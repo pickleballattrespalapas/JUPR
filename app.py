@@ -444,15 +444,6 @@ def check_password():
     else:
         st.error("Incorrect Password")
 
-# --- TABS ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🏆 Leaderboards", 
-    "🏟️ Live Court Manager (Admin)", 
-    "🔄 Other Round Robins (Admin)",
-    "👥 Player Management (Admin)", 
-    "📝 Match Log (Admin)"
-])
-
 # --- TABS DEFINITION ---
 tab_titles = ["🏆 Leaderboards", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
 tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_titles)
