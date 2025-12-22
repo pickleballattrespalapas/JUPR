@@ -286,17 +286,48 @@ def process_live_doubles_match(match_data, ladder_name):
             update_local_memory(all_rows, p, context_id, round(r - delta))
 
 # --- HELPER: SCHEDULE GENERATOR ---
-def get_match_schedule(court_type, players):
-    p = players + ["?"] * (12 - len(players))
-    matches = []
+def get_match_schedule(format_type, players):
+    # Ensure we have enough players
+    if len(players) < int(format_type.split('-')[0]):
+        return []
+
+    # --- 12-PLAYER INDIVIDUAL RR SCHEDULE (11 ROUNDS) ---
+    if format_type == "12-Player":
+        # Standard pairings (1-based indices converted to 0-based for Python)
+        raw_schedule = [
+            [([0, 11], [8, 9]), ([1, 7], [2, 5]), ([3, 10], [4, 6])],   # Round 1
+            [([3, 5], [2, 9]), ([1, 4], [0, 6]), ([7, 8], [10, 11])],  # Round 2
+            [([2, 8], [3, 6]), ([9, 10], [1, 11]), ([0, 4], [5, 7])],  # Round 3
+            [([6, 7], [9, 11]), ([1, 8], [2, 3]), ([0, 10], [4, 5])],  # Round 4
+            [([2, 11], [0, 10]), ([5, 8], [4, 9]), ([1, 6], [3, 7])],  # Round 5
+            [([8, 11], [5, 6]), ([0, 7], [1, 2]), ([3, 4], [9, 10])],  # Round 6
+            [([0, 2], [6, 10]), ([3, 8], [4, 7]), ([1, 9], [5, 11])],  # Round 7
+            [([0, 8], [2, 7]), ([3, 11], [4, 5]), ([1, 10], [6, 9])],  # Round 8
+            [([5, 10], [1, 3]), ([0, 9], [7, 11]), ([2, 4], [6, 8])],  # Round 9
+            [([4, 11], [1, 10]), ([0, 3], [5, 9]), ([2, 6], [7, 8])],  # Round 10
+            [([2, 5], [0, 1]), ([3, 9], [6, 11]), ([4, 8], [7, 10])]   # Round 11
+        ]
+        
+        matches = []
+        for r_idx, round_pairs in enumerate(raw_schedule):
+            for m_idx, (t1_idx, t2_idx) in enumerate(round_pairs):
+                matches.append({
+                    'desc': f"R{r_idx+1} C{m_idx+1}",
+                    't1': [players[t1_idx[0]], players[t1_idx[1]]],
+                    't2': [players[t2_idx[0]], players[t2_idx[1]]]
+                })
+        return matches
+
+    # ... (Keep your existing 4-Player, 5-Player, 8-Player logic here) ...
+    return []
     
-    if court_type == "4-Player":
+    if format_type == "4-Player":
         matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
-    elif court_type == "5-Player":
+    elif format_type == "5-Player":
         matches = [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1 (1 Sit)'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2 (4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3 (2 Sit)'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4 (3 Sit)'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5 (5 Sit)'}]
-    elif court_type == "6-Player":
+    elif format_type == "6-Player":
         matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1 (4,6 Sit)'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2 (1,2 Sit)'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3 (1,3 Sit)'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4 (3,4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5 (2,5 Sit)'}]
-    elif court_type == "8-Player":
+    elif format_type == "8-Player":
         matches = [
             {'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'},
             {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'},
@@ -593,7 +624,7 @@ else:
                 court_data = []
                 for i in range(num_courts):
                     c1,c2 = st.columns([1,4])
-                    with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player"], key=f"t{i}")
+                    with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
                     with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
                     court_data.append({'id':i+1,'type':t,'names':n})
                 if st.form_submit_button("Generate"):
@@ -640,7 +671,7 @@ else:
                 rr_data = []
                 for i in range(rr_courts):
                     c1, c2 = st.columns([1, 4])
-                    with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player"], key=f"rr_t{i}")
+                    with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
                     with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin, Scott, Robin...")
                     rr_data.append({'id': i+1, 'type': t, 'names': n})
                 if st.form_submit_button("Generate Schedule"):
