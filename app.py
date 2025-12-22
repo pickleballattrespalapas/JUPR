@@ -610,7 +610,6 @@ if not st.session_state.admin_logged_in:
     for admin_tab in [tab2, tab3, tab4, tab5]:
         with admin_tab:
             st.warning("🔒 Admin Access Required")
-            # Use a unique key for the form so it doesn't conflict across tabs
             with st.form(key=f"login_gate_{admin_tab}"):
                 pwd = st.text_input("Password", type="password")
                 if st.form_submit_button("Unlock All Admin Tabs"):
@@ -623,27 +622,29 @@ if not st.session_state.admin_logged_in:
 else:
     # --- EVERYTHING BELOW THIS IS ONLY VISIBLE IF LOGGED IN ---
     
-    # 1. Show Logout Button in Sidebar
+    # 1. Sidebar Logout
     if st.sidebar.button("🔒 Logout Admin"):
         st.session_state.admin_logged_in = False
         st.rerun()
 
-    # 2. Show Tab 2 Content
+    # 2. TAB 2: LIVE COURT MANAGER
     with tab2:
-        # These lines must be indented further than the 'with' statement
         st.header("Live Court Manager") 
         with st.expander("Setup", expanded=True):
             event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
             league_name = st.text_input("League", "Fall 2025 Ladder")
             num_courts = st.number_input("Courts", 1, 20, 1)
-        with st.form("setup"):
+            
+            with st.form("setup"):
                 court_data = []
                 for i in range(num_courts):
-                    c1,c2 = st.columns([1,4])
-                    # 12-Player added to menu
-                    with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
-                    with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
-                    court_data.append({'id':i+1,'type':t,'names':n})
+                    c1, c2 = st.columns([1,4])
+                    with c1: 
+                        t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
+                    with c2: 
+                        n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
+                    court_data.append({'id':i+1, 'type':t, 'names':n})
+                
                 if st.form_submit_button("Generate"):
                     st.session_state.schedule = []
                     for c in court_data:
@@ -656,7 +657,7 @@ else:
                 for c in st.session_state.schedule:
                     st.markdown(f"**Court {c['court']}**")
                     for i, m in enumerate(c['matches']):
-                        c1,c2,c3,c4 = st.columns([3,1,1,3])
+                        c1, c2, c3, c4 = st.columns([3,1,1,3])
                         with c1: st.text(f"{m['desc']} | {m['t1'][0]} & {m['t1'][1]}")
                         with c2: s1 = st.number_input("S1", 0, key=f"s_{c['court']}_{i}_1")
                         with c3: s2 = st.number_input("S2", 0, key=f"s_{c['court']}_{i}_2")
@@ -667,9 +668,17 @@ else:
                     for c in st.session_state.schedule:
                         for i, m in enumerate(c['matches']):
                             s1, s2 = st.session_state.get(f"s_{c['court']}_{i}_1", 0), st.session_state.get(f"s_{c['court']}_{i}_2", 0)
-                            # 0-0 Ignore rule
                             if s1 == 0 and s2 == 0: continue
-                            match_data = {'id': len(df_matches) + len(new_matches) + 1, 'date': str(event_date), 'league': league_name, 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2, 'match_type': f"Court {c['court']} RR"}
+                            
+                            match_data = {
+                                'id': len(df_matches) + len(new_matches) + 1, 
+                                'date': str(event_date), 
+                                'league': league_name, 
+                                't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
+                                't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
+                                'score_t1': s1, 'score_t2': s2, 
+                                'match_type': f"Court {c['court']} RR"
+                            }
                             process_live_doubles_match(match_data, ladder_name=league_name)
                             new_matches.append(match_data)
                     
@@ -680,23 +689,24 @@ else:
                         st.success(f"✅ Processed {len(new_matches)} matches!")
                         st.rerun()
 
-    # 3. Show Tab 3 Content
+    # 3. TAB 3: POP-UP ROUND ROBIN
     with tab3:
         st.header("Pop-Up Round Robin")
-    with st.expander("Event Setup", expanded=True):
-        # NEW: Added date selection for past matches
-        event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
-        
-        popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
-        rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
+        with st.expander("Event Setup", expanded=True):
+            event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
+            popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
+            rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
+            
             with st.form("rr_setup"):
                 rr_data = []
                 for i in range(rr_courts):
                     c1, c2 = st.columns([1, 4])
-                    # 12-Player added to menu
-                    with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
-                    with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin, Scott, Robin...")
+                    with c1: 
+                        t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
+                    with c2: 
+                        n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin, Scott, Robin...")
                     rr_data.append({'id': i+1, 'type': t, 'names': n})
+                
                 if st.form_submit_button("Generate Schedule"):
                     st.session_state.rr_schedule = []
                     for c in rr_data:
@@ -714,6 +724,7 @@ else:
                         with c2: s1 = st.number_input("S1", 0, key=f"rr_s_{c['court']}_{i}_1")
                         with c3: s2 = st.number_input("S2", 0, key=f"rr_s_{c['court']}_{i}_2")
                         with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
+                
                 if st.form_submit_button("Submit to Overall Ratings"):
                     for c in st.session_state.rr_schedule:
                         for i, m in enumerate(c['matches']):
@@ -724,7 +735,7 @@ else:
                     st.success("✅ Overall ratings updated!")
                     st.rerun()
 
-    # 4. Show Tab 4 Content
+    # 4. TAB 4: PLAYER MANAGEMENT
     with tab4:
         st.header("Player Management")
         c1, c2 = st.columns(2)
@@ -761,7 +772,7 @@ else:
         st.subheader("Current Player Registry")
         st.dataframe(df_players, use_container_width=True, hide_index=True)
 
-    # 5. Show Tab 5 Content
+    # 5. TAB 5: ADMIN TOOLS
     with tab5:
         st.header("Admin Tools")
         st.subheader("📤 Upload Ladder Matches")
