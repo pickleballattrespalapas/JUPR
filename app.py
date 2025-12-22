@@ -243,6 +243,53 @@ def process_live_doubles_match(match_data, ladder_name):
         for p, r in zip(losers, l_ratings):
             update_local_memory(all_rows, p, context_id, round(r - delta))
 
+# --- OVERALL-ONLY LOGIC (FOR TAB 3) ---
+def process_overall_only_match(match_data):
+    """
+    Handles a match that counts ONLY toward the Global Rating, not a specific ladder.
+    """
+    sh = get_db_connection()
+    ratings_sheet = sh.worksheet("player_ratings")
+    all_rows = ratings_sheet.get_all_records()
+
+    t1 = [match_data['t1_p1'], match_data['t1_p2']]
+    t2 = [match_data['t2_p1'], match_data['t2_p2']]
+    s1 = match_data['score_t1']
+    s2 = match_data['score_t2']
+
+    if s1 > s2:
+        winners, losers = t1, t2
+    else:
+        winners, losers = t2, t1
+
+    # --- UPDATE ONLY THE 'OVERALL' CONTEXT ---
+    context_id = "OVERALL"
+    
+    # A. Get Ratings
+    w_ratings = [get_effective_rating(all_rows, p, context_id) for p in winners]
+    l_ratings = [get_effective_rating(all_rows, p, context_id) for p in losers]
+    
+    # B. Calculate Team Averages
+    w_avg = sum(w_ratings) / len(w_ratings)
+    l_avg = sum(l_ratings) / len(l_ratings)
+    
+    # C. Calculate Elo Delta
+    expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
+    delta = K_FACTOR * (1 - expected_win)
+    
+    # D. Apply Delta
+    for p, r in zip(winners, w_ratings):
+        update_local_memory(all_rows, p, context_id, round(r + delta))
+    for p, r in zip(losers, l_ratings):
+        update_local_memory(all_rows, p, context_id, round(r - delta))
+
+    # Save to Cloud
+    if all_rows:
+        headers = list(all_rows[0].keys())
+        data_to_write = [headers] + [list(r.values()) for r in all_rows]
+        ratings_sheet.clear()
+        ratings_sheet.update(data_to_write)
+    
     # 4. Run Updates
     # Update Specific Island (The League Name)
     update_context(ladder_name)
@@ -502,10 +549,77 @@ with tab2:
                     st.success(f"✅ Processed {len(new_matches)} matches into League '{league_name}'!")
                     st.rerun()
 
-# --- TAB 3: OTHER RR ---
+# --- TAB 3: POP-UP ROUND ROBINS (OVERALL RATING ONLY) ---
 with tab3:
-    st.info("Standalone generator (Logic same as above)")
+    st.header("Pop-Up Round Robin")
+    st.caption("Matches played here affect **OVERALL RATING** but do not affect specific League Ladders.")
+    
+    with st.expander("Event Setup", expanded=True):
+        # We give this a name for the history logs
+        popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
+        rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
+        
+        with st.form("rr_setup"):
+            rr_data = []
+            for i in range(rr_courts):
+                c1, c2 = st.columns([1, 4])
+                with c1: 
+                    t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player"], key=f"rr_t{i}")
+                with c2: 
+                    n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin, Scott, Robin...")
+                rr_data.append({'id': i+1, 'type': t, 'names': n})
+            
+            if st.form_submit_button("Generate Schedule"):
+                st.session_state.rr_schedule = []
+                for c in rr_data:
+                    pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
+                    st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
 
+    # Display Schedule & Score Inputs
+    if st.session_state.get('rr_schedule'):
+        st.divider()
+        with st.form("submit_rr_scores"):
+            for c in st.session_state.rr_schedule:
+                st.markdown(f"**Court {c['court']}**")
+                for i, m in enumerate(c['matches']):
+                    c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
+                    with c1: st.text(f"{m['desc']} | {m['t1'][0]} & {m['t1'][1]}")
+                    with c2: s1 = st.number_input("S1", 0, key=f"rr_s_{c['court']}_{i}_1")
+                    with c3: s2 = st.number_input("S2", 0, key=f"rr_s_{c['court']}_{i}_2")
+                    with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
+            
+            if st.form_submit_button("Submit to Overall Ratings"):
+                new_matches = []
+                for c in st.session_state.rr_schedule:
+                    for i, m in enumerate(c['matches']):
+                        s1 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0)
+                        s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
+                        
+                        if s1 == 0 and s2 == 0: continue
+                        
+                        match_data = {
+                            'id': len(df_matches) + len(new_matches) + 1,
+                            'date': str(datetime.now()),
+                            'league': "PopUp_Event", # Just for the history log
+                            't1_p1': m['t1'][0], 't1_p2': m['t1'][1],
+                            't2_p1': m['t2'][0], 't2_p2': m['t2'][1],
+                            'score_t1': s1, 'score_t2': s2,
+                            'match_type': popup_name
+                        }
+                        
+                        # --- THE MAGIC LINE: CALL THE NEW OVERALL-ONLY FUNCTION ---
+                        process_overall_only_match(match_data)
+                        
+                        new_matches.append(match_data)
+                
+                # Save Log
+                if new_matches:
+                    new_df = pd.DataFrame(new_matches)
+                    df_matches = pd.concat([df_matches, new_df], ignore_index=True)
+                    ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
+                    
+                    st.success(f"✅ Processed {len(new_matches)} matches! Overall ratings updated.")
+                    st.rerun()
 # --- TAB 4: PLAYERS ---
 with tab4:
     c1, c2 = st.columns(2)
