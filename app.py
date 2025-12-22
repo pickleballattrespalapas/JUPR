@@ -453,8 +453,24 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Match Log (Admin)"
 ])
 
-# --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM WITH SHARING) ---
+# --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM WITH EXPLANATION) ---
 with tab1:
+    # --- EXPLANATION SECTION ---
+    with st.expander("ℹ️ How the Island Rating System Works"):
+        st.markdown("""
+        ### Why do I have multiple ratings?
+        We use an **'Island System'** to ensure fair play across different groups while maintaining a global skill level.
+        
+        * **Specific Ladders (The Islands):** Your rating here is unique to this specific group (e.g., Verified Mens 4.0). This protects the ladder's integrity; matches played elsewhere won't affect your standing in this specific competitive group.
+        * **OVERALL Rating (The Global Map):** Every match you play, regardless of which ladder it's in, updates your Overall Rating. This is your "Universal" skill level used for seeding and general tracking.
+        
+        ### What is 'Soft Seeding'?
+        If you join a new ladder for the first time, the system **seeds** you using your **Overall Rating**. 
+        * *Example:* If your Overall is 3.500, you start a new ladder at 3.500 instead of starting at zero. From that point on, that 'Island' rating moves independently based on your performance within that group.
+        """)
+
+    st.divider()
+
     col_a, col_b = st.columns([1, 3])
     
     # 1. Get List of Ladders
@@ -463,8 +479,7 @@ with tab1:
         others = [str(x).strip() for x in df_ratings['ladder_id'].unique() if str(x).strip() != "OVERALL"]
         available_ladders += sorted(list(set(others)))
     
-    # 2. READ THE LINK (Query Params)
-    # Check if someone arrived via a link like .../?league=Verified%20Mens%204.0
+    # 2. Query Params / Sharing Logic
     query_params = st.query_params
     default_index = 0
     if "league" in query_params:
@@ -476,32 +491,24 @@ with tab1:
         st.subheader("Filter")
         selected_ladder = st.selectbox("Select Ladder", available_ladders, index=default_index)
         
-        # 3. UPDATE THE URL (So they can copy the address bar)
         if selected_ladder != "OVERALL":
             st.query_params["league"] = selected_ladder
         else:
-            if "league" in st.query_params: 
-                del st.query_params["league"]
+            if "league" in st.query_params: del st.query_params["league"]
 
     with col_b:
         st.subheader(f"Standings: {selected_ladder}")
         
-        # 4. GENERATE SHAREABLE LINK
         if selected_ladder != "OVERALL":
-            # This automatically detects your app's URL
             base_url = "https://8lkemld946rmtwwptk2gcs.streamlit.app/" 
             share_link = f"{base_url}?league={selected_ladder.replace(' ', '%20')}"
-            
             st.markdown(f"**🔗 Share this leaderboard:**")
             st.code(share_link, language="text")
-            st.caption("Copy the link above to send players directly to this specific ladder.")
     
     # --- BUILD THE LEADERBOARD ---
     if not df_ratings.empty:
-        # Filter Ratings
         ladder_ratings = df_ratings[df_ratings['ladder_id'].str.strip() == selected_ladder].copy()
         
-        # Filter Match History for Win/Loss Tally
         if selected_ladder == "OVERALL":
             relevant_matches = df_matches
         else:
@@ -526,18 +533,14 @@ with tab1:
                     if p not in stats: stats[p] = {'w': 0, 'l': 0}
                     stats[p]['l'] += 1
 
-        # Merge Stats
         ladder_ratings['wins'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'w':0})['w'])
         ladder_ratings['losses'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'l':0})['l'])
         ladder_ratings['matches'] = ladder_ratings['wins'] + ladder_ratings['losses']
         
-        # Format
         ladder_ratings['JUPR'] = (ladder_ratings['rating'] / 400).map('{:,.3f}'.format)
         ladder_ratings['Win %'] = (ladder_ratings['wins'] / ladder_ratings['matches'] * 100).fillna(0).map('{:.1f}%'.format)
 
         leaderboard = ladder_ratings.sort_values(by='rating', ascending=False)
-        
-        # Only show active players for this ladder
         leaderboard = leaderboard[leaderboard['matches'] > 0]
 
         if not leaderboard.empty:
