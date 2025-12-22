@@ -453,8 +453,13 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Match Log (Admin)"
 ])
 
-# --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM WITH EXPLANATION) ---
-with tab1:
+# --- TABS DEFINITION ---
+# Tab 1 is always public. Tabs 2-5 require login.
+tab_titles = ["🏆 Leaderboards", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
+tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_titles)
+
+# --- TAB 1: LEADERBOARDS (PUBLIC) ---
+   with tab1:
     # --- EXPLANATION SECTION ---
     with st.expander("ℹ️ How the Individual League Rating System Works"):
         st.markdown("""
@@ -550,9 +555,26 @@ with tab1:
     else:
         st.info("No ratings found.")
 
-# --- TAB 2: LIVE COURT MANAGER ---
-with tab2:
-    st.header("Live Court Manager")
+# --- ADMIN PROTECTION ---
+# Everything below this line checks if the user is logged in
+if not st.session_state.admin_logged_in:
+    # If not logged in, show the login form inside the Admin tabs
+    for admin_tab in [tab2, tab3, tab4, tab5]:
+        with admin_tab:
+            st.warning("🔒 This section is restricted to Admins.")
+            with st.form(key=f"login_form_{admin_tab}"):
+                password = st.text_input("Enter Admin Password", type="password")
+                if st.form_submit_button("Login"):
+                    if password == st.secrets["admin_password"]:
+                        st.session_state.admin_logged_in = True
+                        st.success("Login Successful!")
+                        st.rerun()
+                    else:
+                        st.error("Incorrect Password")
+else:
+    # IF LOGGED IN, SHOW THE CONTENT
+    with tab2:
+        st.header("Live Court Manager")
     with st.expander("Setup", expanded=True):
         league_name = st.text_input("League", "Fall 2025 Ladder")
         num_courts = st.number_input("Courts", 1, 20, 1)
@@ -618,10 +640,10 @@ with tab2:
                     
                     st.success(f"✅ Processed {len(new_matches)} matches into League '{league_name}'!")
                     st.rerun()
+        pass
 
-# --- TAB 3: POP-UP ROUND ROBINS (OVERALL RATING ONLY) ---
-with tab3:
-    st.header("Pop-Up Round Robin")
+    with tab3:
+        st.header("Pop-Up Round Robin")
     st.caption("Matches played here affect **OVERALL RATING** but do not affect specific League Ladders.")
     
     with st.expander("Event Setup", expanded=True):
@@ -690,9 +712,10 @@ with tab3:
                     
                     st.success(f"✅ Processed {len(new_matches)} matches! Overall ratings updated.")
                     st.rerun()
-# --- TAB 4: PLAYERS ---
-with tab4:
-    c1, c2 = st.columns(2)
+        pass
+
+    with tab4:
+        c1, c2 = st.columns(2)
     with c1:
         with st.form("add_p"):
             n = st.text_input("Name")
@@ -705,10 +728,10 @@ with tab4:
                     st.success("Added to Cloud")
                     st.rerun()
                 else: st.error("Player exists")
+        pass
 
-# --- TAB 5: MATCH LOG & LADDER TOOLS ---
-with tab5:
-    st.header("Admin Tools")
+    with tab5:
+        st.header("Admin Tools")
     
     # --- SECTION A: LADDER UPLOAD (NEW ISLAND SYSTEM) ---
     st.subheader("📤 Upload Ladder Matches (Island System)")
@@ -773,3 +796,4 @@ with tab5:
         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
         st.success("Cloud Updated!")
+        pass
