@@ -630,7 +630,7 @@ else:
 
     # 2. Show Tab 2 Content
     with tab2:
-    st.header("Live Court Manager")
+        st.header("Live Court Manager")
     with st.expander("Setup", expanded=True):
         # NEW: Added date selection for past matches
         event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
