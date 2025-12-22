@@ -296,7 +296,8 @@ def get_match_schedule(format_type, players):
 
     # --- 12-PLAYER INDIVIDUAL RR SCHEDULE (11 ROUNDS) ---
     if format_type == "12-Player":
-        # Standard pairings (1-based indices converted to 0-based for Python)
+        # Exact pairings from '12 person RR Chart.csv'
+        # Format: [([Team1_P1, Team1_P2], [Team2_P1, Team2_P2]), ...]
         raw_schedule = [
             [([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])],  # Round 1 (3/6 v 4/11, 5/7 v 9/10, 12/1 v 2/8)
             [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])], # Round 2
@@ -342,21 +343,10 @@ def get_match_schedule(format_type, players):
 # --- OVERALL-ONLY LOGIC (FOR TAB 3) ---
 def process_overall_only_match(match_data):
     """
-    Handles a match that counts ONLY toward the Global Rating, not a specific ladder.
+    Forces Pop-Up matches to only affect the 'OVERALL' leaderboard.
     """
-    sh = get_db_connection()
-    ratings_sheet = sh.worksheet("player_ratings")
-    all_rows = ratings_sheet.get_all_records()
-
-    t1 = [match_data['t1_p1'], match_data['t1_p2']]
-    t2 = [match_data['t2_p1'], match_data['t2_p2']]
-    s1 = match_data['score_t1']
-    s2 = match_data['score_t2']
-
-    if s1 > s2:
-        winners, losers = t1, t2
-    else:
-        winners, losers = t2, t1
+    # Simply reuse the main logic but explicitly set the ladder to OVERALL
+    process_live_doubles_match(match_data, ladder_name="OVERALL")
 
     # --- UPDATE ONLY THE 'OVERALL' CONTEXT ---
     context_id = "OVERALL"
