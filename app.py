@@ -392,3 +392,82 @@ with tab5:
         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
         st.success("Cloud Updated!")
+
+def process_batch_upload(dataframe, ladder_name_from_ui=None):
+    """
+    Takes the uploaded CSV data and runs the Island/Soft Seeding logic on it.
+    """
+    # Connect to sheet (Ensure credentials are accessible to the app)
+    gc = gspread.service_account(filename='credentials.json')
+    sh = gc.open("Tres Palapas DB")
+    ratings_sheet = sh.worksheet("player_ratings")
+    
+    # Pre-fetch all data to minimize API reads (Speed Boost)
+    all_rows = ratings_sheet.get_all_records()
+    
+    results_log = []
+
+    # Loop through the uploaded file row by row
+    for index, row in dataframe.iterrows():
+        # Adjust these keys to match your CSV column headers!
+        winner = row.get('winner') or row.get('Winner')
+        loser = row.get('loser') or row.get('Loser')
+        
+        # Determine the Ladder Name
+        # Priority 1: Is it in the CSV file?
+        csv_ladder = row.get('ladder') or row.get('Ladder')
+        
+        # Priority 2: Did the user select it in the UI dropdown?
+        ladder_id = csv_ladder if csv_ladder else ladder_name_from_ui
+        
+        if not winner or not loser or not ladder_id:
+            results_log.append(f"Skipped Row {index}: Missing data.")
+            continue
+
+        # --- RUN THE LOGIC ---
+        # 1. Update Specific Island
+        r_win = get_effective_rating(all_rows, winner, ladder_id)
+        r_lose = get_effective_rating(all_rows, loser, ladder_id)
+        
+        new_win, new_lose = calculate_elo(r_win, r_lose, 1)
+        
+        # Update our local memory of the data (so the next row is accurate)
+        update_local_memory(all_rows, winner, ladder_id, new_win)
+        update_local_memory(all_rows, loser, ladder_id, new_lose)
+
+        # 2. Update Overall
+        r_ov_win = get_effective_rating(all_rows, winner, 'OVERALL')
+        r_ov_lose = get_effective_rating(all_rows, loser, 'OVERALL')
+        
+        new_ov_win, new_ov_lose = calculate_elo(r_ov_win, r_ov_lose, 1)
+        
+        update_local_memory(all_rows, winner, 'OVERALL', new_ov_win)
+        update_local_memory(all_rows, loser, 'OVERALL', new_ov_lose)
+        
+        results_log.append(f"Processed: {winner} def. {loser} ({ladder_id})")
+
+    # --- SAVE TO GOOGLE SHEETS ---
+    # We overwrite the whole sheet with our updated memory (Fastest method)
+    # WARNING: This replaces the sheet. Ensure 'all_rows' is perfect.
+    
+    # Convert list of dicts back to list of lists for upload
+    headers = list(all_rows[0].keys())
+    data_to_write = [headers]
+    for r in all_rows:
+        data_to_write.append(list(r.values()))
+        
+    ratings_sheet.clear()
+    ratings_sheet.update(data_to_write)
+    
+    return results_log
+
+# Helper to update the list in memory without hitting the API
+def update_local_memory(all_rows, name, ladder, new_rating):
+    found = False
+    for row in all_rows:
+        if row['name'] == name and row['ladder_id'] == ladder:
+            row['rating'] = new_rating
+            found = True
+            break
+    if not found:
+        all_rows.append({'name': name, 'ladder_id': ladder, 'rating': new_rating})
