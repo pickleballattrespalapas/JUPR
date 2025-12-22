@@ -199,49 +199,33 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
 
 # --- HISTORY REPLAY LOGIC ---
 def replay_league_history(target_league):
-    """
-    Reads existing match history for a specific league and 
-    re-calculates the Island Ratings from scratch.
-    """
     sh = get_db_connection()
     ratings_sheet = sh.worksheet("player_ratings")
-    all_rows = ratings_sheet.get_all_records()
     
-    # 1. Load Match History
+    # 1. Load History
     matches_ws = sh.worksheet("Matches")
-    m_data = matches_ws.get_all_records()
-    df_history = pd.DataFrame(m_data)
+    df_history = pd.DataFrame(matches_ws.get_all_records())
     
-    # Filter for the league we want to restore
-    if 'league' not in df_history.columns:
-        return f"Error: No 'league' column found in matches."
-    
-    # Sort by date to ensure correct order
-    if 'date' in df_history.columns:
-        df_history['date'] = pd.to_datetime(df_history['date'])
-        df_history = df_history.sort_values(by='date')
-    
+    # 2. Filter matches
     league_matches = df_history[df_history['league'] == target_league]
     
     if league_matches.empty:
-        return f"No matches found for league: {target_league}"
-
+        # This is likely where the problem is. Let's see what IS there.
+        all_leagues = df_history['league'].unique().tolist()
+        return f"❌ Error: No matches found for '{target_league}'. Found these instead: {all_leagues}"
+    
     count = 0
-    # 2. Replay every match
     for _, row in league_matches.iterrows():
-        # Construct match data object from the row
         match_data = {
             't1_p1': row.get('t1_p1'), 't1_p2': row.get('t1_p2'),
             't2_p1': row.get('t2_p1'), 't2_p2': row.get('t2_p2'),
             'score_t1': row.get('score_t1'), 'score_t2': row.get('score_t2')
         }
-        
-        # Use the standard Island Processor
-        # This will auto-seed from OVERALL if they don't have a rating yet
         process_live_doubles_match(match_data, ladder_name=target_league)
         count += 1
-
-    return f"Successfully restored '{target_league}'! Processed {count} historical matches."
+        time.sleep(1.1) 
+        
+    return f"✅ Success! Replayed {count} matches for '{target_league}' into the ratings sheet."
 
 # --- DOUBLES ISLAND LOGIC ---
 def process_live_doubles_match(match_data, ladder_name):
