@@ -630,10 +630,13 @@ else:
 
     # 2. Show Tab 2 Content
     with tab2:
-        st.header("Live Court Manager")
-        with st.expander("Setup", expanded=True):
-            league_name = st.text_input("League", "Fall 2025 Ladder")
-            num_courts = st.number_input("Courts", 1, 20, 1)
+    st.header("Live Court Manager")
+    with st.expander("Setup", expanded=True):
+        # NEW: Added date selection for past matches
+        event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
+        
+        league_name = st.text_input("League", "Fall 2025 Ladder")
+        num_courts = st.number_input("Courts", 1, 20, 1)
             with st.form("setup"):
                 court_data = []
                 for i in range(num_courts):
@@ -667,7 +670,7 @@ else:
                             s1, s2 = st.session_state.get(f"s_{c['court']}_{i}_1", 0), st.session_state.get(f"s_{c['court']}_{i}_2", 0)
                             # 0-0 Ignore rule
                             if s1 == 0 and s2 == 0: continue
-                            match_data = {'id': len(df_matches) + len(new_matches) + 1, 'date': str(datetime.now()), 'league': league_name, 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2, 'match_type': f"Court {c['court']} RR"}
+                            match_data = {'id': len(df_matches) + len(new_matches) + 1, 'date': str(event_date), 'league': league_name, 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2, 'match_type': f"Court {c['court']} RR"}
                             process_live_doubles_match(match_data, ladder_name=league_name)
                             new_matches.append(match_data)
                     
@@ -680,9 +683,12 @@ else:
 
     # 3. Show Tab 3 Content
     with tab3:
-        st.header("Pop-Up Round Robin")
-        with st.expander("Event Setup", expanded=True):
-            popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
+    st.header("Pop-Up Round Robin")
+    with st.expander("Event Setup", expanded=True):
+        # NEW: Added date selection for past matches
+        event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
+        
+        popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
             rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
             with st.form("rr_setup"):
                 rr_data = []
@@ -714,7 +720,7 @@ else:
                         for i, m in enumerate(c['matches']):
                             s1, s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0), st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
                             if s1 == 0 and s2 == 0: continue
-                            match_data = {'date': str(datetime.now()), 'league': "PopUp_Event", 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2}
+                            match_data = 'date': str(event_date_rr), 'league': "PopUp_Event", 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2}
                             process_overall_only_match(match_data)
                     st.success("✅ Overall ratings updated!")
                     st.rerun()
