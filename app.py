@@ -637,7 +637,7 @@ else:
         
         league_name = st.text_input("League", "Fall 2025 Ladder")
         num_courts = st.number_input("Courts", 1, 20, 1)
-            with st.form("setup"):
+        with st.form("setup"):
                 court_data = []
                 for i in range(num_courts):
                     c1,c2 = st.columns([1,4])
