@@ -31,21 +31,31 @@ def get_db_connection():
 # --- DATA LOADERS (CACHED) ---
 # We don't cache these heavily because we want instant updates for the admin
 # --- DATA LOADERS (UPDATED) ---
+# --- DATA LOADERS (CORRECTED) ---
 def load_data():
     sh = get_db_connection()
     try:
         # Load the 3 Core Sheets
-        players_ws = sh.worksheet("Players")       # Legacy / Metadata
+        players_ws = sh.worksheet("Players")       # Legacy / Roster
         matches_ws = sh.worksheet("Matches")       # Match History
         ratings_ws = sh.worksheet("player_ratings") # NEW ISLAND RATINGS
         
-        # 1. LOAD RATINGS (The New Engine)
+        # 1. LOAD LEGACY PLAYERS (Required for Tab 4 & Roster checks)
+        p_data = players_ws.get_all_records()
+        df_players = pd.DataFrame(p_data)
+        
+        # Safety check for players
+        expected_p_cols = ['name', 'elo', 'starting_elo', 'matches_played', 'wins', 'losses']
+        if df_players.empty or 'name' not in df_players.columns:
+            df_players = pd.DataFrame(columns=expected_p_cols)
+
+        # 2. LOAD RATINGS (The New Engine)
         r_data = ratings_ws.get_all_records()
         df_ratings = pd.DataFrame(r_data)
         if df_ratings.empty:
             df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
 
-        # 2. LOAD MATCHES (History)
+        # 3. LOAD MATCHES (History)
         m_data = matches_ws.get_all_records()
         df_matches = pd.DataFrame(m_data)
         
@@ -53,12 +63,14 @@ def load_data():
         if df_matches.empty:
              df_matches = pd.DataFrame(columns=expected_m_cols)
 
-        # 3. Clean up Numbers
+        # 4. Clean up Numbers
         for c in ['score_t1', 'score_t2']:
             if c in df_matches.columns:
                 df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
             
-        return df_ratings, df_matches, players_ws, matches_ws, ratings_ws
+        # RETURN EVERYTHING (6 items)
+        return df_players, df_ratings, df_matches, players_ws, matches_ws, ratings_ws
+
     except Exception as e:
         st.error(f"Database Error: {e}")
         st.stop()
