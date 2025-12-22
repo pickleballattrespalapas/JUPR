@@ -179,14 +179,87 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # --- TAB 1: LEADERBOARDS (PUBLIC) ---
+# --- TAB 1: LEADERBOARDS (PUBLIC) ---
 with tab1:
     col_a, col_b = st.columns([1, 3])
+    
+    # 1. Get all available leagues
+    leagues = ["All"]
+    if not df_matches.empty:
+        leagues += list(df_matches['league'].unique())
+    
+    # 2. Check URL for specific league (e.g. ?league=Fall2025)
+    query_params = st.query_params
+    default_index = 0
+    
+    if "league" in query_params:
+        target_league = query_params["league"]
+        if target_league in leagues:
+            default_index = leagues.index(target_league)
+
     with col_a:
         st.subheader("Filter")
-        leagues = ["All"]
-        if not df_matches.empty:
-            leagues += list(df_matches['league'].unique())
-        selected_league = st.selectbox("Select League", leagues)
+        # 3. Create the dropdown with the smart default
+        selected_league = st.selectbox("Select League", leagues, index=default_index)
+        
+        # 4. Update the URL silently when they change the dropdown
+        if selected_league != "All":
+            st.query_params["league"] = selected_league
+        else:
+            # Clear the param if they select "All"
+             if "league" in st.query_params: 
+                 del st.query_params["league"]
+
+    with col_b:
+        st.subheader(f"Standings: {selected_league}")
+        # 5. Show a shareable link for this specific league
+        if selected_league != "All":
+            base_url = "https://8lkemld946rmtwwptk2gcs.streamlit.app/" # REPLACE THIS WITH YOUR ACTUAL URL
+            share_link = f"{base_url}?league={selected_league.replace(' ', '%20')}"
+            st.code(share_link, language="text")
+            st.caption("Copy this link to send players directly to this league.")
+    
+    # Calculate League Specific Stats
+    display_df = df_players.copy()
+    
+    if selected_league != "All" and not df_matches.empty:
+        # Filter matches
+        league_matches = df_matches[df_matches['league'] == selected_league]
+        
+        # Re-tally wins/losses just for this view (Ratings stay global)
+        stats = {}
+        for _, row in league_matches.iterrows():
+            s1, s2 = row['score_t1'], row['score_t2']
+            winners = [row['t1_p1'], row['t1_p2']] if s1 > s2 else [row['t2_p1'], row['t2_p2']]
+            losers = [row['t2_p1'], row['t2_p2']] if s1 > s2 else [row['t1_p1'], row['t1_p2']]
+            
+            for p in winners: 
+                if p not in stats: stats[p] = {'w':0, 'l':0}
+                stats[p]['w'] += 1
+            for p in losers:
+                if p not in stats: stats[p] = {'w':0, 'l':0}
+                stats[p]['l'] += 1
+        
+        # Map back to display_df
+        display_df['wins'] = display_df['name'].map(lambda x: stats.get(x, {'w':0})['w'])
+        display_df['losses'] = display_df['name'].map(lambda x: stats.get(x, {'l':0})['l'])
+        display_df['matches_played'] = display_df['wins'] + display_df['losses']
+        display_df = display_df[display_df['matches_played'] > 0]
+
+    # Format
+    display_df['JUPR'] = (display_df['elo'] / 400).map('{:,.3f}'.format)
+    display_df['Win %'] = (display_df['wins'] / display_df['matches_played'] * 100).fillna(0).map('{:.1f}%'.format)
+    display_df['Improvement'] = ((display_df['elo'] - display_df['starting_elo']) / 400).map('{:+.3f}'.format)
+    
+    # CORRECT LOGIC: Sort by 'elo' FIRST
+    sorted_df = display_df.sort_values(by='elo', ascending=False)
+
+    # THEN select only the columns you want to show
+    st.dataframe(
+        sorted_df[['name', 'JUPR', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']], 
+        use_container_width=True, 
+        hide_index=True
+    )
 
     with col_b:
         st.subheader(f"Standings: {selected_league}")
