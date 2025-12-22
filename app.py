@@ -630,13 +630,12 @@ else:
 
     # 2. Show Tab 2 Content
     with tab2:
-        st.header("Live Court Manager")
-    with st.expander("Setup", expanded=True):
-        # NEW: Added date selection for past matches
-        event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
-        
-        league_name = st.text_input("League", "Fall 2025 Ladder")
-        num_courts = st.number_input("Courts", 1, 20, 1)
+        # These lines must be indented further than the 'with' statement
+        st.header("Live Court Manager") 
+        with st.expander("Setup", expanded=True):
+            event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
+            league_name = st.text_input("League", "Fall 2025 Ladder")
+            num_courts = st.number_input("Courts", 1, 20, 1)
         with st.form("setup"):
                 court_data = []
                 for i in range(num_courts):
