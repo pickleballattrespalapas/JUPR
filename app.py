@@ -244,60 +244,63 @@ def replay_league_history(target_league):
 # --- DOUBLES ISLAND LOGIC ---
 def process_live_doubles_match(match_data, ladder_name):
     """
-    Handles a single 2v2 match from the Live Court Manager.
-    Updates both the Specific Ladder and OVERALL ratings.
+    Handles a single 2v2 match. Updates the Specific Ladder and OVERALL ratings.
     """
-    # 1. Connect to Sheet
     sh = get_db_connection()
     ratings_sheet = sh.worksheet("player_ratings")
     all_rows = ratings_sheet.get_all_records()
 
-    # 2. Extract Data
     t1 = [match_data['t1_p1'], match_data['t1_p2']]
     t2 = [match_data['t2_p1'], match_data['t2_p2']]
-    s1 = match_data['score_t1']
-    s2 = match_data['score_t2']
+    s1, s2 = match_data['score_t1'], match_data['score_t2']
     
-    # 3. Determine Winner/Loser Teams
     if s1 > s2:
         winners, losers = t1, t2
-        actual_score = 1
     else:
         winners, losers = t2, t1
-        actual_score = 0 # From perspective of Team 1, but we calculate per team below
 
-    # --- HELPER: UPDATE ONE LADDER CONTEXT ---
     def update_context(context_id):
-        # A. Get Ratings
-        w_ratings = [get_effective_rating(all_rows, p, context_id) for p in winners]
-        l_ratings = [get_effective_rating(all_rows, p, context_id) for p in losers]
+        w_ratings = [get_effective_rating(all_rows, p, context_id) for p in winners if p]
+        l_ratings = [get_effective_rating(all_rows, p, context_id) for p in losers if p]
         
-        # B. Calculate Team Averages
-        w_avg = sum(w_ratings) / len(w_ratings)
-        l_avg = sum(l_ratings) / len(l_ratings)
-        
-        # C. Calculate Elo Delta (Using Average)
-        # We assume Winners won (score=1) against Losers
-        expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
-        delta = K_FACTOR * (1 - expected_win)
-        
-        # D. Apply Delta to INDIVIDUALS
-        for p, r in zip(winners, w_ratings):
-            update_local_memory(all_rows, p, context_id, round(r + delta))
+        if len(w_ratings) > 0 and len(l_ratings) > 0:
+            w_avg = sum(w_ratings) / len(w_ratings)
+            l_avg = sum(l_ratings) / len(l_ratings)
+            expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
+            delta = K_FACTOR * (1 - expected_win)
             
-        for p, r in zip(losers, l_ratings):
-            update_local_memory(all_rows, p, context_id, round(r - delta))
+            for p in winners:
+                if p: update_local_memory(all_rows, p, context_id, round(get_effective_rating(all_rows, p, context_id) + delta))
+            for p in losers:
+                if p: update_local_memory(all_rows, p, context_id, round(get_effective_rating(all_rows, p, context_id) - delta))
+
+    # Update the Specific League
+    if ladder_name and ladder_name != "OVERALL":
+        update_context(ladder_name)
+    
+    # Update OVERALL
+    update_context("OVERALL")
+
+    # Save to Cloud
+    if all_rows:
+        headers = list(all_rows[0].keys())
+        data_to_write = [headers] + [list(r.values()) for r in all_rows]
+        ratings_sheet.clear()
+        ratings_sheet.update(data_to_write)
+
+def process_overall_only_match(match_data):
+    """
+    Directs Pop-Up Round Robin matches to update ONLY the OVERALL leaderboard.
+    """
+    process_live_doubles_match(match_data, ladder_name="OVERALL")
 
 # --- HELPER: SCHEDULE GENERATOR ---
 def get_match_schedule(format_type, players):
-    # Ensure we have enough players
     if len(players) < int(format_type.split('-')[0]):
         return []
 
-    # --- 12-PLAYER INDIVIDUAL RR SCHEDULE (11 ROUNDS) ---
     if format_type == "12-Player":
-        # Exact pairings from '12 person RR Chart.csv'
-        # Indices are 0-based: Player 1 = 0, Player 12 = 11
+        # Exact pairings from your '12 person RR Chart.csv'
         raw_schedule = [
             [([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])],   # Round 1
             [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])],  # Round 2
@@ -311,7 +314,6 @@ def get_match_schedule(format_type, players):
             [([11, 5], [6, 1]), ([9, 0], [2, 3]), ([7, 10], [8, 4])],  # Round 10
             [([10, 2], [0, 7]), ([11, 8], [9, 4]), ([1, 3], [5, 6])],  # Round 11
         ]
-        
         matches = []
         for r_idx, round_pairs in enumerate(raw_schedule):
             for m_idx, (t1_idx, t2_idx) in enumerate(round_pairs):
@@ -322,71 +324,17 @@ def get_match_schedule(format_type, players):
                 })
         return matches
     
+    # Generic logic for 4, 5, 6, 8 player
+    p = players
     if format_type == "4-Player":
         matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
     elif format_type == "5-Player":
-        matches = [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1 (1 Sit)'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2 (4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3 (2 Sit)'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4 (3 Sit)'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5 (5 Sit)'}]
+        matches = [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5'}]
     elif format_type == "6-Player":
-        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1 (4,6 Sit)'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2 (1,2 Sit)'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3 (1,3 Sit)'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4 (3,4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5 (2,5 Sit)'}]
+        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5'}]
     elif format_type == "8-Player":
-        matches = [
-            {'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'},
-            {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'},
-            {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'},
-            {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}
-        ]
+        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'}, {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'}, {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'}, {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}]
     return matches
-
-# --- OVERALL-ONLY LOGIC (FOR TAB 3) ---
-def process_overall_only_match(match_data):
-    """
-    Directs Pop-Up Round Robin matches to update only the OVERALL leaderboard.
-    """
-    # Simply reuse the main processing engine
-    process_live_doubles_match(match_data, ladder_name="OVERALL")
-
-    # --- UPDATE ONLY THE 'OVERALL' CONTEXT ---
-    context_id = "OVERALL"
-    
-    # A. Get Ratings
-    w_ratings = [get_effective_rating(all_rows, p, context_id) for p in winners]
-    l_ratings = [get_effective_rating(all_rows, p, context_id) for p in losers]
-    
-    # B. Calculate Team Averages
-    w_avg = sum(w_ratings) / len(w_ratings)
-    l_avg = sum(l_ratings) / len(l_ratings)
-    
-    # C. Calculate Elo Delta
-    expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
-    delta = K_FACTOR * (1 - expected_win)
-    
-    # D. Apply Delta
-    for p, r in zip(winners, w_ratings):
-        update_local_memory(all_rows, p, context_id, round(r + delta))
-    for p, r in zip(losers, l_ratings):
-        update_local_memory(all_rows, p, context_id, round(r - delta))
-
-    # Save to Cloud
-    if all_rows:
-        headers = list(all_rows[0].keys())
-        data_to_write = [headers] + [list(r.values()) for r in all_rows]
-        ratings_sheet.clear()
-        ratings_sheet.update(data_to_write)
-    
-    # 4. Run Updates
-    # Update Specific Island (The League Name)
-    update_context(ladder_name)
-    
-    # Update OVERALL
-    update_context("OVERALL")
-
-    # 5. Save to Cloud
-    if all_rows:
-        headers = list(all_rows[0].keys())
-        data_to_write = [headers] + [list(r.values()) for r in all_rows]
-        ratings_sheet.clear()
-        ratings_sheet.update(data_to_write)
-
 # --- ISLAND / LADDER LOGIC END ---
 
 # --- BATCH CALCULATOR (IN MEMORY) ---
