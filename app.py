@@ -33,44 +33,29 @@ def get_db_connection():
 def load_data():
     sh = get_db_connection()
     try:
-        # Load the 3 Core Sheets
-        players_ws = sh.worksheet("Players")       # Legacy / Metadata
-        matches_ws = sh.worksheet("Matches")       # Match History
-        ratings_ws = sh.worksheet("player_ratings") # NEW ISLAND RATINGS
+        # Fetch ALL worksheets in one meta-call if possible, 
+        # but at least fetch all data from each sheet in one go.
+        players_ws = sh.worksheet("Players")
+        matches_ws = sh.worksheet("Matches")
+        ratings_ws = sh.worksheet("player_ratings")
         
-        # 1. LOAD LEGACY PLAYERS (Required for Tab 4 & Roster checks)
-        p_data = players_ws.get_all_records()
-        df_players = pd.DataFrame(p_data)
-        
-        # Safety check for players
-        expected_p_cols = ['name', 'elo', 'starting_elo', 'matches_played', 'wins', 'losses']
-        if df_players.empty or 'name' not in df_players.columns:
-            df_players = pd.DataFrame(columns=expected_p_cols)
+        # get_all_records() is one API call per sheet.
+        df_players = pd.DataFrame(players_ws.get_all_records())
+        df_ratings = pd.DataFrame(ratings_ws.get_all_records())
+        df_matches = pd.DataFrame(matches_ws.get_all_records())
 
-        # 2. LOAD RATINGS (The New Engine)
-        r_data = ratings_ws.get_all_records()
-        df_ratings = pd.DataFrame(r_data)
+        # Safety checks for empty dataframes
         if df_ratings.empty:
             df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
-
-        # 3. LOAD MATCHES (History)
-        m_data = matches_ws.get_all_records()
-        df_matches = pd.DataFrame(m_data)
         
-        expected_m_cols = ['score_t1', 'score_t2', 'league', 't1_p1', 't1_p2', 't2_p1', 't2_p2']
-        if df_matches.empty:
-             df_matches = pd.DataFrame(columns=expected_m_cols)
-
-        # 4. Clean up Numbers
+        # Numeric cleanup
         for c in ['score_t1', 'score_t2']:
             if c in df_matches.columns:
                 df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
             
-        # RETURN EVERYTHING (6 items)
         return df_players, df_ratings, df_matches, players_ws, matches_ws, ratings_ws
-
     except Exception as e:
-        st.error(f"Database Error: {e}")
+        st.error(f"Database Quota Error: {e}. Please wait 60 seconds and refresh.")
         st.stop()
 
 
@@ -201,32 +186,56 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
 # --- HISTORY REPLAY LOGIC ---
 def replay_league_history(target_league):
     sh = get_db_connection()
-    ratings_sheet = sh.worksheet("player_ratings")
-    
-    # 1. Load History
+    ratings_ws = sh.worksheet("player_ratings")
     matches_ws = sh.worksheet("Matches")
-    df_history = pd.DataFrame(matches_ws.get_all_records())
     
-    # 2. Filter matches
+    # FETCH ONCE
+    all_rows = ratings_ws.get_all_records()
+    all_matches = matches_ws.get_all_records()
+    df_history = pd.DataFrame(all_matches)
+    
     league_matches = df_history[df_history['league'] == target_league]
-    
     if league_matches.empty:
-        # This is likely where the problem is. Let's see what IS there.
-        all_leagues = df_history['league'].unique().tolist()
-        return f"❌ Error: No matches found for '{target_league}'. Found these instead: {all_leagues}"
-    
+        return f"❌ No matches found for '{target_league}'."
+
     count = 0
+    # Process everything in the 'all_rows' list (memory), NOT the API
     for _, row in league_matches.iterrows():
-        match_data = {
-            't1_p1': row.get('t1_p1'), 't1_p2': row.get('t1_p2'),
-            't2_p1': row.get('t2_p1'), 't2_p2': row.get('t2_p2'),
-            'score_t1': row.get('score_t1'), 'score_t2': row.get('score_t2')
-        }
-        process_live_doubles_match(match_data, ladder_name=target_league)
-        count += 1
-        time.sleep(1.1) 
+        s1, s2 = row.get('score_t1', 0), row.get('score_t2', 0)
+        p1, p2 = row.get('t1_p1'), row.get('t1_p2')
+        p3, p4 = row.get('t2_p1'), row.get('t2_p2')
         
-    return f"✅ Success! Replayed {count} matches for '{target_league}' into the ratings sheet."
+        # Determine Winners/Losers
+        if s1 > s2:
+            win_team, lose_team = [p1, p2], [p3, p4]
+        else:
+            win_team, lose_team = [p3, p4], [p1, p2]
+
+        # Update Memory for both League and Overall
+        for context in [target_league, "OVERALL"]:
+            # Helper logic done in memory
+            w_ratings = [get_effective_rating(all_rows, p, context) for p in win_team if p]
+            l_ratings = [get_effective_rating(all_rows, p, context) for p in lose_team if p]
+            
+            if len(w_ratings) > 0 and len(l_ratings) > 0:
+                w_avg = sum(w_ratings) / len(w_ratings)
+                l_avg = sum(l_ratings) / len(l_ratings)
+                exp = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
+                delta = K_FACTOR * (1 - exp)
+                
+                for p in win_team:
+                    if p: update_local_memory(all_rows, p, context, get_effective_rating(all_rows, p, context) + delta)
+                for p in lose_team:
+                    if p: update_local_memory(all_rows, p, context, get_effective_rating(all_rows, p, context) - delta)
+        count += 1
+
+    # UPLOAD ONCE
+    headers = list(all_rows[0].keys())
+    data_to_write = [headers] + [list(r.values()) for r in all_rows]
+    ratings_ws.clear()
+    ratings_ws.update(data_to_write)
+    
+    return f"✅ Success! Replayed {count} matches without hitting API limits."
 
 # --- DOUBLES ISLAND LOGIC ---
 def process_live_doubles_match(match_data, ladder_name):
