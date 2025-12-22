@@ -741,18 +741,8 @@ with tab5:
                 st.write("") 
                 if st.button("Reconstruct Island"):
                     with st.spinner(f"Replaying history for {league_to_restore}..."):
+                        # Ensure you have the replay function defined at the top of your script!
                         msg = replay_league_history(league_to_restore)
-                        import time # Add this to your imports at the very top
-
-# Inside your replay_league_history function:
-    for _, row in league_matches.iterrows():
-        # ... your existing match data code ...
-        
-        process_live_doubles_match(match_data, ladder_name=target_league)
-        count += 1
-        
-        # ADD THIS LINE HERE:
-        time.sleep(1.1) # Pause for 1.1 seconds between matches to stay under API limits
                     st.success(msg)
                     st.rerun()
         else:
@@ -769,9 +759,9 @@ with tab5:
     edited_df = st.data_editor(df_matches, num_rows="dynamic", use_container_width=True)
     
     if st.button("💾 Save Changes & Recalc All History"):
+        # We use the legacy logic here to maintain the 'Players' sheet elo column
         df_matches = edited_df
         df_players, df_matches = recalculate_all_stats(df_players, df_matches)
         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
         st.success("Cloud Updated!")
-
