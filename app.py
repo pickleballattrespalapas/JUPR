@@ -688,7 +688,7 @@ else:
         event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
         
         popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
-            rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
+        rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
             with st.form("rr_setup"):
                 rr_data = []
                 for i in range(rr_courts):
