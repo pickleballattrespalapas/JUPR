@@ -18,6 +18,8 @@ DEFAULT_START_RATING = 3.00
 def init_db():
     conn = sqlite3.connect('pickleball_club.db')
     c = conn.cursor()
+    
+    # Matches Table
     c.execute('''CREATE TABLE IF NOT EXISTS matches 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   date TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
@@ -27,6 +29,7 @@ def init_db():
                   elo_change_t1 REAL, elo_change_t2 REAL,
                   match_type TEXT)''')
     
+    # Players Table
     c.execute('''CREATE TABLE IF NOT EXISTS players 
                  (name TEXT PRIMARY KEY, elo REAL, starting_elo REAL, 
                   matches_played INTEGER, wins INTEGER, losses INTEGER)''')
@@ -56,99 +59,62 @@ def upsert_player_rating(conn, name, rating, wins=0, losses=0):
     matches = wins + losses
     c.execute("SELECT name FROM players WHERE name=?", (name,))
     if c.fetchone():
-        c.execute("UPDATE players SET elo=?, wins=?, losses=?, matches_played=? WHERE name=?", (elo, wins, losses, matches, name))
+        c.execute("""UPDATE players 
+                     SET elo=?, starting_elo=?, wins=?, losses=?, matches_played=? 
+                     WHERE name=?""", 
+                  (elo, elo, wins, losses, matches, name))
     else:
-        c.execute("INSERT INTO players VALUES (?, ?, ?, ?, ?, ?)", (name, elo, elo, matches, wins, losses))
+        c.execute("INSERT INTO players VALUES (?, ?, ?, ?, ?, ?)", 
+                  (name, elo, elo, matches, wins, losses))
     conn.commit()
 
 def update_player_stats(conn, name, elo_delta, is_win):
     c = conn.cursor()
     win_inc = 1 if is_win else 0
-    c.execute("UPDATE players SET elo=elo+?, matches_played=matches_played+1, wins=wins+? WHERE name=?", (elo_delta, win_inc, name))
+    c.execute("""UPDATE players 
+                 SET elo = elo + ?, matches_played = matches_played + 1, wins = wins + ?
+                 WHERE name=?""", (elo_delta, win_inc, name))
     conn.commit()
 
-# --- RECALCULATION ENGINE (THE TIME MACHINE) ---
+# --- RECALCULATION ENGINE ---
 def recalculate_history(conn):
-    """Resets all stats and replays every match in history."""
     status_text = st.empty()
     status_text.info("⏳ Rewinding time... Resetting all player stats...")
-    
     c = conn.cursor()
-    
-    # 1. Reset Players to Starting Elo
-    # We keep 'starting_elo' as the anchor.
     c.execute("UPDATE players SET elo = starting_elo, wins = 0, losses = 0, matches_played = 0")
-    
-    # 2. Fetch All Matches (Chronological Order)
     matches = pd.read_sql_query("SELECT * FROM matches ORDER BY date ASC, id ASC", conn)
-    
     total = len(matches)
-    status_text.info(f"⏳ Replaying {total} matches...")
-    bar = st.progress(0)
-    
-    # 3. Replay Logic
-    for i, m in matches.iterrows():
-        # Get Names
-        p1, p2 = m['t1_p1'], m['t1_p2']
-        p3, p4 = m['t2_p1'], m['t2_p2']
-        s1, s2 = m['score_t1'], m['score_t2']
-        
-        # Get Current Ratings (Newly reset/growing)
-        # Note: We must ensure players exist. If a match has a name not in players table (typo fixed?), create them.
-        r1 = get_player_data(conn, p1)
-        r2 = get_player_data(conn, p2)
-        r3 = get_player_data(conn, p3)
-        r4 = get_player_data(conn, p4)
-        
-        # Calc Delta
-        # Check match type to see if we need special handling? 
-        # For now, standard math applies to all stored matches.
-        
-        # Determine K-Factor
-        # If it was a summary row (multiple games), the K might need to be higher?
-        # The stored 'elo_change_t1' in history helps us guess, but simpler to just use standard K for individual games
-        # OR reuse the logic. For Ladder Summaries, we inserted rows.
-        # Let's use Standard Math for everything for consistency.
-        
-        dt1, dt2 = calculate_hybrid_elo((r1+r2)/2, (r3+r4)/2, s1, s2)
-        
-        # Special Case: If it was a "Ladder Summary" row (where score might be total wins), 
-        # our simple calculate_hybrid_elo might not match perfectly if we don't know the exact game count.
-        # However, for a robust edit system, applying the standard math to the *stored* scores is the best way to ensure integrity.
-        
-        win = s1 > s2
-        
-        # Update Players
-        update_player_stats(conn, p1, dt1, win)
-        update_player_stats(conn, p2, dt1, win)
-        update_player_stats(conn, p3, dt2, not win)
-        update_player_stats(conn, p4, dt2, not win)
-        
-        # Update the match record with the *new* calculated delta (in case the fix changed the result)
-        c.execute("UPDATE matches SET elo_change_t1=?, elo_change_t2=? WHERE id=?", (dt1, dt2, m['id']))
-        
-        bar.progress((i + 1) / total)
-        
+    if total > 0:
+        bar = st.progress(0)
+        for i, m in matches.iterrows():
+            p1, p2, p3, p4 = m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']
+            s1, s2 = m['score_t1'], m['score_t2']
+            r1, r2 = get_player_data(conn, p1), get_player_data(conn, p2)
+            r3, r4 = get_player_data(conn, p3), get_player_data(conn, p4)
+            dt1, dt2 = calculate_hybrid_elo((r1+r2)/2, (r3+r4)/2, s1, s2)
+            win = s1 > s2
+            update_player_stats(conn, p1, dt1, win)
+            update_player_stats(conn, p2, dt1, win)
+            update_player_stats(conn, p3, dt2, not win)
+            update_player_stats(conn, p4, dt2, not win)
+            c.execute("UPDATE matches SET elo_change_t1=?, elo_change_t2=? WHERE id=?", (dt1, dt2, m['id']))
+            bar.progress((i + 1) / total)
     conn.commit()
-    status_text.success("✅ History Replayed! All ratings are now mathematically perfect.")
+    status_text.success("✅ History Replayed! All JUPR scores are now mathematically perfect.")
     st.balloons()
 
 # --- MATH ENGINES ---
 def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
     expected_t1 = 1 / (1 + 10 ** ((t2_avg - t1_avg) / 400))
     expected_t2 = 1 - expected_t1
-    
     total_points = score_t1 + score_t2
     if total_points == 0: return 0, 0 
     actual_t1 = score_t1 / total_points
     actual_t2 = score_t2 / total_points
-    
     raw_delta_t1 = K_FACTOR * 2 * (actual_t1 - expected_t1)
     raw_delta_t2 = K_FACTOR * 2 * (actual_t2 - expected_t2) 
-    
     final_delta_t1 = 0
     final_delta_t2 = 0
-    
     if score_t1 > score_t2: 
         final_delta_t1 = max(0, raw_delta_t1)
         final_delta_t2 = raw_delta_t2
@@ -160,7 +126,6 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
     else:
         final_delta_t1 = raw_delta_t1
         final_delta_t2 = raw_delta_t2
-
     return final_delta_t1, final_delta_t2
 
 # --- HELPER: HEADER SEARCH ---
@@ -179,46 +144,38 @@ def find_header_row(file_obj, candidate_cols=['PlayerID', 'Full Name', 'First', 
 # --- HELPER: LEAGUE STATS ---
 def get_league_leaderboard(conn, selected_league):
     df_players = pd.read_sql_query("SELECT name, elo, starting_elo FROM players", conn)
-    
     if selected_league == "All":
         df_stats = pd.read_sql_query("SELECT name, wins, losses, matches_played FROM players", conn)
         merged = pd.merge(df_players, df_stats, on="name")
     else:
         matches_query = "SELECT * FROM matches WHERE league = ?"
         df_matches = pd.read_sql_query(matches_query, conn, params=(selected_league,))
-        
         if df_matches.empty: return pd.DataFrame()
-            
         stats = {}
         for _, row in df_matches.iterrows():
             s1, s2 = row['score_t1'], row['score_t2']
             t1 = [row['t1_p1'], row['t1_p2']]
             t2 = [row['t2_p1'], row['t2_p2']]
-            
             def add_stat(p, is_win):
                 if not p: return
                 p = p.strip()
                 if p not in stats: stats[p] = {'wins': 0, 'losses': 0}
                 if is_win: stats[p]['wins'] += 1
                 else: stats[p]['losses'] += 1
-
             if s1 > s2: 
                 for p in t1: add_stat(p, True)
                 for p in t2: add_stat(p, False)
             elif s2 > s1: 
                 for p in t1: add_stat(p, False)
                 for p in t2: add_stat(p, True)
-        
         if not stats: return pd.DataFrame()
-        
         stats_data = []
         for name, data in stats.items():
             stats_data.append({'name': name, 'wins': data['wins'], 'losses': data['losses'], 'matches_played': data['wins'] + data['losses']})
-        
         df_league_stats = pd.DataFrame(stats_data)
         merged = pd.merge(df_players, df_league_stats, on="name", how="inner")
 
-    merged['Rating'] = (merged['elo'] / 400).map('{:,.3f}'.format)
+    merged['JUPR'] = (merged['elo'] / 400).map('{:,.3f}'.format)
     merged['Win %'] = (merged['wins'] / merged['matches_played'] * 100).fillna(0).map('{:.1f}%'.format)
     merged['Improvement'] = ((merged['elo'] - merged['starting_elo']) / 400).map('{:+.3f}'.format)
     return merged.sort_values(by='elo', ascending=False)
@@ -244,10 +201,46 @@ def get_match_schedule(court_type, players):
     return matches
 
 # --- UI LAYOUT ---
-st.set_page_config(page_title="League Manager", layout="wide")
-st.title("🥒 Club League Manager")
+st.set_page_config(page_title="Tres Palapas Pickleball", layout="wide")
+st.title("🌵 Tres Palapas Pickleball Ratings and Ladder Results")
+
+# --- CUSTOM CSS FOR FOOTER ---
+st.markdown("""
+<style>
+.footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: white;
+    color: #555;
+    text-align: center;
+    padding: 10px;
+    font-size: 12px;
+    border-top: 1px solid #eee;
+}
+</style>
+<div class="footer">
+    <p>This data, program logic, and the "JUPR" Rating System are the intellectual property of <b>Joe Baumann</b>.</p>
+</div>
+""", unsafe_allow_html=True)
 
 conn = init_db()
+
+# --- JUPR EXPLANATION ---
+with st.expander("ℹ️ About JUPR (Joe's Unique Pickleball Ratings)"):
+    st.markdown("""
+    **What is JUPR?**
+    It stands for **Joe's Unique Pickleball Ratings**. It is a highly sophisticated, bespoke algorithm designed specifically for the chaos of ladder play.
+    
+    **How does it work?**
+    It's complicated. But essentially:
+    1.  **Expectations:** The system looks at who you are playing with and against. It calculates exactly how many points you *should* win based on everyone's history.
+    2.  **Reality:** It compares that to what *actually* happened.
+    3.  **The Secret Sauce:** If you outperform the computer's prediction, your JUPR goes up. If you underperform, it goes down. The magic is in the weighting—winning 11-0 against pros counts a lot more than winning 11-9 against beginners.
+    
+    *Trust the JUPR.*
+    """)
 
 tab1, tab2, tab3, tab4 = st.tabs([
     "🏆 Leaderboards", 
@@ -272,7 +265,7 @@ with tab1:
     display_df = get_league_leaderboard(conn, selected_league)
     
     if not display_df.empty:
-        cols = ['name', 'Rating', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']
+        cols = ['name', 'JUPR', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']
         st.dataframe(display_df[cols], use_container_width=True, hide_index=True)
     else:
         st.info("No matches recorded for this league yet.")
@@ -281,7 +274,6 @@ with tab1:
 with tab2:
     st.header("Live Court Manager")
     
-    # 1. SETUP
     with st.expander("Setup Courts & Players", expanded=True):
         league_name = st.text_input("League / Event Name", "Fall 2025 Ladder")
         if 'num_courts' not in st.session_state: st.session_state.num_courts = 1
@@ -305,7 +297,6 @@ with tab2:
                     else:
                         st.session_state.schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
     
-    # 2. SCORING
     if st.session_state.get('schedule'):
         st.divider()
         st.subheader("📝 Scorecard")
@@ -328,7 +319,6 @@ with tab2:
                         s2 = st.session_state.get(f"s_{c_idx}_{m_idx}_2", 0)
                         if s1==0 and s2==0: continue
                         
-                        # Process
                         p1,p2,p3,p4 = m['t1'][0], m['t1'][1], m['t2'][0], m['t2'][1]
                         r1,r2 = get_player_data(conn,p1), get_player_data(conn,p2)
                         r3,r4 = get_player_data(conn,p3), get_player_data(conn,p4)
@@ -349,35 +339,25 @@ with tab2:
                 del st.session_state.schedule
                 st.rerun()
 
-    # 3. OTHER INPUTS
     with st.expander("Other Input Methods"):
         entry_method = st.radio("Method", ["Ladder Week Summary", "Manual Single"], horizontal=True)
-        
-        # LADDER UPLOAD
         if entry_method == "Ladder Week Summary":
             f = st.file_uploader("Upload Week Template")
-            if f:
-                h = find_header_row(f, ['PlayerID', 'First', 'Full Name'])
-                f.seek(0)
-                df = pd.read_csv(f, header=h)
-                df.columns = [c.strip() for c in df.columns]
-                
-                # Logic from V8
-                if st.button("Process Ladder"):
-                    # (Simplified for brevity - re-using core logic)
-                    st.success("Logic placeholder - use the Live Court Manager for best results!")
+            if f: st.info("Please use Live Court Manager or Manual Single for best JUPR accuracy.")
 
 # --- TAB 3: PLAYERS ---
 with tab3:
     st.header("Player Management")
     c1, c2 = st.columns(2)
     with c1:
+        st.subheader("Add / Edit Player")
         with st.form("new_p"):
-            n = st.text_input("Name")
-            r = st.number_input("Rating", 3.0)
-            if st.form_submit_button("Add"):
-                upsert_player_rating(conn, n, r)
-                st.success("Added")
+            n = st.text_input("Name (Exact Spelling)")
+            r = st.number_input("Correct Starting JUPR", 1.0, 8.0, 3.0, 0.01)
+            if st.form_submit_button("Save / Update Player"):
+                upsert_player_rating(conn, n.strip(), r)
+                st.success(f"Updated {n}. Start JUPR set to {r}. Go to Tab 4 to Recalculate History if needed.")
+    
     with c2:
         st.subheader("Import Roster")
         f = st.file_uploader("Upload OverallResults.csv", type=['csv'])
@@ -399,36 +379,22 @@ with tab3:
 # --- TAB 4: MATCH LOG (EDITABLE) ---
 with tab4:
     st.header("Match Log & Editor")
-    st.info("Double-click any cell to fix typos or scores. Then click 'Save & Recalculate' to fix the Leaderboard.")
+    st.info("1. Edit rows to fix typos/scores. 2. Click 'Save & Recalculate' to fix JUPR.")
     
-    # Load Data
     df_log = pd.read_sql_query("SELECT id, date, league, t1_p1, t1_p2, score_t1, score_t2, t2_p1, t2_p2 FROM matches ORDER BY date DESC", conn)
-    
-    # Editable Dataframe
     edited_df = st.data_editor(df_log, num_rows="dynamic", use_container_width=True)
     
-    if st.button("💾 Save Changes & Recalculate Ratings"):
+    if st.button("💾 Save Changes & Recalculate JUPR"):
         try:
-            # 1. Update Matches Table with Edits
-            # We loop through and update. For simplicity in a small app, we can wipe and reload 
-            # BUT we want to keep IDs if possible. 
-            # Best approach for Streamlit: Iterate and Update.
-            
             c = conn.cursor()
             for _, row in edited_df.iterrows():
-                # We use ID to update the correct row
-                # Note: If user added a row, ID might be NaN or new.
                 if pd.notna(row['id']):
                     c.execute("""UPDATE matches 
                                  SET league=?, t1_p1=?, t1_p2=?, score_t1=?, score_t2=?, t2_p1=?, t2_p2=? 
                                  WHERE id=?""", 
                               (row['league'], row['t1_p1'], row['t1_p2'], row['score_t1'], 
                                row['score_t2'], row['t2_p1'], row['t2_p2'], row['id']))
-            
             conn.commit()
-            
-            # 2. Trigger Time Machine
             recalculate_history(conn)
-            
         except Exception as e:
             st.error(f"Error updating: {e}")
