@@ -297,19 +297,19 @@ def get_match_schedule(format_type, players):
     # --- 12-PLAYER INDIVIDUAL RR SCHEDULE (11 ROUNDS) ---
     if format_type == "12-Player":
         # Exact pairings from '12 person RR Chart.csv'
-        # Format: [([Team1_P1, Team1_P2], [Team2_P1, Team2_P2]), ...]
+        # Indices are 0-based: Player 1 = 0, Player 12 = 11
         raw_schedule = [
-            [([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])],  # Round 1 (3/6 v 4/11, 5/7 v 9/10, 12/1 v 2/8)
-            [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])], # Round 2
-            [([10, 1], [3, 4]), ([11, 6], [7, 2]), ([8, 0], [9, 5])], # Round 3
-            [([11, 9], [10, 5]), ([0, 3], [1, 8]), ([2, 4], [6, 7])], # Round 4
-            [([3, 6], [4, 0]), ([5, 7], [9, 10]), ([11, 1], [2, 8])], # Round 5
-            [([8, 10], [1, 2]), ([11, 4], [5, 0]), ([6, 9], [7, 3])], # Round 6
-            [([11, 7], [8, 3]), ([9, 1], [10, 6]), ([0, 2], [4, 5])], # Round 7
-            [([1, 4], [2, 9]), ([3, 5], [7, 8]), ([11, 10], [0, 6])], # Round 8
-            [([6, 8], [10, 0]), ([4, 7], [5, 1]), ([11, 2], [3, 9])], # Round 9
-            [([11, 5], [6, 1]), ([9, 0], [2, 3]), ([7, 10], [8, 4])], # Round 10
-            [([10, 2], [0, 7]), ([11, 8], [9, 4]), ([1, 3], [5, 6])], # Round 11
+            [([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])],   # Round 1
+            [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])],  # Round 2
+            [([10, 1], [3, 4]), ([11, 6], [7, 2]), ([8, 0], [9, 5])],  # Round 3
+            [([11, 9], [10, 5]), ([0, 3], [1, 8]), ([2, 4], [6, 7])],  # Round 4
+            [([3, 6], [4, 0]), ([5, 7], [9, 10]), ([11, 1], [2, 8])],  # Round 5
+            [([8, 10], [1, 2]), ([11, 4], [5, 0]), ([6, 9], [7, 3])],  # Round 6
+            [([11, 7], [8, 3]), ([9, 1], [10, 6]), ([0, 2], [4, 5])],  # Round 7
+            [([1, 4], [2, 9]), ([3, 5], [7, 8]), ([11, 10], [0, 6])],  # Round 8
+            [([6, 8], [10, 0]), ([4, 7], [5, 1]), ([11, 2], [3, 9])],  # Round 9
+            [([11, 5], [6, 1]), ([9, 0], [2, 3]), ([7, 10], [8, 4])],  # Round 10
+            [([10, 2], [0, 7]), ([11, 8], [9, 4]), ([1, 3], [5, 6])],  # Round 11
         ]
         
         matches = []
@@ -321,9 +321,6 @@ def get_match_schedule(format_type, players):
                     't2': [players[t2_idx[0]], players[t2_idx[1]]]
                 })
         return matches
-
-    # ... (Keep your existing 4-Player, 5-Player, 8-Player logic here) ...
-    return []
     
     if format_type == "4-Player":
         matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
@@ -343,9 +340,9 @@ def get_match_schedule(format_type, players):
 # --- OVERALL-ONLY LOGIC (FOR TAB 3) ---
 def process_overall_only_match(match_data):
     """
-    Forces Pop-Up matches to only affect the 'OVERALL' leaderboard.
+    Directs Pop-Up Round Robin matches to update only the OVERALL leaderboard.
     """
-    # Simply reuse the existing main logic but explicitly set the destination to OVERALL
+    # Simply reuse the main processing engine
     process_live_doubles_match(match_data, ladder_name="OVERALL")
 
     # --- UPDATE ONLY THE 'OVERALL' CONTEXT ---
