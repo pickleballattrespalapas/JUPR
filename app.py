@@ -196,6 +196,53 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
         ratings_sheet.update(data_to_write)
         
     return results_log
+
+# --- HISTORY REPLAY LOGIC ---
+def replay_league_history(target_league):
+    """
+    Reads existing match history for a specific league and 
+    re-calculates the Island Ratings from scratch.
+    """
+    sh = get_db_connection()
+    ratings_sheet = sh.worksheet("player_ratings")
+    all_rows = ratings_sheet.get_all_records()
+    
+    # 1. Load Match History
+    matches_ws = sh.worksheet("Matches")
+    m_data = matches_ws.get_all_records()
+    df_history = pd.DataFrame(m_data)
+    
+    # Filter for the league we want to restore
+    if 'league' not in df_history.columns:
+        return f"Error: No 'league' column found in matches."
+    
+    # Sort by date to ensure correct order
+    if 'date' in df_history.columns:
+        df_history['date'] = pd.to_datetime(df_history['date'])
+        df_history = df_history.sort_values(by='date')
+    
+    league_matches = df_history[df_history['league'] == target_league]
+    
+    if league_matches.empty:
+        return f"No matches found for league: {target_league}"
+
+    count = 0
+    # 2. Replay every match
+    for _, row in league_matches.iterrows():
+        # Construct match data object from the row
+        match_data = {
+            't1_p1': row.get('t1_p1'), 't1_p2': row.get('t1_p2'),
+            't2_p1': row.get('t2_p1'), 't2_p2': row.get('t2_p2'),
+            'score_t1': row.get('score_t1'), 'score_t2': row.get('score_t2')
+        }
+        
+        # Use the standard Island Processor
+        # This will auto-seed from OVERALL if they don't have a rating yet
+        process_live_doubles_match(match_data, ladder_name=target_league)
+        count += 1
+
+    return f"Successfully restored '{target_league}'! Processed {count} historical matches."
+
 # --- DOUBLES ISLAND LOGIC ---
 def process_live_doubles_match(match_data, ladder_name):
     """
@@ -681,6 +728,34 @@ with tab5:
 
     st.divider()
 
+st.divider()
+    
+    # --- SECTION B: RESTORE LOST LADDERS ---
+    st.subheader("🔄 Restore Lost Ladders")
+    st.info("Use this if you see empty leaderboards for leagues that have existing match history.")
+    
+    # 1. Find all leagues in the match history
+    if 'league' in df_matches.columns:
+        # Get unique leagues, ignoring empty ones
+        historical_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
+        
+        if historical_leagues:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                league_to_restore = st.selectbox("Select League to Restore", historical_leagues)
+            with c2:
+                st.write("") # Spacer
+                st.write("") # Spacer
+                if st.button("Reconstruct Island"):
+                    with st.spinner(f"Replaying history for {league_to_restore}..."):
+                        msg = replay_league_history(league_to_restore)
+                    st.success(msg)
+                    st.rerun()
+        else:
+            st.warning("No league history found in the 'Matches' sheet.")
+    else:
+        st.error("Your 'Matches' sheet is missing the 'league' column.")
+    
     # --- SECTION B: MATCH EDITOR (EXISTING SYSTEM) ---
     st.subheader("📝 Edit Main League Matches")
     st.info("Edits here update the 'Matches' sheet directly.")
