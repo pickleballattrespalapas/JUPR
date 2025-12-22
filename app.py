@@ -28,15 +28,12 @@ def get_db_connection():
         st.error(f"❌ Could not find Google Sheet named '{SHEET_NAME}'. Did you share it with the service account email?")
         st.stop()
 
-# --- DATA LOADERS (CACHED) ---
-# We don't cache these heavily because we want instant updates for the admin
-# --- DATA LOADERS (UPDATED) ---
 # --- DATA LOADERS (CORRECTED) ---
 def load_data():
     sh = get_db_connection()
     try:
         # Load the 3 Core Sheets
-        players_ws = sh.worksheet("Players")       # Legacy / Roster
+        players_ws = sh.worksheet("Players")       # Legacy / Metadata
         matches_ws = sh.worksheet("Matches")       # Match History
         ratings_ws = sh.worksheet("player_ratings") # NEW ISLAND RATINGS
         
@@ -327,7 +324,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- LOAD DATA ---
-# We now unpack 6 items safely
+# We now unpack 6 items safely (Added df_players at the start)
 df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
 
 # --- LOGIN SYSTEM ---
