@@ -720,7 +720,15 @@ else:
                         for i, m in enumerate(c['matches']):
                             s1, s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0), st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
                             if s1 == 0 and s2 == 0: continue
-                            match_data = {'date': str(event_date_rr), 'league': "PopUp_Event", 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2}
+                            
+                            # Fixed match_data dictionary syntax
+                            match_data = {
+                                'date': str(event_date_rr), 
+                                'league': "PopUp_Event", 
+                                't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
+                                't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
+                                'score_t1': s1, 'score_t2': s2
+                            }
                             process_overall_only_match(match_data)
                     st.success("✅ Overall ratings updated!")
                     st.rerun()
