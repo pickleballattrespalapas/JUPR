@@ -327,8 +327,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- LOAD DATA ---
-# We now unpack 5 items instead of 4
-df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
+# We now unpack 6 items safely
+df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
 
 # --- LOGIN SYSTEM ---
 if 'admin_logged_in' not in st.session_state: st.session_state.admin_logged_in = False
