@@ -453,88 +453,103 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Match Log (Admin)"
 ])
 
-# --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM) ---
+# --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM WITH SHARING) ---
 with tab1:
     col_a, col_b = st.columns([1, 3])
     
-    # 1. Get List of Ladders (Islands)
+    # 1. Get List of Ladders
     available_ladders = ["OVERALL"]
     if not df_ratings.empty:
-        others = [x for x in df_ratings['ladder_id'].unique() if x != "OVERALL"]
-        available_ladders += sorted(others)
+        others = [str(x).strip() for x in df_ratings['ladder_id'].unique() if str(x).strip() != "OVERALL"]
+        available_ladders += sorted(list(set(others)))
     
-    # 2. Check URL for sharing
+    # 2. READ THE LINK (Query Params)
+    # Check if someone arrived via a link like .../?league=Verified%20Mens%204.0
     query_params = st.query_params
     default_index = 0
     if "league" in query_params:
-        target = query_params["league"]
-        if target in available_ladders:
-            default_index = available_ladders.index(target)
+        target_from_link = query_params["league"]
+        if target_from_link in available_ladders:
+            default_index = available_ladders.index(target_from_link)
 
     with col_a:
         st.subheader("Filter")
         selected_ladder = st.selectbox("Select Ladder", available_ladders, index=default_index)
         
-        # Update URL
+        # 3. UPDATE THE URL (So they can copy the address bar)
         if selected_ladder != "OVERALL":
             st.query_params["league"] = selected_ladder
         else:
-            if "league" in st.query_params: del st.query_params["league"]
+            if "league" in st.query_params: 
+                del st.query_params["league"]
 
     with col_b:
         st.subheader(f"Standings: {selected_ladder}")
+        
+        # 4. GENERATE SHAREABLE LINK
+        if selected_ladder != "OVERALL":
+            # This automatically detects your app's URL
+            base_url = "https://8lkemld946rmtwwptk2gcs.streamlit.app/" 
+            share_link = f"{base_url}?league={selected_ladder.replace(' ', '%20')}"
+            
+            st.markdown(f"**🔗 Share this leaderboard:**")
+            st.code(share_link, language="text")
+            st.caption("Copy the link above to send players directly to this specific ladder.")
     
     # --- BUILD THE LEADERBOARD ---
     if not df_ratings.empty:
-        # A. Filter Ratings for this specific Island
-        ladder_ratings = df_ratings[df_ratings['ladder_id'] == selected_ladder].copy()
+        # Filter Ratings
+        ladder_ratings = df_ratings[df_ratings['ladder_id'].str.strip() == selected_ladder].copy()
         
-        # B. Calculate Win/Loss Record from Match History
+        # Filter Match History for Win/Loss Tally
         if selected_ladder == "OVERALL":
             relevant_matches = df_matches
         else:
-            relevant_matches = df_matches[df_matches['league'] == selected_ladder]
+            relevant_matches = df_matches[df_matches['league'].str.strip() == selected_ladder]
 
         stats = {}
         for _, row in relevant_matches.iterrows():
-            s1, s2 = row['score_t1'], row['score_t2']
-            if s1 > s2:
-                wins = [row['t1_p1'], row['t1_p2']]
-                loss = [row['t2_p1'], row['t2_p2']]
-            else:
-                wins = [row['t2_p1'], row['t2_p2']]
-                loss = [row['t1_p1'], row['t1_p2']]
+            s1, s2 = row.get('score_t1', 0), row.get('score_t2', 0)
+            p1, p2, p3, p4 = row.get('t1_p1'), row.get('t1_p2'), row.get('t2_p1'), row.get('t2_p2')
             
-            for p in wins:
-                if p not in stats: stats[p] = {'w': 0, 'l': 0}
-                stats[p]['w'] += 1
-            for p in loss:
-                if p not in stats: stats[p] = {'w': 0, 'l': 0}
-                stats[p]['l'] += 1
+            if s1 > s2:
+                winners, losers = [p1, p2], [p3, p4]
+            else:
+                winners, losers = [p3, p4], [p1, p2]
+            
+            for p in winners:
+                if p:
+                    if p not in stats: stats[p] = {'w': 0, 'l': 0}
+                    stats[p]['w'] += 1
+            for p in losers:
+                if p:
+                    if p not in stats: stats[p] = {'w': 0, 'l': 0}
+                    stats[p]['l'] += 1
 
-        # C. Merge Stats into Ratings
+        # Merge Stats
         ladder_ratings['wins'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'w':0})['w'])
         ladder_ratings['losses'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'l':0})['l'])
         ladder_ratings['matches'] = ladder_ratings['wins'] + ladder_ratings['losses']
         
-        # D. Format and Sort
-        # THIS IS THE FIX: Divide by 400 to get JUPR format (e.g. 3.521)
+        # Format
         ladder_ratings['JUPR'] = (ladder_ratings['rating'] / 400).map('{:,.3f}'.format)
-        
-        # Win % Calculation
         ladder_ratings['Win %'] = (ladder_ratings['wins'] / ladder_ratings['matches'] * 100).fillna(0).map('{:.1f}%'.format)
 
-        # Sort by Rating High -> Low
         leaderboard = ladder_ratings.sort_values(by='rating', ascending=False)
         
-        # E. Display
-        st.dataframe(
-            leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']],
-            use_container_width=True,
-            hide_index=True
-        )
+        # Only show active players for this ladder
+        leaderboard = leaderboard[leaderboard['matches'] > 0]
+
+        if not leaderboard.empty:
+            st.dataframe(
+                leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info(f"No match history found for '{selected_ladder}'.")
     else:
-        st.info("No ratings found. Upload matches to generate the first leaderboard!")
+        st.info("No ratings found.")
 
 # --- TAB 2: LIVE COURT MANAGER ---
 with tab2:
