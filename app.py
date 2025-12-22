@@ -243,6 +243,26 @@ def process_live_doubles_match(match_data, ladder_name):
         for p, r in zip(losers, l_ratings):
             update_local_memory(all_rows, p, context_id, round(r - delta))
 
+# --- HELPER: SCHEDULE GENERATOR ---
+def get_match_schedule(court_type, players):
+    p = players + ["?"] * (12 - len(players))
+    matches = []
+    
+    if court_type == "4-Player":
+        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
+    elif court_type == "5-Player":
+        matches = [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1 (1 Sit)'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2 (4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3 (2 Sit)'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4 (3 Sit)'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5 (5 Sit)'}]
+    elif court_type == "6-Player":
+        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1 (4,6 Sit)'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2 (1,2 Sit)'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3 (1,3 Sit)'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4 (3,4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5 (2,5 Sit)'}]
+    elif court_type == "8-Player":
+        matches = [
+            {'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'},
+            {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'},
+            {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'},
+            {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}
+        ]
+    return matches
+
 # --- OVERALL-ONLY LOGIC (FOR TAB 3) ---
 def process_overall_only_match(match_data):
     """
