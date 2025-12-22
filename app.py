@@ -531,34 +531,57 @@ with tab_search:
     selected_p = st.selectbox("Search for a Player", all_player_names)
     
     if selected_p:
+        # 1. Metric Cards
         st.subheader(f"Current Ratings: {selected_p}")
         p_ratings = df_ratings[df_ratings['name'] == selected_p].copy()
         if not p_ratings.empty:
-            p_ratings['JUPR'] = (p_ratings['rating'] / 400).map('{:,.3f}'.format)
+            p_ratings['JUPR_val'] = (p_ratings['rating'] / 400).map('{:,.3f}'.format)
             cols = st.columns(len(p_ratings))
             for i, (_, row) in enumerate(p_ratings.iterrows()):
-                cols[i].metric(label=row['ladder_id'], value=row['JUPR'])
+                cols[i].metric(label=row['ladder_id'], value=row['JUPR_val'])
         
         st.divider()
+        
+        # 2. Match History with JUPR Delta
         st.subheader("Match History & Rating Changes")
         p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
         
         if not p_matches.empty:
+            # Get the starting JUPR for this player to anchor the chart
+            player_info = df_players[df_players['name'] == selected_p].iloc[0]
+            start_jupr = player_info['starting_elo'] / 400
+
             def get_match_summary(row):
                 is_t1 = (row['t1_p1'] == selected_p or row['t1_p2'] == selected_p)
                 score_us, score_them = (row['score_t1'], row['score_t2']) if is_t1 else (row['score_t2'], row['score_t1'])
-                change = row.get('elo_change_t1' if is_t1 else 'elo_change_t2', 0)
+                
+                # Conversion: Convert raw Elo delta to JUPR delta (divide by 400)
+                raw_delta = row.get('elo_change_t1' if is_t1 else 'elo_change_t2', 0)
+                jupr_delta = raw_delta / 400
+                
                 res = "✅ Win" if score_us > score_them else "❌ Loss"
-                return pd.Series([res, f"{score_us}-{score_them}", round(change, 1)])
+                return pd.Series([res, f"{score_us}-{score_them}", round(jupr_delta, 3)])
 
-            p_matches[['Result', 'Score', 'Δ Elo']] = p_matches.apply(get_match_summary, axis=1)
-            st.dataframe(p_matches[['date', 'league', 'Result', 'Score', 'Δ Elo', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], use_container_width=True, hide_index=True)
+            p_matches[['Result', 'Score', 'Δ JUPR']] = p_matches.apply(get_match_summary, axis=1)
             
-            st.subheader("Performance Trend")
+            # Show Table (Removing raw Elo, showing only JUPR change)
+            st.dataframe(p_matches[['date', 'league', 'Result', 'Score', 'Δ JUPR', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], 
+                         use_container_width=True, hide_index=True)
+            
+            # 3. Corrected Performance Trend
+            st.subheader("JUPR Progress Trend")
             p_matches['date'] = pd.to_datetime(p_matches['date'])
             chart_df = p_matches.sort_values('date')
-            chart_df['Rating Progress'] = chart_df['Δ Elo'].cumsum()
-            st.line_chart(chart_df, x='date', y='Rating Progress')
+            
+            # Calculate Progression: Starting JUPR + Cumulative Change
+            chart_df['JUPR Progress'] = start_jupr + chart_df['Δ JUPR'].cumsum()
+            
+            # Round for a cleaner chart tooltip
+            chart_df['JUPR Progress'] = chart_df['JUPR Progress'].round(3)
+            
+            st.line_chart(chart_df, x='date', y='JUPR Progress')
+        else:
+            st.info("No match history found for this player.")
 
 # --- ADMIN PROTECTION ---
 if not st.session_state.admin_logged_in:
