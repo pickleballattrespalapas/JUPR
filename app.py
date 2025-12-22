@@ -731,10 +731,28 @@ else:
         if 'league' in df_matches.columns:
             hist_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
             league_to_restore = st.selectbox("Select League", hist_leagues)
-            if st.button("Reconstruct Island"):
-                msg = replay_league_history(league_to_restore)
-                st.success(msg)
-                st.rerun()
+            # Updated Tab 5 Reconstruct logic
+if st.button("Reconstruct Island"):
+    with st.spinner(f"Resetting and replaying history for {league_to_restore}..."):
+        # 1. FETCH CURRENT RATINGS
+        sh = get_db_connection()
+        ratings_ws = sh.worksheet("player_ratings")
+        all_ratings = ratings_ws.get_all_records()
+        
+        # 2. DELETE ENTRIES FOR THIS LEAGUE FROM MEMORY
+        # This ensures we don't 'double up' on existing ratings
+        clean_ratings = [r for r in all_ratings if r['ladder_id'] != league_to_restore]
+        
+        # 3. UPLOAD CLEAN LIST BACK TO GOOGLE (Clear the old doubled data)
+        headers = list(all_ratings[0].keys())
+        data_to_write = [headers] + [list(r.values()) for r in clean_ratings]
+        ratings_ws.clear()
+        ratings_ws.update(data_to_write)
+        
+        # 4. RUN THE REPLAY FUNCTION
+        msg = replay_league_history(league_to_restore)
+        st.success(f"League reset and {msg}")
+        st.rerun()
 
         st.divider()
         st.subheader("📝 Edit Match History")
