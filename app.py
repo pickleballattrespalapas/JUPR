@@ -456,18 +456,13 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM WITH EXPLANATION) ---
 with tab1:
     # --- EXPLANATION SECTION ---
-    with st.expander("ℹ️ How the Island Rating System Works"):
+    with st.expander("ℹ️ How the Individual League Rating System Works"):
         st.markdown("""
         ### Why do I have multiple ratings?
-        We use an **'Island System'** to ensure fair play across different groups while maintaining a global skill level.
+        We use an Individual League Rating System to ensure fair play across different groups while maintaining a global skill level.
         
-        * **Specific Ladders (The Islands):** Your rating here is unique to this specific group (e.g., Verified Mens 4.0). This protects the ladder's integrity; matches played elsewhere won't affect your standing in this specific competitive group.
-        * **OVERALL Rating (The Global Map):** Every match you play, regardless of which ladder it's in, updates your Overall Rating. This is your "Universal" skill level used for seeding and general tracking.
-        
-        ### What is 'Soft Seeding'?
-        If you join a new ladder for the first time, the system **seeds** you using your **Overall Rating**. 
-        * *Example:* If your Overall is 3.500, you start a new ladder at 3.500 instead of starting at zero. From that point on, that 'Island' rating moves independently based on your performance within that group.
-        """)
+        * **Specific Ladders :** Your rating here is unique to this specific group. This protects the ladder's integrity; matches played elsewhere won't affect your standing in this specific competitive group.
+        * **OVERALL Rating (The Global Map):** Every match you play, regardless of which ladder it's in, updates your Overall Rating. When you join a new league or group, this is the rating that will be used at the start of that group's play.)
 
     st.divider()
 
