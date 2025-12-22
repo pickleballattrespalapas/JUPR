@@ -261,51 +261,6 @@ with tab1:
         hide_index=True
     )
 
-    with col_b:
-        st.subheader(f"Standings: {selected_league}")
-    
-    # Calculate League Specific Stats
-    display_df = df_players.copy()
-    
-    if selected_league != "All" and not df_matches.empty:
-        # Filter matches
-        league_matches = df_matches[df_matches['league'] == selected_league]
-        
-        # Re-tally wins/losses just for this view (Ratings stay global)
-        stats = {}
-        for _, row in league_matches.iterrows():
-            s1, s2 = row['score_t1'], row['score_t2']
-            winners = [row['t1_p1'], row['t1_p2']] if s1 > s2 else [row['t2_p1'], row['t2_p2']]
-            losers = [row['t2_p1'], row['t2_p2']] if s1 > s2 else [row['t1_p1'], row['t1_p2']]
-            
-            for p in winners: 
-                if p not in stats: stats[p] = {'w':0, 'l':0}
-                stats[p]['w'] += 1
-            for p in losers:
-                if p not in stats: stats[p] = {'w':0, 'l':0}
-                stats[p]['l'] += 1
-        
-        # Map back to display_df
-        display_df['wins'] = display_df['name'].map(lambda x: stats.get(x, {'w':0})['w'])
-        display_df['losses'] = display_df['name'].map(lambda x: stats.get(x, {'l':0})['l'])
-        display_df['matches_played'] = display_df['wins'] + display_df['losses']
-        display_df = display_df[display_df['matches_played'] > 0]
-
-    # Format
-    display_df['JUPR'] = (display_df['elo'] / 400).map('{:,.3f}'.format)
-    display_df['Win %'] = (display_df['wins'] / display_df['matches_played'] * 100).fillna(0).map('{:.1f}%'.format)
-    display_df['Improvement'] = ((display_df['elo'] - display_df['starting_elo']) / 400).map('{:+.3f}'.format)
-    
-  # CORRECT LOGIC: Sort by 'elo' FIRST, while it still exists
-    sorted_df = display_df.sort_values(by='elo', ascending=False)
-
-    # THEN select only the columns you want to show
-    st.dataframe(
-        sorted_df[['name', 'JUPR', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']], 
-        use_container_width=True, 
-        hide_index=True
-    )
-
 # --- ADMIN GATEKEEPER ---
 if not st.session_state.admin_logged_in:
     with tab2: st.warning("Admin Access Only"); st.text_input("Admin Password", type="password", key="password", on_change=check_password)
