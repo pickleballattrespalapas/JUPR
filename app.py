@@ -717,6 +717,8 @@ else:
 
     with tab5:
         st.header("Admin Tools")
+        
+        # --- SECTION A: LADDER UPLOAD ---
         st.subheader("📤 Upload Ladder Matches")
         ladder_upload = st.file_uploader("Upload CSV", type=["csv"], key="ladder_up")
         if ladder_upload is not None:
@@ -727,32 +729,41 @@ else:
                 st.write(logs)
 
         st.divider()
-        st.subheader("🔄 Restore Lost Ladders")
+        
+        # --- SECTION B: RESTORE / RESET LADDERS ---
+        st.subheader("🔄 Reconstruct/Reset League")
+        st.warning("This will wipe existing ratings for the selected league and re-calculate them from the Match History to ensure 100% accuracy.")
+        
         if 'league' in df_matches.columns:
             hist_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
-            league_to_restore = st.selectbox("Select League", hist_leagues)
-            # Updated Tab 5 Reconstruct logic
-if st.button("Reconstruct Island"):
-    with st.spinner(f"Resetting and replaying history for {league_to_restore}..."):
-        # 1. FETCH CURRENT RATINGS
-        sh = get_db_connection()
-        ratings_ws = sh.worksheet("player_ratings")
-        all_ratings = ratings_ws.get_all_records()
-        
-        # 2. DELETE ENTRIES FOR THIS LEAGUE FROM MEMORY
-        # This ensures we don't 'double up' on existing ratings
-        clean_ratings = [r for r in all_ratings if r['ladder_id'] != league_to_restore]
-        
-        # 3. UPLOAD CLEAN LIST BACK TO GOOGLE (Clear the old doubled data)
-        headers = list(all_ratings[0].keys())
-        data_to_write = [headers] + [list(r.values()) for r in clean_ratings]
-        ratings_ws.clear()
-        ratings_ws.update(data_to_write)
-        
-        # 4. RUN THE REPLAY FUNCTION
-        msg = replay_league_history(league_to_restore)
-        st.success(f"League reset and {msg}")
-        st.rerun()
+            # Create the selection box here so 'league_to_restore' is defined
+            league_to_restore = st.selectbox("Select League to Fix", hist_leagues)
+            
+            if st.button("Clean Reconstruct"):
+                with st.spinner(f"Wiping old data and replaying history for {league_to_restore}..."):
+                    # 1. CONNECT & FETCH
+                    sh = get_db_connection()
+                    r_ws = sh.worksheet("player_ratings")
+                    all_r = r_ws.get_all_records()
+                    
+                    # 2. DELETE OLD DATA FOR THIS LEAGUE & OVERALL
+                    # Because OVERALL is affected by every match, we must reset it too 
+                    # to fix the 'doubling' error.
+                    clean_r = [r for r in all_r if r['ladder_id'] != league_to_restore and r['ladder_id'] != 'OVERALL']
+                    
+                    # 3. UPDATE SHEET WITH CLEANED DATA
+                    if clean_r:
+                        headers = list(all_r[0].keys())
+                        data_to_write = [headers] + [list(r.values()) for r in clean_r]
+                        r_ws.clear()
+                        r_ws.update(data_to_write)
+                    else:
+                        r_ws.clear() # If it's the only league, just wipe it
+                    
+                    # 4. RUN REPLAY (This function must be defined at the top of your app)
+                    msg = replay_league_history(league_to_restore)
+                    st.success(f"Fixed! {msg}")
+                    st.rerun()
 
         st.divider()
         st.subheader("📝 Edit Match History")
