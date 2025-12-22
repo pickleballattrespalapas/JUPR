@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import math
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import io
@@ -92,6 +93,107 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
         if final_delta_t2 == 0: final_delta_t2 = 1.0
         
     return final_delta_t1, final_delta_t2
+
+# --- ISLAND / LADDER LOGIC START ---
+
+def calculate_ladder_elo(rating_a, rating_b, actual_score_a):
+    """Standard 1v1 Elo for Ladder Matches."""
+    expected_a = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
+    new_rating_a = rating_a + K_FACTOR * (actual_score_a - expected_a)
+    return round(new_rating_a)
+
+def get_effective_rating(all_rows, user_name, ladder_id):
+    """
+    Finds rating for a specific ladder. 
+    If not found, 'Seeds' from OVERALL. 
+    If OVERALL not found, returns Default (1200).
+    """
+    # 1. Search for specific ladder rating
+    for row in all_rows:
+        if row['name'] == user_name and row['ladder_id'] == ladder_id:
+            return float(row['rating'])
+    
+    # 2. If not found, look for OVERALL (Seeding)
+    if ladder_id != 'OVERALL':
+        for row in all_rows:
+            if row['name'] == user_name and row['ladder_id'] == 'OVERALL':
+                return float(row['rating'])
+    
+    # 3. Default start (1200 or whatever you prefer)
+    return 1200.0
+
+def update_local_memory(all_rows, name, ladder, new_rating):
+    """Updates the list of dictionaries in memory."""
+    found = False
+    for row in all_rows:
+        if row['name'] == name and row['ladder_id'] == ladder:
+            row['rating'] = new_rating
+            found = True
+            break
+    if not found:
+        all_rows.append({'name': name, 'ladder_id': ladder, 'rating': new_rating})
+
+def process_batch_upload(dataframe, ladder_name_from_ui=None):
+    """
+    Takes uploaded CSV, runs Island/Soft Seeding logic, and updates Google Sheet.
+    """
+    # 1. Use the EXISTING Streamlit connection (Secure)
+    sh = get_db_connection()
+    try:
+        ratings_sheet = sh.worksheet("player_ratings")
+    except gspread.exceptions.WorksheetNotFound:
+        st.error("❌ Tab 'player_ratings' not found in Google Sheets. Please create it!")
+        return []
+    
+    # 2. Load current state
+    all_rows = ratings_sheet.get_all_records()
+    results_log = []
+
+    # 3. Process Rows
+    for index, row in dataframe.iterrows():
+        # Handle case-insensitive columns
+        winner = row.get('winner') or row.get('Winner')
+        loser = row.get('loser') or row.get('Loser')
+        
+        # Determine Ladder Name
+        csv_ladder = row.get('ladder') or row.get('Ladder')
+        ladder_id = csv_ladder if csv_ladder else ladder_name_from_ui
+        
+        if not winner or not loser or not ladder_id:
+            continue # Skip invalid rows
+
+        # --- UPDATE SPECIFIC LADDER ---
+        r_win = get_effective_rating(all_rows, winner, ladder_id)
+        r_lose = get_effective_rating(all_rows, loser, ladder_id)
+        
+        new_win = calculate_ladder_elo(r_win, r_lose, 1)
+        new_lose = calculate_ladder_elo(r_lose, r_win, 0)
+        
+        update_local_memory(all_rows, winner, ladder_id, new_win)
+        update_local_memory(all_rows, loser, ladder_id, new_lose)
+
+        # --- UPDATE OVERALL LADDER ---
+        r_ov_win = get_effective_rating(all_rows, winner, 'OVERALL')
+        r_ov_lose = get_effective_rating(all_rows, loser, 'OVERALL')
+        
+        new_ov_win = calculate_ladder_elo(r_ov_win, r_ov_lose, 1)
+        new_ov_lose = calculate_ladder_elo(r_ov_lose, r_ov_win, 0)
+        
+        update_local_memory(all_rows, winner, 'OVERALL', new_ov_win)
+        update_local_memory(all_rows, loser, 'OVERALL', new_ov_lose)
+        
+        results_log.append(f"Processed: {winner} def. {loser} ({ladder_id})")
+
+    # 4. Save back to Google Sheets (Bulk Update)
+    if all_rows:
+        headers = list(all_rows[0].keys())
+        data_to_write = [headers] + [list(r.values()) for r in all_rows]
+        ratings_sheet.clear()
+        ratings_sheet.update(data_to_write)
+        
+    return results_log
+
+# --- ISLAND / LADDER LOGIC END ---
 
 # --- BATCH CALCULATOR (IN MEMORY) ---
 def recalculate_all_stats(df_players, df_matches):
@@ -377,9 +479,38 @@ with tab4:
                 else: st.error("Player exists")
 
 # --- TAB 5: MATCH LOG ---
+# --- TAB 5: MATCH LOG & LADDER UPLOAD ---
 with tab5:
-    st.header("Match Editor (Cloud)")
-    st.info("Edits here update the Google Sheet directly.")
+    st.header("Admin Tools")
+    
+    # --- SECTION A: LADDER UPLOAD (NEW ISLAND SYSTEM) ---
+    st.subheader("📤 Upload Ladder Matches (Island System)")
+    st.info("Upload a CSV with columns: 'winner', 'loser'. Optional: 'ladder'")
+    
+    ladder_upload = st.file_uploader("Upload CSV", type=["csv"], key="ladder_up")
+    
+    if ladder_upload is not None:
+        # Dropdown for ladder name (in case CSV doesn't have it)
+        target_ladder = st.selectbox("Select Ladder Name (if not in CSV)", 
+                                     ["Testing_Ladder", "1v1", "Doubles", "Sniper"])
+        
+        if st.button("🚀 Process Ladder Matches"):
+            df_ladder = pd.read_csv(ladder_upload)
+            # This calls the NEW function we added in Step 2
+            logs = process_batch_upload(df_ladder, ladder_name_from_ui=target_ladder)
+            
+            if logs:
+                st.success(f"Processed {len(logs)} matches!")
+                with st.expander("View Log"):
+                    st.write(logs)
+            else:
+                st.warning("No matches processed. Check CSV headers.")
+
+    st.divider()
+
+    # --- SECTION B: MATCH EDITOR (EXISTING SYSTEM) ---
+    st.subheader("📝 Edit Main League Matches")
+    st.info("Edits here update the 'Matches' sheet directly.")
     
     edited_df = st.data_editor(df_matches, num_rows="dynamic", use_container_width=True)
     
