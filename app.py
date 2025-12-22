@@ -462,8 +462,9 @@ with tab1:
         We use an Individual League Rating System to ensure fair play across different groups while maintaining a global skill level.
         
         * **Specific Ladders :** Your rating here is unique to this specific group. This protects the ladder's integrity; matches played elsewhere won't affect your standing in this specific competitive group.
-        * **OVERALL Rating (The Global Map):** Every match you play, regardless of which ladder it's in, updates your Overall Rating. When you join a new league or group, this is the rating that will be used at the start of that group's play.)
-
+        * **OVERALL Rating (The Global Map):** Every match you play, regardless of which ladder it's in, updates your Overall Rating. When you join a new league or group, this is the rating that will be used at the start of that group's play.
+        """)
+        
     st.divider()
 
     col_a, col_b = st.columns([1, 3])
