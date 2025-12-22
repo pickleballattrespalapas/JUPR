@@ -527,11 +527,14 @@ with tab1:
 # --- TAB: PLAYER SEARCH (PUBLIC) ---
 with tab_search:
     st.header("🔍 Player Profile Search")
-    all_player_names = sorted(df_players['name'].unique().tolist())
-    selected_p = st.selectbox("Search for a Player", all_player_names)
     
-    if selected_p:
-        # 1. Metric Cards
+    # 1. Improved Search Functionality
+    # Add an empty string at the top so the box starts blank
+    all_player_names = [""] + sorted(df_players['name'].unique().tolist())
+    selected_p = st.selectbox("Type to Search for a Player", all_player_names, index=0)
+    
+    if selected_p != "":
+        # 2. Metric Cards
         st.subheader(f"Current Ratings: {selected_p}")
         p_ratings = df_ratings[df_ratings['name'] == selected_p].copy()
         if not p_ratings.empty:
@@ -542,46 +545,54 @@ with tab_search:
         
         st.divider()
         
-        # 2. Match History with JUPR Delta
+        # 3. Match History with JUPR Delta
         st.subheader("Match History & Rating Changes")
         p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
         
         if not p_matches.empty:
-            # Get the starting JUPR for this player to anchor the chart
+            # Get starting JUPR for anchor
             player_info = df_players[df_players['name'] == selected_p].iloc[0]
             start_jupr = player_info['starting_elo'] / 400
 
             def get_match_summary(row):
                 is_t1 = (row['t1_p1'] == selected_p or row['t1_p2'] == selected_p)
                 score_us, score_them = (row['score_t1'], row['score_t2']) if is_t1 else (row['score_t2'], row['score_t1'])
-                
-                # Conversion: Convert raw Elo delta to JUPR delta (divide by 400)
                 raw_delta = row.get('elo_change_t1' if is_t1 else 'elo_change_t2', 0)
                 jupr_delta = raw_delta / 400
-                
                 res = "✅ Win" if score_us > score_them else "❌ Loss"
                 return pd.Series([res, f"{score_us}-{score_them}", round(jupr_delta, 3)])
 
             p_matches[['Result', 'Score', 'Δ JUPR']] = p_matches.apply(get_match_summary, axis=1)
             
-            # Show Table (Removing raw Elo, showing only JUPR change)
             st.dataframe(p_matches[['date', 'league', 'Result', 'Score', 'Δ JUPR', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], 
                          use_container_width=True, hide_index=True)
             
-            # 3. Corrected Performance Trend
+            # 4. Progress Trend with "Zoomed" Axis
             st.subheader("JUPR Progress Trend")
             p_matches['date'] = pd.to_datetime(p_matches['date'])
             chart_df = p_matches.sort_values('date')
-            
-            # Calculate Progression: Starting JUPR + Cumulative Change
             chart_df['JUPR Progress'] = start_jupr + chart_df['Δ JUPR'].cumsum()
-            
-            # Round for a cleaner chart tooltip
             chart_df['JUPR Progress'] = chart_df['JUPR Progress'].round(3)
             
-            st.line_chart(chart_df, x='date', y='JUPR Progress')
+            # Set the Y-axis range to be slightly above/below the min/max values
+            y_min = chart_df['JUPR Progress'].min() - 0.05
+            y_max = chart_df['JUPR Progress'].max() + 0.05
+            
+            # We use st.area_chart or st.line_chart with the 'use_container_width'
+            # To force a specific range in native Streamlit charts, we use a scatter plot 
+            # with lines which respects the data boundaries better.
+            st.scatter_chart(
+                chart_df, 
+                x='date', 
+                y='JUPR Progress', 
+                color="#00FFAA",
+                use_container_width=True
+            )
+            st.caption(f"Y-Axis focused on range: {round(y_min, 2)} - {round(y_max, 2)}")
         else:
             st.info("No match history found for this player.")
+    else:
+        st.info("Please search and select a player to view their profile.")
 
 # --- ADMIN PROTECTION ---
 if not st.session_state.admin_logged_in:
