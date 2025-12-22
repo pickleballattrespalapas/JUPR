@@ -7,6 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import io
 
+if 'admin_logged_in' not in st.session_state:
+    st.session_state.admin_logged_in = False
+
 # --- CONFIGURATION ---
 K_FACTOR = 32
 DEFAULT_START_RATING = 3.00
@@ -603,17 +606,26 @@ with tab_search:
 
 # --- ADMIN PROTECTION ---
 if not st.session_state.admin_logged_in:
+    # If not logged in, show the login form in the restricted tabs
     for admin_tab in [tab2, tab3, tab4, tab5]:
         with admin_tab:
-            st.warning("🔒 This section is restricted to Admins.")
-            with st.form(key=f"login_form_{admin_tab}"):
-                password = st.text_input("Enter Admin Password", type="password")
-                if st.form_submit_button("Login"):
-                    if password == st.secrets["admin_password"]:
+            st.warning("🔒 Admin Access Required")
+            # Use a unique key for the form so it doesn't conflict across tabs
+            with st.form(key=f"login_gate_{admin_tab}"):
+                pwd = st.text_input("Password", type="password")
+                if st.form_submit_button("Unlock All Admin Tabs"):
+                    if pwd == st.secrets["admin_password"]:
                         st.session_state.admin_logged_in = True
+                        st.success("Access Granted! Tabs Unlocked.")
                         st.rerun()
                     else:
                         st.error("Incorrect Password")
+else:
+    # ADD A LOGOUT BUTTON TO THE SIDEBAR
+    # This keeps you logged in across tabs until you click this button
+    if st.sidebar.button("🔒 Logout Admin"):
+        st.session_state.admin_logged_in = False
+        st.rerun()
 else:
     with tab2:
         st.header("Live Court Manager")
