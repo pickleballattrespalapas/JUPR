@@ -445,10 +445,18 @@ def check_password():
         st.error("Incorrect Password")
 
 # --- TABS DEFINITION ---
-tab_titles = ["🏆 Leaderboards", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
-tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_titles)
+# Public tabs: Leaderboards, Player Search. Admin tabs: 2-5.
+tab_titles = [
+    "🏆 Leaderboards", 
+    "🔍 Player Search", 
+    "🏟️ Live Court Manager (Admin)", 
+    "🔄 Pop-Up RR (Admin)", 
+    "👥 Players (Admin)", 
+    "📝 Match Log (Admin)"
+]
+tab1, tab_search, tab2, tab3, tab4, tab5 = st.tabs(tab_titles)
 
-# --- TAB 1: LEADERBOARDS (ALWAYS PUBLIC) ---
+# --- TAB 1: LEADERBOARDS (PUBLIC) ---
 with tab1:
     with st.expander("ℹ️ How the Individual League Rating System Works"):
         st.markdown("""
@@ -456,7 +464,7 @@ with tab1:
         We use an Individual League Rating System to ensure fair play across different groups while maintaining a global skill level.
         
         * **Specific Ladders:** Your rating here is unique to this specific group. This protects the ladder's integrity; matches played elsewhere won't affect your standing here.
-        * **OVERALL Rating (The Global Map):** Every match you play, regardless of which ladder it's in, updates your Overall Rating. When you join a new league, this is the rating used for your initial seeding.
+        * **OVERALL Rating (The Global Map):** Every match you play updates your Overall Rating. When you join a new league, this is the rating used for your initial seeding.
         """)
         
     st.divider()
@@ -514,8 +522,43 @@ with tab1:
         ladder_ratings['JUPR'] = (ladder_ratings['rating'] / 400).map('{:,.3f}'.format)
         ladder_ratings['Win %'] = (ladder_ratings['wins'] / ladder_ratings['matches'] * 100).fillna(0).map('{:.1f}%'.format)
         leaderboard = ladder_ratings[ladder_ratings['matches'] > 0].sort_values(by='rating', ascending=False)
-
         st.dataframe(leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
+
+# --- TAB: PLAYER SEARCH (PUBLIC) ---
+with tab_search:
+    st.header("🔍 Player Profile Search")
+    all_player_names = sorted(df_players['name'].unique().tolist())
+    selected_p = st.selectbox("Search for a Player", all_player_names)
+    
+    if selected_p:
+        st.subheader(f"Current Ratings: {selected_p}")
+        p_ratings = df_ratings[df_ratings['name'] == selected_p].copy()
+        if not p_ratings.empty:
+            p_ratings['JUPR'] = (p_ratings['rating'] / 400).map('{:,.3f}'.format)
+            cols = st.columns(len(p_ratings))
+            for i, (_, row) in enumerate(p_ratings.iterrows()):
+                cols[i].metric(label=row['ladder_id'], value=row['JUPR'])
+        
+        st.divider()
+        st.subheader("Match History & Rating Changes")
+        p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
+        
+        if not p_matches.empty:
+            def get_match_summary(row):
+                is_t1 = (row['t1_p1'] == selected_p or row['t1_p2'] == selected_p)
+                score_us, score_them = (row['score_t1'], row['score_t2']) if is_t1 else (row['score_t2'], row['score_t1'])
+                change = row.get('elo_change_t1' if is_t1 else 'elo_change_t2', 0)
+                res = "✅ Win" if score_us > score_them else "❌ Loss"
+                return pd.Series([res, f"{score_us}-{score_them}", round(change, 1)])
+
+            p_matches[['Result', 'Score', 'Δ Elo']] = p_matches.apply(get_match_summary, axis=1)
+            st.dataframe(p_matches[['date', 'league', 'Result', 'Score', 'Δ Elo', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], use_container_width=True, hide_index=True)
+            
+            st.subheader("Performance Trend")
+            p_matches['date'] = pd.to_datetime(p_matches['date'])
+            chart_df = p_matches.sort_values('date')
+            chart_df['Rating Progress'] = chart_df['Δ Elo'].cumsum()
+            st.line_chart(chart_df, x='date', y='Rating Progress')
 
 # --- ADMIN PROTECTION ---
 if not st.session_state.admin_logged_in:
@@ -565,18 +608,9 @@ else:
                     new_matches = []
                     for c in st.session_state.schedule:
                         for i, m in enumerate(c['matches']):
-                            s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
-                            s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
+                            s1, s2 = st.session_state.get(f"s_{c['court']}_{i}_1", 0), st.session_state.get(f"s_{c['court']}_{i}_2", 0)
                             if s1 == 0 and s2 == 0: continue
-                            match_data = {
-                                'id': len(df_matches) + len(new_matches) + 1,
-                                'date': str(datetime.now()),
-                                'league': league_name,
-                                't1_p1': m['t1'][0], 't1_p2': m['t1'][1],
-                                't2_p1': m['t2'][0], 't2_p2': m['t2'][1],
-                                'score_t1': s1, 'score_t2': s2,
-                                'match_type': f"Court {c['court']} RR"
-                            }
+                            match_data = {'id': len(df_matches) + len(new_matches) + 1, 'date': str(datetime.now()), 'league': league_name, 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2, 'match_type': f"Court {c['court']} RR"}
                             process_live_doubles_match(match_data, ladder_name=league_name)
                             new_matches.append(match_data)
                     
@@ -589,7 +623,6 @@ else:
 
     with tab3:
         st.header("Pop-Up Round Robin")
-        st.caption("Matches played here affect **OVERALL RATING** but do not affect specific League Ladders.")
         with st.expander("Event Setup", expanded=True):
             popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
             rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
@@ -657,13 +690,11 @@ else:
         st.subheader("🔄 Restore Lost Ladders")
         if 'league' in df_matches.columns:
             hist_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
-            c1, c2 = st.columns([2, 1])
-            with c1: league_to_restore = st.selectbox("Select League", hist_leagues)
-            with c2: 
-                if st.button("Reconstruct Island"):
-                    msg = replay_league_history(league_to_restore)
-                    st.success(msg)
-                    st.rerun()
+            league_to_restore = st.selectbox("Select League", hist_leagues)
+            if st.button("Reconstruct Island"):
+                msg = replay_league_history(league_to_restore)
+                st.success(msg)
+                st.rerun()
 
         st.divider()
         st.subheader("📝 Edit Match History")
