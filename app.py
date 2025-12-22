@@ -528,13 +528,11 @@ with tab1:
 with tab_search:
     st.header("🔍 Player Profile Search")
     
-    # 1. Improved Search Functionality
-    # Add an empty string at the top so the box starts blank
+    # Improved Search: Starts blank
     all_player_names = [""] + sorted(df_players['name'].unique().tolist())
     selected_p = st.selectbox("Type to Search for a Player", all_player_names, index=0)
     
     if selected_p != "":
-        # 2. Metric Cards
         st.subheader(f"Current Ratings: {selected_p}")
         p_ratings = df_ratings[df_ratings['name'] == selected_p].copy()
         if not p_ratings.empty:
@@ -545,15 +543,11 @@ with tab_search:
         
         st.divider()
         
-        # 3. Match History with JUPR Delta
         st.subheader("Match History & Rating Changes")
-        p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
+        p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | 
+                               (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
         
         if not p_matches.empty:
-            # Get starting JUPR for anchor
-            player_info = df_players[df_players['name'] == selected_p].iloc[0]
-            start_jupr = player_info['starting_elo'] / 400
-
             def get_match_summary(row):
                 is_t1 = (row['t1_p1'] == selected_p or row['t1_p2'] == selected_p)
                 score_us, score_them = (row['score_t1'], row['score_t2']) if is_t1 else (row['score_t2'], row['score_t1'])
@@ -564,31 +558,12 @@ with tab_search:
 
             p_matches[['Result', 'Score', 'Δ JUPR']] = p_matches.apply(get_match_summary, axis=1)
             
-            st.dataframe(p_matches[['date', 'league', 'Result', 'Score', 'Δ JUPR', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], 
-                         use_container_width=True, hide_index=True)
-            
-            # 4. Progress Trend with "Zoomed" Axis
-            st.subheader("JUPR Progress Trend")
+            # Display Table (Sorting newest first)
             p_matches['date'] = pd.to_datetime(p_matches['date'])
-            chart_df = p_matches.sort_values('date')
-            chart_df['JUPR Progress'] = start_jupr + chart_df['Δ JUPR'].cumsum()
-            chart_df['JUPR Progress'] = chart_df['JUPR Progress'].round(3)
-            
-            # Set the Y-axis range to be slightly above/below the min/max values
-            y_min = chart_df['JUPR Progress'].min() - 0.05
-            y_max = chart_df['JUPR Progress'].max() + 0.05
-            
-            # We use st.area_chart or st.line_chart with the 'use_container_width'
-            # To force a specific range in native Streamlit charts, we use a scatter plot 
-            # with lines which respects the data boundaries better.
-            st.scatter_chart(
-                chart_df, 
-                x='date', 
-                y='JUPR Progress', 
-                color="#00FFAA",
-                use_container_width=True
+            st.dataframe(
+                p_matches.sort_values('date', ascending=False)[['date', 'league', 'Result', 'Score', 'Δ JUPR', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], 
+                use_container_width=True, hide_index=True
             )
-            st.caption(f"Y-Axis focused on range: {round(y_min, 2)} - {round(y_max, 2)}")
         else:
             st.info("No match history found for this player.")
     else:
@@ -697,17 +672,48 @@ else:
     with tab4:
         st.header("Player Management")
         c1, c2 = st.columns(2)
+        
+        # --- SUB-SECTION: ADD PLAYER ---
         with c1:
+            st.subheader("➕ Add New Player")
             with st.form("add_p"):
                 n = st.text_input("Name")
-                r = st.number_input("Start JUPR", 3.0)
+                r = st.number_input("Start JUPR", 3.0, step=0.1)
                 if st.form_submit_button("Add Player"):
-                    if n not in df_players['name'].values:
+                    if n and n not in df_players['name'].values:
                         new_p = {'name': n, 'elo': r*400, 'starting_elo': r*400, 'matches_played':0, 'wins':0, 'losses':0}
                         df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
                         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
-                        st.success("Added to Cloud")
+                        st.success(f"Added {n} to Cloud")
                         st.rerun()
+                    else:
+                        st.error("Invalid name or player already exists.")
+
+        # --- SUB-SECTION: DELETE PLAYER ---
+        with c2:
+            st.subheader("🗑️ Delete Player")
+            p_to_delete = st.selectbox("Select Player to Remove", [""] + sorted(df_players['name'].tolist()))
+            
+            if p_to_delete:
+                st.warning(f"Are you sure you want to delete **{p_to_delete}**? This will remove them from all leaderboards and match history reference.")
+                if st.button(f"Confirm Delete {p_to_delete}"):
+                    # 1. Remove from Players Sheet
+                    df_players = df_players[df_players['name'] != p_to_delete]
+                    ws_players.clear()
+                    ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
+                    
+                    # 2. Remove from Ratings Sheet (Islands)
+                    if not df_ratings.empty:
+                        df_ratings = df_ratings[df_ratings['name'] != p_to_delete]
+                        ws_ratings.clear()
+                        ws_ratings.update([df_ratings.columns.values.tolist()] + df_ratings.values.tolist())
+                    
+                    st.success(f"Successfully deleted {p_to_delete}.")
+                    st.rerun()
+
+        st.divider()
+        st.subheader("Current Player Registry")
+        st.dataframe(df_players, use_container_width=True, hide_index=True)
 
     with tab5:
         st.header("Admin Tools")
