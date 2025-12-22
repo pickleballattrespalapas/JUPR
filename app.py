@@ -698,8 +698,7 @@ with tab4:
                     st.rerun()
                 else: st.error("Player exists")
 
-# --- TAB 5: MATCH LOG ---
-# --- TAB 5: MATCH LOG & LADDER UPLOAD ---
+# --- TAB 5: MATCH LOG & LADDER TOOLS ---
 with tab5:
     st.header("Admin Tools")
     
@@ -710,13 +709,11 @@ with tab5:
     ladder_upload = st.file_uploader("Upload CSV", type=["csv"], key="ladder_up")
     
     if ladder_upload is not None:
-        # Dropdown for ladder name (in case CSV doesn't have it)
         target_ladder = st.selectbox("Select Ladder Name (if not in CSV)", 
                                      ["Testing_Ladder", "1v1", "Doubles", "Sniper"])
         
         if st.button("🚀 Process Ladder Matches"):
             df_ladder = pd.read_csv(ladder_upload)
-            # This calls the NEW function we added in Step 2
             logs = process_batch_upload(df_ladder, ladder_name_from_ui=target_ladder)
             
             if logs:
@@ -727,16 +724,12 @@ with tab5:
                 st.warning("No matches processed. Check CSV headers.")
 
     st.divider()
-
-st.divider()
     
     # --- SECTION B: RESTORE LOST LADDERS ---
     st.subheader("🔄 Restore Lost Ladders")
-    st.info("Use this if you see empty leaderboards for leagues that have existing match history.")
+    st.info("Use this to reconstruct leaderboards from your 'Matches' history.")
     
-    # 1. Find all leagues in the match history
     if 'league' in df_matches.columns:
-        # Get unique leagues, ignoring empty ones
         historical_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
         
         if historical_leagues:
@@ -744,8 +737,8 @@ st.divider()
             with c1:
                 league_to_restore = st.selectbox("Select League to Restore", historical_leagues)
             with c2:
-                st.write("") # Spacer
-                st.write("") # Spacer
+                st.write("") 
+                st.write("") 
                 if st.button("Reconstruct Island"):
                     with st.spinner(f"Replaying history for {league_to_restore}..."):
                         msg = replay_league_history(league_to_restore)
@@ -755,19 +748,18 @@ st.divider()
             st.warning("No league history found in the 'Matches' sheet.")
     else:
         st.error("Your 'Matches' sheet is missing the 'league' column.")
-    
-    # --- SECTION B: MATCH EDITOR (EXISTING SYSTEM) ---
+
+    st.divider()
+
+    # --- SECTION C: MATCH EDITOR (EXISTING SYSTEM) ---
     st.subheader("📝 Edit Main League Matches")
     st.info("Edits here update the 'Matches' sheet directly.")
     
     edited_df = st.data_editor(df_matches, num_rows="dynamic", use_container_width=True)
     
     if st.button("💾 Save Changes & Recalc All History"):
-        # 1. Update Match Data
         df_matches = edited_df
-        # 2. Recalculate Ratings from Scratch
         df_players, df_matches = recalculate_all_stats(df_players, df_matches)
-        # 3. Push to Cloud
         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
         st.success("Cloud Updated!")
