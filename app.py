@@ -621,12 +621,14 @@ if not st.session_state.admin_logged_in:
                     else:
                         st.error("Incorrect Password")
 else:
-    # ADD A LOGOUT BUTTON TO THE SIDEBAR
-    # This keeps you logged in across tabs until you click this button
+    # --- EVERYTHING BELOW THIS IS ONLY VISIBLE IF LOGGED IN ---
+    
+    # 1. Show Logout Button in Sidebar
     if st.sidebar.button("🔒 Logout Admin"):
         st.session_state.admin_logged_in = False
         st.rerun()
-else:
+
+    # 2. Show Tab 2 Content
     with tab2:
         st.header("Live Court Manager")
         with st.expander("Setup", expanded=True):
@@ -636,6 +638,7 @@ else:
                 court_data = []
                 for i in range(num_courts):
                     c1,c2 = st.columns([1,4])
+                    # 12-Player added to menu
                     with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
                     with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
                     court_data.append({'id':i+1,'type':t,'names':n})
@@ -662,6 +665,7 @@ else:
                     for c in st.session_state.schedule:
                         for i, m in enumerate(c['matches']):
                             s1, s2 = st.session_state.get(f"s_{c['court']}_{i}_1", 0), st.session_state.get(f"s_{c['court']}_{i}_2", 0)
+                            # 0-0 Ignore rule
                             if s1 == 0 and s2 == 0: continue
                             match_data = {'id': len(df_matches) + len(new_matches) + 1, 'date': str(datetime.now()), 'league': league_name, 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 'score_t1': s1, 'score_t2': s2, 'match_type': f"Court {c['court']} RR"}
                             process_live_doubles_match(match_data, ladder_name=league_name)
@@ -674,6 +678,7 @@ else:
                         st.success(f"✅ Processed {len(new_matches)} matches!")
                         st.rerun()
 
+    # 3. Show Tab 3 Content
     with tab3:
         st.header("Pop-Up Round Robin")
         with st.expander("Event Setup", expanded=True):
@@ -683,6 +688,7 @@ else:
                 rr_data = []
                 for i in range(rr_courts):
                     c1, c2 = st.columns([1, 4])
+                    # 12-Player added to menu
                     with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
                     with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin, Scott, Robin...")
                     rr_data.append({'id': i+1, 'type': t, 'names': n})
@@ -713,11 +719,10 @@ else:
                     st.success("✅ Overall ratings updated!")
                     st.rerun()
 
+    # 4. Show Tab 4 Content
     with tab4:
         st.header("Player Management")
         c1, c2 = st.columns(2)
-        
-        # --- SUB-SECTION: ADD PLAYER ---
         with c1:
             st.subheader("➕ Add New Player")
             with st.form("add_p"):
@@ -732,37 +737,28 @@ else:
                         st.rerun()
                     else:
                         st.error("Invalid name or player already exists.")
-
-        # --- SUB-SECTION: DELETE PLAYER ---
         with c2:
             st.subheader("🗑️ Delete Player")
             p_to_delete = st.selectbox("Select Player to Remove", [""] + sorted(df_players['name'].tolist()))
-            
             if p_to_delete:
-                st.warning(f"Are you sure you want to delete **{p_to_delete}**? This will remove them from all leaderboards and match history reference.")
+                st.warning(f"Are you sure you want to delete **{p_to_delete}**?")
                 if st.button(f"Confirm Delete {p_to_delete}"):
-                    # 1. Remove from Players Sheet
                     df_players = df_players[df_players['name'] != p_to_delete]
                     ws_players.clear()
                     ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
-                    
-                    # 2. Remove from Ratings Sheet (Islands)
                     if not df_ratings.empty:
                         df_ratings = df_ratings[df_ratings['name'] != p_to_delete]
                         ws_ratings.clear()
                         ws_ratings.update([df_ratings.columns.values.tolist()] + df_ratings.values.tolist())
-                    
                     st.success(f"Successfully deleted {p_to_delete}.")
                     st.rerun()
-
         st.divider()
         st.subheader("Current Player Registry")
         st.dataframe(df_players, use_container_width=True, hide_index=True)
 
+    # 5. Show Tab 5 Content
     with tab5:
         st.header("Admin Tools")
-        
-        # --- SECTION A: LADDER UPLOAD ---
         st.subheader("📤 Upload Ladder Matches")
         ladder_upload = st.file_uploader("Upload CSV", type=["csv"], key="ladder_up")
         if ladder_upload is not None:
@@ -773,38 +769,23 @@ else:
                 st.write(logs)
 
         st.divider()
-        
-        # --- SECTION B: RESTORE / RESET LADDERS ---
         st.subheader("🔄 Reconstruct/Reset League")
-        st.warning("This will wipe existing ratings for the selected league and re-calculate them from the Match History to ensure 100% accuracy.")
-        
         if 'league' in df_matches.columns:
             hist_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
-            # Create the selection box here so 'league_to_restore' is defined
             league_to_restore = st.selectbox("Select League to Fix", hist_leagues)
-            
             if st.button("Clean Reconstruct"):
                 with st.spinner(f"Wiping old data and replaying history for {league_to_restore}..."):
-                    # 1. CONNECT & FETCH
                     sh = get_db_connection()
                     r_ws = sh.worksheet("player_ratings")
                     all_r = r_ws.get_all_records()
-                    
-                    # 2. DELETE OLD DATA FOR THIS LEAGUE & OVERALL
-                    # Because OVERALL is affected by every match, we must reset it too 
-                    # to fix the 'doubling' error.
                     clean_r = [r for r in all_r if r['ladder_id'] != league_to_restore and r['ladder_id'] != 'OVERALL']
-                    
-                    # 3. UPDATE SHEET WITH CLEANED DATA
                     if clean_r:
                         headers = list(all_r[0].keys())
                         data_to_write = [headers] + [list(r.values()) for r in clean_r]
                         r_ws.clear()
                         r_ws.update(data_to_write)
                     else:
-                        r_ws.clear() # If it's the only league, just wipe it
-                    
-                    # 4. RUN REPLAY (This function must be defined at the top of your app)
+                        r_ws.clear()
                     msg = replay_league_history(league_to_restore)
                     st.success(f"Fixed! {msg}")
                     st.rerun()
