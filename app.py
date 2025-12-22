@@ -30,40 +30,35 @@ def get_db_connection():
 
 # --- DATA LOADERS (CACHED) ---
 # We don't cache these heavily because we want instant updates for the admin
+# --- DATA LOADERS (UPDATED) ---
 def load_data():
     sh = get_db_connection()
     try:
-        players_ws = sh.worksheet("Players")
-        matches_ws = sh.worksheet("Matches")
+        # Load the 3 Core Sheets
+        players_ws = sh.worksheet("Players")       # Legacy / Metadata
+        matches_ws = sh.worksheet("Matches")       # Match History
+        ratings_ws = sh.worksheet("player_ratings") # NEW ISLAND RATINGS
         
-        # 1. LOAD PLAYERS safely
-        p_data = players_ws.get_all_records()
-        df_players = pd.DataFrame(p_data)
-        
-        # SAFETY CHECK: If sheet is empty or missing 'elo', force the columns to exist
-        expected_p_cols = ['name', 'elo', 'starting_elo', 'matches_played', 'wins', 'losses']
-        if df_players.empty or 'elo' not in df_players.columns:
-            df_players = pd.DataFrame(columns=expected_p_cols)
-        
-        # 2. LOAD MATCHES safely
+        # 1. LOAD RATINGS (The New Engine)
+        r_data = ratings_ws.get_all_records()
+        df_ratings = pd.DataFrame(r_data)
+        if df_ratings.empty:
+            df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
+
+        # 2. LOAD MATCHES (History)
         m_data = matches_ws.get_all_records()
         df_matches = pd.DataFrame(m_data)
         
-        expected_m_cols = ['score_t1', 'score_t2', 'elo_change_t1', 'elo_change_t2', 'league']
+        expected_m_cols = ['score_t1', 'score_t2', 'league', 't1_p1', 't1_p2', 't2_p1', 't2_p2']
         if df_matches.empty:
-             # Create minimal columns needed to prevent crashes
-            df_matches = pd.DataFrame(columns=expected_m_cols)
+             df_matches = pd.DataFrame(columns=expected_m_cols)
 
-        # 3. CLEAN UP NUMBERS (Convert text to numbers)
-        for c in expected_p_cols:
-            if c in df_players.columns and c != 'name': 
-                df_players[c] = pd.to_numeric(df_players[c], errors='coerce').fillna(0)
-            
-        for c in expected_m_cols:
-            if c in df_matches.columns and 'league' not in c:
+        # 3. Clean up Numbers
+        for c in ['score_t1', 'score_t2']:
+            if c in df_matches.columns:
                 df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
             
-        return df_players, df_matches, players_ws, matches_ws
+        return df_ratings, df_matches, players_ws, matches_ws, ratings_ws
     except Exception as e:
         st.error(f"Database Error: {e}")
         st.stop()
@@ -192,6 +187,66 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
         ratings_sheet.update(data_to_write)
         
     return results_log
+# --- DOUBLES ISLAND LOGIC ---
+def process_live_doubles_match(match_data, ladder_name):
+    """
+    Handles a single 2v2 match from the Live Court Manager.
+    Updates both the Specific Ladder and OVERALL ratings.
+    """
+    # 1. Connect to Sheet
+    sh = get_db_connection()
+    ratings_sheet = sh.worksheet("player_ratings")
+    all_rows = ratings_sheet.get_all_records()
+
+    # 2. Extract Data
+    t1 = [match_data['t1_p1'], match_data['t1_p2']]
+    t2 = [match_data['t2_p1'], match_data['t2_p2']]
+    s1 = match_data['score_t1']
+    s2 = match_data['score_t2']
+    
+    # 3. Determine Winner/Loser Teams
+    if s1 > s2:
+        winners, losers = t1, t2
+        actual_score = 1
+    else:
+        winners, losers = t2, t1
+        actual_score = 0 # From perspective of Team 1, but we calculate per team below
+
+    # --- HELPER: UPDATE ONE LADDER CONTEXT ---
+    def update_context(context_id):
+        # A. Get Ratings
+        w_ratings = [get_effective_rating(all_rows, p, context_id) for p in winners]
+        l_ratings = [get_effective_rating(all_rows, p, context_id) for p in losers]
+        
+        # B. Calculate Team Averages
+        w_avg = sum(w_ratings) / len(w_ratings)
+        l_avg = sum(l_ratings) / len(l_ratings)
+        
+        # C. Calculate Elo Delta (Using Average)
+        # We assume Winners won (score=1) against Losers
+        expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
+        delta = K_FACTOR * (1 - expected_win)
+        
+        # D. Apply Delta to INDIVIDUALS
+        for p, r in zip(winners, w_ratings):
+            update_local_memory(all_rows, p, context_id, round(r + delta))
+            
+        for p, r in zip(losers, l_ratings):
+            update_local_memory(all_rows, p, context_id, round(r - delta))
+
+    # 4. Run Updates
+    # Update Specific Island (The League Name)
+    update_context(ladder_name)
+    
+    # Update OVERALL
+    update_context("OVERALL")
+
+    # 5. Save to Cloud
+    if all_rows:
+        headers = list(all_rows[0].keys())
+        data_to_write = [headers] + [list(r.values()) for r in all_rows]
+        ratings_sheet.clear()
+        ratings_sheet.update(data_to_write)
 
 # --- ISLAND / LADDER LOGIC END ---
 
@@ -260,7 +315,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- LOAD DATA ---
-df_players, df_matches, ws_players, ws_matches = load_data()
+# We now unpack 5 items instead of 4
+df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
 
 # --- LOGIN SYSTEM ---
 if 'admin_logged_in' not in st.session_state: st.session_state.admin_logged_in = False
@@ -281,116 +337,92 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # --- TAB 1: LEADERBOARDS (PUBLIC) ---
-# --- TAB 1: LEADERBOARDS (PUBLIC) ---
+# --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM) ---
 with tab1:
     col_a, col_b = st.columns([1, 3])
     
-    # 1. Get all available leagues
-    leagues = ["All"]
-    if not df_matches.empty:
-        leagues += list(df_matches['league'].unique())
+    # 1. Get List of Ladders (Islands)
+    # We grab unique Ladder IDs from the ratings sheet, ensuring OVERALL is first
+    available_ladders = ["OVERALL"]
+    if not df_ratings.empty:
+        others = [x for x in df_ratings['ladder_id'].unique() if x != "OVERALL"]
+        available_ladders += sorted(others)
     
-    # 2. Check URL for specific league (e.g. ?league=Fall2025)
+    # 2. Check URL for sharing
     query_params = st.query_params
     default_index = 0
-    
     if "league" in query_params:
-        target_league = query_params["league"]
-        if target_league in leagues:
-            default_index = leagues.index(target_league)
+        target = query_params["league"]
+        if target in available_ladders:
+            default_index = available_ladders.index(target)
 
     with col_a:
         st.subheader("Filter")
-        # 3. Create the dropdown with the smart default
-        selected_league = st.selectbox("Select League", leagues, index=default_index)
+        selected_ladder = st.selectbox("Select Ladder", available_ladders, index=default_index)
         
-        # 4. Update the URL silently when they change the dropdown
-        if selected_league != "All":
-            st.query_params["league"] = selected_league
+        # Update URL
+        if selected_ladder != "OVERALL":
+            st.query_params["league"] = selected_ladder
         else:
-            # Clear the param if they select "All"
-             if "league" in st.query_params: 
-                 del st.query_params["league"]
+            if "league" in st.query_params: del st.query_params["league"]
 
     with col_b:
-        st.subheader(f"Standings: {selected_league}")
-        # 5. Show a shareable link for this specific league
-        if selected_league != "All":
-            base_url = "https://8lkemld946rmtwwptk2gcs.streamlit.app/" # REPLACE THIS WITH YOUR ACTUAL URL
-            share_link = f"{base_url}?league={selected_league.replace(' ', '%20')}"
-            st.code(share_link, language="text")
-            st.caption("Copy this link to send players directly to this league.")
+        st.subheader(f"Standings: {selected_ladder}")
     
-    # Calculate League Specific Stats
-    display_df = df_players.copy()
-    
-    if selected_league != "All" and not df_matches.empty:
-        # Filter matches
-        league_matches = df_matches[df_matches['league'] == selected_league]
+    # --- BUILD THE LEADERBOARD ---
+    if not df_ratings.empty:
+        # A. Filter Ratings for this specific Island
+        ladder_ratings = df_ratings[df_ratings['ladder_id'] == selected_ladder].copy()
         
-        # Re-tally wins/losses just for this view (Ratings stay global)
+        # B. Calculate Win/Loss Record from Match History
+        # We filter matches to match the selected ladder (or include all if OVERALL)
+        if selected_ladder == "OVERALL":
+            relevant_matches = df_matches
+        else:
+            relevant_matches = df_matches[df_matches['league'] == selected_ladder]
+
         stats = {}
-        for _, row in league_matches.iterrows():
+        for _, row in relevant_matches.iterrows():
             s1, s2 = row['score_t1'], row['score_t2']
-            winners = [row['t1_p1'], row['t1_p2']] if s1 > s2 else [row['t2_p1'], row['t2_p2']]
-            losers = [row['t2_p1'], row['t2_p2']] if s1 > s2 else [row['t1_p1'], row['t1_p2']]
+            # Identify winners and losers
+            if s1 > s2:
+                wins = [row['t1_p1'], row['t1_p2']]
+                loss = [row['t2_p1'], row['t2_p2']]
+            else:
+                wins = [row['t2_p1'], row['t2_p2']]
+                loss = [row['t1_p1'], row['t1_p2']]
             
-            for p in winners: 
-                if p not in stats: stats[p] = {'w':0, 'l':0}
+            for p in wins:
+                if p not in stats: stats[p] = {'w': 0, 'l': 0}
                 stats[p]['w'] += 1
-            for p in losers:
-                if p not in stats: stats[p] = {'w':0, 'l':0}
+            for p in loss:
+                if p not in stats: stats[p] = {'w': 0, 'l': 0}
                 stats[p]['l'] += 1
+
+        # C. Merge Stats into Ratings
+        ladder_ratings['wins'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'w':0})['w'])
+        ladder_ratings['losses'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'l':0})['l'])
+        ladder_ratings['matches'] = ladder_ratings['wins'] + ladder_ratings['losses']
         
-        # Map back to display_df
-        display_df['wins'] = display_df['name'].map(lambda x: stats.get(x, {'w':0})['w'])
-        display_df['losses'] = display_df['name'].map(lambda x: stats.get(x, {'l':0})['l'])
-        display_df['matches_played'] = display_df['wins'] + display_df['losses']
-        display_df = display_df[display_df['matches_played'] > 0]
+        # D. Format and Sort
+        ladder_ratings['JUPR'] = (ladder_ratings['rating']).apply(lambda x: f"{x:.0f}") # Display as integer
+        
+        # Win % Calculation
+        ladder_ratings['Win %'] = (ladder_ratings['wins'] / ladder_ratings['matches'] * 100).fillna(0).map('{:.1f}%'.format)
 
-    # Format
-    display_df['JUPR'] = (display_df['elo'] / 400).map('{:,.3f}'.format)
-    display_df['Win %'] = (display_df['wins'] / display_df['matches_played'] * 100).fillna(0).map('{:.1f}%'.format)
-    display_df['Improvement'] = ((display_df['elo'] - display_df['starting_elo']) / 400).map('{:+.3f}'.format)
-    
-    # CORRECT LOGIC: Sort by 'elo' FIRST
-    sorted_df = display_df.sort_values(by='elo', ascending=False)
-
-    # THEN select only the columns you want to show
-    st.dataframe(
-        sorted_df[['name', 'JUPR', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']], 
-        use_container_width=True, 
-        hide_index=True
-    )
-
-# --- ADMIN GATEKEEPER ---
-if not st.session_state.admin_logged_in:
-    with tab2: st.warning("Admin Access Only"); st.text_input("Admin Password", type="password", key="password", on_change=check_password)
-    with tab3: st.warning("Admin Access Only")
-    with tab4: st.warning("Admin Access Only")
-    with tab5: st.warning("Admin Access Only")
-    st.stop() # Stop rendering the rest
-
-# --- HELPER: SCHEDULE GENERATOR ---
-def get_match_schedule(court_type, players):
-    p = players + ["?"] * (12 - len(players))
-    matches = []
-    
-    if court_type == "4-Player":
-        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
-    elif court_type == "5-Player":
-        matches = [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1 (1 Sit)'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2 (4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3 (2 Sit)'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4 (3 Sit)'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5 (5 Sit)'}]
-    elif court_type == "6-Player":
-        matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1 (4,6 Sit)'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2 (1,2 Sit)'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3 (1,3 Sit)'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4 (3,4 Sit)'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5 (2,5 Sit)'}]
-    elif court_type == "8-Player":
-        matches = [
-            {'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'},
-            {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'},
-            {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'},
-            {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}
-        ]
-    # Add 9 and 12 logic as previously defined if needed
-    return matches
+        # Sort by Rating High -> Low
+        leaderboard = ladder_ratings.sort_values(by='rating', ascending=False)
+        
+        # E. Display
+        # We filter out people with 0 matches if you want to keep it clean, 
+        # or keep them to show the seeded ratings. Let's keep them for now.
+        st.dataframe(
+            leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No ratings found. Upload matches to generate the first leaderboard!")
 
 # --- TAB 2: LIVE COURT MANAGER ---
 with tab2:
@@ -423,39 +455,42 @@ with tab2:
                     with c3: s2 = st.number_input("S2", 0, key=f"s_{c['court']}_{i}_2")
                     with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
             
-            if st.form_submit_button("Submit & Save to Cloud"):
+        if st.form_submit_button("Submit & Save to Cloud"):
                 new_matches = []
+                
+                # 1. Gather all results from the form
                 for c in st.session_state.schedule:
                     for i, m in enumerate(c['matches']):
                         s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
                         s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
+                        
+                        # Skip games with no score
                         if s1 == 0 and s2 == 0: continue
                         
-                        # Add to list
-                        new_matches.append({
+                        # Create Match Object
+                        match_data = {
                             'id': len(df_matches) + len(new_matches) + 1,
                             'date': str(datetime.now()),
-                            'league': league_name,
+                            'league': league_name, # This becomes the Island ID!
                             't1_p1': m['t1'][0], 't1_p2': m['t1'][1],
                             't2_p1': m['t2'][0], 't2_p2': m['t2'][1],
                             'score_t1': s1, 'score_t2': s2,
-                            'elo_change_t1': 0, 'elo_change_t2': 0, # Calc later
                             'match_type': f"Court {c['court']} RR"
-                        })
+                        }
+                        
+                        # 2. RUN THE NEW ISLAND LOGIC
+                        process_live_doubles_match(match_data, ladder_name=league_name)
+                        
+                        # 3. Log it for history (Optional but recommended)
+                        new_matches.append(match_data)
                 
-                # Append to dataframe
+                # 4. Save the Match Log (Just for record keeping, not for math)
                 if new_matches:
                     new_df = pd.DataFrame(new_matches)
                     df_matches = pd.concat([df_matches, new_df], ignore_index=True)
-                    
-                    # Recalc All Stats (To update ratings)
-                    df_players, df_matches = recalculate_all_stats(df_players, df_matches)
-                    
-                    # WRITE TO GOOGLE SHEETS
-                    ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
                     ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
                     
-                    st.success("✅ Saved to Google Cloud!")
+                    st.success(f"✅ Processed {len(new_matches)} matches into League '{league_name}'!")
                     st.rerun()
 
 # --- TAB 3: OTHER RR ---
