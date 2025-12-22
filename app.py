@@ -92,25 +92,26 @@ def calculate_ladder_elo(rating_a, rating_b, actual_score_a):
     new_rating_a = rating_a + K_FACTOR * (actual_score_a - expected_a)
     return round(new_rating_a)
 
-def get_effective_rating(all_rows, user_name, ladder_id):
+def get_effective_rating(all_ratings, player_name, ladder_id):
     """
-    Finds rating for a specific ladder. 
-    If not found, 'Seeds' from OVERALL. 
-    If OVERALL not found, returns Default (1200).
+    Finds a player's rating for a specific island. 
+    If not found, it pulls their 'starting_elo' from the master registry.
     """
-    # 1. Search for specific ladder rating
-    for row in all_rows:
-        if row['name'] == user_name and row['ladder_id'] == ladder_id:
-            return float(row['rating'])
+    # 1. Search the Island Ratings first
+    for r in all_ratings:
+        if str(r['name']).strip() == str(player_name).strip() and str(r['ladder_id']).strip() == str(ladder_id).strip():
+            return float(r['rating'])
+
+    # 2. SOFT SEEDING: Look in the master df_players if Island rating is missing
+    # This uses the 173 players from your Tres Palapas DB
+    master_player = df_players[df_players['name'].str.strip() == str(player_name).strip()]
     
-    # 2. If not found, look for OVERALL (Seeding)
-    if ladder_id != 'OVERALL':
-        for row in all_rows:
-            if row['name'] == user_name and row['ladder_id'] == 'OVERALL':
-                return float(row['rating'])
-    
-    # 3. Default start (1200 or whatever you prefer)
-    return 1200.0
+    if not master_player.empty:
+        # Pull the starting_elo we restored earlier
+        return float(master_player.iloc[0]['starting_elo'])
+
+    # 3. FINAL FALLBACK: Only if player isn't in the registry at all
+    return 1400.0 # Standard 3.5 JUPR starting point
 
 def update_local_memory(all_rows, name, ladder, new_rating):
     """Updates the list of dictionaries in memory."""
