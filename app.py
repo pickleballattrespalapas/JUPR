@@ -345,7 +345,7 @@ def process_overall_only_match(match_data):
     """
     Forces Pop-Up matches to only affect the 'OVERALL' leaderboard.
     """
-    # Simply reuse the main logic but explicitly set the ladder to OVERALL
+    # Simply reuse the existing main logic but explicitly set the destination to OVERALL
     process_live_doubles_match(match_data, ladder_name="OVERALL")
 
     # --- UPDATE ONLY THE 'OVERALL' CONTEXT ---
