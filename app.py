@@ -742,6 +742,17 @@ with tab5:
                 if st.button("Reconstruct Island"):
                     with st.spinner(f"Replaying history for {league_to_restore}..."):
                         msg = replay_league_history(league_to_restore)
+                        import time # Add this to your imports at the very top
+
+# Inside your replay_league_history function:
+    for _, row in league_matches.iterrows():
+        # ... your existing match data code ...
+        
+        process_live_doubles_match(match_data, ladder_name=target_league)
+        count += 1
+        
+        # ADD THIS LINE HERE:
+        time.sleep(1.1) # Pause for 1.1 seconds between matches to stay under API limits
                     st.success(msg)
                     st.rerun()
         else:
