@@ -682,7 +682,7 @@ else:
 
     # 3. Show Tab 3 Content
     with tab3:
-    st.header("Pop-Up Round Robin")
+        st.header("Pop-Up Round Robin")
     with st.expander("Event Setup", expanded=True):
         # NEW: Added date selection for past matches
         event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
