@@ -412,13 +412,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Match Log (Admin)"
 ])
 
-# --- TAB 1: LEADERBOARDS (PUBLIC) ---
 # --- TAB 1: LEADERBOARDS (NEW ISLAND SYSTEM) ---
 with tab1:
     col_a, col_b = st.columns([1, 3])
     
     # 1. Get List of Ladders (Islands)
-    # We grab unique Ladder IDs from the ratings sheet, ensuring OVERALL is first
     available_ladders = ["OVERALL"]
     if not df_ratings.empty:
         others = [x for x in df_ratings['ladder_id'].unique() if x != "OVERALL"]
@@ -451,7 +449,6 @@ with tab1:
         ladder_ratings = df_ratings[df_ratings['ladder_id'] == selected_ladder].copy()
         
         # B. Calculate Win/Loss Record from Match History
-        # We filter matches to match the selected ladder (or include all if OVERALL)
         if selected_ladder == "OVERALL":
             relevant_matches = df_matches
         else:
@@ -460,7 +457,6 @@ with tab1:
         stats = {}
         for _, row in relevant_matches.iterrows():
             s1, s2 = row['score_t1'], row['score_t2']
-            # Identify winners and losers
             if s1 > s2:
                 wins = [row['t1_p1'], row['t1_p2']]
                 loss = [row['t2_p1'], row['t2_p2']]
@@ -481,7 +477,8 @@ with tab1:
         ladder_ratings['matches'] = ladder_ratings['wins'] + ladder_ratings['losses']
         
         # D. Format and Sort
-        ladder_ratings['JUPR'] = (ladder_ratings['rating']).apply(lambda x: f"{x:.0f}") # Display as integer
+        # THIS IS THE FIX: Divide by 400 to get JUPR format (e.g. 3.521)
+        ladder_ratings['JUPR'] = (ladder_ratings['rating'] / 400).map('{:,.3f}'.format)
         
         # Win % Calculation
         ladder_ratings['Win %'] = (ladder_ratings['wins'] / ladder_ratings['matches'] * 100).fillna(0).map('{:.1f}%'.format)
@@ -490,8 +487,6 @@ with tab1:
         leaderboard = ladder_ratings.sort_values(by='rating', ascending=False)
         
         # E. Display
-        # We filter out people with 0 matches if you want to keep it clean, 
-        # or keep them to show the seeded ratings. Let's keep them for now.
         st.dataframe(
             leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']],
             use_container_width=True,
