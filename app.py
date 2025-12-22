@@ -35,22 +35,38 @@ def load_data():
         players_ws = sh.worksheet("Players")
         matches_ws = sh.worksheet("Matches")
         
-        df_players = pd.DataFrame(players_ws.get_all_records())
-        df_matches = pd.DataFrame(matches_ws.get_all_records())
+        # 1. LOAD PLAYERS safely
+        p_data = players_ws.get_all_records()
+        df_players = pd.DataFrame(p_data)
         
-        # Ensure numeric columns are numeric
-        cols_p = ['elo', 'starting_elo', 'matches_played', 'wins', 'losses']
-        for c in cols_p:
-            if c in df_players.columns: df_players[c] = pd.to_numeric(df_players[c], errors='coerce').fillna(0)
+        # SAFETY CHECK: If sheet is empty or missing 'elo', force the columns to exist
+        expected_p_cols = ['name', 'elo', 'starting_elo', 'matches_played', 'wins', 'losses']
+        if df_players.empty or 'elo' not in df_players.columns:
+            df_players = pd.DataFrame(columns=expected_p_cols)
+        
+        # 2. LOAD MATCHES safely
+        m_data = matches_ws.get_all_records()
+        df_matches = pd.DataFrame(m_data)
+        
+        expected_m_cols = ['score_t1', 'score_t2', 'elo_change_t1', 'elo_change_t2', 'league']
+        if df_matches.empty:
+             # Create minimal columns needed to prevent crashes
+            df_matches = pd.DataFrame(columns=expected_m_cols)
+
+        # 3. CLEAN UP NUMBERS (Convert text to numbers)
+        for c in expected_p_cols:
+            if c in df_players.columns and c != 'name': 
+                df_players[c] = pd.to_numeric(df_players[c], errors='coerce').fillna(0)
             
-        cols_m = ['score_t1', 'score_t2', 'elo_change_t1', 'elo_change_t2']
-        for c in cols_m:
-            if c in df_matches.columns: df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
+        for c in expected_m_cols:
+            if c in df_matches.columns and 'league' not in c:
+                df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
             
         return df_players, df_matches, players_ws, matches_ws
     except Exception as e:
         st.error(f"Database Error: {e}")
         st.stop()
+
 
 # --- MATH ENGINES ---
 def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
@@ -207,7 +223,15 @@ with tab1:
     display_df['Win %'] = (display_df['wins'] / display_df['matches_played'] * 100).fillna(0).map('{:.1f}%'.format)
     display_df['Improvement'] = ((display_df['elo'] - display_df['starting_elo']) / 400).map('{:+.3f}'.format)
     
-    st.dataframe(display_df[['name', 'JUPR', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']].sort_values(by='elo', ascending=False), use_container_width=True, hide_index=True)
+  # CORRECT LOGIC: Sort by 'elo' FIRST, while it still exists
+    sorted_df = display_df.sort_values(by='elo', ascending=False)
+
+    # THEN select only the columns you want to show
+    st.dataframe(
+        sorted_df[['name', 'JUPR', 'Improvement', 'matches_played', 'wins', 'losses', 'Win %']], 
+        use_container_width=True, 
+        hide_index=True
+    )
 
 # --- ADMIN GATEKEEPER ---
 if not st.session_state.admin_logged_in:
