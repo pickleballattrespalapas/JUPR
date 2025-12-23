@@ -19,7 +19,6 @@ CLUB_ID = "tres_palapas"
 def init_supabase():
     url = st.secrets["supabase"]["url"]
     key = st.secrets["supabase"]["key"]
-    # Reverting to standard connection which is most stable
     return create_client(url, key)
 
 try:
@@ -53,7 +52,6 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
 
 # --- DATA LOADER (WITH RETRY) ---
 def load_data():
-    # We use a retry loop to handle random network timeouts gracefully
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -88,7 +86,7 @@ def load_data():
         
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(1) # Wait 1s and retry
+                time.sleep(1) 
                 continue
             else:
                 st.error(f"⚠️ Network unstable. Please refresh. ({e})")
@@ -126,20 +124,28 @@ def safe_add_player(name, rating):
 def process_matches(match_list, name_to_id, df_p, df_l):
     db_matches = []
     
-    # Trackers for Bulk Updates
-    overall_updates = {} # {pid: {r, w, l, mp}}
-    island_updates = {}  # { (pid, league): {r, w, l, mp} }
+    overall_updates = {} 
+    island_updates = {}
 
     # Helper to get current Island Rating
     def get_island_r(pid, league):
         if (pid, league) in island_updates: return island_updates[(pid, league)]['r']
-        # Check loaded DF
+        
+        # 1. Check existing island data
         if not df_l.empty:
             match = df_l[(df_l['player_id'] == pid) & (df_l['league_name'] == league)]
             if not match.empty: return float(match.iloc[0]['rating'])
-        # Fallback to Overall Rating (or starting) if no island history
+        
+        # 2. INHERIT FROM OVERALL (This fixes the 3.0 reset issue on live matches)
+        # We need the most current overall rating for this player.
+        # Check local updates first
+        if pid in overall_updates: return overall_updates[pid]['r']
+        
+        # Check DB
         overall = df_p[df_p['id'] == pid]
         if not overall.empty: return float(overall.iloc[0]['rating'])
+        
+        # Default
         return 1200.0
 
     # Helper to get current Overall Rating
@@ -164,7 +170,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
         di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
 
-        # Record Match (We store Overall Delta in main table, Island logic is separate)
+        # Record Match 
         db_matches.append({
             "club_id": CLUB_ID, "date": m['date'], "league": league,
             "t1_p1": p1, "t1_p2": p2, "t2_p1": p3, "t2_p2": p4,
@@ -189,8 +195,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             # Island Update
             key = (pid, league)
             if key not in island_updates:
-                # Need initial values
-                curr = get_island_r(pid, league) # This fetches DB or Overall fallback
+                curr = get_island_r(pid, league) # Fetches inherited rating
                 island_updates[key] = {'r': curr, 'w': 0, 'l': 0, 'mp': 0}
             
             island_updates[key]['r'] += d_island
@@ -216,7 +221,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         })
     
     for row in island_data:
-        # Check if exists to get current counts
         existing = supabase.table("league_ratings").select("*").eq("player_id", row['player_id']).eq("league_name", row['league_name']).execute()
         if existing.data:
             cur = existing.data[0]
@@ -530,9 +534,12 @@ elif sel == "⚙️ Admin Tools":
                         else: p_map[pid]['l'] += 1
 
                 # 2. Island Math
+                # FIX: INHERIT FROM CURRENT OVERALL
                 def get_i_r(pid, lg):
                     if (pid, lg) not in island_map:
-                        island_map[(pid, lg)] = {'r': 1200.0, 'w':0, 'l':0, 'mp':0}
+                        # Inherit current overall rating (from p_map)
+                        start_r = p_map[pid]['r']
+                        island_map[(pid, lg)] = {'r': start_r, 'w':0, 'l':0, 'mp':0}
                     return island_map[(pid, lg)]['r']
 
                 ri1, ri2, ri3, ri4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
@@ -541,7 +548,11 @@ elif sel == "⚙️ Admin Tools":
                 win = s1 > s2
                 for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
                     k = (pid, league)
-                    if k not in island_map: island_map[k] = {'r': 1200.0, 'w':0, 'l':0, 'mp':0}
+                    if k not in island_map: 
+                        # Should have been inited by get_i_r, but just in case
+                        start_r = p_map[pid]['r']
+                        island_map[k] = {'r': start_r, 'w':0, 'l':0, 'mp':0}
+                        
                     island_map[k]['r'] += delta
                     island_map[k]['mp'] += 1
                     if is_win: island_map[k]['w'] += 1
