@@ -145,14 +145,21 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         
         s1, s2 = m['s1'], m['s2']
         league = m['league']
+        # Check if this match is flagged as a Pop-Up (Skip Island)
+        is_popup = m.get('is_popup', False)
         
+        # --- OVERALL MATH (Always Runs) ---
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
         do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
         
-        ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
-        di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
+        # --- ISLAND MATH (Only if NOT Pop-Up) ---
+        di1, di2 = 0, 0
+        if not is_popup:
+            ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
+            di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
 
-        # Store the WINNER'S gain in elo_delta
+        # Store the match
+        # Note: If is_popup, we store the Overall delta in the match record
         db_matches.append({
             "club_id": CLUB_ID, "date": m['date'], "league": league,
             "t1_p1": p1, "t1_p2": p2, "t2_p1": p3, "t2_p2": p4,
@@ -164,6 +171,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         participants = [(p1, do1, di1, win), (p2, do1, di1, win), (p3, do2, di2, not win), (p4, do2, di2, not win)]
         
         for pid, d_overall, d_island, won in participants:
+            # 1. Update Overall
             if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
                 overall_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
@@ -172,14 +180,16 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             if won: overall_updates[pid]['w'] += 1
             else: overall_updates[pid]['l'] += 1
             
-            key = (pid, league)
-            if key not in island_updates:
-                curr = get_island_r(pid, league) 
-                island_updates[key] = {'r': curr, 'w': 0, 'l': 0, 'mp': 0}
-            island_updates[key]['r'] += d_island
-            island_updates[key]['mp'] += 1
-            if won: island_updates[key]['w'] += 1
-            else: island_updates[key]['l'] += 1
+            # 2. Update Island (Only if NOT Pop-Up)
+            if not is_popup:
+                key = (pid, league)
+                if key not in island_updates:
+                    curr = get_island_r(pid, league) 
+                    island_updates[key] = {'r': curr, 'w': 0, 'l': 0, 'mp': 0}
+                island_updates[key]['r'] += d_island
+                island_updates[key]['mp'] += 1
+                if won: island_updates[key]['w'] += 1
+                else: island_updates[key]['l'] += 1
 
     if db_matches: supabase.table("matches").insert(db_matches).execute()
     
@@ -188,23 +198,25 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
         }).eq("id", pid).execute()
 
-    island_data = []
-    for (pid, league), stats in island_updates.items():
-        island_data.append({
-            "player_id": pid, "club_id": CLUB_ID, "league_name": league,
-            "rating": stats['r'], "matches_played": stats['mp'], "wins": stats['w'], "losses": stats['l']
-        })
-    
-    for row in island_data:
-        existing = supabase.table("league_ratings").select("*").eq("player_id", row['player_id']).eq("league_name", row['league_name']).execute()
-        if existing.data:
-            cur = existing.data[0]
-            row['wins'] += cur['wins']
-            row['losses'] += cur['losses']
-            row['matches_played'] += cur['matches_played']
-            supabase.table("league_ratings").update(row).eq("id", cur['id']).execute()
-        else:
-            supabase.table("league_ratings").insert(row).execute()
+    # Only write Islands if there are updates
+    if island_updates:
+        island_data = []
+        for (pid, league), stats in island_updates.items():
+            island_data.append({
+                "player_id": pid, "club_id": CLUB_ID, "league_name": league,
+                "rating": stats['r'], "matches_played": stats['mp'], "wins": stats['w'], "losses": stats['l']
+            })
+        
+        for row in island_data:
+            existing = supabase.table("league_ratings").select("*").eq("player_id", row['player_id']).eq("league_name", row['league_name']).execute()
+            if existing.data:
+                cur = existing.data[0]
+                row['wins'] += cur['wins']
+                row['losses'] += cur['losses']
+                row['matches_played'] += cur['matches_played']
+                supabase.table("league_ratings").update(row).eq("id", cur['id']).execute()
+            else:
+                supabase.table("league_ratings").insert(row).execute()
 
 # --- MAIN APP ---
 df_players, df_leagues, df_matches, name_to_id, id_to_name = load_data()
@@ -233,13 +245,12 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 Leaderboards")
     
-    # 1. League Selector
+    # 1. League Selector (Filter out leagues not in the Island table)
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
         unique_l = sorted(df_leagues['league_name'].unique().tolist())
         available_leagues += unique_l
         
-    # Check URL
     default_index = 0
     query_params = st.query_params
     if "league" in query_params:
@@ -249,17 +260,15 @@ if sel == "🏆 Leaderboards":
             
     target_league = st.selectbox("Select View", available_leagues, index=default_index)
     
-    # Update URL
     if target_league != "OVERALL":
         st.query_params["league"] = target_league
-        APP_BASE_URL = "https://jupr-leagues.streamlit.app" # REPLACE THIS IF NEEDED
+        APP_BASE_URL = "https://jupr-leagues.streamlit.app"
         full_link = f"{APP_BASE_URL}/?league={target_league.replace(' ', '%20')}"
         st.caption("👇 Share this league:")
         st.code(full_link, language=None)
     else:
         st.query_params.clear()
     
-    # Explainer
     with st.expander("📊 How Ratings Work"):
         st.markdown("""
         * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
@@ -269,7 +278,6 @@ if sel == "🏆 Leaderboards":
         * **Safety Net:** Winners *never* lose points, even in sloppy wins.
         """)
 
-    # Filter Data
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -290,39 +298,61 @@ elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
     p = st.selectbox("Search", [""] + sorted(df_players['name']))
     
-    with st.expander("📊 Understanding the Stats"):
-        st.markdown("""
-        * **Δ JUPR:** The exact amount your rating moved after this match.
-        * **Green (+):** You won or outperformed expectation.
-        * **Red (-):** You lost or underperformed.
-        * *Note: Ratings update instantly after every match.*
-        """)
+    if p:
+        # --- PLAYER SUMMARY CARD (NEW) ---
+        st.subheader("📊 Rating Snapshot")
+        # 1. Get Overall
+        p_row = df_players[df_players['name'] == p]
+        summary_data = []
+        if not p_row.empty:
+            summary_data.append({
+                "Context": "🌍 OVERALL",
+                "Rating": f"{(float(p_row.iloc[0]['rating'])/400):.3f}",
+                "Matches": p_row.iloc[0]['matches_played']
+            })
+        
+        # 2. Get Islands
+        if not df_leagues.empty:
+            pid = name_to_id.get(p)
+            islands = df_leagues[df_leagues['player_id'] == pid]
+            for _, row in islands.iterrows():
+                summary_data.append({
+                    "Context": f"🏝️ {row['league_name']}",
+                    "Rating": f"{(float(row['rating'])/400):.3f}",
+                    "Matches": row['matches_played']
+                })
+        
+        # Display Summary Table
+        st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
 
-    if p and not df_matches.empty:
-        mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
-        h = df_matches[mask].copy()
-        if not h.empty:
-            # Calculate Win/Loss and Signed JUPR Change
-            def get_stats(r):
-                is_t1 = p in [r['p1'], r['p2']]
-                t1_won = r['score_t1'] > r['score_t2']
-                player_won = (is_t1 and t1_won) or (not is_t1 and not t1_won)
-                
-                # DB stores absolute positive delta for winner. 
-                # If I won, I gained it. If I lost, I lost it.
-                delta = r['elo_delta'] / 400
-                if not player_won: delta = -delta
-                
-                return ("✅ Win" if player_won else "❌ Loss", delta)
+        with st.expander("📊 Understanding the Stats"):
+            st.markdown("""
+            * **Δ JUPR:** The exact amount your rating moved after this match.
+            * **Green (+):** You won or outperformed expectation.
+            * **Red (-):** You lost or underperformed.
+            * *Note: Ratings update instantly after every match.*
+            """)
 
-            # Apply
-            stats = h.apply(get_stats, axis=1, result_type='expand')
-            h['Result'] = stats[0]
-            h['Δ JUPR'] = stats[1].map('{:+.3f}'.format)
-            
-            st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
-        else:
-            st.info("No matches found.")
+        # --- MATCH HISTORY ---
+        if not df_matches.empty:
+            mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
+            h = df_matches[mask].copy()
+            if not h.empty:
+                def get_stats(r):
+                    is_t1 = p in [r['p1'], r['p2']]
+                    t1_won = r['score_t1'] > r['score_t2']
+                    player_won = (is_t1 and t1_won) or (not is_t1 and not t1_won)
+                    delta = r['elo_delta'] / 400
+                    if not player_won: delta = -delta
+                    return ("✅ Win" if player_won else "❌ Loss", delta)
+
+                stats = h.apply(get_stats, axis=1, result_type='expand')
+                h['Result'] = stats[0]
+                h['Δ JUPR'] = stats[1].map('{:+.3f}'.format)
+                
+                st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
+            else:
+                st.info("No matches found.")
 
 elif sel == "🏟️ Live Court Manager":
     st.header("🏟️ Live Court Manager")
@@ -380,7 +410,8 @@ elif sel == "🏟️ Live Court Manager":
                     s1 = c2.number_input("S1", 0, key=f"lc_{c['c']}_{i}_1")
                     s2 = c3.number_input("S2", 0, key=f"lc_{c['c']}_{i}_2")
                     c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':st.session_state.get('active_league', 'Unknown'), 'type':f"C{c['c']} RR"})
+                    # Note: is_popup = False
+                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':st.session_state.get('active_league', 'Unknown'), 'type':f"C{c['c']} RR", 'is_popup': False})
             
             if st.form_submit_button("Submit Scores"):
                 valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
@@ -448,7 +479,8 @@ elif sel == "🔄 Pop-Up RR":
                     s1 = c2.number_input("S1", 0, key=f"rr_{c['c']}_{i}_1")
                     s2 = c3.number_input("S2", 0, key=f"rr_{c['c']}_{i}_2")
                     c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(date_rr), 'league':st.session_state.get('rr_league', 'PopUp'), 'type':f"C{c['c']} RR"})
+                    # Note: is_popup = True
+                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(date_rr), 'league':st.session_state.get('rr_league', 'PopUp'), 'type':f"C{c['c']} RR", 'is_popup': True})
             if st.form_submit_button("Submit"):
                 valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
                 if valid:
@@ -548,6 +580,13 @@ elif sel == "⚙️ Admin Tools":
                 s1, s2 = m['score_t1'], m['score_t2']
                 league = m['league']
                 
+                # Check if this historic match was a popup
+                # In your CSV upload or history, we don't store 'is_popup' explicitly yet.
+                # BUT, since we filtered PopUps from the League Table view, they won't appear in the dropdown to recalc.
+                # So if we are Recalculating "ALL", we should be careful.
+                # For now, let's treat anything named "PopUp" as popup.
+                is_popup = "PopUp" in league or "Pop-Up" in league
+                
                 if target_reset == "ALL (Full System Reset)":
                     ro1, ro2, ro3, ro4 = p_map[p1]['r'], p_map[p2]['r'], p_map[p3]['r'], p_map[p4]['r']
                     do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
@@ -558,20 +597,21 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: p_map[pid]['w'] += 1
                         else: p_map[pid]['l'] += 1
 
-                def get_i_r(pid, lg):
-                    if (pid, lg) not in island_map: island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
-                    return island_map[(pid, lg)]['r']
+                if not is_popup:
+                    def get_i_r(pid, lg):
+                        if (pid, lg) not in island_map: island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
+                        return island_map[(pid, lg)]['r']
 
-                ri1, ri2, ri3, ri4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
-                di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
-                win = s1 > s2
-                for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
-                    k = (pid, league)
-                    if k not in island_map: island_map[k] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
-                    island_map[k]['r'] += delta
-                    island_map[k]['mp'] += 1
-                    if is_win: island_map[k]['w'] += 1
-                    else: island_map[k]['l'] += 1
+                    ri1, ri2, ri3, ri4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
+                    di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
+                    win = s1 > s2
+                    for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
+                        k = (pid, league)
+                        if k not in island_map: island_map[k] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
+                        island_map[k]['r'] += delta
+                        island_map[k]['mp'] += 1
+                        if is_win: island_map[k]['w'] += 1
+                        else: island_map[k]['l'] += 1
 
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
