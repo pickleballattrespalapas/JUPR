@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
 import time
 from datetime import datetime
 
@@ -15,13 +14,13 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
-# --- DATABASE CONNECTION (STABILITY FIX) ---
+# --- DATABASE CONNECTION (STABLE) ---
 @st.cache_resource
 def init_supabase():
     url = st.secrets["supabase"]["url"]
     key = st.secrets["supabase"]["key"]
-    # Increase network timeout to 60 seconds to prevent ReadErrors
-    return create_client(url, key, options=ClientOptions(postgrest_client_timeout=60))
+    # Reverting to standard connection which is most stable
+    return create_client(url, key)
 
 try:
     supabase = init_supabase()
@@ -54,6 +53,7 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
 
 # --- DATA LOADER (WITH RETRY) ---
 def load_data():
+    # We use a retry loop to handle random network timeouts gracefully
     max_retries = 3
     for attempt in range(max_retries):
         try:
