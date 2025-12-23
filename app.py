@@ -264,6 +264,8 @@ def submit_batch_of_matches(match_list, ladder_name_override=None):
         data_to_write = [headers] + [list(r.values()) for r in all_rows]
         r_ws.clear()
         r_ws.update(data_to_write)
+        # Clear cache so next load gets new ratings
+        fetch_all_data_snapshots.clear()
 
 def get_match_schedule(format_type, players):
     if len(players) < int(format_type.split('-')[0]):
@@ -525,7 +527,6 @@ else:
                         df_matches = pd.concat([df_matches, new_df], ignore_index=True)
                         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
                         st.success(f"✅ Processed {len(matches_to_process)} matches!")
-                        # NO RERUN HERE (Prevent Tab Jump)
 
     with tab3:
         st.header("Pop-Up Round Robin")
@@ -576,7 +577,6 @@ else:
                     if matches_to_process:
                         submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
                         st.success("✅ Overall ratings updated!")
-                        # NO RERUN HERE (Prevent Tab Jump)
 
     with tab4:
         st.header("Player Management")
