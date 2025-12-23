@@ -433,37 +433,63 @@ elif sel == "🔄 Pop-Up RR":
 
 elif sel == "👥 Players":
     st.header("Player Management")
-    c1, c2 = st.columns(2)
+    
+    # Create 3 columns for Add, Edit, Delete
+    c1, c2, c3 = st.columns(3)
+    
+    # --- 1. ADD PLAYER ---
     with c1:
+        st.subheader("➕ Add New")
         with st.form("add_p"):
             n = st.text_input("Name")
             r = st.number_input("Rating", 1.0, 7.0, 3.0)
-            if st.form_submit_button("Add"):
+            if st.form_submit_button("Add Player"):
                 ok, msg = safe_add_player(n, r)
-                if ok: st.success("Added!"); st.rerun()
-                else: st.error(msg)
+                if ok: 
+                    st.success(f"Added {n}!")
+                    time.sleep(1)
+                    st.rerun()
+                else: 
+                    st.error(msg)
+    
+    # --- 2. EDIT PLAYER (NEW!) ---
     with c2:
-        to_del = st.selectbox("Delete", sorted(df_players['name']))
-        if st.button("Confirm Delete"):
-            supabase.table("players").delete().eq("name", to_del).eq("club_id", CLUB_ID).execute()
-            st.success("Deleted"); st.rerun()
-    st.dataframe(df_players, use_container_width=True)
+        st.subheader("✏️ Edit Rating")
+        p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
+        
+        if p_edit:
+            # Get current starting stats
+            curr_row = df_players[df_players['name'] == p_edit].iloc[0]
+            curr_start = float(curr_row['starting_rating']) / 400
+            
+            new_start = st.number_input("New Start Rating", 1.0, 7.0, curr_start, step=0.1)
+            
+            if st.button("Update Rating"):
+                # Update database
+                supabase.table("players").update({
+                    "starting_rating": new_start * 400,
+                    "rating": new_start * 400 # Reset current rating too
+                }).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
+                
+                st.success(f"Updated {p_edit} to {new_start}")
+                st.info("ℹ️ Go to Admin Tools -> 'Recalculate History' to apply this to past matches.")
+                time.sleep(2)
+                st.rerun()
 
-elif sel == "📝 Match Log":
-    st.header("📝 Match Log")
-    st.subheader("Recent Matches")
-    edit_df = df_matches.head(50)[['id', 'date', 'league', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
-    st.dataframe(edit_df, use_container_width=True)
+    # --- 3. DELETE PLAYER ---
+    with c3:
+        st.subheader("🗑️ Delete")
+        to_del = st.selectbox("Select to Remove", [""] + sorted(df_players['name']))
+        if to_del:
+            st.warning(f"Deleting {to_del} will remove their history.")
+            if st.button("Confirm Delete"):
+                supabase.table("players").delete().eq("name", to_del).eq("club_id", CLUB_ID).execute()
+                st.success("Deleted.")
+                time.sleep(1)
+                st.rerun()
     
     st.divider()
-    st.subheader("🗑️ Delete Match")
-    m_id = st.number_input("Match ID", min_value=0, step=1)
-    if st.button("Delete Match"):
-        supabase.table("matches").delete().eq("id", m_id).execute()
-        st.success("Deleted! Note: This does not auto-revert Elo points yet. Replay History feature coming.")
-        time.sleep(1)
-        st.rerun()
-
+    st.dataframe(df_players, use_container_width=True)
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
