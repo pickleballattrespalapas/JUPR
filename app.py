@@ -7,7 +7,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import io
 
-# --- 1. PAGE CONFIG MUST BE FIRST ---
+# --- 1. PAGE CONFIG (First Command) ---
 st.set_page_config(page_title="Tres Palapas Pickleball", layout="wide")
 
 if 'admin_logged_in' not in st.session_state:
@@ -100,7 +100,6 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
     return final_delta_t1, final_delta_t2
 
 # --- ISLAND / LADDER LOGIC ---
-
 def calculate_ladder_elo(rating_a, rating_b, actual_score_a):
     expected_a = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
     new_rating_a = rating_a + K_FACTOR * (actual_score_a - expected_a)
@@ -264,7 +263,6 @@ def submit_batch_of_matches(match_list, ladder_name_override=None):
         data_to_write = [headers] + [list(r.values()) for r in all_rows]
         r_ws.clear()
         r_ws.update(data_to_write)
-        # Clear cache so next load gets new ratings
         fetch_all_data_snapshots.clear()
 
 def get_match_schedule(format_type, players):
@@ -358,6 +356,50 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
+
+# --- HELPER: NEW PLAYER INTERCEPTOR ---
+def handle_missing_players(names_list, section_key, ws_p, df_p):
+    """
+    Checks if names exist. If not, pauses execution to ask for ratings.
+    Returns: (stop_execution: bool, updated_df_players)
+    """
+    if not names_list: return False, df_p
+    
+    # 1. Identify Missing
+    unique_names = list(set([n.strip() for n in names_list if n.strip()]))
+    existing_names = set(df_p['name'].astype(str).str.strip().tolist())
+    missing = [n for n in unique_names if n not in existing_names]
+    
+    if not missing:
+        return False, df_p
+        
+    # 2. Show Form if Missing found
+    st.warning(f"⚠️ Found {len(missing)} new player(s) in {section_key}. Please enter their starting ratings.")
+    
+    with st.form(f"new_player_form_{section_key}"):
+        cols = st.columns(3)
+        inputs = {}
+        for i, name in enumerate(missing):
+            with cols[i % 3]:
+                inputs[name] = st.number_input(f"{name}", min_value=1.0, value=3.0, step=0.1, key=f"np_{section_key}_{i}")
+        
+        if st.form_submit_button("💾 Save New Players & Continue"):
+            new_rows = []
+            for name, rating in inputs.items():
+                new_rows.append({'name': name, 'elo': rating*400, 'starting_elo': rating*400, 'matches_played':0, 'wins':0, 'losses':0})
+            
+            # Save to Cloud
+            new_df = pd.DataFrame(new_rows)
+            df_p = pd.concat([df_p, new_df], ignore_index=True)
+            ws_p.update([df_p.columns.values.tolist()] + df_p.values.tolist())
+            fetch_all_data_snapshots.clear() # Clear cache so new players appear instantly
+            
+            st.success("✅ Players added! Please click 'Generate' again.")
+            time.sleep(1)
+            st.rerun()
+            
+    # Stop the rest of the app from running schedule generation until this is resolved
+    return True, df_p
 
 # --- TABS DEFINITION ---
 tab_titles = ["🏆 Leaderboards", "🔍 Player Search", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
@@ -486,11 +528,28 @@ else:
                     court_data.append({'id':i+1, 'type':t, 'names':n})
                 
                 if st.form_submit_button("Generate"):
-                    st.session_state.schedule = []
+                    # 1. Parse Names
+                    all_input_names = []
                     for c in court_data:
                         pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                        st.session_state.schedule.append({'court':c['id'], 'matches':get_match_schedule(c['type'], pl)})
+                        all_input_names.extend(pl)
+                    
+                    # 2. Check for Missing Players
+                    stop_flag, df_players = handle_missing_players(all_input_names, "tab2", ws_players, df_players)
+                    
+                    # 3. Only Generate if no missing players
+                    if not stop_flag:
+                        st.session_state.schedule = []
+                        for c in court_data:
+                            pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
+                            st.session_state.schedule.append({'court':c['id'], 'matches':get_match_schedule(c['type'], pl)})
         
+        # Intercept logic for the rerun case (must be outside form)
+        if 'last_names_check_tab2' in st.session_state:
+             # This is tricky because we don't persist court_data. 
+             # For simplicity, relying on the user to click Generate again is safer.
+             pass
+
         if st.session_state.get('schedule'):
             st.divider()
             with st.form("submit_scores", clear_on_submit=True):
@@ -544,10 +603,21 @@ else:
                     rr_data.append({'id': i+1, 'type': t, 'names': n})
                 
                 if st.form_submit_button("Generate Schedule"):
-                    st.session_state.rr_schedule = []
+                    # 1. Parse Names
+                    all_input_names = []
                     for c in rr_data:
                         pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
-                        st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
+                        all_input_names.extend(pl)
+
+                    # 2. Check for Missing Players
+                    stop_flag, df_players = handle_missing_players(all_input_names, "tab3", ws_players, df_players)
+
+                    # 3. Only Generate if no missing players
+                    if not stop_flag:
+                        st.session_state.rr_schedule = []
+                        for c in rr_data:
+                            pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
+                            st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
 
         if st.session_state.get('rr_schedule'):
             st.divider()
@@ -592,6 +662,7 @@ else:
                         df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
                         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
                         st.success(f"Added {n} to Cloud")
+                        fetch_all_data_snapshots.clear()
                         st.rerun()
                     else: st.error("Invalid name or player already exists.")
         with c2:
@@ -608,6 +679,7 @@ else:
                         ws_ratings.clear()
                         ws_ratings.update([df_ratings.columns.values.tolist()] + df_ratings.values.tolist())
                     st.success(f"Successfully deleted {p_to_delete}.")
+                    fetch_all_data_snapshots.clear()
                     st.rerun()
         st.divider()
         st.subheader("Current Player Registry")
@@ -643,6 +715,7 @@ else:
                     else: r_ws.clear()
                     msg = replay_league_history(league_to_restore)
                     st.success(f"Fixed! {msg}")
+                    fetch_all_data_snapshots.clear()
                     st.rerun()
 
         st.divider()
