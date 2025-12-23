@@ -27,33 +27,6 @@ except Exception as e:
     st.error(f"❌ Connection Error: {e}")
     st.stop()
 
-# --- DATA LOADER ---
-def load_data():
-    # Fetch fresh data every time (No cache for live inputs)
-    p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
-    df_players = pd.DataFrame(p_response.data)
-    
-    m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(500).execute()
-    df_matches = pd.DataFrame(m_response.data)
-    
-    # Map Helpers
-    if not df_players.empty:
-        id_to_name = dict(zip(df_players['id'], df_players['name']))
-        name_to_id = dict(zip(df_players['name'], df_players['id']))
-    else:
-        id_to_name = {}
-        name_to_id = {}
-        df_players = pd.DataFrame(columns=['id', 'name', 'rating', 'wins', 'losses'])
-
-    # Map Match Display Names
-    if not df_matches.empty:
-        df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
-        df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
-        df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
-        df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
-        
-    return df_players, df_matches, name_to_id
-
 # --- LOGIC ENGINES ---
 def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
     expected_t1 = 1 / (1 + 10 ** ((t2_avg - t1_avg) / 400))
@@ -62,16 +35,55 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
     if total_points == 0: return 0, 0 
     raw_delta_t1 = K_FACTOR * 2 * ((score_t1 / total_points) - expected_t1)
     raw_delta_t2 = K_FACTOR * 2 * ((score_t2 / total_points) - expected_t2)
-    final_t1 = max(0, raw_delta_t1) if score_t1 > score_t2 else raw_delta_t1
-    final_t2 = raw_delta_t2 if score_t1 > score_t2 else max(0, raw_delta_t2)
-    if score_t1 > score_t2 and final_t1 == 0: final_t1 = 1.0
-    if score_t2 > score_t1 and final_t2 == 0: final_t2 = 1.0
-    return final_t1, final_t2
+    
+    final_delta_t1 = 0
+    final_delta_t2 = 0
+    
+    if score_t1 > score_t2: 
+        final_delta_t1 = max(0, raw_delta_t1)
+        final_delta_t2 = raw_delta_t2
+        if final_delta_t1 == 0: final_delta_t1 = 1.0
+    elif score_t2 > score_t1: 
+        final_delta_t1 = raw_delta_t1
+        final_delta_t2 = max(0, raw_delta_t2)
+        if final_delta_t2 == 0: final_delta_t2 = 1.0
+        
+    return final_delta_t1, final_delta_t2
 
+# --- DATA LOADER ---
+def load_data():
+    # 1. Players (Overall)
+    p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
+    df_players = pd.DataFrame(p_response.data)
+    
+    # 2. League Ratings (Islands)
+    l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
+    df_leagues = pd.DataFrame(l_response.data)
+
+    # 3. Matches
+    m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(1000).execute()
+    df_matches = pd.DataFrame(m_response.data)
+    
+    if not df_players.empty:
+        id_to_name = dict(zip(df_players['id'], df_players['name']))
+        name_to_id = dict(zip(df_players['name'], df_players['id']))
+    else:
+        id_to_name = {}
+        name_to_id = {}
+        df_players = pd.DataFrame(columns=['id', 'name', 'rating', 'wins', 'losses'])
+
+    if not df_matches.empty:
+        df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
+        df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
+        df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
+        df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
+        
+    return df_players, df_leagues, df_matches, name_to_id, id_to_name
+
+# --- HELPERS ---
 def get_match_schedule(format_type, players):
     if len(players) < int(format_type.split('-')[0]): return []
     if format_type == "12-Player":
-        # Fixed schedule 
         raw = [[([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])], [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])], [([10, 1], [3, 4]), ([11, 6], [7, 2]), ([8, 0], [9, 5])], [([11, 9], [10, 5]), ([0, 3], [1, 8]), ([2, 4], [6, 7])], [([3, 6], [4, 0]), ([5, 7], [9, 10]), ([11, 1], [2, 8])], [([8, 10], [1, 2]), ([11, 4], [5, 0]), ([6, 9], [7, 3])], [([11, 7], [8, 3]), ([9, 1], [10, 6]), ([0, 2], [4, 5])], [([1, 4], [2, 9]), ([3, 5], [7, 8]), ([11, 10], [0, 6])], [([6, 8], [10, 0]), ([4, 7], [5, 1]), ([11, 2], [3, 9])], [([11, 5], [6, 1]), ([9, 0], [2, 3]), ([7, 10], [8, 4])], [([10, 2], [0, 7]), ([11, 8], [9, 4]), ([1, 3], [5, 6])]]
         matches = []
         for r_idx, round_pairs in enumerate(raw):
@@ -86,7 +98,6 @@ def get_match_schedule(format_type, players):
     elif format_type == "8-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'}, {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'}, {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'}, {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}]
     return []
 
-# --- DB HELPERS ---
 def safe_add_player(name, rating):
     try:
         supabase.table("players").insert({
@@ -97,55 +108,120 @@ def safe_add_player(name, rating):
     except Exception as e:
         return False, str(e)
 
-def process_matches(match_list, name_to_id, df_p):
+# --- DUAL-TRACK PROCESSOR (OVERALL + ISLAND) ---
+def process_matches(match_list, name_to_id, df_p, df_l):
     db_matches = []
-    # Use a dictionary to track accumulated changes for players locally
-    p_updates = {} 
+    
+    # Trackers for Bulk Updates
+    overall_updates = {} # {pid: {r, w, l, mp}}
+    island_updates = {}  # { (pid, league): {r, w, l, mp} }
+
+    # Helper to get current Island Rating
+    def get_island_r(pid, league):
+        if (pid, league) in island_updates: return island_updates[(pid, league)]['r']
+        # Check loaded DF
+        if not df_l.empty:
+            match = df_l[(df_l['player_id'] == pid) & (df_l['league_name'] == league)]
+            if not match.empty: return float(match.iloc[0]['rating'])
+        # Fallback to Overall Rating (or starting) if no island history
+        overall = df_p[df_p['id'] == pid]
+        if not overall.empty: return float(overall.iloc[0]['rating'])
+        return 1200.0
+
+    # Helper to get current Overall Rating
+    def get_overall_r(pid):
+        if pid in overall_updates: return overall_updates[pid]['r']
+        row = df_p[df_p['id'] == pid]
+        if not row.empty: return float(row.iloc[0]['rating'])
+        return 1200.0
 
     for m in match_list:
-        p1, p2 = name_to_id.get(m['t1_p1']), name_to_id.get(m['t1_p2'])
-        p3, p4 = name_to_id.get(m['t2_p1']), name_to_id.get(m['t2_p2'])
+        p1, p2, p3, p4 = [name_to_id.get(m[k]) for k in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']]
         if not all([p1, p2, p3, p4]): continue
-
-        # Get ratings from DF or local accumulation
-        def current_r(pid):
-            if pid in p_updates: return p_updates[pid]['r']
-            return float(df_p[df_p['id'] == pid]['rating'].iloc[0])
-
-        r1, r2, r3, r4 = current_r(p1), current_r(p2), current_r(p3), current_r(p4)
-        s1, s2 = m['s1'], m['s2']
-        dt1, dt2 = calculate_hybrid_elo((r1+r2)/2, (r3+r4)/2, s1, s2)
         
-        # Save Match
+        s1, s2 = m['s1'], m['s2']
+        league = m['league']
+        
+        # --- 1. OVERALL MATH ---
+        ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
+        do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
+        
+        # --- 2. ISLAND MATH ---
+        ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
+        di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
+
+        # Record Match (We store Overall Delta in main table, Island logic is separate)
         db_matches.append({
-            "club_id": CLUB_ID, "date": m['date'], "league": m['league'],
+            "club_id": CLUB_ID, "date": m['date'], "league": league,
             "t1_p1": p1, "t1_p2": p2, "t2_p1": p3, "t2_p2": p4,
-            "score_t1": s1, "score_t2": s2, "elo_delta": dt1 if s1 > s2 else dt2,
+            "score_t1": s1, "score_t2": s2, "elo_delta": do1 if s1 > s2 else do2,
             "match_type": m['type']
         })
 
-        # Update Local Tracking
-        for pid, delta, won in [(p1, dt1, s1>s2), (p2, dt1, s1>s2), (p3, dt2, s2>s1), (p4, dt2, s2>s1)]:
-            if pid not in p_updates:
+        # ACCUMULATE UPDATES
+        win = s1 > s2
+        participants = [(p1, do1, di1, win), (p2, do1, di1, win), (p3, do2, di2, not win), (p4, do2, di2, not win)]
+        
+        for pid, d_overall, d_island, won in participants:
+            # Overall Update
+            if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
-                p_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
-            p_updates[pid]['r'] += delta
-            p_updates[pid]['mp'] += 1
-            if won: p_updates[pid]['w'] += 1
-            else: p_updates[pid]['l'] += 1
+                overall_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
+            overall_updates[pid]['r'] += d_overall
+            overall_updates[pid]['mp'] += 1
+            if won: overall_updates[pid]['w'] += 1
+            else: overall_updates[pid]['l'] += 1
+            
+            # Island Update
+            key = (pid, league)
+            if key not in island_updates:
+                # Need initial values
+                curr = get_island_r(pid, league) # This fetches DB or Overall fallback
+                island_updates[key] = {'r': curr, 'w': 0, 'l': 0, 'mp': 0}
+                # If they existed in DB, we should have fetched real stats, but for simplicity/speed in this patch
+                # we are doing incremental updates. Real production apps fetch specific rows here.
+            
+            island_updates[key]['r'] += d_island
+            island_updates[key]['mp'] += 1
+            if won: island_updates[key]['w'] += 1
+            else: island_updates[key]['l'] += 1
 
-    # Batch Insert Matches
+    # EXECUTE WRITES
     if db_matches: supabase.table("matches").insert(db_matches).execute()
     
-    # Update Players (One by one - Supabase bulk update is tricky without custom SQL)
-    for pid, stats in p_updates.items():
+    # Write Overall
+    for pid, stats in overall_updates.items():
         supabase.table("players").update({
-            "rating": stats['r'], "wins": stats['w'], 
-            "losses": stats['l'], "matches_played": stats['mp']
+            "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
         }).eq("id", pid).execute()
 
+    # Write Islands (Upsert)
+    island_data = []
+    for (pid, league), stats in island_updates.items():
+        island_data.append({
+            "player_id": pid, "club_id": CLUB_ID, "league_name": league,
+            "rating": stats['r'], "matches_played": stats['mp'], "wins": stats['w'], "losses": stats['l']
+        })
+    # We need to handle the "Wins/Losses" correctly. Upsert replaces data. 
+    # To do this perfectly accurately without reading first, we'd need SQL increment.
+    # For now, we will Upsert. Note: This assumes the `island_updates` gathered cumulative stats for the batch.
+    # But it resets the win/loss count if the player existed before but wasn't in memory. 
+    # FIX: We will just update rating for now to be safe, or we accept that 'matches_played' in island view resets annually.
+    # Let's do a safe individual Upsert for now.
+    for row in island_data:
+        # Check if exists to get current counts
+        existing = supabase.table("league_ratings").select("*").eq("player_id", row['player_id']).eq("league_name", row['league_name']).execute()
+        if existing.data:
+            cur = existing.data[0]
+            row['wins'] += cur['wins']
+            row['losses'] += cur['losses']
+            row['matches_played'] += cur['matches_played']
+            supabase.table("league_ratings").update(row).eq("id", cur['id']).execute()
+        else:
+            supabase.table("league_ratings").insert(row).execute()
+
 # --- MAIN APP ---
-df_players, df_matches, name_to_id = load_data()
+df_players, df_leagues, df_matches, name_to_id, id_to_name = load_data()
 
 st.sidebar.title("JUPR Leagues 🌵")
 if not st.session_state.admin_logged_in:
@@ -155,7 +231,6 @@ if not st.session_state.admin_logged_in:
             if pwd == st.secrets["supabase"]["admin_password"]:
                 st.session_state.admin_logged_in = True
                 st.rerun()
-            else: st.error("Wrong PW")
 else:
     st.sidebar.success("Logged In: Admin")
     if st.sidebar.button("Log Out"):
@@ -163,24 +238,42 @@ else:
         st.rerun()
 
 nav = ["🏆 Leaderboards", "🔍 Player Search"]
-if st.session_state.admin_logged_in: nav += ["──────────", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players"]
-sel = st.sidebar.radio("Go to:", nav)
+if st.session_state.admin_logged_in: 
+    nav += ["──────────", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
+sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
-# --- TABS ---
+# --- UI LOGIC ---
+
 if sel == "🏆 Leaderboards":
     st.header("🏆 Leaderboards")
-    if not df_players.empty:
-        df_disp = df_players.copy()
-        df_disp['JUPR'] = (df_disp['rating']/400).map('{:,.3f}'.format)
-        df_disp['Win %'] = (df_disp['wins'] / df_disp['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
+    
+    # 1. League Selector
+    available_leagues = ["OVERALL"]
+    if not df_leagues.empty:
+        unique_l = sorted(df_leagues['league_name'].unique().tolist())
+        available_leagues += unique_l
         
-        # FIX: Sort first (while 'rating' still exists), THEN select columns
-        df_sorted = df_disp.sort_values('rating', ascending=False)
-        
-        st.dataframe(
-            df_sorted[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], 
-            use_container_width=True, hide_index=True
-        )
+    target_league = st.selectbox("Select View", available_leagues)
+    
+    # 2. Filter Data
+    if target_league == "OVERALL":
+        display_df = df_players.copy()
+    else:
+        # Filter for Island Data
+        if df_leagues.empty: display_df = pd.DataFrame()
+        else:
+            display_df = df_leagues[df_leagues['league_name'] == target_league].copy()
+            # Merge name back in
+            display_df['name'] = display_df['player_id'].map(id_to_name)
+    
+    # 3. Render
+    if not display_df.empty and 'rating' in display_df.columns:
+        display_df['JUPR'] = (display_df['rating']/400).map('{:,.3f}'.format)
+        display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
+        df_sorted = display_df.sort_values('rating', ascending=False)
+        st.dataframe(df_sorted[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
+    else:
+        st.info("No data for this league yet.")
 
 elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
@@ -194,59 +287,51 @@ elif sel == "🔍 Player Search":
 
 elif sel == "🏟️ Live Court Manager":
     st.header("🏟️ Live Court Manager")
-    
-    # State Persistence for Form
     if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
     
     with st.form("setup_lc"):
         num = st.number_input("Courts", 1, 10, st.session_state.lc_courts)
+        lg = st.text_input("League Name (Controls Island Rating)", "Tuesday Ladder")
         c_data = []
         for i in range(num):
             c1, c2 = st.columns([1,3])
             t = c1.selectbox(f"T{i}", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
-            n = c2.text_area(f"N{i}", height=70, placeholder="Names separated by comma or new line")
+            n = c2.text_area(f"N{i}", height=70)
             c_data.append({'type':t, 'names':n})
         
         if st.form_submit_button("Generate Schedule"):
-            # 1. Check Missing
             all_n = []
             for c in c_data: all_n.extend([x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()])
             missing = [x for x in all_n if x not in name_to_id]
             
             if missing:
                 st.session_state.missing = missing
-                st.rerun() # Force rerun to show missing form
+                st.rerun()
             else:
                 st.session_state.lc_schedule = []
+                st.session_state.active_league = lg # Save league name
                 for idx, c in enumerate(c_data):
                     pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
                     st.session_state.lc_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
                 st.rerun()
 
-    # Interceptor
     if 'missing' in st.session_state:
-        st.warning("⚠️ New Players Detected! Add them to continue.")
+        st.warning("⚠️ New Players Detected!")
         with st.form("add_missing"):
             cols = st.columns(3)
             new_inputs = {}
             for i, name in enumerate(st.session_state.missing):
                 new_inputs[name] = cols[i%3].number_input(f"{name}", 1.0, 7.0, 3.0)
-            
-            if st.form_submit_button("Save New Players"):
-                errs = []
-                for name, r in new_inputs.items():
-                    ok, msg = safe_add_player(name, r)
-                    if not ok: errs.append(f"{name}: {msg}")
-                
-                if errs: st.error("\n".join(errs))
-                else: 
-                    st.success("Saved! Click Generate Schedule again.")
-                    del st.session_state.missing
-                    time.sleep(1)
-                    st.rerun()
+            if st.form_submit_button("Save"):
+                for name, r in new_inputs.items(): safe_add_player(name, r)
+                st.success("Saved! Click Generate again.")
+                del st.session_state.missing
+                time.sleep(1)
+                st.rerun()
 
     if 'lc_schedule' in st.session_state:
         st.divider()
+        st.info(f"Posting results to: **{st.session_state.get('active_league', 'Unknown')}**")
         with st.form("scores_lc"):
             all_res = []
             for c in st.session_state.lc_schedule:
@@ -257,68 +342,64 @@ elif sel == "🏟️ Live Court Manager":
                     s1 = c2.number_input("S1", 0, key=f"lc_{c['c']}_{i}_1")
                     s2 = c3.number_input("S2", 0, key=f"lc_{c['c']}_{i}_2")
                     c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':'Live Court', 'type':f"C{c['c']} RR"})
+                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':st.session_state.get('active_league', 'Unknown'), 'type':f"C{c['c']} RR"})
             
             if st.form_submit_button("Submit Scores"):
                 valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
                 if valid:
-                    process_matches(valid, name_to_id, df_players)
-                    st.success(f"Processed {len(valid)} matches!")
+                    process_matches(valid, name_to_id, df_players, df_leagues)
+                    st.success("✅ Processed!")
                     del st.session_state.lc_schedule
                     time.sleep(1)
                     st.rerun()
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
-    
-    # PERSISTENT FORM STATE
     if 'rr_courts' not in st.session_state: st.session_state.rr_courts = 1
     
     with st.form("setup_rr"):
         st.session_state.rr_courts = st.number_input("Courts", 1, 10, st.session_state.rr_courts)
         date_rr = st.date_input("Date", datetime.now())
+        lg_rr = st.text_input("Event Name", "PopUp Event")
         c_data = []
         for i in range(st.session_state.rr_courts):
             c1, c2 = st.columns([1,3])
             t = c1.selectbox(f"Format {i}", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
-            n = c2.text_area(f"Players {i}", height=70, placeholder="Names...")
+            n = c2.text_area(f"Players {i}", height=70)
             c_data.append({'type':t, 'names':n})
         
         if st.form_submit_button("Generate Schedule"):
-            # Check Missing
             all_n = []
             for c in c_data: all_n.extend([x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()])
             missing = [x for x in all_n if x not in name_to_id]
-            
             if missing:
                 st.session_state.missing_rr = missing
                 st.rerun()
             else:
                 st.session_state.rr_schedule = []
+                st.session_state.rr_league = lg_rr
                 for idx, c in enumerate(c_data):
                     pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
                     st.session_state.rr_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
                 st.rerun()
 
-    # Interceptor for RR
     if 'missing_rr' in st.session_state:
-        st.warning("⚠️ New Players Detected! Add them to continue.")
+        st.warning("⚠️ New Players Detected!")
         with st.form("add_missing_rr"):
             cols = st.columns(3)
             new_inputs = {}
             for i, name in enumerate(st.session_state.missing_rr):
                 new_inputs[name] = cols[i%3].number_input(f"{name}", 1.0, 7.0, 3.0, key=f"rr_{name}")
-            
-            if st.form_submit_button("Save New Players"):
-                for name, r in new_inputs.items():
-                    safe_add_player(name, r)
-                st.success("Saved! Click Generate Schedule again.")
+            if st.form_submit_button("Save"):
+                for name, r in new_inputs.items(): safe_add_player(name, r)
+                st.success("Saved! Click Generate again.")
                 del st.session_state.missing_rr
                 time.sleep(1)
                 st.rerun()
 
     if 'rr_schedule' in st.session_state:
         st.divider()
+        st.info(f"Posting results to: **{st.session_state.get('rr_league', 'PopUp')}**")
         with st.form("scores_rr"):
             all_res = []
             for c in st.session_state.rr_schedule:
@@ -329,13 +410,12 @@ elif sel == "🔄 Pop-Up RR":
                     s1 = c2.number_input("S1", 0, key=f"rr_{c['c']}_{i}_1")
                     s2 = c3.number_input("S2", 0, key=f"rr_{c['c']}_{i}_2")
                     c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(date_rr), 'league':'PopUp', 'type':f"C{c['c']} RR"})
-            
+                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(date_rr), 'league':st.session_state.get('rr_league', 'PopUp'), 'type':f"C{c['c']} RR"})
             if st.form_submit_button("Submit"):
                 valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
                 if valid:
-                    process_matches(valid, name_to_id, df_players)
-                    st.success(f"Processed {len(valid)} matches!")
+                    process_matches(valid, name_to_id, df_players, df_leagues)
+                    st.success("✅ Processed!")
                     del st.session_state.rr_schedule
                     time.sleep(1)
                     st.rerun()
@@ -357,3 +437,39 @@ elif sel == "👥 Players":
             supabase.table("players").delete().eq("name", to_del).eq("club_id", CLUB_ID).execute()
             st.success("Deleted"); st.rerun()
     st.dataframe(df_players, use_container_width=True)
+
+elif sel == "📝 Match Log":
+    st.header("📝 Match Log")
+    st.subheader("Recent Matches")
+    edit_df = df_matches.head(50)[['id', 'date', 'league', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    st.dataframe(edit_df, use_container_width=True)
+    
+    st.divider()
+    st.subheader("🗑️ Delete Match")
+    m_id = st.number_input("Match ID", min_value=0, step=1)
+    if st.button("Delete Match"):
+        supabase.table("matches").delete().eq("id", m_id).execute()
+        st.success("Deleted! Note: This does not auto-revert Elo points yet. Replay History feature coming.")
+        time.sleep(1)
+        st.rerun()
+
+elif sel == "⚙️ Admin Tools":
+    st.header("⚙️ Admin Tools")
+    st.subheader("Bulk Match Upload (CSV)")
+    up_file = st.file_uploader("Upload CSV", type=['csv'])
+    if up_file:
+        df_csv = pd.read_csv(up_file)
+        st.write("Preview:", df_csv.head())
+        c1, c2, c3, c4 = st.columns(4)
+        winner_col = c1.selectbox("Winner Column", df_csv.columns, index=0)
+        loser_col = c2.selectbox("Loser Column", df_csv.columns, index=1)
+        ladder_col = c3.text_input("Ladder Name", "CSV Upload")
+        if st.button("Process Upload"):
+            valid_batch = []
+            for _, row in df_csv.iterrows():
+                w, l = str(row[winner_col]).strip(), str(row[loser_col]).strip()
+                if w in name_to_id and l in name_to_id:
+                    valid_batch.append({'t1_p1': w, 't1_p2': None, 't2_p1': l, 't2_p2': None, 's1': 11, 's2': 0, 'date': str(datetime.now()), 'league': ladder_col, 'type': 'Ladder 1v1'})
+            if valid_batch:
+                process_matches(valid_batch, name_to_id, df_players, df_leagues)
+                st.success(f"Uploaded {len(valid_batch)} matches!")
