@@ -173,7 +173,14 @@ if sel == "🏆 Leaderboards":
         df_disp = df_players.copy()
         df_disp['JUPR'] = (df_disp['rating']/400).map('{:,.3f}'.format)
         df_disp['Win %'] = (df_disp['wins'] / df_disp['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
-        st.dataframe(df_disp[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']].sort_values('rating', ascending=False), use_container_width=True, hide_index=True)
+        
+        # FIX: Sort first (while 'rating' still exists), THEN select columns
+        df_sorted = df_disp.sort_values('rating', ascending=False)
+        
+        st.dataframe(
+            df_sorted[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], 
+            use_container_width=True, hide_index=True
+        )
 
 elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
