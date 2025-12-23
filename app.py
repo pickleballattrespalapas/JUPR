@@ -258,14 +258,13 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 Leaderboards")
     
-    # 1. Build List of Available Leagues
+    # 1. League Selector
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
         unique_l = sorted(df_leagues['league_name'].unique().tolist())
         available_leagues += unique_l
         
     # 2. Check URL for "?league=..."
-    # If the URL has a league that exists in our list, we set that as the default
     default_index = 0
     query_params = st.query_params
     if "league" in query_params:
@@ -276,29 +275,30 @@ if sel == "🏆 Leaderboards":
     # 3. Render Dropdown
     target_league = st.selectbox("Select View", available_leagues, index=default_index)
     
-    # 4. Update URL dynamically
-    # This ensures that if they change the dropdown, the URL updates (making it shareable)
+    # 4. Update URL & Show Copy Button
     if target_league != "OVERALL":
         st.query_params["league"] = target_league
+        
+        # REPLACE THIS WITH YOUR ACTUAL APP URL
+        APP_BASE_URL = "https://jupr-leagues.streamlit.app" 
+        
+        full_link = f"{APP_BASE_URL}/?league={target_league.replace(' ', '%20')}"
+        
+        st.caption("👇 Share this league:")
+        st.code(full_link, language=None) # This creates a copyable box
     else:
-        st.query_params.clear() # Clear URL for Overall view
+        st.query_params.clear()
     
-    # 5. Display "Shareable Link" helper
-    if target_league != "OVERALL":
-        st.caption(f"🔗 **Direct Link:** `[Your App URL]/?league={target_league.replace(' ', '%20')}`")
-    
-    # 6. Filter & Display Data
+    # 5. Filter Data
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
-        # Filter for Island Data
         if df_leagues.empty: display_df = pd.DataFrame()
         else:
             display_df = df_leagues[df_leagues['league_name'] == target_league].copy()
-            # Merge name back in
             display_df['name'] = display_df['player_id'].map(id_to_name)
     
-    # 7. Render Table
+    # 6. Render Table
     if not display_df.empty and 'rating' in display_df.columns:
         display_df['JUPR'] = (display_df['rating']/400).map('{:,.3f}'.format)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
