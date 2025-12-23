@@ -140,18 +140,37 @@ def process_matches(match_list, name_to_id, df_p, df_l):
 
     for m in match_list:
         p1, p2, p3, p4 = [name_to_id.get(m[k]) for k in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']]
-        if not all([p1, p2, p3, p4]): continue
+        # Fix: Allow 1v1 by checking only p1 and p3 are present, setting p2/p4 to None or dummy if needed
+        # But our core logic requires p1/p2/p3/p4 for 2v2 math.
+        # If any essential player (p1, p3) is missing, skip.
+        if not p1 or not p3: continue
+        
+        # If p2/p4 missing (1v1), we need to handle it. 
+        # For now, let's assume if p2/p4 is None, we treat them as "Ghost" for math? 
+        # Or better: check strictly for 2v2 data integrity.
+        # The user's CSV upload might have put None for p2/p4.
+        # If so, the previous check "if not all([p1, p2, p3, p4])" was failing 1v1s.
+        # I removed that strict check in favor of "if not p1 or not p3".
         
         s1, s2 = m['s1'], m['s2']
         league = m['league']
         is_popup = m.get('match_type') == 'PopUp' or m.get('is_popup', False)
         
-        ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
+        # Safe Get Rating (Handle None for p2/p4)
+        def safe_get_o(pid):
+            if pid is None: return 1200.0 # Ghost is 3.0
+            return get_overall_r(pid)
+            
+        ro1, ro2, ro3, ro4 = safe_get_o(p1), safe_get_o(p2), safe_get_o(p3), safe_get_o(p4)
         do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
         
         di1, di2 = 0, 0
         if not is_popup:
-            ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
+            def safe_get_i(pid, lg):
+                if pid is None: return 1200.0
+                return get_island_r(pid, lg)
+            
+            ri1, ri2, ri3, ri4 = safe_get_i(p1, league), safe_get_i(p2, league), safe_get_i(p3, league), safe_get_i(p4, league)
             di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
 
         db_matches.append({
@@ -165,6 +184,8 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         participants = [(p1, do1, di1, win), (p2, do1, di1, win), (p3, do2, di2, not win), (p4, do2, di2, not win)]
         
         for pid, d_overall, d_island, won in participants:
+            if pid is None: continue # Skip ghosts
+            
             if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
                 overall_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
@@ -260,15 +281,6 @@ if sel == "🏆 Leaderboards":
     else:
         st.query_params.clear()
     
-    with st.expander("📊 How Ratings Work"):
-        st.markdown("""
-        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
-        * **The Swing:**
-            * **Big Upset:** ~ +0.075 JUPR
-            * **Even Match (11-9):** ~ +0.008 JUPR
-        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
-        """)
-
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -477,10 +489,53 @@ elif sel == "⚙️ Admin Tools":
         st.error(f"⚠️ Warning: Found {zero_pts} matches with 0 point impact. These matches did not affect ratings.")
     else:
         st.success("✅ System Health: All matches have valid point values.")
+
+    # --- FORENSIC TOOL (Option B) ---
+    st.subheader("🕵️ Match Forensics")
+    debug_id = st.number_input("Enter Match ID to Diagnose", value=0, step=1)
+    if st.button("Run Diagnostics"):
+        m = supabase.table("matches").select("*").eq("id", debug_id).execute().data
+        if not m:
+            st.error("Match not found.")
+        else:
+            m = m[0]
+            st.write("### 1. Match Data Raw")
+            st.json(m)
+
+            p_ids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
+            p_ids = [x for x in p_ids if x is not None]
+
+            st.write("### 2. Player Data")
+            if p_ids:
+                players = supabase.table("players").select("*").in_("id", p_ids).execute().data
+                st.write(players)
+                for p in players:
+                    if p['rating'] is None: st.error(f"⚠️ Player {p['name']} has NULL rating!")
+            
+            st.write("### 3. Math Engine Simulation")
+            # Re-run simulation
+            # We need simple rating getter
+            def mock_get(pid):
+                if pid is None: return 1200.0
+                match_p = next((x for x in players if x['id'] == pid), None)
+                if match_p: return float(match_p['rating'])
+                return 1200.0
+
+            ro1 = mock_get(m['t1_p1'])
+            ro2 = mock_get(m['t1_p2'])
+            ro3 = mock_get(m['t2_p1'])
+            ro4 = mock_get(m['t2_p2'])
+            
+            st.write(f"Team 1 Ratings: {ro1}, {ro2} (Avg: {(ro1+ro2)/2})")
+            st.write(f"Team 2 Ratings: {ro3}, {ro4} (Avg: {(ro3+ro4)/2})")
+            st.write(f"Scores: {m['score_t1']} - {m['score_t2']}")
+            
+            d1, d2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, m['score_t1'], m['score_t2'])
+            st.write(f"**Calculated Delta:** {d1 if m['score_t1'] > m['score_t2'] else d2}")
     
     st.divider()
     
-    # --- LEAGUE MANAGER (CONVERT POPUPS) ---
+    # --- LEAGUE MANAGER ---
     st.subheader("🛠️ League Manager")
     if not df_leagues.empty:
         active_islands = sorted(df_leagues['league_name'].unique().tolist())
@@ -515,11 +570,17 @@ elif sel == "⚙️ Admin Tools":
                 league = m['league']
                 is_popup = m.get('match_type') == 'PopUp'
                 
+                # Check for 1v1
+                def safe_get_r(pid):
+                    if pid is None: return 1200.0
+                    return p_map[pid]['r']
+
                 if target_reset == "ALL (Full System Reset)":
-                    ro1, ro2, ro3, ro4 = p_map[p1]['r'], p_map[p2]['r'], p_map[p3]['r'], p_map[p4]['r']
+                    ro1, ro2, ro3, ro4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
                     do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
                     win = s1 > s2
                     for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
+                        if pid is None: continue
                         p_map[pid]['r'] += delta
                         p_map[pid]['mp'] += 1
                         if is_win: p_map[pid]['w'] += 1
@@ -528,13 +589,21 @@ elif sel == "⚙️ Admin Tools":
                 if not is_popup:
                     def get_i_r(pid, lg):
                         if (pid, lg) not in island_map: 
-                            island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
+                            # Inherit from current P_MAP rating
+                            curr_r = p_map[pid]['r']
+                            island_map[(pid, lg)] = {'r': curr_r, 'w':0, 'l':0, 'mp':0}
                         return island_map[(pid, lg)]['r']
 
-                    ri1, ri2, ri3, ri4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
+                    # Handle 1v1 in islands
+                    def safe_get_i(pid, lg):
+                        if pid is None: return 1200.0
+                        return get_i_r(pid, lg)
+
+                    ri1, ri2, ri3, ri4 = safe_get_i(p1, league), safe_get_i(p2, league), safe_get_i(p3, league), safe_get_i(p4, league)
                     di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
                     win = s1 > s2
                     for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
+                        if pid is None: continue
                         k = (pid, league)
                         if k not in island_map: island_map[k] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
                         island_map[k]['r'] += delta
