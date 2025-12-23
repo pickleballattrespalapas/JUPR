@@ -521,6 +521,7 @@ elif selection == "🏟️ Live Court Manager":
         league_name = st.text_input("League", "Fall 2025 Ladder")
         num_courts = st.number_input("Courts", 1, 20, 1)
         
+        # --- FORM DEFINITION ---
         with st.form("setup"):
             court_data = []
             for i in range(num_courts):
@@ -529,22 +530,26 @@ elif selection == "🏟️ Live Court Manager":
                 with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
                 court_data.append({'id':i+1, 'type':t, 'names':n})
             
-            if st.form_submit_button("Generate"):
-                # 1. Parse Names
-                all_input_names = []
+            # Capture the click, but don't run logic yet
+            submitted = st.form_submit_button("Generate")
+        
+        # --- LOGIC (OUTSIDE THE FORM) ---
+        if submitted:
+            # 1. Parse Names
+            all_input_names = []
+            for c in court_data:
+                pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
+                all_input_names.extend(pl)
+            
+            # 2. Check for Missing Players (Now safe because we are outside the form)
+            stop_flag, df_players = handle_missing_players(all_input_names, "tab2", ws_players, df_players)
+            
+            # 3. Only Generate if no missing players
+            if not stop_flag:
+                st.session_state.schedule = []
                 for c in court_data:
                     pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                    all_input_names.extend(pl)
-                
-                # 2. Check for Missing Players
-                stop_flag, df_players = handle_missing_players(all_input_names, "tab2", ws_players, df_players)
-                
-                # 3. Only Generate if no missing players
-                if not stop_flag:
-                    st.session_state.schedule = []
-                    for c in court_data:
-                        pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                        st.session_state.schedule.append({'court':c['id'], 'matches':get_match_schedule(c['type'], pl)})
+                    st.session_state.schedule.append({'court':c['id'], 'matches':get_match_schedule(c['type'], pl)})
     
     if st.session_state.get('schedule'):
         st.divider()
@@ -558,30 +563,34 @@ elif selection == "🏟️ Live Court Manager":
                     with c3: s2 = st.number_input("S2", 0, key=f"s_{c['court']}_{i}_2")
                     with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
             
-            if st.form_submit_button("Submit & Save to Cloud"):
-                matches_to_process = []
-                for c in st.session_state.schedule:
-                    for i, m in enumerate(c['matches']):
-                        s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
-                        s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
-                        if s1 == 0 and s2 == 0: continue
-                        
-                        matches_to_process.append({
-                            'id': len(df_matches) + len(matches_to_process) + 1, 
-                            'date': str(event_date), 
-                            'league': league_name, 
-                            't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
-                            't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
-                            'score_t1': s1, 'score_t2': s2, 
-                            'match_type': f"Court {c['court']} RR"
-                        })
-                
-                if matches_to_process:
-                    submit_batch_of_matches(matches_to_process, ladder_name_override=league_name)
-                    new_df = pd.DataFrame(matches_to_process)
-                    df_matches = pd.concat([df_matches, new_df], ignore_index=True)
-                    ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
-                    st.success(f"✅ Processed {len(matches_to_process)} matches!")
+            # Capture click
+            scores_submitted = st.form_submit_button("Submit & Save to Cloud")
+        
+        # Logic outside form (Best practice, though technically not required here if no nested forms)
+        if scores_submitted:
+            matches_to_process = []
+            for c in st.session_state.schedule:
+                for i, m in enumerate(c['matches']):
+                    s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
+                    s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
+                    if s1 == 0 and s2 == 0: continue
+                    
+                    matches_to_process.append({
+                        'id': len(df_matches) + len(matches_to_process) + 1, 
+                        'date': str(event_date), 
+                        'league': league_name, 
+                        't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
+                        't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
+                        'score_t1': s1, 'score_t2': s2, 
+                        'match_type': f"Court {c['court']} RR"
+                    })
+            
+            if matches_to_process:
+                submit_batch_of_matches(matches_to_process, ladder_name_override=league_name)
+                new_df = pd.DataFrame(matches_to_process)
+                df_matches = pd.concat([df_matches, new_df], ignore_index=True)
+                ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
+                st.success(f"✅ Processed {len(matches_to_process)} matches!")
 
 elif selection == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
@@ -590,6 +599,7 @@ elif selection == "🔄 Pop-Up RR":
         popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
         rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
         
+        # --- FORM DEFINITION ---
         with st.form("rr_setup"):
             rr_data = []
             for i in range(rr_courts):
@@ -598,22 +608,26 @@ elif selection == "🔄 Pop-Up RR":
                 with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin...")
                 rr_data.append({'id': i+1, 'type': t, 'names': n})
             
-            if st.form_submit_button("Generate Schedule"):
-                # 1. Parse Names
-                all_input_names = []
+            # Capture click
+            submitted_rr = st.form_submit_button("Generate Schedule")
+        
+        # --- LOGIC (OUTSIDE THE FORM) ---
+        if submitted_rr:
+            # 1. Parse Names
+            all_input_names = []
+            for c in rr_data:
+                pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
+                all_input_names.extend(pl)
+
+            # 2. Check for Missing Players (Safe now)
+            stop_flag, df_players = handle_missing_players(all_input_names, "tab3", ws_players, df_players)
+
+            # 3. Only Generate if no missing players
+            if not stop_flag:
+                st.session_state.rr_schedule = []
                 for c in rr_data:
                     pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
-                    all_input_names.extend(pl)
-
-                # 2. Check for Missing Players
-                stop_flag, df_players = handle_missing_players(all_input_names, "tab3", ws_players, df_players)
-
-                # 3. Only Generate if no missing players
-                if not stop_flag:
-                    st.session_state.rr_schedule = []
-                    for c in rr_data:
-                        pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
-                        st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
+                    st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
 
     if st.session_state.get('rr_schedule'):
         st.divider()
@@ -627,22 +641,26 @@ elif selection == "🔄 Pop-Up RR":
                     with c3: s2 = st.number_input("S2", 0, key=f"rr_s_{c['court']}_{i}_2")
                     with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
             
-            if st.form_submit_button("Submit to Overall Ratings"):
-                matches_to_process = []
-                for c in st.session_state.rr_schedule:
-                    for i, m in enumerate(c['matches']):
-                        s1 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0)
-                        s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
-                        if s1 == 0 and s2 == 0: continue
-                        matches_to_process.append({
-                            'date': str(event_date_rr), 'league': "PopUp_Event", 
-                            't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
-                            't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
-                            'score_t1': s1, 'score_t2': s2
-                        })
-                if matches_to_process:
-                    submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
-                    st.success("✅ Overall ratings updated!")
+            # Capture click
+            submitted_scores_rr = st.form_submit_button("Submit to Overall Ratings")
+        
+        # Logic outside form
+        if submitted_scores_rr:
+            matches_to_process = []
+            for c in st.session_state.rr_schedule:
+                for i, m in enumerate(c['matches']):
+                    s1 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0)
+                    s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
+                    if s1 == 0 and s2 == 0: continue
+                    matches_to_process.append({
+                        'date': str(event_date_rr), 'league': "PopUp_Event", 
+                        't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
+                        't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
+                        'score_t1': s1, 'score_t2': s2
+                    })
+            if matches_to_process:
+                submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
+                st.success("✅ Overall ratings updated!")
 
 elif selection == "👥 Players":
     st.header("Player Management")
