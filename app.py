@@ -25,13 +25,9 @@ def clean_data_for_google(df):
     Converts a DataFrame to a list of lists that Google Sheets API accepts.
     Removes numpy types (int64, float64) which cause silent failures.
     """
-    # 1. Fill NaNs
     df = df.fillna("")
-    
-    # 2. Convert to standard Python types
     data = [df.columns.values.tolist()] + df.astype(object).values.tolist()
     
-    # 3. Recursive cleanup for JSON serializability
     def clean_cell(cell):
         if isinstance(cell, (np.int64, np.int32)): return int(cell)
         if isinstance(cell, (np.float64, np.float32)): return float(cell)
@@ -42,7 +38,6 @@ def clean_data_for_google(df):
 # --- OPTIMIZED CONNECTION (CACHE RESOURCE) ---
 @st.cache_resource
 def get_db_connection():
-    """Connects to Google Sheets using Streamlit Secrets"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -89,6 +84,19 @@ def load_data():
     if df_ratings.empty:
         df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
     
+    # --- CRITICAL FIX: APPLY LOCAL PATCHES ---
+    # This merges recently added players into the dataframe immediately,
+    # so we don't have to wait for Google Sheets to update.
+    if 'local_player_patch' in st.session_state and st.session_state.local_player_patch:
+        patch_df = pd.DataFrame(st.session_state.local_player_patch)
+        # Filter out duplicates if Google already caught up
+        new_names = set(patch_df['name'])
+        existing = set(df_players['name'])
+        unique_patch = patch_df[~patch_df['name'].isin(existing)]
+        
+        if not unique_patch.empty:
+            df_players = pd.concat([df_players, unique_patch], ignore_index=True)
+
     for c in ['score_t1', 'score_t2']:
         if c in df_matches.columns:
             df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
@@ -398,19 +406,21 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
             new_df = pd.DataFrame(new_rows)
             df_p = pd.concat([df_p, new_df], ignore_index=True)
             
-            # SAFE UPDATE
+            # 1. Update Cloud (Safely)
             cleaned_data = clean_data_for_google(df_p)
             ws_p.clear()
             ws_p.update(values=cleaned_data)
             
+            # 2. Update Local Patch (For immediate speed)
+            if 'local_player_patch' not in st.session_state:
+                st.session_state.local_player_patch = []
+            st.session_state.local_player_patch.extend(new_rows)
+            
+            # 3. Clear cache and notify
             fetch_all_data_snapshots.clear() 
+            st.success("✅ Players added! Please CLICK 'GENERATE SCHEDULE' AGAIN to proceed.")
             
-            # SET FLAG SO WE KNOW TO AUTO-CONTINUE
-            st.session_state[f"auto_gen_{section_key}"] = True
-            st.success("✅ Players added! Continuing...")
-            time.sleep(0.5)
-            st.rerun()
-            
+    # Always return True if missing were found
     return True, df_p
 
 # --- SIDEBAR NAVIGATION ---
@@ -554,11 +564,7 @@ elif selection == "🏟️ Live Court Manager":
             
             submitted = st.form_submit_button("Generate")
         
-        # LOGIC: Check 'submitted' OR 'auto_gen' flag
-        if submitted or st.session_state.get("auto_gen_tab2"):
-            # Clear flag immediately
-            if "auto_gen_tab2" in st.session_state: del st.session_state["auto_gen_tab2"]
-            
+        if submitted:
             all_input_names = []
             for c in court_data:
                 pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
@@ -628,10 +634,7 @@ elif selection == "🔄 Pop-Up RR":
             
             submitted_rr = st.form_submit_button("Generate Schedule")
         
-        # LOGIC: Check 'submitted_rr' OR 'auto_gen' flag
-        if submitted_rr or st.session_state.get("auto_gen_tab3"):
-            if "auto_gen_tab3" in st.session_state: del st.session_state["auto_gen_tab3"]
-            
+        if submitted_rr:
             all_input_names = []
             for c in rr_data:
                 pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
@@ -689,6 +692,10 @@ elif selection == "👥 Players":
                     new_p = {'name': n, 'elo': r*400, 'starting_elo': r*400, 'matches_played':0, 'wins':0, 'losses':0}
                     df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
                     ws_players.update(values=clean_data_for_google(df_players))
+                    
+                    if 'local_player_patch' not in st.session_state: st.session_state.local_player_patch = []
+                    st.session_state.local_player_patch.append(new_p)
+                    
                     st.success(f"Added {n} to Cloud")
                     fetch_all_data_snapshots.clear()
                     st.rerun()
