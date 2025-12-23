@@ -14,6 +14,10 @@ st.set_page_config(page_title="JUPR Leagues", layout="wide")
 if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
 
+# Initialize Persistent Player Patch in Session State
+if 'local_player_patch' not in st.session_state:
+    st.session_state.local_player_patch = []
+
 # --- CONFIGURATION ---
 K_FACTOR = 32
 DEFAULT_START_RATING = 3.00
@@ -84,18 +88,16 @@ def load_data():
     if df_ratings.empty:
         df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
     
-    # --- CRITICAL FIX: APPLY LOCAL PATCHES ---
-    # This merges recently added players into the dataframe immediately,
-    # so we don't have to wait for Google Sheets to update.
-    if 'local_player_patch' in st.session_state and st.session_state.local_player_patch:
+    # --- CRITICAL FIX: APPLY LOCAL PATCHES (PERSISTENT) ---
+    # Merge session state players into the main dataframe
+    if st.session_state.local_player_patch:
         patch_df = pd.DataFrame(st.session_state.local_player_patch)
-        # Filter out duplicates if Google already caught up
-        new_names = set(patch_df['name'])
-        existing = set(df_players['name'])
-        unique_patch = patch_df[~patch_df['name'].isin(existing)]
+        existing_names = set(df_players['name'].astype(str).str.strip())
         
-        if not unique_patch.empty:
-            df_players = pd.concat([df_players, unique_patch], ignore_index=True)
+        # Only add if not already in the main DB (prevent duplicates)
+        new_rows = patch_df[~patch_df['name'].isin(existing_names)]
+        if not new_rows.empty:
+            df_players = pd.concat([df_players, new_rows], ignore_index=True)
 
     for c in ['score_t1', 'score_t2']:
         if c in df_matches.columns:
@@ -411,9 +413,7 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
             ws_p.clear()
             ws_p.update(values=cleaned_data)
             
-            # 2. Update Local Patch (For immediate speed)
-            if 'local_player_patch' not in st.session_state:
-                st.session_state.local_player_patch = []
+            # 2. Update Persistent Local Patch (Session State)
             st.session_state.local_player_patch.extend(new_rows)
             
             # 3. Clear cache and notify
@@ -693,7 +693,7 @@ elif selection == "👥 Players":
                     df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
                     ws_players.update(values=clean_data_for_google(df_players))
                     
-                    if 'local_player_patch' not in st.session_state: st.session_state.local_player_patch = []
+                    # Update local patch too
                     st.session_state.local_player_patch.append(new_p)
                     
                     st.success(f"Added {n} to Cloud")
