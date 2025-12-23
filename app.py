@@ -7,8 +7,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import io
 
-# --- 1. PAGE CONFIG (First Command) ---
-st.set_page_config(page_title="Tres Palapas Pickleball", layout="wide")
+# --- 1. PAGE CONFIG MUST BE FIRST ---
+st.set_page_config(page_title="JUPR Leagues", layout="wide")
 
 if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
@@ -346,15 +346,7 @@ def recalculate_all_stats(df_players, df_matches):
             
     return df_players, df_matches
 
-st.title("🌵 Tres Palapas Pickleball Ratings and Ladder Results")
-
-st.markdown("""
-<style>
-.footer {position: fixed; left: 0; bottom: 0; width: 100%; background-color: white; color: #555; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #eee;}
-</style>
-<div class="footer"><p>This data, program logic, and the "JUPR" Rating System are the intellectual property of <b>Joe Baumann</b>.</p></div>
-""", unsafe_allow_html=True)
-
+# --- LOAD DATA ---
 df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
 
 # --- HELPER: NEW PLAYER INTERCEPTOR ---
@@ -365,7 +357,6 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
     """
     if not names_list: return False, df_p
     
-    # 1. Identify Missing
     unique_names = list(set([n.strip() for n in names_list if n.strip()]))
     existing_names = set(df_p['name'].astype(str).str.strip().tolist())
     missing = [n for n in unique_names if n not in existing_names]
@@ -373,7 +364,6 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
     if not missing:
         return False, df_p
         
-    # 2. Show Form if Missing found
     st.warning(f"⚠️ Found {len(missing)} new player(s) in {section_key}. Please enter their starting ratings.")
     
     with st.form(f"new_player_form_{section_key}"):
@@ -388,24 +378,53 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
             for name, rating in inputs.items():
                 new_rows.append({'name': name, 'elo': rating*400, 'starting_elo': rating*400, 'matches_played':0, 'wins':0, 'losses':0})
             
-            # Save to Cloud
             new_df = pd.DataFrame(new_rows)
             df_p = pd.concat([df_p, new_df], ignore_index=True)
             ws_p.update([df_p.columns.values.tolist()] + df_p.values.tolist())
-            fetch_all_data_snapshots.clear() # Clear cache so new players appear instantly
-            
+            fetch_all_data_snapshots.clear() 
             st.success("✅ Players added! Please click 'Generate' again.")
             time.sleep(1)
             st.rerun()
             
-    # Stop the rest of the app from running schedule generation until this is resolved
     return True, df_p
 
-# --- TABS DEFINITION ---
-tab_titles = ["🏆 Leaderboards", "🔍 Player Search", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
-tab1, tab_search, tab2, tab3, tab4, tab5 = st.tabs(tab_titles)
+# --- SIDEBAR NAVIGATION (THE FIX) ---
+st.sidebar.title("JUPR Leagues 🌵")
 
-with tab1:
+# 1. ADMIN LOGIN UI
+if not st.session_state.admin_logged_in:
+    with st.sidebar.expander("🔒 Admin Login"):
+        pwd = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if pwd == st.secrets["admin_password"]:
+                st.session_state.admin_logged_in = True
+                st.rerun()
+            else:
+                st.error("Wrong PW")
+else:
+    st.sidebar.success("Logged In: Admin")
+    if st.sidebar.button("Log Out"):
+        st.session_state.admin_logged_in = False
+        st.rerun()
+
+# 2. NAVIGATION MENU
+nav_options = ["🏆 Leaderboards", "🔍 Player Search"]
+if st.session_state.admin_logged_in:
+    nav_options += ["──────────", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
+
+selection = st.sidebar.radio("Go to:", nav_options)
+
+st.markdown("""
+<style>
+.footer {position: fixed; left: 0; bottom: 0; width: 100%; background-color: white; color: #555; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #eee;}
+</style>
+<div class="footer"><p>This data, program logic, and the "JUPR" Rating System are the intellectual property of <b>Joe Baumann</b>.</p></div>
+""", unsafe_allow_html=True)
+
+# --- PAGE RENDERING ---
+
+if selection == "🏆 Leaderboards":
+    st.header("🏆 Leaderboards")
     with st.expander("ℹ️ How the Individual League Rating System Works"):
         st.markdown("""
         ### Why do I have multiple ratings?
@@ -461,7 +480,7 @@ with tab1:
         leaderboard = ladder_ratings[ladder_ratings['matches'] > 0].sort_values(by='rating', ascending=False)
         st.dataframe(leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
 
-with tab_search:
+elif selection == "🔍 Player Search":
     st.header("🔍 Player Profile Search")
     all_player_names = [""] + sorted(df_players['name'].unique().tolist())
     selected_p = st.selectbox("Type to Search for a Player", all_player_names, index=0)
@@ -495,235 +514,213 @@ with tab_search:
     else:
         st.info("Select a player to view stats.")
 
-if not st.session_state.admin_logged_in:
-    for admin_tab in [tab2, tab3, tab4, tab5]:
-        with admin_tab:
-            st.warning("🔒 Admin Access Required")
-            with st.form(key=f"login_gate_{admin_tab}"):
-                pwd = st.text_input("Password", type="password")
-                if st.form_submit_button("Unlock"):
-                    if pwd == st.secrets["admin_password"]:
-                        st.session_state.admin_logged_in = True
-                        st.rerun()
-                    else:
-                        st.error("Incorrect Password")
-else:
-    if st.sidebar.button("🔒 Logout Admin"):
-        st.session_state.admin_logged_in = False
-        st.rerun()
-
-    with tab2:
-        st.header("Live Court Manager") 
-        with st.expander("Setup", expanded=True):
-            event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
-            league_name = st.text_input("League", "Fall 2025 Ladder")
-            num_courts = st.number_input("Courts", 1, 20, 1)
+elif selection == "🏟️ Live Court Manager":
+    st.header("🏟️ Live Court Manager") 
+    with st.expander("Setup", expanded=True):
+        event_date = st.date_input("Match Date", datetime.now(), key="date_tab2")
+        league_name = st.text_input("League", "Fall 2025 Ladder")
+        num_courts = st.number_input("Courts", 1, 20, 1)
+        
+        with st.form("setup"):
+            court_data = []
+            for i in range(num_courts):
+                c1, c2 = st.columns([1,4])
+                with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
+                with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
+                court_data.append({'id':i+1, 'type':t, 'names':n})
             
-            with st.form("setup"):
-                court_data = []
-                for i in range(num_courts):
-                    c1, c2 = st.columns([1,4])
-                    with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
-                    with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
-                    court_data.append({'id':i+1, 'type':t, 'names':n})
+            if st.form_submit_button("Generate"):
+                # 1. Parse Names
+                all_input_names = []
+                for c in court_data:
+                    pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
+                    all_input_names.extend(pl)
                 
-                if st.form_submit_button("Generate"):
-                    # 1. Parse Names
-                    all_input_names = []
+                # 2. Check for Missing Players
+                stop_flag, df_players = handle_missing_players(all_input_names, "tab2", ws_players, df_players)
+                
+                # 3. Only Generate if no missing players
+                if not stop_flag:
+                    st.session_state.schedule = []
                     for c in court_data:
                         pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                        all_input_names.extend(pl)
-                    
-                    # 2. Check for Missing Players
-                    stop_flag, df_players = handle_missing_players(all_input_names, "tab2", ws_players, df_players)
-                    
-                    # 3. Only Generate if no missing players
-                    if not stop_flag:
-                        st.session_state.schedule = []
-                        for c in court_data:
-                            pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                            st.session_state.schedule.append({'court':c['id'], 'matches':get_match_schedule(c['type'], pl)})
-        
-        # Intercept logic for the rerun case (must be outside form)
-        if 'last_names_check_tab2' in st.session_state:
-             # This is tricky because we don't persist court_data. 
-             # For simplicity, relying on the user to click Generate again is safer.
-             pass
-
-        if st.session_state.get('schedule'):
-            st.divider()
-            with st.form("submit_scores", clear_on_submit=True):
-                for c in st.session_state.schedule:
-                    st.markdown(f"**Court {c['court']}**")
-                    for i, m in enumerate(c['matches']):
-                        c1, c2, c3, c4 = st.columns([3,1,1,3])
-                        with c1: st.text(f"{m['desc']} | {m['t1'][0]} & {m['t1'][1]}")
-                        with c2: s1 = st.number_input("S1", 0, key=f"s_{c['court']}_{i}_1")
-                        with c3: s2 = st.number_input("S2", 0, key=f"s_{c['court']}_{i}_2")
-                        with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                
-                if st.form_submit_button("Submit & Save to Cloud"):
-                    matches_to_process = []
-                    for c in st.session_state.schedule:
-                        for i, m in enumerate(c['matches']):
-                            s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
-                            s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
-                            if s1 == 0 and s2 == 0: continue
-                            
-                            matches_to_process.append({
-                                'id': len(df_matches) + len(matches_to_process) + 1, 
-                                'date': str(event_date), 
-                                'league': league_name, 
-                                't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
-                                't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
-                                'score_t1': s1, 'score_t2': s2, 
-                                'match_type': f"Court {c['court']} RR"
-                            })
-                    
-                    if matches_to_process:
-                        submit_batch_of_matches(matches_to_process, ladder_name_override=league_name)
-                        new_df = pd.DataFrame(matches_to_process)
-                        df_matches = pd.concat([df_matches, new_df], ignore_index=True)
-                        ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
-                        st.success(f"✅ Processed {len(matches_to_process)} matches!")
-
-    with tab3:
-        st.header("Pop-Up Round Robin")
-        with st.expander("Event Setup", expanded=True):
-            event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
-            popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
-            rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
+                        st.session_state.schedule.append({'court':c['id'], 'matches':get_match_schedule(c['type'], pl)})
+    
+    if st.session_state.get('schedule'):
+        st.divider()
+        with st.form("submit_scores", clear_on_submit=True):
+            for c in st.session_state.schedule:
+                st.markdown(f"**Court {c['court']}**")
+                for i, m in enumerate(c['matches']):
+                    c1, c2, c3, c4 = st.columns([3,1,1,3])
+                    with c1: st.text(f"{m['desc']} | {m['t1'][0]} & {m['t1'][1]}")
+                    with c2: s1 = st.number_input("S1", 0, key=f"s_{c['court']}_{i}_1")
+                    with c3: s2 = st.number_input("S2", 0, key=f"s_{c['court']}_{i}_2")
+                    with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
             
-            with st.form("rr_setup"):
-                rr_data = []
-                for i in range(rr_courts):
-                    c1, c2 = st.columns([1, 4])
-                    with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
-                    with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin...")
-                    rr_data.append({'id': i+1, 'type': t, 'names': n})
+            if st.form_submit_button("Submit & Save to Cloud"):
+                matches_to_process = []
+                for c in st.session_state.schedule:
+                    for i, m in enumerate(c['matches']):
+                        s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
+                        s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
+                        if s1 == 0 and s2 == 0: continue
+                        
+                        matches_to_process.append({
+                            'id': len(df_matches) + len(matches_to_process) + 1, 
+                            'date': str(event_date), 
+                            'league': league_name, 
+                            't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
+                            't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
+                            'score_t1': s1, 'score_t2': s2, 
+                            'match_type': f"Court {c['court']} RR"
+                        })
                 
-                if st.form_submit_button("Generate Schedule"):
-                    # 1. Parse Names
-                    all_input_names = []
+                if matches_to_process:
+                    submit_batch_of_matches(matches_to_process, ladder_name_override=league_name)
+                    new_df = pd.DataFrame(matches_to_process)
+                    df_matches = pd.concat([df_matches, new_df], ignore_index=True)
+                    ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
+                    st.success(f"✅ Processed {len(matches_to_process)} matches!")
+
+elif selection == "🔄 Pop-Up RR":
+    st.header("🔄 Pop-Up Round Robin")
+    with st.expander("Event Setup", expanded=True):
+        event_date_rr = st.date_input("Event Date", datetime.now(), key="date_tab3")
+        popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
+        rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
+        
+        with st.form("rr_setup"):
+            rr_data = []
+            for i in range(rr_courts):
+                c1, c2 = st.columns([1, 4])
+                with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
+                with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin...")
+                rr_data.append({'id': i+1, 'type': t, 'names': n})
+            
+            if st.form_submit_button("Generate Schedule"):
+                # 1. Parse Names
+                all_input_names = []
+                for c in rr_data:
+                    pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
+                    all_input_names.extend(pl)
+
+                # 2. Check for Missing Players
+                stop_flag, df_players = handle_missing_players(all_input_names, "tab3", ws_players, df_players)
+
+                # 3. Only Generate if no missing players
+                if not stop_flag:
+                    st.session_state.rr_schedule = []
                     for c in rr_data:
                         pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
-                        all_input_names.extend(pl)
+                        st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
 
-                    # 2. Check for Missing Players
-                    stop_flag, df_players = handle_missing_players(all_input_names, "tab3", ws_players, df_players)
-
-                    # 3. Only Generate if no missing players
-                    if not stop_flag:
-                        st.session_state.rr_schedule = []
-                        for c in rr_data:
-                            pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
-                            st.session_state.rr_schedule.append({'court': c['id'], 'matches': get_match_schedule(c['type'], pl)})
-
-        if st.session_state.get('rr_schedule'):
-            st.divider()
-            with st.form("submit_rr_scores", clear_on_submit=True):
+    if st.session_state.get('rr_schedule'):
+        st.divider()
+        with st.form("submit_rr_scores", clear_on_submit=True):
+            for c in st.session_state.rr_schedule:
+                st.markdown(f"**Court {c['court']}**")
+                for i, m in enumerate(c['matches']):
+                    c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
+                    with c1: st.text(f"{m['desc']} | {m['t1'][0]} & {m['t1'][1]}")
+                    with c2: s1 = st.number_input("S1", 0, key=f"rr_s_{c['court']}_{i}_1")
+                    with c3: s2 = st.number_input("S2", 0, key=f"rr_s_{c['court']}_{i}_2")
+                    with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
+            
+            if st.form_submit_button("Submit to Overall Ratings"):
+                matches_to_process = []
                 for c in st.session_state.rr_schedule:
-                    st.markdown(f"**Court {c['court']}**")
                     for i, m in enumerate(c['matches']):
-                        c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
-                        with c1: st.text(f"{m['desc']} | {m['t1'][0]} & {m['t1'][1]}")
-                        with c2: s1 = st.number_input("S1", 0, key=f"rr_s_{c['court']}_{i}_1")
-                        with c3: s2 = st.number_input("S2", 0, key=f"rr_s_{c['court']}_{i}_2")
-                        with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                
-                if st.form_submit_button("Submit to Overall Ratings"):
-                    matches_to_process = []
-                    for c in st.session_state.rr_schedule:
-                        for i, m in enumerate(c['matches']):
-                            s1 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0)
-                            s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
-                            if s1 == 0 and s2 == 0: continue
-                            matches_to_process.append({
-                                'date': str(event_date_rr), 'league': "PopUp_Event", 
-                                't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
-                                't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
-                                'score_t1': s1, 'score_t2': s2
-                            })
-                    if matches_to_process:
-                        submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
-                        st.success("✅ Overall ratings updated!")
+                        s1 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0)
+                        s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
+                        if s1 == 0 and s2 == 0: continue
+                        matches_to_process.append({
+                            'date': str(event_date_rr), 'league': "PopUp_Event", 
+                            't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
+                            't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
+                            'score_t1': s1, 'score_t2': s2
+                        })
+                if matches_to_process:
+                    submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
+                    st.success("✅ Overall ratings updated!")
 
-    with tab4:
-        st.header("Player Management")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("➕ Add New Player")
-            with st.form("add_p"):
-                n = st.text_input("Name")
-                r = st.number_input("Start JUPR", 3.0, step=0.1)
-                if st.form_submit_button("Add Player"):
-                    if n and n not in df_players['name'].values:
-                        new_p = {'name': n, 'elo': r*400, 'starting_elo': r*400, 'matches_played':0, 'wins':0, 'losses':0}
-                        df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
-                        ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
-                        st.success(f"Added {n} to Cloud")
-                        fetch_all_data_snapshots.clear()
-                        st.rerun()
-                    else: st.error("Invalid name or player already exists.")
-        with c2:
-            st.subheader("🗑️ Delete Player")
-            p_to_delete = st.selectbox("Select Player to Remove", [""] + sorted(df_players['name'].tolist()))
-            if p_to_delete:
-                st.warning(f"Are you sure you want to delete **{p_to_delete}**?")
-                if st.button(f"Confirm Delete {p_to_delete}"):
-                    df_players = df_players[df_players['name'] != p_to_delete]
-                    ws_players.clear()
+elif selection == "👥 Players":
+    st.header("Player Management")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("➕ Add New Player")
+        with st.form("add_p"):
+            n = st.text_input("Name")
+            r = st.number_input("Start JUPR", 3.0, step=0.1)
+            if st.form_submit_button("Add Player"):
+                if n and n not in df_players['name'].values:
+                    new_p = {'name': n, 'elo': r*400, 'starting_elo': r*400, 'matches_played':0, 'wins':0, 'losses':0}
+                    df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
                     ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
-                    if not df_ratings.empty:
-                        df_ratings = df_ratings[df_ratings['name'] != p_to_delete]
-                        ws_ratings.clear()
-                        ws_ratings.update([df_ratings.columns.values.tolist()] + df_ratings.values.tolist())
-                    st.success(f"Successfully deleted {p_to_delete}.")
+                    st.success(f"Added {n} to Cloud")
                     fetch_all_data_snapshots.clear()
                     st.rerun()
-        st.divider()
-        st.subheader("Current Player Registry")
-        st.dataframe(df_players, use_container_width=True, hide_index=True)
+                else: st.error("Invalid name or player already exists.")
+    with c2:
+        st.subheader("🗑️ Delete Player")
+        p_to_delete = st.selectbox("Select Player to Remove", [""] + sorted(df_players['name'].tolist()))
+        if p_to_delete:
+            st.warning(f"Are you sure you want to delete **{p_to_delete}**?")
+            if st.button(f"Confirm Delete {p_to_delete}"):
+                df_players = df_players[df_players['name'] != p_to_delete]
+                ws_players.clear()
+                ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
+                if not df_ratings.empty:
+                    df_ratings = df_ratings[df_ratings['name'] != p_to_delete]
+                    ws_ratings.clear()
+                    ws_ratings.update([df_ratings.columns.values.tolist()] + df_ratings.values.tolist())
+                st.success(f"Successfully deleted {p_to_delete}.")
+                fetch_all_data_snapshots.clear()
+                st.rerun()
+    st.divider()
+    st.subheader("Current Player Registry")
+    st.dataframe(df_players, use_container_width=True, hide_index=True)
 
-    with tab5:
-        st.header("Admin Tools")
-        st.subheader("📤 Upload Ladder Matches")
-        ladder_upload = st.file_uploader("Upload CSV", type=["csv"], key="ladder_up")
-        if ladder_upload is not None:
-            target_ladder = st.selectbox("Select Ladder Name", ["Testing_Ladder", "1v1", "Doubles", "Sniper"])
-            if st.button("🚀 Process Ladder Matches"):
-                df_ladder = pd.read_csv(ladder_upload)
-                logs = process_batch_upload(df_ladder, ladder_name_from_ui=target_ladder)
-                st.write(logs)
+elif selection == "📝 Match Log":
+    st.header("📝 Match Log")
+    st.subheader("Edit Match History")
+    edited_df = st.data_editor(df_matches, num_rows="dynamic", use_container_width=True)
+    if st.button("💾 Save & Recalc"):
+        df_matches = edited_df
+        df_players, df_matches = recalculate_all_stats(df_players, df_matches)
+        ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
+        ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
+        st.success("Cloud Updated!")
 
-        st.divider()
-        st.subheader("🔄 Reconstruct/Reset League")
-        if 'league' in df_matches.columns:
-            hist_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
-            league_to_restore = st.selectbox("Select League to Fix", hist_leagues)
-            if st.button("Clean Reconstruct"):
-                with st.spinner(f"Wiping old data and replaying history for {league_to_restore}..."):
-                    sh = get_db_connection()
-                    r_ws = sh.worksheet("player_ratings")
-                    all_r = r_ws.get_all_records()
-                    clean_r = [r for r in all_r if r['ladder_id'] != league_to_restore and r['ladder_id'] != 'OVERALL']
-                    if clean_r:
-                        headers = list(all_r[0].keys())
-                        data_to_write = [headers] + [list(r.values()) for r in clean_r]
-                        r_ws.clear()
-                        r_ws.update(data_to_write)
-                    else: r_ws.clear()
-                    msg = replay_league_history(league_to_restore)
-                    st.success(f"Fixed! {msg}")
-                    fetch_all_data_snapshots.clear()
-                    st.rerun()
+elif selection == "⚙️ Admin Tools":
+    st.header("Admin Tools")
+    st.subheader("📤 Upload Ladder Matches")
+    ladder_upload = st.file_uploader("Upload CSV", type=["csv"], key="ladder_up")
+    if ladder_upload is not None:
+        target_ladder = st.selectbox("Select Ladder Name", ["Testing_Ladder", "1v1", "Doubles", "Sniper"])
+        if st.button("🚀 Process Ladder Matches"):
+            df_ladder = pd.read_csv(ladder_upload)
+            logs = process_batch_upload(df_ladder, ladder_name_from_ui=target_ladder)
+            st.write(logs)
 
-        st.divider()
-        st.subheader("📝 Edit Match History")
-        edited_df = st.data_editor(df_matches, num_rows="dynamic", use_container_width=True)
-        if st.button("💾 Save & Recalc"):
-            df_matches = edited_df
-            df_players, df_matches = recalculate_all_stats(df_players, df_matches)
-            ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
-            ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
-            st.success("Cloud Updated!")
+    st.divider()
+    st.subheader("🔄 Reconstruct/Reset League")
+    if 'league' in df_matches.columns:
+        hist_leagues = [x for x in df_matches['league'].unique() if x and str(x) != "nan"]
+        league_to_restore = st.selectbox("Select League to Fix", hist_leagues)
+        if st.button("Clean Reconstruct"):
+            with st.spinner(f"Wiping old data and replaying history for {league_to_restore}..."):
+                sh = get_db_connection()
+                r_ws = sh.worksheet("player_ratings")
+                all_r = r_ws.get_all_records()
+                clean_r = [r for r in all_r if r['ladder_id'] != league_to_restore and r['ladder_id'] != 'OVERALL']
+                if clean_r:
+                    headers = list(all_r[0].keys())
+                    data_to_write = [headers] + [list(r.values()) for r in clean_r]
+                    r_ws.clear()
+                    r_ws.update(data_to_write)
+                else: r_ws.clear()
+                msg = replay_league_history(league_to_restore)
+                st.success(f"Fixed! {msg}")
+                fetch_all_data_snapshots.clear()
+                st.rerun()
