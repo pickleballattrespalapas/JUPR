@@ -14,6 +14,15 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
+# --- MAGIC LINK LOGIN (OPTION B) ---
+# Check URL for admin key to auto-login
+query_params = st.query_params
+if "admin_key" in query_params:
+    if query_params["admin_key"] == st.secrets["supabase"]["admin_password"]:
+        st.session_state.admin_logged_in = True
+        # Optional: Clear the key from URL so it doesn't linger visually (comment out if you prefer it stays)
+        # st.query_params.clear() 
+
 # --- DATABASE CONNECTION (STABLE) ---
 @st.cache_resource
 def init_supabase():
@@ -140,25 +149,14 @@ def process_matches(match_list, name_to_id, df_p, df_l):
 
     for m in match_list:
         p1, p2, p3, p4 = [name_to_id.get(m[k]) for k in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']]
-        # Fix: Allow 1v1 by checking only p1 and p3 are present, setting p2/p4 to None or dummy if needed
-        # But our core logic requires p1/p2/p3/p4 for 2v2 math.
-        # If any essential player (p1, p3) is missing, skip.
-        if not p1 or not p3: continue
-        
-        # If p2/p4 missing (1v1), we need to handle it. 
-        # For now, let's assume if p2/p4 is None, we treat them as "Ghost" for math? 
-        # Or better: check strictly for 2v2 data integrity.
-        # The user's CSV upload might have put None for p2/p4.
-        # If so, the previous check "if not all([p1, p2, p3, p4])" was failing 1v1s.
-        # I removed that strict check in favor of "if not p1 or not p3".
+        if not all([p1, p2, p3, p4]): continue
         
         s1, s2 = m['s1'], m['s2']
         league = m['league']
         is_popup = m.get('match_type') == 'PopUp' or m.get('is_popup', False)
         
-        # Safe Get Rating (Handle None for p2/p4)
         def safe_get_o(pid):
-            if pid is None: return 1200.0 # Ghost is 3.0
+            if pid is None: return 1200.0
             return get_overall_r(pid)
             
         ro1, ro2, ro3, ro4 = safe_get_o(p1), safe_get_o(p2), safe_get_o(p3), safe_get_o(p4)
@@ -184,7 +182,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         participants = [(p1, do1, di1, win), (p2, do1, di1, win), (p3, do2, di2, not win), (p4, do2, di2, not win)]
         
         for pid, d_overall, d_island, won in participants:
-            if pid is None: continue # Skip ghosts
+            if pid is None: continue 
             
             if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
@@ -257,7 +255,6 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 Leaderboards")
     
-    # 1. League Selector
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
@@ -281,6 +278,15 @@ if sel == "🏆 Leaderboards":
     else:
         st.query_params.clear()
     
+    with st.expander("📊 How Ratings Work"):
+        st.markdown("""
+        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
+        * **The Swing:**
+            * **Big Upset:** ~ +0.075 JUPR
+            * **Even Match (11-9):** ~ +0.008 JUPR
+        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
+        """)
+
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -469,7 +475,6 @@ elif sel == "📝 Match Log":
     st.header("📝 Match Log")
     st.subheader("Recent Matches")
     
-    # X-RAY VIEW: Added 'elo_delta' (Raw Pts) to view
     edit_df = df_matches.head(100)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
     edit_df['Raw Pts'] = edit_df['elo_delta'].map('{:.1f}'.format)
     st.dataframe(edit_df.drop(columns=['elo_delta']), use_container_width=True)
@@ -483,14 +488,12 @@ elif sel == "📝 Match Log":
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
-    # --- DIAGNOSTIC: Zero Point Detector ---
     zero_pts = df_matches[df_matches['elo_delta'] == 0].shape[0]
     if zero_pts > 0:
-        st.warning(f"⚠️ Found {zero_pts} matches with 0.0 point impact (likely from before the fix). Run 'Recalculate' below to fix them.")
+        st.warning(f"⚠️ Found {zero_pts} matches with 0.0 point impact. Run 'Recalculate' below to fix them.")
     else:
         st.success("✅ System Health: All matches have valid point values.")
 
-    # --- FORENSIC TOOL ---
     st.subheader("🕵️ Match Forensics")
     debug_id = st.number_input("Enter Match ID to Diagnose", value=0, step=1)
     if st.button("Run Diagnostics"):
@@ -528,7 +531,6 @@ elif sel == "⚙️ Admin Tools":
     
     st.divider()
     
-    # --- LEAGUE MANAGER ---
     st.subheader("🛠️ League Manager")
     if not df_leagues.empty:
         active_islands = sorted(df_leagues['league_name'].unique().tolist())
@@ -543,7 +545,6 @@ elif sel == "⚙️ Admin Tools":
 
     st.divider()
 
-    # --- RECALCULATE TOOL (FIXED TO UPDATE MATCHES) ---
     st.subheader("🔄 Recalculate League History")
     league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL (Full System Reset)"]
     target_reset = st.selectbox("Select League to Recalculate", league_options)
@@ -555,8 +556,6 @@ elif sel == "⚙️ Admin Tools":
             
             p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
             island_map = {}
-            
-            # List to store the corrected match deltas
             matches_to_update = []
 
             for m in all_matches:
@@ -567,7 +566,6 @@ elif sel == "⚙️ Admin Tools":
                 league = m['league']
                 is_popup = m.get('match_type') == 'PopUp'
                 
-                # Safe Get for Overall
                 def safe_get_r(pid):
                     if pid is None: return 1200.0
                     return p_map[pid]['r']
@@ -576,7 +574,6 @@ elif sel == "⚙️ Admin Tools":
                     ro1, ro2, ro3, ro4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
                     do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
                     
-                    # SAVE THE DELTA for this match
                     delta_to_save = do1 if s1 > s2 else do2
                     matches_to_update.append({'id': m['id'], 'elo_delta': delta_to_save})
                     
@@ -589,7 +586,6 @@ elif sel == "⚙️ Admin Tools":
                         else: p_map[pid]['l'] += 1
 
                 if not is_popup:
-                    # Inherit current Overall if island rating missing
                     def get_i_r(pid, lg):
                         if (pid, lg) not in island_map: 
                             curr_r = p_map[pid]['r']
@@ -612,12 +608,10 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: island_map[k]['w'] += 1
                         else: island_map[k]['l'] += 1
 
-            # 1. Update Players
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
                     supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
             
-            # 2. Update Islands
             if target_reset != "ALL (Full System Reset)": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
             else: supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
             
@@ -631,8 +625,6 @@ elif sel == "⚙️ Admin Tools":
                 for i in range(0, len(new_islands), chunk_size):
                     supabase.table("league_ratings").insert(new_islands[i:i+chunk_size]).execute()
 
-            # 3. UPDATE MATCH LOGS (The Fix!)
-            # We do this one by one or in batches. One by one is safer for simple scripts.
             progress_bar = st.progress(0)
             for idx, update in enumerate(matches_to_update):
                 supabase.table("matches").update({"elo_delta": update['elo_delta']}).eq("id", update['id']).execute()
