@@ -19,22 +19,25 @@ K_FACTOR = 32
 DEFAULT_START_RATING = 3.00
 SHEET_NAME = "Tres Palapas DB"
 
-# --- HELPER: SAFE GOOGLE SHEETS UPDATE ---
-def safe_update_sheet(worksheet, dataframe):
+# --- HELPER: ROBUST DATA CLEANER ---
+def clean_data_for_google(df):
     """
-    Converts a Pandas DataFrame to a standard Python list of lists 
-    to prevent 'int64' JSON serialization errors in GSpread.
+    Converts a DataFrame to a list of lists that Google Sheets API accepts.
+    Removes numpy types (int64, float64) which cause silent failures.
     """
-    # 1. Replace NaNs and Infinities
-    df_clean = dataframe.replace([np.inf, -np.inf], np.nan).fillna("")
+    # 1. Fill NaNs
+    df = df.fillna("")
     
-    # 2. Convert to standard types (scrub numpy types)
-    # This ensures int64 becomes int, float64 becomes float
-    data = [df_clean.columns.values.tolist()] + df_clean.astype(object).values.tolist()
+    # 2. Convert to standard Python types
+    data = [df.columns.values.tolist()] + df.astype(object).values.tolist()
     
-    # 3. Clear and Update
-    worksheet.clear()
-    worksheet.update(values=data)
+    # 3. Recursive cleanup for JSON serializability
+    def clean_cell(cell):
+        if isinstance(cell, (np.int64, np.int32)): return int(cell)
+        if isinstance(cell, (np.float64, np.float32)): return float(cell)
+        return cell
+
+    return [[clean_cell(c) for c in row] for row in data]
 
 # --- OPTIMIZED CONNECTION (CACHE RESOURCE) ---
 @st.cache_resource
@@ -179,9 +182,9 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
         results_log.append(f"Processed: {winner} def. {loser} ({ladder_id})")
 
     if all_rows:
-        headers = list(all_rows[0].keys())
-        data_to_write = [headers] + [list(r.values()) for r in all_rows]
-        safe_update_sheet(ratings_sheet, pd.DataFrame(all_rows))
+        cleaned_data = clean_data_for_google(pd.DataFrame(all_rows))
+        ratings_sheet.clear()
+        ratings_sheet.update(values=cleaned_data)
         
     return results_log
 
@@ -223,7 +226,9 @@ def replay_league_history(target_league):
                     if p: update_local_memory_global(all_rows, p, context, get_effective_rating(all_rows, p, context) - delta)
         count += 1
 
-    safe_update_sheet(ratings_ws, pd.DataFrame(all_rows))
+    cleaned_data = clean_data_for_google(pd.DataFrame(all_rows))
+    ratings_ws.clear()
+    ratings_ws.update(values=cleaned_data)
     
     return f"✅ Success! Replayed {count} matches."
 
@@ -273,7 +278,9 @@ def submit_batch_of_matches(match_list, ladder_name_override=None):
                     if p: update_local(p, ctx, round(get_effective_rating(all_rows, p, ctx) - delta))
 
     if all_rows:
-        safe_update_sheet(r_ws, pd.DataFrame(all_rows))
+        cleaned_data = clean_data_for_google(pd.DataFrame(all_rows))
+        r_ws.clear()
+        r_ws.update(values=cleaned_data)
         fetch_all_data_snapshots.clear()
 
 def get_match_schedule(format_type, players):
@@ -364,7 +371,6 @@ df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_da
 def handle_missing_players(names_list, section_key, ws_p, df_p):
     """
     Checks if names exist. If not, pauses execution to ask for ratings.
-    Returns: (stop_execution: bool, updated_df_players)
     """
     if not names_list: return False, df_p
     
@@ -384,7 +390,7 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
             with cols[i % 3]:
                 inputs[name] = st.number_input(f"{name}", min_value=1.0, value=3.0, step=0.1, key=f"np_{section_key}_{i}")
         
-        if st.form_submit_button("💾 Save New Players & Continue"):
+        if st.form_submit_button("💾 Save New Players"):
             new_rows = []
             for name, rating in inputs.items():
                 new_rows.append({'name': name, 'elo': rating*400, 'starting_elo': rating*400, 'matches_played':0, 'wins':0, 'losses':0})
@@ -393,10 +399,13 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
             df_p = pd.concat([df_p, new_df], ignore_index=True)
             
             # SAFE UPDATE
-            safe_update_sheet(ws_p, df_p)
+            cleaned_data = clean_data_for_google(df_p)
+            ws_p.clear()
+            ws_p.update(values=cleaned_data)
             
             fetch_all_data_snapshots.clear() 
-            # SET FLAG FOR AUTO-CONTINUE
+            
+            # SET FLAG SO WE KNOW TO AUTO-CONTINUE
             st.session_state[f"auto_gen_{section_key}"] = True
             st.success("✅ Players added! Continuing...")
             time.sleep(0.5)
@@ -426,7 +435,7 @@ nav_options = ["🏆 Leaderboards", "🔍 Player Search"]
 if st.session_state.admin_logged_in:
     nav_options += ["──────────", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
 
-selection = st.sidebar.radio("Go to:", nav_options)
+selection = st.sidebar.radio("Go to:", nav_options, key="main_nav")
 
 st.markdown("""
 <style>
@@ -545,8 +554,9 @@ elif selection == "🏟️ Live Court Manager":
             
             submitted = st.form_submit_button("Generate")
         
+        # LOGIC: Check 'submitted' OR 'auto_gen' flag
         if submitted or st.session_state.get("auto_gen_tab2"):
-            # Clear flag if it exists
+            # Clear flag immediately
             if "auto_gen_tab2" in st.session_state: del st.session_state["auto_gen_tab2"]
             
             all_input_names = []
@@ -598,7 +608,7 @@ elif selection == "🏟️ Live Court Manager":
                 submit_batch_of_matches(matches_to_process, ladder_name_override=league_name)
                 new_df = pd.DataFrame(matches_to_process)
                 df_matches = pd.concat([df_matches, new_df], ignore_index=True)
-                ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
+                ws_matches.update(values=clean_data_for_google(df_matches))
                 st.success(f"✅ Processed {len(matches_to_process)} matches!")
 
 elif selection == "🔄 Pop-Up RR":
@@ -618,6 +628,7 @@ elif selection == "🔄 Pop-Up RR":
             
             submitted_rr = st.form_submit_button("Generate Schedule")
         
+        # LOGIC: Check 'submitted_rr' OR 'auto_gen' flag
         if submitted_rr or st.session_state.get("auto_gen_tab3"):
             if "auto_gen_tab3" in st.session_state: del st.session_state["auto_gen_tab3"]
             
@@ -677,7 +688,7 @@ elif selection == "👥 Players":
                 if n and n not in df_players['name'].values:
                     new_p = {'name': n, 'elo': r*400, 'starting_elo': r*400, 'matches_played':0, 'wins':0, 'losses':0}
                     df_players = pd.concat([df_players, pd.DataFrame([new_p])], ignore_index=True)
-                    ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
+                    ws_players.update(values=clean_data_for_google(df_players))
                     st.success(f"Added {n} to Cloud")
                     fetch_all_data_snapshots.clear()
                     st.rerun()
@@ -689,12 +700,11 @@ elif selection == "👥 Players":
             st.warning(f"Are you sure you want to delete **{p_to_delete}**?")
             if st.button(f"Confirm Delete {p_to_delete}"):
                 df_players = df_players[df_players['name'] != p_to_delete]
-                ws_players.clear()
-                ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
+                ws_players.update(values=clean_data_for_google(df_players))
+                
                 if not df_ratings.empty:
                     df_ratings = df_ratings[df_ratings['name'] != p_to_delete]
-                    ws_ratings.clear()
-                    ws_ratings.update([df_ratings.columns.values.tolist()] + df_ratings.values.tolist())
+                    ws_ratings.update(values=clean_data_for_google(df_ratings))
                 st.success(f"Successfully deleted {p_to_delete}.")
                 fetch_all_data_snapshots.clear()
                 st.rerun()
@@ -709,8 +719,9 @@ elif selection == "📝 Match Log":
     if st.button("💾 Save & Recalc"):
         df_matches = edited_df
         df_players, df_matches = recalculate_all_stats(df_players, df_matches)
-        ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
-        ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
+        
+        ws_players.update(values=clean_data_for_google(df_players))
+        ws_matches.update(values=clean_data_for_google(df_matches))
         st.success("Cloud Updated!")
 
 elif selection == "⚙️ Admin Tools":
@@ -736,10 +747,8 @@ elif selection == "⚙️ Admin Tools":
                 all_r = r_ws.get_all_records()
                 clean_r = [r for r in all_r if r['ladder_id'] != league_to_restore and r['ladder_id'] != 'OVERALL']
                 if clean_r:
-                    headers = list(all_r[0].keys())
-                    data_to_write = [headers] + [list(r.values()) for r in clean_r]
                     r_ws.clear()
-                    r_ws.update(data_to_write)
+                    r_ws.update(values=clean_data_for_google(pd.DataFrame(clean_r)))
                 else: r_ws.clear()
                 msg = replay_league_history(league_to_restore)
                 st.success(f"Fixed! {msg}")
