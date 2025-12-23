@@ -55,19 +55,15 @@ def load_data():
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 1. Players (Overall)
             p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
             df_players = pd.DataFrame(p_response.data)
             
-            # 2. League Ratings (Islands)
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # 3. Matches
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(1000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
-            # Map Helpers
             if not df_players.empty:
                 id_to_name = dict(zip(df_players['id'], df_players['name']))
                 name_to_id = dict(zip(df_players['name'], df_players['id']))
@@ -120,35 +116,23 @@ def safe_add_player(name, rating):
     except Exception as e:
         return False, str(e)
 
-# --- DUAL-TRACK PROCESSOR (OVERALL + ISLAND) ---
+# --- PROCESSOR ---
 def process_matches(match_list, name_to_id, df_p, df_l):
     db_matches = []
-    
     overall_updates = {} 
     island_updates = {}
 
-    # Helper to get current Island Rating
     def get_island_r(pid, league):
         if (pid, league) in island_updates: return island_updates[(pid, league)]['r']
-        
-        # 1. Check existing island data
         if not df_l.empty:
             match = df_l[(df_l['player_id'] == pid) & (df_l['league_name'] == league)]
             if not match.empty: return float(match.iloc[0]['rating'])
-        
-        # 2. INHERIT FROM OVERALL (This fixes the 3.0 reset issue on live matches)
-        # We need the most current overall rating for this player.
-        # Check local updates first
+        # Inherit from Overall
         if pid in overall_updates: return overall_updates[pid]['r']
-        
-        # Check DB
         overall = df_p[df_p['id'] == pid]
         if not overall.empty: return float(overall.iloc[0]['rating'])
-        
-        # Default
         return 1200.0
 
-    # Helper to get current Overall Rating
     def get_overall_r(pid):
         if pid in overall_updates: return overall_updates[pid]['r']
         row = df_p[df_p['id'] == pid]
@@ -162,15 +146,13 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         s1, s2 = m['s1'], m['s2']
         league = m['league']
         
-        # --- 1. OVERALL MATH ---
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
         do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
         
-        # --- 2. ISLAND MATH ---
         ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
         di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
 
-        # Record Match 
+        # Store the WINNER'S gain in elo_delta
         db_matches.append({
             "club_id": CLUB_ID, "date": m['date'], "league": league,
             "t1_p1": p1, "t1_p2": p2, "t2_p1": p3, "t2_p2": p4,
@@ -178,12 +160,10 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             "match_type": m['type']
         })
 
-        # ACCUMULATE UPDATES
         win = s1 > s2
         participants = [(p1, do1, di1, win), (p2, do1, di1, win), (p3, do2, di2, not win), (p4, do2, di2, not win)]
         
         for pid, d_overall, d_island, won in participants:
-            # Overall Update
             if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
                 overall_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
@@ -192,27 +172,22 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             if won: overall_updates[pid]['w'] += 1
             else: overall_updates[pid]['l'] += 1
             
-            # Island Update
             key = (pid, league)
             if key not in island_updates:
-                curr = get_island_r(pid, league) # Fetches inherited rating
+                curr = get_island_r(pid, league) 
                 island_updates[key] = {'r': curr, 'w': 0, 'l': 0, 'mp': 0}
-            
             island_updates[key]['r'] += d_island
             island_updates[key]['mp'] += 1
             if won: island_updates[key]['w'] += 1
             else: island_updates[key]['l'] += 1
 
-    # EXECUTE WRITES
     if db_matches: supabase.table("matches").insert(db_matches).execute()
     
-    # Write Overall
     for pid, stats in overall_updates.items():
         supabase.table("players").update({
             "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
         }).eq("id", pid).execute()
 
-    # Write Islands (Upsert)
     island_data = []
     for (pid, league), stats in island_updates.items():
         island_data.append({
@@ -264,7 +239,7 @@ if sel == "🏆 Leaderboards":
         unique_l = sorted(df_leagues['league_name'].unique().tolist())
         available_leagues += unique_l
         
-    # 2. Check URL for "?league=..."
+    # Check URL
     default_index = 0
     query_params = st.query_params
     if "league" in query_params:
@@ -272,24 +247,29 @@ if sel == "🏆 Leaderboards":
         if url_league in available_leagues:
             default_index = available_leagues.index(url_league)
             
-    # 3. Render Dropdown
     target_league = st.selectbox("Select View", available_leagues, index=default_index)
     
-    # 4. Update URL & Show Copy Button
+    # Update URL
     if target_league != "OVERALL":
         st.query_params["league"] = target_league
-        
-        # REPLACE THIS WITH YOUR ACTUAL APP URL
-        APP_BASE_URL = "https://jupr-leagues.streamlit.app" 
-        
+        APP_BASE_URL = "https://jupr-leagues.streamlit.app" # REPLACE THIS IF NEEDED
         full_link = f"{APP_BASE_URL}/?league={target_league.replace(' ', '%20')}"
-        
         st.caption("👇 Share this league:")
-        st.code(full_link, language=None) # This creates a copyable box
+        st.code(full_link, language=None)
     else:
         st.query_params.clear()
     
-    # 5. Filter Data
+    # Explainer
+    with st.expander("📊 How Ratings Work"):
+        st.markdown("""
+        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
+        * **The Swing:**
+            * **Big Upset:** ~ +0.075 JUPR
+            * **Even Match (11-9):** ~ +0.008 JUPR
+        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
+        """)
+
+    # Filter Data
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -298,7 +278,6 @@ if sel == "🏆 Leaderboards":
             display_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             display_df['name'] = display_df['player_id'].map(id_to_name)
     
-    # 6. Render Table
     if not display_df.empty and 'rating' in display_df.columns:
         display_df['JUPR'] = (display_df['rating']/400).map('{:,.3f}'.format)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
@@ -310,12 +289,40 @@ if sel == "🏆 Leaderboards":
 elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
     p = st.selectbox("Search", [""] + sorted(df_players['name']))
+    
+    with st.expander("📊 Understanding the Stats"):
+        st.markdown("""
+        * **Δ JUPR:** The exact amount your rating moved after this match.
+        * **Green (+):** You won or outperformed expectation.
+        * **Red (-):** You lost or underperformed.
+        * *Note: Ratings update instantly after every match.*
+        """)
+
     if p and not df_matches.empty:
         mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
         h = df_matches[mask].copy()
         if not h.empty:
-            h['Res'] = h.apply(lambda r: "✅" if (p in [r['p1'],r['p2']] and r['score_t1']>r['score_t2']) or (p in [r['p3'],r['p4']] and r['score_t2']>r['score_t1']) else "❌", axis=1)
-            st.dataframe(h[['date', 'league', 'Res', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True)
+            # Calculate Win/Loss and Signed JUPR Change
+            def get_stats(r):
+                is_t1 = p in [r['p1'], r['p2']]
+                t1_won = r['score_t1'] > r['score_t2']
+                player_won = (is_t1 and t1_won) or (not is_t1 and not t1_won)
+                
+                # DB stores absolute positive delta for winner. 
+                # If I won, I gained it. If I lost, I lost it.
+                delta = r['elo_delta'] / 400
+                if not player_won: delta = -delta
+                
+                return ("✅ Win" if player_won else "❌ Loss", delta)
+
+            # Apply
+            stats = h.apply(get_stats, axis=1, result_type='expand')
+            h['Result'] = stats[0]
+            h['Δ JUPR'] = stats[1].map('{:+.3f}'.format)
+            
+            st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
+        else:
+            st.info("No matches found.")
 
 elif sel == "🏟️ Live Court Manager":
     st.header("🏟️ Live Court Manager")
@@ -335,13 +342,12 @@ elif sel == "🏟️ Live Court Manager":
             all_n = []
             for c in c_data: all_n.extend([x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()])
             missing = [x for x in all_n if x not in name_to_id]
-            
             if missing:
                 st.session_state.missing = missing
                 st.rerun()
             else:
                 st.session_state.lc_schedule = []
-                st.session_state.active_league = lg # Save league name
+                st.session_state.active_league = lg 
                 for idx, c in enumerate(c_data):
                     pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
                     st.session_state.lc_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
@@ -454,11 +460,8 @@ elif sel == "🔄 Pop-Up RR":
 
 elif sel == "👥 Players":
     st.header("Player Management")
-    
-    # Create 3 columns for Add, Edit, Delete
     c1, c2, c3 = st.columns(3)
     
-    # --- 1. ADD PLAYER ---
     with c1:
         st.subheader("➕ Add New")
         with st.form("add_p"):
@@ -466,55 +469,45 @@ elif sel == "👥 Players":
             r = st.number_input("Rating", 1.0, 7.0, 3.0)
             if st.form_submit_button("Add Player"):
                 ok, msg = safe_add_player(n, r)
-                if ok: 
-                    st.success(f"Added {n}!")
-                    time.sleep(1)
-                    st.rerun()
-                else: 
-                    st.error(msg)
+                if ok: st.success(f"Added {n}!"); time.sleep(1); st.rerun()
+                else: st.error(msg)
     
-    # --- 2. EDIT PLAYER (NEW!) ---
     with c2:
         st.subheader("✏️ Edit Rating")
         p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
-        
         if p_edit:
-            # Get current starting stats
             curr_row = df_players[df_players['name'] == p_edit].iloc[0]
             curr_start = float(curr_row['starting_rating']) / 400
-            
             new_start = st.number_input("New Start Rating", 1.0, 7.0, curr_start, step=0.1)
-            
             if st.button("Update Rating"):
-                # Update database
-                supabase.table("players").update({
-                    "starting_rating": new_start * 400,
-                    "rating": new_start * 400 # Reset current rating too
-                }).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
-                
-                st.success(f"Updated {p_edit} to {new_start}")
-                st.info("ℹ️ Go to Admin Tools -> 'Recalculate History' to apply this to past matches.")
-                time.sleep(2)
-                st.rerun()
+                supabase.table("players").update({"starting_rating": new_start * 400, "rating": new_start * 400}).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
+                st.success(f"Updated {p_edit} to {new_start}"); time.sleep(1); st.rerun()
 
-    # --- 3. DELETE PLAYER ---
     with c3:
         st.subheader("🗑️ Delete")
         to_del = st.selectbox("Select to Remove", [""] + sorted(df_players['name']))
-        if to_del:
-            st.warning(f"Deleting {to_del} will remove their history.")
-            if st.button("Confirm Delete"):
-                supabase.table("players").delete().eq("name", to_del).eq("club_id", CLUB_ID).execute()
-                st.success("Deleted.")
-                time.sleep(1)
-                st.rerun()
+        if to_del and st.button("Confirm Delete"):
+            supabase.table("players").delete().eq("name", to_del).eq("club_id", CLUB_ID).execute()
+            st.success("Deleted."); time.sleep(1); st.rerun()
+    
+    st.dataframe(df_players, use_container_width=True)
+
+elif sel == "📝 Match Log":
+    st.header("📝 Match Log")
+    st.subheader("Recent Matches")
+    edit_df = df_matches.head(50)[['id', 'date', 'league', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    st.dataframe(edit_df, use_container_width=True)
     
     st.divider()
-    st.dataframe(df_players, use_container_width=True)
+    st.subheader("🗑️ Delete Match")
+    m_id = st.number_input("Match ID", min_value=0, step=1)
+    if st.button("Delete Match"):
+        supabase.table("matches").delete().eq("id", m_id).execute()
+        st.success("Deleted! Use Recalculate Tool to fix ratings."); time.sleep(1); st.rerun()
+
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
-    # --- TAB 1: CSV UPLOAD ---
     st.subheader("📤 Bulk Match Upload (CSV)")
     up_file = st.file_uploader("Upload CSV", type=['csv'])
     if up_file:
@@ -536,43 +529,28 @@ elif sel == "⚙️ Admin Tools":
 
     st.divider()
 
-    # --- TAB 2: RECALCULATE LEAGUE ---
     st.subheader("🔄 Recalculate League History")
-    st.markdown("""
-    **Use this if:**
-    * You deleted a match and need to fix the points.
-    * You changed a player's starting rating.
-    * The math looks "off."
-    """)
-
-    # 1. Select Scope
     league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL (Full System Reset)"]
     target_reset = st.selectbox("Select League to Recalculate", league_options)
 
     if st.button(f"⚠️ Replay History for: {target_reset}"):
-        with st.spinner("Crunching numbers... this may take a moment."):
-            # A. FETCH ALL DATA needed for replay
+        with st.spinner("Crunching numbers..."):
             all_players = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute().data
-            all_matches = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data # Oldest first
+            all_matches = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data
             
-            # B. RESET MEMORY
             p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
-            island_map = {} # (pid, league) -> {r, w, l, mp}
+            island_map = {}
 
-            # C. REPLAY MATCHES
             for m in all_matches:
-                if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset:
-                    continue
+                if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset: continue
 
                 p1, p2, p3, p4 = m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']
                 s1, s2 = m['score_t1'], m['score_t2']
                 league = m['league']
                 
-                # 1. Overall Math (Only if resetting ALL)
                 if target_reset == "ALL (Full System Reset)":
                     ro1, ro2, ro3, ro4 = p_map[p1]['r'], p_map[p2]['r'], p_map[p3]['r'], p_map[p4]['r']
                     do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
-                    
                     win = s1 > s2
                     for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
                         p_map[pid]['r'] += delta
@@ -580,56 +558,36 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: p_map[pid]['w'] += 1
                         else: p_map[pid]['l'] += 1
 
-                # 2. Island Math
-                # FIX: INHERIT FROM CURRENT OVERALL
                 def get_i_r(pid, lg):
-                    if (pid, lg) not in island_map:
-                        # Inherit current overall rating (from p_map)
-                        start_r = p_map[pid]['r']
-                        island_map[(pid, lg)] = {'r': start_r, 'w':0, 'l':0, 'mp':0}
+                    if (pid, lg) not in island_map: island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
                     return island_map[(pid, lg)]['r']
 
                 ri1, ri2, ri3, ri4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
                 di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
-
                 win = s1 > s2
                 for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
                     k = (pid, league)
-                    if k not in island_map: 
-                        # Should have been inited by get_i_r, but just in case
-                        start_r = p_map[pid]['r']
-                        island_map[k] = {'r': start_r, 'w':0, 'l':0, 'mp':0}
-                        
+                    if k not in island_map: island_map[k] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
                     island_map[k]['r'] += delta
                     island_map[k]['mp'] += 1
                     if is_win: island_map[k]['w'] += 1
                     else: island_map[k]['l'] += 1
 
-            # D. SAVE RESULTS
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
-                    supabase.table("players").update({
-                        "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
-                    }).eq("id", pid).execute()
+                    supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
             
-            if target_reset != "ALL (Full System Reset)":
-                supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
-            else:
-                supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
+            if target_reset != "ALL (Full System Reset)": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
+            else: supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
             
             new_islands = []
             for (pid, lg), stats in island_map.items():
                 if target_reset == "ALL (Full System Reset)" or lg == target_reset:
-                    new_islands.append({
-                        "club_id": CLUB_ID, "player_id": pid, "league_name": lg,
-                        "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
-                    })
+                    new_islands.append({"club_id": CLUB_ID, "player_id": pid, "league_name": lg, "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']})
             
             if new_islands:
                 chunk_size = 1000
                 for i in range(0, len(new_islands), chunk_size):
                     supabase.table("league_ratings").insert(new_islands[i:i+chunk_size]).execute()
 
-            st.success(f"✅ Successfully replayed {len(all_matches)} matches!")
-            time.sleep(2)
-            st.rerun()
+            st.success(f"✅ Replayed {len(all_matches)} matches!"); time.sleep(2); st.rerun()
