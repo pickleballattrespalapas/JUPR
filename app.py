@@ -127,7 +127,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         if not df_l.empty:
             match = df_l[(df_l['player_id'] == pid) & (df_l['league_name'] == league)]
             if not match.empty: return float(match.iloc[0]['rating'])
-        # Inherit from Overall
         if pid in overall_updates: return overall_updates[pid]['r']
         overall = df_p[df_p['id'] == pid]
         if not overall.empty: return float(overall.iloc[0]['rating'])
@@ -145,15 +144,11 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         
         s1, s2 = m['s1'], m['s2']
         league = m['league']
-        
-        # Check if match is flagged as 'PopUp' in its type or metadata
         is_popup = m.get('match_type') == 'PopUp' or m.get('is_popup', False)
         
-        # --- OVERALL MATH (Always Runs) ---
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
         do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
         
-        # --- ISLAND MATH (Only if NOT Pop-Up) ---
         di1, di2 = 0, 0
         if not is_popup:
             ri1, ri2, ri3, ri4 = get_island_r(p1, league), get_island_r(p2, league), get_island_r(p3, league), get_island_r(p4, league)
@@ -170,7 +165,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         participants = [(p1, do1, di1, win), (p2, do1, di1, win), (p3, do2, di2, not win), (p4, do2, di2, not win)]
         
         for pid, d_overall, d_island, won in participants:
-            # 1. Update Overall
             if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
                 overall_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
@@ -179,7 +173,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             if won: overall_updates[pid]['w'] += 1
             else: overall_updates[pid]['l'] += 1
             
-            # 2. Update Island
             if not is_popup:
                 key = (pid, league)
                 if key not in island_updates:
@@ -246,7 +239,6 @@ if sel == "🏆 Leaderboards":
     # 1. League Selector
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
-        # Exclude known PopUp names if any remain
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
         available_leagues += unique_l
         
@@ -268,6 +260,15 @@ if sel == "🏆 Leaderboards":
     else:
         st.query_params.clear()
     
+    with st.expander("📊 How Ratings Work"):
+        st.markdown("""
+        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
+        * **The Swing:**
+            * **Big Upset:** ~ +0.075 JUPR
+            * **Even Match (11-9):** ~ +0.008 JUPR
+        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
+        """)
+
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -320,13 +321,14 @@ elif sel == "🔍 Player Search":
                     player_won = (is_t1 and t1_won) or (not is_t1 and not t1_won)
                     delta = r['elo_delta'] / 400
                     if not player_won: delta = -delta
-                    return ("✅ Win" if player_won else "❌ Loss", delta)
+                    return ("✅ Win" if player_won else "❌ Loss", delta, r['elo_delta'])
 
                 stats = h.apply(get_stats, axis=1, result_type='expand')
                 h['Result'] = stats[0]
                 h['Δ JUPR'] = stats[1].map('{:+.3f}'.format)
+                h['Raw Pts'] = stats[2]
                 
-                st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
+                st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'Raw Pts', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
             else:
                 st.info("No matches found.")
 
@@ -366,7 +368,8 @@ elif sel == "🏟️ Live Court Manager":
                     s2 = c3.number_input("S2", 0, key=f"lc_{c['c']}_{i}_2")
                     c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
                     all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':st.session_state.get('active_league', 'Unknown'), 'type':f"C{c['c']} RR", 'match_type': 'Live Match', 'is_popup': False})
-            if st.form_submit_button("Submit"):
+            
+            if st.form_submit_button("Submit Scores"):
                 valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
                 if valid:
                     process_matches(valid, name_to_id, df_players, df_leagues)
@@ -411,7 +414,6 @@ elif sel == "🔄 Pop-Up RR":
                     s1 = c2.number_input("S1", 0, key=f"rr_{c['c']}_{i}_1")
                     s2 = c3.number_input("S2", 0, key=f"rr_{c['c']}_{i}_2")
                     c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                    # KEY FIX: match_type = 'PopUp'. This ensures recalculations know to skip Islands.
                     all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(date_rr), 'league':st.session_state.get('rr_league', 'PopUp'), 'type':f"C{c['c']} RR", 'match_type': 'PopUp', 'is_popup': True})
             if st.form_submit_button("Submit"):
                 valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
@@ -454,8 +456,11 @@ elif sel == "👥 Players":
 elif sel == "📝 Match Log":
     st.header("📝 Match Log")
     st.subheader("Recent Matches")
-    edit_df = df_matches.head(50)[['id', 'date', 'league', 'match_type', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
-    st.dataframe(edit_df, use_container_width=True)
+    
+    # X-RAY VIEW: Added 'elo_delta' (Raw Pts) to view
+    edit_df = df_matches.head(100)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    edit_df['Raw Pts'] = edit_df['elo_delta'].map('{:.1f}'.format)
+    st.dataframe(edit_df.drop(columns=['elo_delta']), use_container_width=True)
     
     st.divider()
     m_id = st.number_input("Match ID to Delete", min_value=0, step=1)
@@ -466,21 +471,24 @@ elif sel == "📝 Match Log":
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
+    # --- DIAGNOSTIC: Zero Point Detector ---
+    zero_pts = df_matches[df_matches['elo_delta'] == 0].shape[0]
+    if zero_pts > 0:
+        st.error(f"⚠️ Warning: Found {zero_pts} matches with 0 point impact. These matches did not affect ratings.")
+    else:
+        st.success("✅ System Health: All matches have valid point values.")
+    
+    st.divider()
+    
     # --- LEAGUE MANAGER (CONVERT POPUPS) ---
     st.subheader("🛠️ League Manager")
-    st.markdown("Use this to hide accidental leagues (convert them to PopUps).")
-    
-    # Identify unique leagues that are currently Islands
     if not df_leagues.empty:
         active_islands = sorted(df_leagues['league_name'].unique().tolist())
         to_hide = st.selectbox("Select League to Convert to 'PopUp' (Hides from Leaderboard)", [""] + active_islands)
         
         if to_hide and st.button(f"⚠️ Convert '{to_hide}' to PopUp"):
-            # 1. Update Matches to match_type='PopUp'
             supabase.table("matches").update({"match_type": "PopUp"}).eq("league", to_hide).execute()
-            # 2. Delete the Island Stats
             supabase.table("league_ratings").delete().eq("league_name", to_hide).execute()
-            
             st.success(f"Converted '{to_hide}'! It will now vanish from the Leaderboard.")
             time.sleep(2)
             st.rerun()
@@ -505,7 +513,6 @@ elif sel == "⚙️ Admin Tools":
                 p1, p2, p3, p4 = m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']
                 s1, s2 = m['score_t1'], m['score_t2']
                 league = m['league']
-                # CHECK DB MATCH TYPE
                 is_popup = m.get('match_type') == 'PopUp'
                 
                 if target_reset == "ALL (Full System Reset)":
@@ -518,7 +525,6 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: p_map[pid]['w'] += 1
                         else: p_map[pid]['l'] += 1
 
-                # SKIP ISLAND CALC FOR POPUPS
                 if not is_popup:
                     def get_i_r(pid, lg):
                         if (pid, lg) not in island_map: 
