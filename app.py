@@ -258,15 +258,36 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 Leaderboards")
     
-    # 1. League Selector
+    # 1. Build List of Available Leagues
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
         unique_l = sorted(df_leagues['league_name'].unique().tolist())
         available_leagues += unique_l
         
-    target_league = st.selectbox("Select View", available_leagues)
+    # 2. Check URL for "?league=..."
+    # If the URL has a league that exists in our list, we set that as the default
+    default_index = 0
+    query_params = st.query_params
+    if "league" in query_params:
+        url_league = query_params["league"]
+        if url_league in available_leagues:
+            default_index = available_leagues.index(url_league)
+            
+    # 3. Render Dropdown
+    target_league = st.selectbox("Select View", available_leagues, index=default_index)
     
-    # 2. Filter Data
+    # 4. Update URL dynamically
+    # This ensures that if they change the dropdown, the URL updates (making it shareable)
+    if target_league != "OVERALL":
+        st.query_params["league"] = target_league
+    else:
+        st.query_params.clear() # Clear URL for Overall view
+    
+    # 5. Display "Shareable Link" helper
+    if target_league != "OVERALL":
+        st.caption(f"🔗 **Direct Link:** `[Your App URL]/?league={target_league.replace(' ', '%20')}`")
+    
+    # 6. Filter & Display Data
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -277,7 +298,7 @@ if sel == "🏆 Leaderboards":
             # Merge name back in
             display_df['name'] = display_df['player_id'].map(id_to_name)
     
-    # 3. Render
+    # 7. Render Table
     if not display_df.empty and 'rating' in display_df.columns:
         display_df['JUPR'] = (display_df['rating']/400).map('{:,.3f}'.format)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
