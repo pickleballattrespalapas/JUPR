@@ -13,54 +13,68 @@ if 'admin_logged_in' not in st.session_state:
 # --- CONFIGURATION ---
 K_FACTOR = 32
 DEFAULT_START_RATING = 3.00
-SHEET_NAME = "Tres Palapas DB"  # Make sure this matches your Google Sheet name exactly
+SHEET_NAME = "Tres Palapas DB"
 
-# --- GOOGLE SHEETS CONNECTION ---
+# --- OPTIMIZED CONNECTION (CACHE RESOURCE) ---
+@st.cache_resource
 def get_db_connection():
     """Connects to Google Sheets using Streamlit Secrets"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    # We load credentials from Streamlit secrets
     creds_dict = dict(st.secrets["gcp_service_account"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    
     try:
-        sheet = client.open(SHEET_NAME)
-        return sheet
+        return client.open(SHEET_NAME)
     except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"❌ Could not find Google Sheet named '{SHEET_NAME}'. Did you share it with the service account email?")
+        st.error(f"❌ Could not find Google Sheet named '{SHEET_NAME}'.")
         st.stop()
 
-# --- DATA LOADERS (CORRECTED) ---
-def load_data():
+# --- OPTIMIZED DATA LOADER (CACHE DATA) ---
+@st.cache_data(ttl=10)
+def fetch_all_data_snapshots():
     sh = get_db_connection()
     try:
-        # Fetch ALL worksheets in one meta-call if possible, 
-        # but at least fetch all data from each sheet in one go.
-        players_ws = sh.worksheet("Players")
-        matches_ws = sh.worksheet("Matches")
-        ratings_ws = sh.worksheet("player_ratings")
-        
-        # get_all_records() is one API call per sheet.
-        df_players = pd.DataFrame(players_ws.get_all_records())
-        df_ratings = pd.DataFrame(ratings_ws.get_all_records())
-        df_matches = pd.DataFrame(matches_ws.get_all_records())
-
-        # Safety checks for empty dataframes
-        if df_ratings.empty:
-            df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
-        
-        # Numeric cleanup
-        for c in ['score_t1', 'score_t2']:
-            if c in df_matches.columns:
-                df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
-            
-        return df_players, df_ratings, df_matches, players_ws, matches_ws, ratings_ws
+        p_data = sh.worksheet("Players").get_all_records()
+        m_data = sh.worksheet("Matches").get_all_records()
+        r_data = sh.worksheet("player_ratings").get_all_records()
+        return p_data, m_data, r_data
     except Exception as e:
-        st.error(f"Database Quota Error: {e}. Please wait 60 seconds and refresh.")
-        st.stop()
+        return None, None, None
 
+def load_data():
+    sh = get_db_connection()
+    
+    # 1. Get Worksheets objects (Fast)
+    try:
+        ws_players = sh.worksheet("Players")
+        ws_matches = sh.worksheet("Matches")
+        ws_ratings = sh.worksheet("player_ratings")
+    except Exception as e:
+        st.error(f"Sheet Error: {e}")
+        st.stop()
+        
+    # 2. Get Data (Cached)
+    p_data, m_data, r_data = fetch_all_data_snapshots()
+    
+    if p_data is None:
+        st.warning("⚠️ High Traffic. Waiting 5s...")
+        time.sleep(5)
+        st.rerun()
+
+    # 3. Build DataFrames
+    df_players = pd.DataFrame(p_data)
+    df_matches = pd.DataFrame(m_data)
+    df_ratings = pd.DataFrame(r_data)
+
+    if df_ratings.empty:
+        df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
+    
+    # Numeric cleanup
+    for c in ['score_t1', 'score_t2']:
+        if c in df_matches.columns:
+            df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
+            
+    return df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings
 
 # --- MATH ENGINES ---
 def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
@@ -87,37 +101,25 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
         
     return final_delta_t1, final_delta_t2
 
-# --- ISLAND / LADDER LOGIC START ---
+# --- ISLAND / LADDER LOGIC ---
 
 def calculate_ladder_elo(rating_a, rating_b, actual_score_a):
-    """Standard 1v1 Elo for Ladder Matches."""
     expected_a = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
     new_rating_a = rating_a + K_FACTOR * (actual_score_a - expected_a)
     return round(new_rating_a)
 
 def get_effective_rating(all_ratings, player_name, ladder_id):
-    """
-    Finds a player's rating for a specific island. 
-    If not found, it pulls their 'starting_elo' from the master registry.
-    """
-    # 1. Search the Island Ratings first
     for r in all_ratings:
         if str(r['name']).strip() == str(player_name).strip() and str(r['ladder_id']).strip() == str(ladder_id).strip():
             return float(r['rating'])
 
-    # 2. SOFT SEEDING: Look in the master df_players if Island rating is missing
-    # This uses the 173 players from your Tres Palapas DB
     master_player = df_players[df_players['name'].str.strip() == str(player_name).strip()]
-    
     if not master_player.empty:
-        # Pull the starting_elo we restored earlier
         return float(master_player.iloc[0]['starting_elo'])
 
-    # 3. FINAL FALLBACK: Only if player isn't in the registry at all
-    return 1400.0 # Standard 3.5 JUPR starting point
+    return 1400.0
 
-def update_local_memory(all_rows, name, ladder, new_rating):
-    """Updates the list of dictionaries in memory."""
+def update_local_memory_global(all_rows, name, ladder, new_rating):
     found = False
     for row in all_rows:
         if row['name'] == name and row['ladder_id'] == ladder:
@@ -128,57 +130,39 @@ def update_local_memory(all_rows, name, ladder, new_rating):
         all_rows.append({'name': name, 'ladder_id': ladder, 'rating': new_rating})
 
 def process_batch_upload(dataframe, ladder_name_from_ui=None):
-    """
-    Takes uploaded CSV, runs Island/Soft Seeding logic, and updates Google Sheet.
-    """
-    # 1. Use the EXISTING Streamlit connection (Secure)
     sh = get_db_connection()
     try:
         ratings_sheet = sh.worksheet("player_ratings")
     except gspread.exceptions.WorksheetNotFound:
-        st.error("❌ Tab 'player_ratings' not found in Google Sheets. Please create it!")
-        return []
+        return ["❌ Tab 'player_ratings' not found."]
     
-    # 2. Load current state
     all_rows = ratings_sheet.get_all_records()
     results_log = []
 
-    # 3. Process Rows
     for index, row in dataframe.iterrows():
-        # Handle case-insensitive columns
         winner = row.get('winner') or row.get('Winner')
         loser = row.get('loser') or row.get('Loser')
-        
-        # Determine Ladder Name
         csv_ladder = row.get('ladder') or row.get('Ladder')
         ladder_id = csv_ladder if csv_ladder else ladder_name_from_ui
         
-        if not winner or not loser or not ladder_id:
-            continue # Skip invalid rows
+        if not winner or not loser or not ladder_id: continue 
 
-        # --- UPDATE SPECIFIC LADDER ---
         r_win = get_effective_rating(all_rows, winner, ladder_id)
         r_lose = get_effective_rating(all_rows, loser, ladder_id)
-        
         new_win = calculate_ladder_elo(r_win, r_lose, 1)
         new_lose = calculate_ladder_elo(r_lose, r_win, 0)
-        
-        update_local_memory(all_rows, winner, ladder_id, new_win)
-        update_local_memory(all_rows, loser, ladder_id, new_lose)
+        update_local_memory_global(all_rows, winner, ladder_id, new_win)
+        update_local_memory_global(all_rows, loser, ladder_id, new_lose)
 
-        # --- UPDATE OVERALL LADDER ---
         r_ov_win = get_effective_rating(all_rows, winner, 'OVERALL')
         r_ov_lose = get_effective_rating(all_rows, loser, 'OVERALL')
-        
         new_ov_win = calculate_ladder_elo(r_ov_win, r_ov_lose, 1)
         new_ov_lose = calculate_ladder_elo(r_ov_lose, r_ov_win, 0)
-        
-        update_local_memory(all_rows, winner, 'OVERALL', new_ov_win)
-        update_local_memory(all_rows, loser, 'OVERALL', new_ov_lose)
+        update_local_memory_global(all_rows, winner, 'OVERALL', new_ov_win)
+        update_local_memory_global(all_rows, loser, 'OVERALL', new_ov_lose)
         
         results_log.append(f"Processed: {winner} def. {loser} ({ladder_id})")
 
-    # 4. Save back to Google Sheets (Bulk Update)
     if all_rows:
         headers = list(all_rows[0].keys())
         data_to_write = [headers] + [list(r.values()) for r in all_rows]
@@ -187,13 +171,11 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
         
     return results_log
 
-# --- HISTORY REPLAY LOGIC ---
 def replay_league_history(target_league):
     sh = get_db_connection()
     ratings_ws = sh.worksheet("player_ratings")
     matches_ws = sh.worksheet("Matches")
     
-    # FETCH ONCE
     all_rows = ratings_ws.get_all_records()
     all_matches = matches_ws.get_all_records()
     df_history = pd.DataFrame(all_matches)
@@ -203,21 +185,15 @@ def replay_league_history(target_league):
         return f"❌ No matches found for '{target_league}'."
 
     count = 0
-    # Process everything in the 'all_rows' list (memory), NOT the API
     for _, row in league_matches.iterrows():
         s1, s2 = row.get('score_t1', 0), row.get('score_t2', 0)
         p1, p2 = row.get('t1_p1'), row.get('t1_p2')
         p3, p4 = row.get('t2_p1'), row.get('t2_p2')
         
-        # Determine Winners/Losers
-        if s1 > s2:
-            win_team, lose_team = [p1, p2], [p3, p4]
-        else:
-            win_team, lose_team = [p3, p4], [p1, p2]
+        if s1 > s2: win_team, lose_team = [p1, p2], [p3, p4]
+        else: win_team, lose_team = [p3, p4], [p1, p2]
 
-        # Update Memory for both League and Overall
         for context in [target_league, "OVERALL"]:
-            # Helper logic done in memory
             w_ratings = [get_effective_rating(all_rows, p, context) for p in win_team if p]
             l_ratings = [get_effective_rating(all_rows, p, context) for p in lose_team if p]
             
@@ -228,79 +204,74 @@ def replay_league_history(target_league):
                 delta = K_FACTOR * (1 - exp)
                 
                 for p in win_team:
-                    if p: update_local_memory(all_rows, p, context, get_effective_rating(all_rows, p, context) + delta)
+                    if p: update_local_memory_global(all_rows, p, context, get_effective_rating(all_rows, p, context) + delta)
                 for p in lose_team:
-                    if p: update_local_memory(all_rows, p, context, get_effective_rating(all_rows, p, context) - delta)
+                    if p: update_local_memory_global(all_rows, p, context, get_effective_rating(all_rows, p, context) - delta)
         count += 1
 
-    # UPLOAD ONCE
     headers = list(all_rows[0].keys())
     data_to_write = [headers] + [list(r.values()) for r in all_rows]
     ratings_ws.clear()
     ratings_ws.update(data_to_write)
     
-    return f"✅ Success! Replayed {count} matches without hitting API limits."
+    return f"✅ Success! Replayed {count} matches."
 
-# --- DOUBLES ISLAND LOGIC ---
-def process_live_doubles_match(match_data, ladder_name):
-    """
-    Handles a single 2v2 match. Updates the Specific Ladder and OVERALL ratings.
-    """
+# --- BATCH MATCH PROCESSOR (THE FIX) ---
+def submit_batch_of_matches(match_list, ladder_name_override=None):
     sh = get_db_connection()
-    ratings_sheet = sh.worksheet("player_ratings")
-    all_rows = ratings_sheet.get_all_records()
-
-    t1 = [match_data['t1_p1'], match_data['t1_p2']]
-    t2 = [match_data['t2_p1'], match_data['t2_p2']]
-    s1, s2 = match_data['score_t1'], match_data['score_t2']
+    r_ws = sh.worksheet("player_ratings")
+    all_rows = r_ws.get_all_records()
     
-    if s1 > s2:
-        winners, losers = t1, t2
-    else:
-        winners, losers = t2, t1
+    def update_local(name, context_id, new_r):
+        found = False
+        for row in all_rows:
+            if str(row['name']) == str(name) and str(row['ladder_id']) == str(context_id):
+                row['rating'] = new_r
+                found = True
+                break
+        if not found:
+            all_rows.append({'name': name, 'ladder_id': context_id, 'rating': new_r})
 
-    def update_context(context_id):
-        w_ratings = [get_effective_rating(all_rows, p, context_id) for p in winners if p]
-        l_ratings = [get_effective_rating(all_rows, p, context_id) for p in losers if p]
+    for m in match_list:
+        t1 = [m['t1_p1'], m['t1_p2']]
+        t2 = [m['t2_p1'], m['t2_p2']]
+        s1, s2 = m['score_t1'], m['score_t2']
         
-        if len(w_ratings) > 0 and len(l_ratings) > 0:
-            w_avg = sum(w_ratings) / len(w_ratings)
-            l_avg = sum(l_ratings) / len(l_ratings)
-            expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
-            delta = K_FACTOR * (1 - expected_win)
+        if s1 > s2: winners, losers = t1, t2
+        else: winners, losers = t2, t1
             
-            for p in winners:
-                if p: update_local_memory(all_rows, p, context_id, round(get_effective_rating(all_rows, p, context_id) + delta))
-            for p in losers:
-                if p: update_local_memory(all_rows, p, context_id, round(get_effective_rating(all_rows, p, context_id) - delta))
+        contexts = ["OVERALL"]
+        if ladder_name_override and ladder_name_override != "OVERALL":
+            contexts.append(ladder_name_override)
+        elif m.get('league') and m['league'] != "PopUp_Event":
+             contexts.append(m['league'])
+             
+        for ctx in contexts:
+            w_ratings = [get_effective_rating(all_rows, p, ctx) for p in winners if p]
+            l_ratings = [get_effective_rating(all_rows, p, ctx) for p in losers if p]
+            
+            if w_ratings and l_ratings:
+                w_avg = sum(w_ratings) / len(w_ratings)
+                l_avg = sum(l_ratings) / len(l_ratings)
+                expected_win = 1 / (1 + 10 ** ((l_avg - w_avg) / 400))
+                delta = K_FACTOR * (1 - expected_win)
+                
+                for p in winners:
+                    if p: update_local(p, ctx, round(get_effective_rating(all_rows, p, ctx) + delta))
+                for p in losers:
+                    if p: update_local(p, ctx, round(get_effective_rating(all_rows, p, ctx) - delta))
 
-    # Update the Specific League
-    if ladder_name and ladder_name != "OVERALL":
-        update_context(ladder_name)
-    
-    # Update OVERALL
-    update_context("OVERALL")
-
-    # Save to Cloud
     if all_rows:
         headers = list(all_rows[0].keys())
         data_to_write = [headers] + [list(r.values()) for r in all_rows]
-        ratings_sheet.clear()
-        ratings_sheet.update(data_to_write)
+        r_ws.clear()
+        r_ws.update(data_to_write)
 
-def process_overall_only_match(match_data):
-    """
-    Directs Pop-Up Round Robin matches to update ONLY the OVERALL leaderboard.
-    """
-    process_live_doubles_match(match_data, ladder_name="OVERALL")
-
-# --- HELPER: SCHEDULE GENERATOR ---
 def get_match_schedule(format_type, players):
     if len(players) < int(format_type.split('-')[0]):
         return []
 
     if format_type == "12-Player":
-        # Exact pairings from your '12 person RR Chart.csv'
         raw_schedule = [
             [([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])],   # Round 1
             [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])],  # Round 2
@@ -324,7 +295,6 @@ def get_match_schedule(format_type, players):
                 })
         return matches
     
-    # Generic logic for 4, 5, 6, 8 player
     p = players
     if format_type == "4-Player":
         matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
@@ -335,43 +305,33 @@ def get_match_schedule(format_type, players):
     elif format_type == "8-Player":
         matches = [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'}, {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'}, {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'}, {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}]
     return matches
-# --- ISLAND / LADDER LOGIC END ---
 
-# --- BATCH CALCULATOR (IN MEMORY) ---
 def recalculate_all_stats(df_players, df_matches):
-    """Replays history in memory and returns updated DataFrames"""
-    
-    # Reset Stats
     df_players['elo'] = df_players['starting_elo']
     df_players['wins'] = 0
     df_players['losses'] = 0
     df_players['matches_played'] = 0
     
-    # Sort matches chronologically
     if not df_matches.empty:
         df_matches['date'] = pd.to_datetime(df_matches['date'])
         df_matches = df_matches.sort_values(by='date')
         
-        # Replay
         for idx, row in df_matches.iterrows():
             p1, p2 = row['t1_p1'], row['t1_p2']
             p3, p4 = row['t2_p1'], row['t2_p2']
             s1, s2 = row['score_t1'], row['score_t2']
             
-            # Lookup Ratings
             def get_elo(p_name):
                 match = df_players[df_players['name'] == p_name]
                 if match.empty: return DEFAULT_START_RATING * 400
                 return match.iloc[0]['elo']
             
             r1, r2, r3, r4 = get_elo(p1), get_elo(p2), get_elo(p3), get_elo(p4)
-            
             dt1, dt2 = calculate_hybrid_elo((r1+r2)/2, (r3+r4)/2, s1, s2)
             
-            # Update Memory
             def update_p(p_name, delta, win):
                 mask = df_players['name'] == p_name
-                if not mask.any(): return # Skip if player deleted
+                if not mask.any(): return 
                 df_players.loc[mask, 'elo'] += delta
                 df_players.loc[mask, 'matches_played'] += 1
                 if win: df_players.loc[mask, 'wins'] += 1
@@ -383,7 +343,6 @@ def recalculate_all_stats(df_players, df_matches):
             update_p(p3, dt2, not win)
             update_p(p4, dt2, not win)
             
-            # Update Match Record
             df_matches.at[idx, 'elo_change_t1'] = dt1
             df_matches.at[idx, 'elo_change_t2'] = dt2
             
@@ -393,7 +352,6 @@ def recalculate_all_stats(df_players, df_matches):
 st.set_page_config(page_title="Tres Palapas Pickleball", layout="wide")
 st.title("🌵 Tres Palapas Pickleball Ratings and Ladder Results")
 
-# --- CUSTOM CSS FOR FOOTER ---
 st.markdown("""
 <style>
 .footer {position: fixed; left: 0; bottom: 0; width: 100%; background-color: white; color: #555; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #eee;}
@@ -401,42 +359,23 @@ st.markdown("""
 <div class="footer"><p>This data, program logic, and the "JUPR" Rating System are the intellectual property of <b>Joe Baumann</b>.</p></div>
 """, unsafe_allow_html=True)
 
-# --- LOAD DATA ---
-# We now unpack 6 items safely (Added df_players at the start)
 df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
 
 # --- LOGIN SYSTEM ---
 if 'admin_logged_in' not in st.session_state: st.session_state.admin_logged_in = False
 
-def check_password():
-    if st.session_state.password == st.secrets["admin_password"]:
-        st.session_state.admin_logged_in = True
-    else:
-        st.error("Incorrect Password")
-
 # --- TABS DEFINITION ---
-# Public tabs: Leaderboards, Player Search. Admin tabs: 2-5.
-tab_titles = [
-    "🏆 Leaderboards", 
-    "🔍 Player Search", 
-    "🏟️ Live Court Manager (Admin)", 
-    "🔄 Pop-Up RR (Admin)", 
-    "👥 Players (Admin)", 
-    "📝 Match Log (Admin)"
-]
+tab_titles = ["🏆 Leaderboards", "🔍 Player Search", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
 tab1, tab_search, tab2, tab3, tab4, tab5 = st.tabs(tab_titles)
 
-# --- TAB 1: LEADERBOARDS (PUBLIC) ---
 with tab1:
     with st.expander("ℹ️ How the Individual League Rating System Works"):
         st.markdown("""
         ### Why do I have multiple ratings?
         We use an Individual League Rating System to ensure fair play across different groups while maintaining a global skill level.
-        
-        * **Specific Ladders:** Your rating here is unique to this specific group. This protects the ladder's integrity; matches played elsewhere won't affect your standing here.
-        * **OVERALL Rating (The Global Map):** Every match you play updates your Overall Rating. When you join a new league, this is the rating used for your initial seeding.
+        * **Specific Ladders:** Your rating here is unique to this specific group.
+        * **OVERALL Rating:** Every match you play updates your Overall Rating.
         """)
-        
     st.divider()
     col_a, col_b = st.columns([1, 3])
     
@@ -447,24 +386,19 @@ with tab1:
     
     query_params = st.query_params
     default_index = 0
-    if "league" in query_params:
-        target_from_link = query_params["league"]
-        if target_from_link in available_ladders:
-            default_index = available_ladders.index(target_from_link)
+    if "league" in query_params and query_params["league"] in available_ladders:
+        default_index = available_ladders.index(query_params["league"])
 
     with col_a:
-        st.subheader("Filter")
         selected_ladder = st.selectbox("Select Ladder", available_ladders, index=default_index)
-        if selected_ladder != "OVERALL":
-            st.query_params["league"] = selected_ladder
-        else:
+        if selected_ladder != "OVERALL": st.query_params["league"] = selected_ladder
+        else: 
             if "league" in st.query_params: del st.query_params["league"]
 
     with col_b:
         st.subheader(f"Standings: {selected_ladder}")
         if selected_ladder != "OVERALL":
-            base_url = "https://8lkemld946rmtwwptk2gcs.streamlit.app/" 
-            share_link = f"{base_url}?league={selected_ladder.replace(' ', '%20')}"
+            share_link = f"https://jupr.streamlit.app/?league={selected_ladder.replace(' ', '%20')}"
             st.markdown(f"**🔗 Share this leaderboard:**")
             st.code(share_link, language="text")
     
@@ -477,14 +411,10 @@ with tab1:
             s1, s2 = row.get('score_t1', 0), row.get('score_t2', 0)
             p1, p2, p3, p4 = row.get('t1_p1'), row.get('t1_p2'), row.get('t2_p1'), row.get('t2_p2')
             wins, losers = ([p1, p2], [p3, p4]) if s1 > s2 else ([p3, p4], [p1, p2])
-            for p in wins:
-                if p:
-                    if p not in stats: stats[p] = {'w': 0, 'l': 0}
-                    stats[p]['w'] += 1
-            for p in losers:
-                if p:
-                    if p not in stats: stats[p] = {'w': 0, 'l': 0}
-                    stats[p]['l'] += 1
+            for p in wins: 
+                if p: stats[p] = stats.get(p, {'w':0, 'l':0}); stats[p]['w'] += 1
+            for p in losers: 
+                if p: stats[p] = stats.get(p, {'w':0, 'l':0}); stats[p]['l'] += 1
 
         ladder_ratings['wins'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'w':0})['w'])
         ladder_ratings['losses'] = ladder_ratings['name'].map(lambda x: stats.get(x, {'l':0})['l'])
@@ -494,11 +424,8 @@ with tab1:
         leaderboard = ladder_ratings[ladder_ratings['matches'] > 0].sort_values(by='rating', ascending=False)
         st.dataframe(leaderboard[['name', 'JUPR', 'matches', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
 
-# --- TAB: PLAYER SEARCH (PUBLIC) ---
 with tab_search:
     st.header("🔍 Player Profile Search")
-    
-    # Improved Search: Starts blank
     all_player_names = [""] + sorted(df_players['name'].unique().tolist())
     selected_p = st.selectbox("Type to Search for a Player", all_player_names, index=0)
     
@@ -512,57 +439,42 @@ with tab_search:
                 cols[i].metric(label=row['ladder_id'], value=row['JUPR_val'])
         
         st.divider()
-        
-        st.subheader("Match History & Rating Changes")
-        p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | 
-                               (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
+        st.subheader("Match History")
+        p_matches = df_matches[(df_matches['t1_p1'] == selected_p) | (df_matches['t1_p2'] == selected_p) | (df_matches['t2_p1'] == selected_p) | (df_matches['t2_p2'] == selected_p)].copy()
         
         if not p_matches.empty:
             def get_match_summary(row):
                 is_t1 = (row['t1_p1'] == selected_p or row['t1_p2'] == selected_p)
                 score_us, score_them = (row['score_t1'], row['score_t2']) if is_t1 else (row['score_t2'], row['score_t1'])
                 raw_delta = row.get('elo_change_t1' if is_t1 else 'elo_change_t2', 0)
-                jupr_delta = raw_delta / 400
                 res = "✅ Win" if score_us > score_them else "❌ Loss"
-                return pd.Series([res, f"{score_us}-{score_them}", round(jupr_delta, 3)])
+                return pd.Series([res, f"{score_us}-{score_them}", round(raw_delta/400, 3)])
 
             p_matches[['Result', 'Score', 'Δ JUPR']] = p_matches.apply(get_match_summary, axis=1)
-            
-            # Display Table (Sorting newest first)
             p_matches['date'] = pd.to_datetime(p_matches['date'])
-            st.dataframe(
-                p_matches.sort_values('date', ascending=False)[['date', 'league', 'Result', 'Score', 'Δ JUPR', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], 
-                use_container_width=True, hide_index=True
-            )
+            st.dataframe(p_matches.sort_values('date', ascending=False)[['date', 'league', 'Result', 'Score', 'Δ JUPR', 't1_p1', 't1_p2', 't2_p1', 't2_p2']], use_container_width=True, hide_index=True)
         else:
-            st.info("No match history found for this player.")
+            st.info("No match history found.")
     else:
-        st.info("Please search and select a player to view their profile.")
+        st.info("Select a player to view stats.")
 
-# --- ADMIN PROTECTION ---
 if not st.session_state.admin_logged_in:
-    # If not logged in, show the login form in the restricted tabs
     for admin_tab in [tab2, tab3, tab4, tab5]:
         with admin_tab:
             st.warning("🔒 Admin Access Required")
             with st.form(key=f"login_gate_{admin_tab}"):
                 pwd = st.text_input("Password", type="password")
-                if st.form_submit_button("Unlock All Admin Tabs"):
+                if st.form_submit_button("Unlock"):
                     if pwd == st.secrets["admin_password"]:
                         st.session_state.admin_logged_in = True
-                        st.success("Access Granted! Tabs Unlocked.")
                         st.rerun()
                     else:
                         st.error("Incorrect Password")
 else:
-    # --- EVERYTHING BELOW THIS IS ONLY VISIBLE IF LOGGED IN ---
-    
-    # 1. Sidebar Logout
     if st.sidebar.button("🔒 Logout Admin"):
         st.session_state.admin_logged_in = False
         st.rerun()
 
-    # 2. TAB 2: LIVE COURT MANAGER
     with tab2:
         st.header("Live Court Manager") 
         with st.expander("Setup", expanded=True):
@@ -574,10 +486,8 @@ else:
                 court_data = []
                 for i in range(num_courts):
                     c1, c2 = st.columns([1,4])
-                    with c1: 
-                        t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
-                    with c2: 
-                        n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
+                    with c1: t = st.selectbox(f"Type {i+1}", ["4-Player","5-Player","6-Player","8-Player", "12-Player"], key=f"t{i}")
+                    with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
                     court_data.append({'id':i+1, 'type':t, 'names':n})
                 
                 if st.form_submit_button("Generate"):
@@ -599,32 +509,31 @@ else:
                         with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
                 
                 if st.form_submit_button("Submit & Save to Cloud"):
-                    new_matches = []
+                    matches_to_process = []
                     for c in st.session_state.schedule:
                         for i, m in enumerate(c['matches']):
-                            s1, s2 = st.session_state.get(f"s_{c['court']}_{i}_1", 0), st.session_state.get(f"s_{c['court']}_{i}_2", 0)
+                            s1 = st.session_state.get(f"s_{c['court']}_{i}_1", 0)
+                            s2 = st.session_state.get(f"s_{c['court']}_{i}_2", 0)
                             if s1 == 0 and s2 == 0: continue
                             
-                            match_data = {
-                                'id': len(df_matches) + len(new_matches) + 1, 
+                            matches_to_process.append({
+                                'id': len(df_matches) + len(matches_to_process) + 1, 
                                 'date': str(event_date), 
                                 'league': league_name, 
                                 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
                                 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
                                 'score_t1': s1, 'score_t2': s2, 
                                 'match_type': f"Court {c['court']} RR"
-                            }
-                            process_live_doubles_match(match_data, ladder_name=league_name)
-                            new_matches.append(match_data)
+                            })
                     
-                    if new_matches:
-                        new_df = pd.DataFrame(new_matches)
+                    if matches_to_process:
+                        submit_batch_of_matches(matches_to_process, ladder_name_override=league_name)
+                        new_df = pd.DataFrame(matches_to_process)
                         df_matches = pd.concat([df_matches, new_df], ignore_index=True)
                         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
-                        st.success(f"✅ Processed {len(new_matches)} matches!")
+                        st.success(f"✅ Processed {len(matches_to_process)} matches!")
                         st.rerun()
 
-    # 3. TAB 3: POP-UP ROUND ROBIN
     with tab3:
         st.header("Pop-Up Round Robin")
         with st.expander("Event Setup", expanded=True):
@@ -636,10 +545,8 @@ else:
                 rr_data = []
                 for i in range(rr_courts):
                     c1, c2 = st.columns([1, 4])
-                    with c1: 
-                        t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
-                    with c2: 
-                        n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin, Scott, Robin...")
+                    with c1: t = st.selectbox(f"Format {i+1}", ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"], key=f"rr_t{i}")
+                    with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin...")
                     rr_data.append({'id': i+1, 'type': t, 'names': n})
                 
                 if st.form_submit_button("Generate Schedule"):
@@ -661,24 +568,23 @@ else:
                         with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
                 
                 if st.form_submit_button("Submit to Overall Ratings"):
+                    matches_to_process = []
                     for c in st.session_state.rr_schedule:
                         for i, m in enumerate(c['matches']):
-                            s1, s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0), st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
+                            s1 = st.session_state.get(f"rr_s_{c['court']}_{i}_1", 0)
+                            s2 = st.session_state.get(f"rr_s_{c['court']}_{i}_2", 0)
                             if s1 == 0 and s2 == 0: continue
-                            
-                            # Fixed match_data dictionary syntax
-                            match_data = {
-                                'date': str(event_date_rr), 
-                                'league': "PopUp_Event", 
+                            matches_to_process.append({
+                                'date': str(event_date_rr), 'league': "PopUp_Event", 
                                 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 
                                 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 
                                 'score_t1': s1, 'score_t2': s2
-                            }
-                            process_overall_only_match(match_data)
-                    st.success("✅ Overall ratings updated!")
-                    st.rerun()
+                            })
+                    if matches_to_process:
+                        submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
+                        st.success("✅ Overall ratings updated!")
+                        st.rerun()
 
-    # 4. TAB 4: PLAYER MANAGEMENT
     with tab4:
         st.header("Player Management")
         c1, c2 = st.columns(2)
@@ -694,8 +600,7 @@ else:
                         ws_players.update([df_players.columns.values.tolist()] + df_players.values.tolist())
                         st.success(f"Added {n} to Cloud")
                         st.rerun()
-                    else:
-                        st.error("Invalid name or player already exists.")
+                    else: st.error("Invalid name or player already exists.")
         with c2:
             st.subheader("🗑️ Delete Player")
             p_to_delete = st.selectbox("Select Player to Remove", [""] + sorted(df_players['name'].tolist()))
@@ -715,7 +620,6 @@ else:
         st.subheader("Current Player Registry")
         st.dataframe(df_players, use_container_width=True, hide_index=True)
 
-    # 5. TAB 5: ADMIN TOOLS
     with tab5:
         st.header("Admin Tools")
         st.subheader("📤 Upload Ladder Matches")
@@ -743,8 +647,7 @@ else:
                         data_to_write = [headers] + [list(r.values()) for r in clean_r]
                         r_ws.clear()
                         r_ws.update(data_to_write)
-                    else:
-                        r_ws.clear()
+                    else: r_ws.clear()
                     msg = replay_league_history(league_to_restore)
                     st.success(f"Fixed! {msg}")
                     st.rerun()
