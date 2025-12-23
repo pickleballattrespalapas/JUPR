@@ -486,11 +486,11 @@ elif sel == "⚙️ Admin Tools":
     # --- DIAGNOSTIC: Zero Point Detector ---
     zero_pts = df_matches[df_matches['elo_delta'] == 0].shape[0]
     if zero_pts > 0:
-        st.error(f"⚠️ Warning: Found {zero_pts} matches with 0 point impact. These matches did not affect ratings.")
+        st.warning(f"⚠️ Found {zero_pts} matches with 0.0 point impact (likely from before the fix). Run 'Recalculate' below to fix them.")
     else:
         st.success("✅ System Health: All matches have valid point values.")
 
-    # --- FORENSIC TOOL (Option B) ---
+    # --- FORENSIC TOOL ---
     st.subheader("🕵️ Match Forensics")
     debug_id = st.number_input("Enter Match ID to Diagnose", value=0, step=1)
     if st.button("Run Diagnostics"):
@@ -509,22 +509,15 @@ elif sel == "⚙️ Admin Tools":
             if p_ids:
                 players = supabase.table("players").select("*").in_("id", p_ids).execute().data
                 st.write(players)
-                for p in players:
-                    if p['rating'] is None: st.error(f"⚠️ Player {p['name']} has NULL rating!")
             
             st.write("### 3. Math Engine Simulation")
-            # Re-run simulation
-            # We need simple rating getter
             def mock_get(pid):
                 if pid is None: return 1200.0
                 match_p = next((x for x in players if x['id'] == pid), None)
                 if match_p: return float(match_p['rating'])
                 return 1200.0
 
-            ro1 = mock_get(m['t1_p1'])
-            ro2 = mock_get(m['t1_p2'])
-            ro3 = mock_get(m['t2_p1'])
-            ro4 = mock_get(m['t2_p2'])
+            ro1, ro2, ro3, ro4 = mock_get(m['t1_p1']), mock_get(m['t1_p2']), mock_get(m['t2_p1']), mock_get(m['t2_p2'])
             
             st.write(f"Team 1 Ratings: {ro1}, {ro2} (Avg: {(ro1+ro2)/2})")
             st.write(f"Team 2 Ratings: {ro3}, {ro4} (Avg: {(ro3+ro4)/2})")
@@ -550,6 +543,7 @@ elif sel == "⚙️ Admin Tools":
 
     st.divider()
 
+    # --- RECALCULATE TOOL (FIXED TO UPDATE MATCHES) ---
     st.subheader("🔄 Recalculate League History")
     league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL (Full System Reset)"]
     target_reset = st.selectbox("Select League to Recalculate", league_options)
@@ -561,6 +555,9 @@ elif sel == "⚙️ Admin Tools":
             
             p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
             island_map = {}
+            
+            # List to store the corrected match deltas
+            matches_to_update = []
 
             for m in all_matches:
                 if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset: continue
@@ -570,7 +567,7 @@ elif sel == "⚙️ Admin Tools":
                 league = m['league']
                 is_popup = m.get('match_type') == 'PopUp'
                 
-                # Check for 1v1
+                # Safe Get for Overall
                 def safe_get_r(pid):
                     if pid is None: return 1200.0
                     return p_map[pid]['r']
@@ -578,6 +575,11 @@ elif sel == "⚙️ Admin Tools":
                 if target_reset == "ALL (Full System Reset)":
                     ro1, ro2, ro3, ro4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
                     do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
+                    
+                    # SAVE THE DELTA for this match
+                    delta_to_save = do1 if s1 > s2 else do2
+                    matches_to_update.append({'id': m['id'], 'elo_delta': delta_to_save})
+                    
                     win = s1 > s2
                     for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
                         if pid is None: continue
@@ -587,14 +589,13 @@ elif sel == "⚙️ Admin Tools":
                         else: p_map[pid]['l'] += 1
 
                 if not is_popup:
+                    # Inherit current Overall if island rating missing
                     def get_i_r(pid, lg):
                         if (pid, lg) not in island_map: 
-                            # Inherit from current P_MAP rating
                             curr_r = p_map[pid]['r']
                             island_map[(pid, lg)] = {'r': curr_r, 'w':0, 'l':0, 'mp':0}
                         return island_map[(pid, lg)]['r']
 
-                    # Handle 1v1 in islands
                     def safe_get_i(pid, lg):
                         if pid is None: return 1200.0
                         return get_i_r(pid, lg)
@@ -611,10 +612,12 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: island_map[k]['w'] += 1
                         else: island_map[k]['l'] += 1
 
+            # 1. Update Players
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
                     supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
             
+            # 2. Update Islands
             if target_reset != "ALL (Full System Reset)": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
             else: supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
             
@@ -628,4 +631,11 @@ elif sel == "⚙️ Admin Tools":
                 for i in range(0, len(new_islands), chunk_size):
                     supabase.table("league_ratings").insert(new_islands[i:i+chunk_size]).execute()
 
-            st.success(f"✅ Replayed {len(all_matches)} matches!"); time.sleep(2); st.rerun()
+            # 3. UPDATE MATCH LOGS (The Fix!)
+            # We do this one by one or in batches. One by one is safer for simple scripts.
+            progress_bar = st.progress(0)
+            for idx, update in enumerate(matches_to_update):
+                supabase.table("matches").update({"elo_delta": update['elo_delta']}).eq("id", update['id']).execute()
+                progress_bar.progress((idx + 1) / len(matches_to_update))
+
+            st.success(f"✅ Replayed & Synced {len(all_matches)} matches!"); time.sleep(2); st.rerun()
