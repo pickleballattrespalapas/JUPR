@@ -455,7 +455,9 @@ elif sel == "📝 Match Log":
 
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
-    st.subheader("Bulk Match Upload (CSV)")
+    
+    # --- TAB 1: CSV UPLOAD ---
+    st.subheader("📤 Bulk Match Upload (CSV)")
     up_file = st.file_uploader("Upload CSV", type=['csv'])
     if up_file:
         df_csv = pd.read_csv(up_file)
@@ -473,3 +475,115 @@ elif sel == "⚙️ Admin Tools":
             if valid_batch:
                 process_matches(valid_batch, name_to_id, df_players, df_leagues)
                 st.success(f"Uploaded {len(valid_batch)} matches!")
+
+    st.divider()
+
+    # --- TAB 2: RECALCULATE LEAGUE ---
+    st.subheader("🔄 Recalculate League History")
+    st.markdown("""
+    **Use this if:**
+    * You deleted a match and need to fix the points.
+    * You changed a player's starting rating.
+    * The math looks "off."
+    """)
+
+    # 1. Select Scope
+    league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL (Full System Reset)"]
+    target_reset = st.selectbox("Select League to Recalculate", league_options)
+
+    if st.button(f"⚠️ Replay History for: {target_reset}"):
+        with st.spinner("Crunching numbers... this may take a moment."):
+            # A. FETCH ALL DATA needed for replay
+            all_players = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute().data
+            all_matches = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data # Oldest first
+            
+            # B. RESET MEMORY
+            # We map ID -> Player Object for fast lookup
+            # If resetting "ALL", we reset their Overall Rating to 'starting_rating'
+            # If resetting "Island", we will wipe the island table later
+            
+            p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
+            island_map = {} # (pid, league) -> {r, w, l, mp}
+
+            # C. REPLAY MATCHES
+            for m in all_matches:
+                # Filter: If we are only recalculating "Tuesday", skip other matches
+                # Note: "ALL" replays everything.
+                if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset:
+                    continue
+
+                p1, p2, p3, p4 = m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']
+                s1, s2 = m['score_t1'], m['score_t2']
+                league = m['league']
+                
+                # 1. Overall Math (Only if resetting ALL)
+                if target_reset == "ALL (Full System Reset)":
+                    ro1, ro2, ro3, ro4 = p_map[p1]['r'], p_map[p2]['r'], p_map[p3]['r'], p_map[p4]['r']
+                    do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
+                    
+                    win = s1 > s2
+                    for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
+                        p_map[pid]['r'] += delta
+                        p_map[pid]['mp'] += 1
+                        if is_win: p_map[pid]['w'] += 1
+                        else: p_map[pid]['l'] += 1
+
+                # 2. Island Math (Always runs for the target league)
+                # Init island stats if new
+                def get_i_r(pid, lg):
+                    if (pid, lg) not in island_map:
+                        # Resetting island means starting from fresh (usually 1200 or Main Rating if we want dynamic start)
+                        # For pure replay, we assume start = 1200 or user set start.
+                        # Let's default to 1200 for islands to be safe/standard.
+                        island_map[(pid, lg)] = {'r': 1200.0, 'w':0, 'l':0, 'mp':0}
+                    return island_map[(pid, lg)]['r']
+
+                ri1, ri2, ri3, ri4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
+                di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
+
+                win = s1 > s2
+                for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
+                    k = (pid, league)
+                    if k not in island_map: island_map[k] = {'r': 1200.0, 'w':0, 'l':0, 'mp':0}
+                    island_map[k]['r'] += delta
+                    island_map[k]['mp'] += 1
+                    if is_win: island_map[k]['w'] += 1
+                    else: island_map[k]['l'] += 1
+
+            # D. SAVE RESULTS
+            
+            # 1. If ALL, Update Players Table
+            if target_reset == "ALL (Full System Reset)":
+                for pid, stats in p_map.items():
+                    supabase.table("players").update({
+                        "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
+                    }).eq("id", pid).execute()
+            
+            # 2. Update League Table (Islands)
+            # If specific league, we delete old entries for that league first
+            if target_reset != "ALL (Full System Reset)":
+                supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
+            else:
+                # If ALL, wipe entire table
+                supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
+            
+            # Bulk Insert New Island Stats
+            new_islands = []
+            for (pid, lg), stats in island_map.items():
+                # Filter: Only save if it matches our target (or if target is ALL)
+                if target_reset == "ALL (Full System Reset)" or lg == target_reset:
+                    new_islands.append({
+                        "club_id": CLUB_ID, "player_id": pid, "league_name": lg,
+                        "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
+                    })
+            
+            # Upload in chunks
+            if new_islands:
+                # Supabase insert limit is usually high, but let's chunk to be safe
+                chunk_size = 1000
+                for i in range(0, len(new_islands), chunk_size):
+                    supabase.table("league_ratings").insert(new_islands[i:i+chunk_size]).execute()
+
+            st.success(f"✅ Successfully replayed {len(all_matches)} matches!")
+            time.sleep(2)
+            st.rerun()
