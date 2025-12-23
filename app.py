@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 import math
 import time
+import numpy as np
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import io
@@ -17,6 +18,23 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 DEFAULT_START_RATING = 3.00
 SHEET_NAME = "Tres Palapas DB"
+
+# --- HELPER: SAFE GOOGLE SHEETS UPDATE ---
+def safe_update_sheet(worksheet, dataframe):
+    """
+    Converts a Pandas DataFrame to a standard Python list of lists 
+    to prevent 'int64' JSON serialization errors in GSpread.
+    """
+    # 1. Replace NaNs and Infinities
+    df_clean = dataframe.replace([np.inf, -np.inf], np.nan).fillna("")
+    
+    # 2. Convert to standard types (scrub numpy types)
+    # This ensures int64 becomes int, float64 becomes float
+    data = [df_clean.columns.values.tolist()] + df_clean.astype(object).values.tolist()
+    
+    # 3. Clear and Update
+    worksheet.clear()
+    worksheet.update(values=data)
 
 # --- OPTIMIZED CONNECTION (CACHE RESOURCE) ---
 @st.cache_resource
@@ -163,8 +181,7 @@ def process_batch_upload(dataframe, ladder_name_from_ui=None):
     if all_rows:
         headers = list(all_rows[0].keys())
         data_to_write = [headers] + [list(r.values()) for r in all_rows]
-        ratings_sheet.clear()
-        ratings_sheet.update(data_to_write)
+        safe_update_sheet(ratings_sheet, pd.DataFrame(all_rows))
         
     return results_log
 
@@ -206,10 +223,7 @@ def replay_league_history(target_league):
                     if p: update_local_memory_global(all_rows, p, context, get_effective_rating(all_rows, p, context) - delta)
         count += 1
 
-    headers = list(all_rows[0].keys())
-    data_to_write = [headers] + [list(r.values()) for r in all_rows]
-    ratings_ws.clear()
-    ratings_ws.update(data_to_write)
+    safe_update_sheet(ratings_ws, pd.DataFrame(all_rows))
     
     return f"✅ Success! Replayed {count} matches."
 
@@ -259,10 +273,7 @@ def submit_batch_of_matches(match_list, ladder_name_override=None):
                     if p: update_local(p, ctx, round(get_effective_rating(all_rows, p, ctx) - delta))
 
     if all_rows:
-        headers = list(all_rows[0].keys())
-        data_to_write = [headers] + [list(r.values()) for r in all_rows]
-        r_ws.clear()
-        r_ws.update(data_to_write)
+        safe_update_sheet(r_ws, pd.DataFrame(all_rows))
         fetch_all_data_snapshots.clear()
 
 def get_match_schedule(format_type, players):
@@ -380,18 +391,22 @@ def handle_missing_players(names_list, section_key, ws_p, df_p):
             
             new_df = pd.DataFrame(new_rows)
             df_p = pd.concat([df_p, new_df], ignore_index=True)
-            ws_p.update([df_p.columns.values.tolist()] + df_p.values.tolist())
+            
+            # SAFE UPDATE
+            safe_update_sheet(ws_p, df_p)
+            
             fetch_all_data_snapshots.clear() 
-            st.success("✅ Players added! Please click 'Generate' again.")
-            time.sleep(1)
+            # SET FLAG FOR AUTO-CONTINUE
+            st.session_state[f"auto_gen_{section_key}"] = True
+            st.success("✅ Players added! Continuing...")
+            time.sleep(0.5)
             st.rerun()
             
     return True, df_p
 
-# --- SIDEBAR NAVIGATION (THE FIX) ---
+# --- SIDEBAR NAVIGATION ---
 st.sidebar.title("JUPR Leagues 🌵")
 
-# 1. ADMIN LOGIN UI
 if not st.session_state.admin_logged_in:
     with st.sidebar.expander("🔒 Admin Login"):
         pwd = st.text_input("Password", type="password")
@@ -407,7 +422,6 @@ else:
         st.session_state.admin_logged_in = False
         st.rerun()
 
-# 2. NAVIGATION MENU
 nav_options = ["🏆 Leaderboards", "🔍 Player Search"]
 if st.session_state.admin_logged_in:
     nav_options += ["──────────", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
@@ -521,7 +535,6 @@ elif selection == "🏟️ Live Court Manager":
         league_name = st.text_input("League", "Fall 2025 Ladder")
         num_courts = st.number_input("Courts", 1, 20, 1)
         
-        # --- FORM DEFINITION ---
         with st.form("setup"):
             court_data = []
             for i in range(num_courts):
@@ -530,21 +543,19 @@ elif selection == "🏟️ Live Court Manager":
                 with c2: n = st.text_area(f"Names {i+1}", key=f"n{i}", height=68)
                 court_data.append({'id':i+1, 'type':t, 'names':n})
             
-            # Capture the click, but don't run logic yet
             submitted = st.form_submit_button("Generate")
         
-        # --- LOGIC (OUTSIDE THE FORM) ---
-        if submitted:
-            # 1. Parse Names
+        if submitted or st.session_state.get("auto_gen_tab2"):
+            # Clear flag if it exists
+            if "auto_gen_tab2" in st.session_state: del st.session_state["auto_gen_tab2"]
+            
             all_input_names = []
             for c in court_data:
                 pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
                 all_input_names.extend(pl)
             
-            # 2. Check for Missing Players (Now safe because we are outside the form)
             stop_flag, df_players = handle_missing_players(all_input_names, "tab2", ws_players, df_players)
             
-            # 3. Only Generate if no missing players
             if not stop_flag:
                 st.session_state.schedule = []
                 for c in court_data:
@@ -563,10 +574,8 @@ elif selection == "🏟️ Live Court Manager":
                     with c3: s2 = st.number_input("S2", 0, key=f"s_{c['court']}_{i}_2")
                     with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
             
-            # Capture click
             scores_submitted = st.form_submit_button("Submit & Save to Cloud")
         
-        # Logic outside form (Best practice, though technically not required here if no nested forms)
         if scores_submitted:
             matches_to_process = []
             for c in st.session_state.schedule:
@@ -599,7 +608,6 @@ elif selection == "🔄 Pop-Up RR":
         popup_name = st.text_input("Event Name", f"PopUp {datetime.now().strftime('%Y-%m-%d')}")
         rr_courts = st.number_input("Number of Courts", 1, 20, 1, key="rr_courts")
         
-        # --- FORM DEFINITION ---
         with st.form("rr_setup"):
             rr_data = []
             for i in range(rr_courts):
@@ -608,21 +616,18 @@ elif selection == "🔄 Pop-Up RR":
                 with c2: n = st.text_area(f"Names {i+1}", key=f"rr_n{i}", height=68, placeholder="Joe, Kevin...")
                 rr_data.append({'id': i+1, 'type': t, 'names': n})
             
-            # Capture click
             submitted_rr = st.form_submit_button("Generate Schedule")
         
-        # --- LOGIC (OUTSIDE THE FORM) ---
-        if submitted_rr:
-            # 1. Parse Names
+        if submitted_rr or st.session_state.get("auto_gen_tab3"):
+            if "auto_gen_tab3" in st.session_state: del st.session_state["auto_gen_tab3"]
+            
             all_input_names = []
             for c in rr_data:
                 pl = [x.strip() for x in c['names'].replace('\n', ',').split(',') if x.strip()]
                 all_input_names.extend(pl)
 
-            # 2. Check for Missing Players (Safe now)
             stop_flag, df_players = handle_missing_players(all_input_names, "tab3", ws_players, df_players)
 
-            # 3. Only Generate if no missing players
             if not stop_flag:
                 st.session_state.rr_schedule = []
                 for c in rr_data:
@@ -641,10 +646,8 @@ elif selection == "🔄 Pop-Up RR":
                     with c3: s2 = st.number_input("S2", 0, key=f"rr_s_{c['court']}_{i}_2")
                     with c4: st.text(f"{m['t2'][0]} & {m['t2'][1]}")
             
-            # Capture click
             submitted_scores_rr = st.form_submit_button("Submit to Overall Ratings")
         
-        # Logic outside form
         if submitted_scores_rr:
             matches_to_process = []
             for c in st.session_state.rr_schedule:
