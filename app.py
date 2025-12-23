@@ -208,8 +208,12 @@ if selection == "🏆 Leaderboards":
         df_disp = df_players.copy()
         df_disp['JUPR'] = (df_disp['rating'] / 400).map('{:,.3f}'.format)
         df_disp['Win %'] = (df_disp['wins'] / (df_disp['matches_played'].replace(0, 1)) * 100).map('{:.1f}%'.format)
+        
+        # FIX: Sort by rating FIRST, then select the columns to display
+        df_sorted = df_disp.sort_values(by='rating', ascending=False)
+        
         st.dataframe(
-            df_disp[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']].sort_values(by='rating', ascending=False), 
+            df_sorted[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], 
             use_container_width=True, hide_index=True
         )
 
