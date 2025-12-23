@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 import time
 from datetime import datetime
 
@@ -14,12 +15,13 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
-# --- DATABASE CONNECTION ---
+# --- DATABASE CONNECTION (STABILITY FIX) ---
 @st.cache_resource
 def init_supabase():
     url = st.secrets["supabase"]["url"]
     key = st.secrets["supabase"]["key"]
-    return create_client(url, key)
+    # Increase network timeout to 60 seconds to prevent ReadErrors
+    return create_client(url, key, options=ClientOptions(postgrest_client_timeout=60))
 
 try:
     supabase = init_supabase()
@@ -50,35 +52,47 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
         
     return final_delta_t1, final_delta_t2
 
-# --- DATA LOADER ---
+# --- DATA LOADER (WITH RETRY) ---
 def load_data():
-    # 1. Players (Overall)
-    p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
-    df_players = pd.DataFrame(p_response.data)
-    
-    # 2. League Ratings (Islands)
-    l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
-    df_leagues = pd.DataFrame(l_response.data)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 1. Players (Overall)
+            p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
+            df_players = pd.DataFrame(p_response.data)
+            
+            # 2. League Ratings (Islands)
+            l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
+            df_leagues = pd.DataFrame(l_response.data)
 
-    # 3. Matches
-    m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(1000).execute()
-    df_matches = pd.DataFrame(m_response.data)
-    
-    if not df_players.empty:
-        id_to_name = dict(zip(df_players['id'], df_players['name']))
-        name_to_id = dict(zip(df_players['name'], df_players['id']))
-    else:
-        id_to_name = {}
-        name_to_id = {}
-        df_players = pd.DataFrame(columns=['id', 'name', 'rating', 'wins', 'losses'])
+            # 3. Matches
+            m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(1000).execute()
+            df_matches = pd.DataFrame(m_response.data)
+            
+            # Map Helpers
+            if not df_players.empty:
+                id_to_name = dict(zip(df_players['id'], df_players['name']))
+                name_to_id = dict(zip(df_players['name'], df_players['id']))
+            else:
+                id_to_name = {}
+                name_to_id = {}
+                df_players = pd.DataFrame(columns=['id', 'name', 'rating', 'wins', 'losses'])
 
-    if not df_matches.empty:
-        df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
-        df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
-        df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
-        df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
+            if not df_matches.empty:
+                df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
+                df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
+                df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
+                df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
+                
+            return df_players, df_leagues, df_matches, name_to_id, id_to_name
         
-    return df_players, df_leagues, df_matches, name_to_id, id_to_name
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1) # Wait 1s and retry
+                continue
+            else:
+                st.error(f"⚠️ Network unstable. Please refresh. ({e})")
+                return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}, {}
 
 # --- HELPERS ---
 def get_match_schedule(format_type, players):
@@ -178,8 +192,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
                 # Need initial values
                 curr = get_island_r(pid, league) # This fetches DB or Overall fallback
                 island_updates[key] = {'r': curr, 'w': 0, 'l': 0, 'mp': 0}
-                # If they existed in DB, we should have fetched real stats, but for simplicity/speed in this patch
-                # we are doing incremental updates. Real production apps fetch specific rows here.
             
             island_updates[key]['r'] += d_island
             island_updates[key]['mp'] += 1
@@ -202,12 +214,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             "player_id": pid, "club_id": CLUB_ID, "league_name": league,
             "rating": stats['r'], "matches_played": stats['mp'], "wins": stats['w'], "losses": stats['l']
         })
-    # We need to handle the "Wins/Losses" correctly. Upsert replaces data. 
-    # To do this perfectly accurately without reading first, we'd need SQL increment.
-    # For now, we will Upsert. Note: This assumes the `island_updates` gathered cumulative stats for the batch.
-    # But it resets the win/loss count if the player existed before but wasn't in memory. 
-    # FIX: We will just update rating for now to be safe, or we accept that 'matches_played' in island view resets annually.
-    # Let's do a safe individual Upsert for now.
+    
     for row in island_data:
         # Check if exists to get current counts
         existing = supabase.table("league_ratings").select("*").eq("player_id", row['player_id']).eq("league_name", row['league_name']).execute()
@@ -498,17 +505,11 @@ elif sel == "⚙️ Admin Tools":
             all_matches = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data # Oldest first
             
             # B. RESET MEMORY
-            # We map ID -> Player Object for fast lookup
-            # If resetting "ALL", we reset their Overall Rating to 'starting_rating'
-            # If resetting "Island", we will wipe the island table later
-            
             p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
             island_map = {} # (pid, league) -> {r, w, l, mp}
 
             # C. REPLAY MATCHES
             for m in all_matches:
-                # Filter: If we are only recalculating "Tuesday", skip other matches
-                # Note: "ALL" replays everything.
                 if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset:
                     continue
 
@@ -528,13 +529,9 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: p_map[pid]['w'] += 1
                         else: p_map[pid]['l'] += 1
 
-                # 2. Island Math (Always runs for the target league)
-                # Init island stats if new
+                # 2. Island Math
                 def get_i_r(pid, lg):
                     if (pid, lg) not in island_map:
-                        # Resetting island means starting from fresh (usually 1200 or Main Rating if we want dynamic start)
-                        # For pure replay, we assume start = 1200 or user set start.
-                        # Let's default to 1200 for islands to be safe/standard.
                         island_map[(pid, lg)] = {'r': 1200.0, 'w':0, 'l':0, 'mp':0}
                     return island_map[(pid, lg)]['r']
 
@@ -551,35 +548,26 @@ elif sel == "⚙️ Admin Tools":
                     else: island_map[k]['l'] += 1
 
             # D. SAVE RESULTS
-            
-            # 1. If ALL, Update Players Table
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
                     supabase.table("players").update({
                         "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
                     }).eq("id", pid).execute()
             
-            # 2. Update League Table (Islands)
-            # If specific league, we delete old entries for that league first
             if target_reset != "ALL (Full System Reset)":
                 supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
             else:
-                # If ALL, wipe entire table
                 supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
             
-            # Bulk Insert New Island Stats
             new_islands = []
             for (pid, lg), stats in island_map.items():
-                # Filter: Only save if it matches our target (or if target is ALL)
                 if target_reset == "ALL (Full System Reset)" or lg == target_reset:
                     new_islands.append({
                         "club_id": CLUB_ID, "player_id": pid, "league_name": lg,
                         "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']
                     })
             
-            # Upload in chunks
             if new_islands:
-                # Supabase insert limit is usually high, but let's chunk to be safe
                 chunk_size = 1000
                 for i in range(0, len(new_islands), chunk_size):
                     supabase.table("league_ratings").insert(new_islands[i:i+chunk_size]).execute()
