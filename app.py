@@ -7,6 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import io
 
+# --- 1. PAGE CONFIG MUST BE FIRST ---
+st.set_page_config(page_title="Tres Palapas Pickleball", layout="wide")
+
 if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
 
@@ -43,8 +46,6 @@ def fetch_all_data_snapshots():
 
 def load_data():
     sh = get_db_connection()
-    
-    # 1. Get Worksheets objects (Fast)
     try:
         ws_players = sh.worksheet("Players")
         ws_matches = sh.worksheet("Matches")
@@ -53,7 +54,6 @@ def load_data():
         st.error(f"Sheet Error: {e}")
         st.stop()
         
-    # 2. Get Data (Cached)
     p_data, m_data, r_data = fetch_all_data_snapshots()
     
     if p_data is None:
@@ -61,7 +61,6 @@ def load_data():
         time.sleep(5)
         st.rerun()
 
-    # 3. Build DataFrames
     df_players = pd.DataFrame(p_data)
     df_matches = pd.DataFrame(m_data)
     df_ratings = pd.DataFrame(r_data)
@@ -69,7 +68,6 @@ def load_data():
     if df_ratings.empty:
         df_ratings = pd.DataFrame(columns=['name', 'ladder_id', 'rating'])
     
-    # Numeric cleanup
     for c in ['score_t1', 'score_t2']:
         if c in df_matches.columns:
             df_matches[c] = pd.to_numeric(df_matches[c], errors='coerce').fillna(0)
@@ -216,7 +214,7 @@ def replay_league_history(target_league):
     
     return f"✅ Success! Replayed {count} matches."
 
-# --- BATCH MATCH PROCESSOR (THE FIX) ---
+# --- BATCH MATCH PROCESSOR ---
 def submit_batch_of_matches(match_list, ladder_name_override=None):
     sh = get_db_connection()
     r_ws = sh.worksheet("player_ratings")
@@ -348,8 +346,6 @@ def recalculate_all_stats(df_players, df_matches):
             
     return df_players, df_matches
 
-# --- UI LAYOUT ---
-st.set_page_config(page_title="Tres Palapas Pickleball", layout="wide")
 st.title("🌵 Tres Palapas Pickleball Ratings and Ladder Results")
 
 st.markdown("""
@@ -360,9 +356,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 df_players, df_ratings, df_matches, ws_players, ws_matches, ws_ratings = load_data()
-
-# --- LOGIN SYSTEM ---
-if 'admin_logged_in' not in st.session_state: st.session_state.admin_logged_in = False
 
 # --- TABS DEFINITION ---
 tab_titles = ["🏆 Leaderboards", "🔍 Player Search", "🏟️ Live Court Manager (Admin)", "🔄 Pop-Up RR (Admin)", "👥 Players (Admin)", "📝 Match Log (Admin)"]
@@ -498,7 +491,7 @@ else:
         
         if st.session_state.get('schedule'):
             st.divider()
-            with st.form("submit_scores"):
+            with st.form("submit_scores", clear_on_submit=True):
                 for c in st.session_state.schedule:
                     st.markdown(f"**Court {c['court']}**")
                     for i, m in enumerate(c['matches']):
@@ -532,7 +525,7 @@ else:
                         df_matches = pd.concat([df_matches, new_df], ignore_index=True)
                         ws_matches.update([df_matches.columns.values.tolist()] + df_matches.values.tolist())
                         st.success(f"✅ Processed {len(matches_to_process)} matches!")
-                        st.rerun()
+                        # NO RERUN HERE (Prevent Tab Jump)
 
     with tab3:
         st.header("Pop-Up Round Robin")
@@ -557,7 +550,7 @@ else:
 
         if st.session_state.get('rr_schedule'):
             st.divider()
-            with st.form("submit_rr_scores"):
+            with st.form("submit_rr_scores", clear_on_submit=True):
                 for c in st.session_state.rr_schedule:
                     st.markdown(f"**Court {c['court']}**")
                     for i, m in enumerate(c['matches']):
@@ -583,7 +576,7 @@ else:
                     if matches_to_process:
                         submit_batch_of_matches(matches_to_process, ladder_name_override="OVERALL")
                         st.success("✅ Overall ratings updated!")
-                        st.rerun()
+                        # NO RERUN HERE (Prevent Tab Jump)
 
     with tab4:
         st.header("Player Management")
