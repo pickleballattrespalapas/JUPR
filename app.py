@@ -68,6 +68,7 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
+            # Sort by ID (Creation Order) to find recent additions regardless of match date
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
@@ -661,16 +662,34 @@ elif sel == "📝 Match Log":
     if id_filter > 0:
         view_df = view_df[view_df['id'] == id_filter]
 
-    # Display matches
-    edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
-    edit_df['Raw Pts'] = edit_df['elo_delta'].map('{:.1f}'.format)
-    st.dataframe(edit_df.drop(columns=['elo_delta']), use_container_width=True)
+    # --- BULK DELETE UI (UPDATED) ---
+    st.write("### 🗑️ Bulk Delete Matches")
+    st.info("Select checkboxes below to delete matches.")
     
-    st.divider()
-    m_id = st.number_input("Match ID to Delete", min_value=0, step=1)
-    if st.button("Delete Match"):
-        supabase.table("matches").delete().eq("id", m_id).execute()
-        st.success("Deleted!"); time.sleep(1); st.rerun()
+    edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    edit_df.insert(0, "Delete", False) # Add checkbox column at start
+
+    edited_log = st.data_editor(
+        edit_df,
+        column_config={
+            "Delete": st.column_config.CheckboxColumn("Delete?", default=False),
+            "elo_delta": st.column_config.NumberColumn("Elo Delta", format="%.1f"),
+        },
+        disabled=["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"],
+        use_container_width=True,
+        hide_index=True
+    )
+
+    to_delete = edited_log[edited_log['Delete'] == True]
+    
+    if not to_delete.empty:
+        st.error(f"⚠️ You have selected {len(to_delete)} matches for deletion.")
+        if st.button("Confirm Bulk Delete"):
+            ids_to_kill = to_delete['id'].tolist()
+            supabase.table("matches").delete().in_("id", ids_to_kill).execute()
+            st.success("Deleted!")
+            time.sleep(1)
+            st.rerun()
 
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
