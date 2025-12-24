@@ -68,7 +68,8 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(1000).execute()
+            # INCREASED LIMIT TO 2000 TO FIND OLD MATCHES
+            m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(2000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
             if not df_players.empty:
@@ -277,6 +278,15 @@ if sel == "🏆 Leaderboards":
     else:
         st.query_params.clear()
     
+    with st.expander("📊 How Ratings Work"):
+        st.markdown("""
+        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
+        * **The Swing:**
+            * **Big Upset:** ~ +0.075 JUPR
+            * **Even Match (11-9):** ~ +0.008 JUPR
+        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
+        """)
+
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -595,7 +605,6 @@ elif sel == "👥 Players":
                 if ok: st.success(f"Added {n}!"); time.sleep(1); st.rerun()
                 else: st.error(msg)
     
-    # --- UPDATED: EDIT PLAYER (NAME + RATING) ---
     with c2:
         st.subheader("✏️ Edit Player")
         p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
@@ -626,9 +635,18 @@ elif sel == "👥 Players":
 
 elif sel == "📝 Match Log":
     st.header("📝 Match Log")
-    st.subheader("Recent Matches")
     
-    edit_df = df_matches.head(100)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    # Filter controls
+    filter_type = st.radio("Filter Matches", ["All", "League Matches", "Pop-Up Events"], horizontal=True)
+    if filter_type == "League Matches":
+        view_df = df_matches[df_matches['match_type'] != 'PopUp']
+    elif filter_type == "Pop-Up Events":
+        view_df = df_matches[df_matches['match_type'] == 'PopUp']
+    else:
+        view_df = df_matches
+
+    # Display matches
+    edit_df = view_df.head(2000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
     edit_df['Raw Pts'] = edit_df['elo_delta'].map('{:.1f}'.format)
     st.dataframe(edit_df.drop(columns=['elo_delta']), use_container_width=True)
     
