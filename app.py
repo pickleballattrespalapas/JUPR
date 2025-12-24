@@ -147,7 +147,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
 
     for m in match_list:
         p1, p2, p3, p4 = [name_to_id.get(m[k]) for k in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']]
-        if not all([p1, p2, p3, p4]): continue
+        if not p1 or not p3: continue
         
         s1, s2 = m['s1'], m['s2']
         league = m['league']
@@ -245,8 +245,7 @@ else:
 
 nav = ["🏆 Leaderboards", "🔍 Player Search"]
 if st.session_state.admin_logged_in: 
-    # Renamed "Live Court Manager" to "League Manager" per request
-    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
+    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "⚡ Batch Entry", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
 # --- UI LOGIC ---
@@ -366,7 +365,6 @@ elif sel == "📋 Roster Check":
         new_players = []
         
         for n in parsed:
-            # STRICT CHECK ONLY (No Fuzzy)
             if n in name_to_id:
                 pid = name_to_id[n]
                 r_val = 1200.0
@@ -432,7 +430,6 @@ elif sel == "📋 Roster Check":
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager")
     
-    # 1. FIXED: Court Counter OUTSIDE the form to allow dynamic refreshing
     if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
     st.session_state.lc_courts = st.number_input("Courts", 1, 10, st.session_state.lc_courts, key="lc_court_input")
     
@@ -477,10 +474,71 @@ elif sel == "🏟️ League Manager":
                     time.sleep(1)
                     st.rerun()
 
+# --- NEW PAGE: BATCH ENTRY (OPTION B) ---
+elif sel == "⚡ Batch Entry":
+    st.header("⚡ Batch Match Entry")
+    st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
+    
+    # Global Settings for the Batch
+    batch_league = st.text_input("League Name for Batch", "Fall 2025 Ladder")
+    
+    # Setup Data Editor
+    player_list = sorted(df_players['name'].tolist())
+    
+    # Initialize empty DataFrame for the editor
+    if 'batch_df' not in st.session_state:
+        # Start with 5 empty rows
+        st.session_state.batch_df = pd.DataFrame(
+            [{'T1_P1': None, 'T1_P2': None, 'T2_P1': None, 'T2_P2': None, 'Score_1': 0, 'Score_2': 0} for _ in range(5)]
+        )
+
+    edited_batch = st.data_editor(
+        st.session_state.batch_df,
+        column_config={
+            "T1_P1": st.column_config.SelectboxColumn("Team 1 - Player 1", options=player_list, required=True),
+            "T1_P2": st.column_config.SelectboxColumn("Team 1 - Player 2", options=player_list),
+            "T2_P1": st.column_config.SelectboxColumn("Team 2 - Player 1", options=player_list, required=True),
+            "T2_P2": st.column_config.SelectboxColumn("Team 2 - Player 2", options=player_list),
+            "Score_1": st.column_config.NumberColumn("Score 1", min_value=0, max_value=30, step=1),
+            "Score_2": st.column_config.NumberColumn("Score 2", min_value=0, max_value=30, step=1),
+        },
+        num_rows="dynamic",
+        use_container_width=True
+    )
+
+    if st.button("Process Batch"):
+        valid_batch = []
+        for _, row in edited_batch.iterrows():
+            # Validation: Must have at least T1_P1 and T2_P1, and a score > 0
+            if row['T1_P1'] and row['T2_P1'] and (row['Score_1'] + row['Score_2'] > 0):
+                match_data = {
+                    't1_p1': row['T1_P1'], 
+                    't1_p2': row['T1_P2'], 
+                    't2_p1': row['T2_P1'], 
+                    't2_p2': row['T2_P2'], 
+                    's1': int(row['Score_1']), 
+                    's2': int(row['Score_2']), 
+                    'date': str(datetime.now()), 
+                    'league': batch_league, 
+                    'type': 'Batch Entry', 
+                    'match_type': 'Live Match', 
+                    'is_popup': False
+                }
+                valid_batch.append(match_data)
+        
+        if valid_batch:
+            process_matches(valid_batch, name_to_id, df_players, df_leagues)
+            st.success(f"✅ Successfully processed {len(valid_batch)} matches!")
+            # Reset table
+            del st.session_state.batch_df
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.warning("⚠️ No valid matches found. Ensure you selected players for Team 1 and Team 2, and entered scores.")
+
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
     
-    # 2. FIXED: Removed multi-court selector here to simplify (per request)
     with st.form("setup_rr"):
         date_rr = st.date_input("Date", datetime.now())
         lg_rr = st.text_input("Event Name", "PopUp Event")
