@@ -68,8 +68,8 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # INCREASED LIMIT TO 2000 TO FIND OLD MATCHES
-            m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=True).limit(2000).execute()
+            # FIX: Sort by ID (Creation Order) instead of Date to ensure specific IDs are found
+            m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
             if not df_players.empty:
@@ -244,7 +244,6 @@ else:
         st.session_state.admin_logged_in = False
         st.rerun()
 
-# --- NAVIGATION ---
 nav = ["🏆 Leaderboards", "🔍 Player Search", "ℹ️ System Info"]
 if st.session_state.admin_logged_in: 
     nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "⚡ Batch Entry", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
@@ -497,7 +496,6 @@ elif sel == "🏟️ League Manager":
                     time.sleep(1)
                     st.rerun()
 
-# --- NEW: BATCH ENTRY (ORDERED) ---
 elif sel == "⚡ Batch Entry":
     st.header("⚡ Batch Match Entry")
     st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
@@ -645,8 +643,15 @@ elif sel == "📝 Match Log":
     else:
         view_df = df_matches
 
+    # NEW: Filter by specific ID
+    col1, col2 = st.columns([1, 4])
+    id_filter = col1.number_input("Jump to ID:", min_value=0, value=0)
+    
+    if id_filter > 0:
+        view_df = view_df[view_df['id'] == id_filter]
+
     # Display matches
-    edit_df = view_df.head(2000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
     edit_df['Raw Pts'] = edit_df['elo_delta'].map('{:.1f}'.format)
     st.dataframe(edit_df.drop(columns=['elo_delta']), use_container_width=True)
     
