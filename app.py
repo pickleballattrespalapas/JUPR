@@ -243,9 +243,10 @@ else:
         st.session_state.admin_logged_in = False
         st.rerun()
 
-nav = ["🏆 Leaderboards", "🔍 Player Search"]
+# --- NAVIGATION ---
+nav = ["🏆 Leaderboards", "🔍 Player Search", "ℹ️ System Info"]
 if st.session_state.admin_logged_in: 
-    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "⚡ Batch Entry", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
+    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "⚡ Batch Entry", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
 # --- UI LOGIC ---
@@ -276,15 +277,6 @@ if sel == "🏆 Leaderboards":
     else:
         st.query_params.clear()
     
-    with st.expander("📊 How Ratings Work"):
-        st.markdown("""
-        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
-        * **The Swing:**
-            * **Big Upset:** ~ +0.075 JUPR
-            * **Even Match (11-9):** ~ +0.008 JUPR
-        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
-        """)
-
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -347,6 +339,27 @@ elif sel == "🔍 Player Search":
                 st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'Raw Pts', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
             else:
                 st.info("No matches found.")
+
+elif sel == "ℹ️ System Info":
+    st.header("ℹ️ System Info")
+    st.markdown("""
+    ### What is JUPR?
+    JUPR (Just a Universal Pickleball Rating) is a hybrid rating system designed for club play. It tracks your performance across all official league matches and round robins.
+
+    ### How Ratings Work
+    * **Scale:** Ratings typically range from **2.000 to 6.000+**.
+    * **The Math:** We use an Elo-based formula that looks at:
+        1.  **Who you played:** Beating a pro is worth more than beating a beginner.
+        2.  **The Score:** Winning 11-0 is worth more than winning 11-9.
+    
+    ### Key Features
+    * **The Safety Net:** If you win a match, you will *never* lose points, even if you play poorly against a lower-rated team.
+    * **Islands & Overall:** * **Overall Rating:** Your global skill level calculated from *every* match you play.
+        * **League Ratings (Islands):** Specific ratings for individual leagues (e.g., "Tuesday Ladder"). This allows you to have a different standing in different groups while maintaining one "True" rating.
+    
+    ### Pop-Up Events
+    Matches labeled as "Pop-Up" (Round Robins) affect your **Overall Rating** but do not generate a separate League Rating.
+    """)
 
 elif sel == "📋 Roster Check":
     st.header("📋 Roster Check")
@@ -474,34 +487,30 @@ elif sel == "🏟️ League Manager":
                     time.sleep(1)
                     st.rerun()
 
-# --- NEW PAGE: BATCH ENTRY (OPTION B) ---
+# --- NEW: BATCH ENTRY (ORDERED) ---
 elif sel == "⚡ Batch Entry":
     st.header("⚡ Batch Match Entry")
     st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
     
-    # Global Settings for the Batch
     batch_league = st.text_input("League Name for Batch", "Fall 2025 Ladder")
-    
-    # Setup Data Editor
     player_list = sorted(df_players['name'].tolist())
     
-    # Initialize empty DataFrame for the editor
     if 'batch_df' not in st.session_state:
-        # Start with 5 empty rows
         st.session_state.batch_df = pd.DataFrame(
-            [{'T1_P1': None, 'T1_P2': None, 'T2_P1': None, 'T2_P2': None, 'Score_1': 0, 'Score_2': 0} for _ in range(5)]
+            [{'T1_P1': None, 'T1_P2': None, 'Score_1': 0, 'Score_2': 0, 'T2_P1': None, 'T2_P2': None} for _ in range(5)]
         )
 
     edited_batch = st.data_editor(
         st.session_state.batch_df,
         column_config={
-            "T1_P1": st.column_config.SelectboxColumn("Team 1 - Player 1", options=player_list, required=True),
-            "T1_P2": st.column_config.SelectboxColumn("Team 1 - Player 2", options=player_list),
-            "T2_P1": st.column_config.SelectboxColumn("Team 2 - Player 1", options=player_list, required=True),
-            "T2_P2": st.column_config.SelectboxColumn("Team 2 - Player 2", options=player_list),
+            "T1_P1": st.column_config.SelectboxColumn("Team 1 - P1", options=player_list, required=True),
+            "T1_P2": st.column_config.SelectboxColumn("Team 1 - P2", options=player_list),
             "Score_1": st.column_config.NumberColumn("Score 1", min_value=0, max_value=30, step=1),
             "Score_2": st.column_config.NumberColumn("Score 2", min_value=0, max_value=30, step=1),
+            "T2_P1": st.column_config.SelectboxColumn("Team 2 - P1", options=player_list, required=True),
+            "T2_P2": st.column_config.SelectboxColumn("Team 2 - P2", options=player_list),
         },
+        column_order=("T1_P1", "T1_P2", "Score_1", "Score_2", "T2_P1", "T2_P2"), # FIXED ORDER
         num_rows="dynamic",
         use_container_width=True
     )
@@ -509,7 +518,6 @@ elif sel == "⚡ Batch Entry":
     if st.button("Process Batch"):
         valid_batch = []
         for _, row in edited_batch.iterrows():
-            # Validation: Must have at least T1_P1 and T2_P1, and a score > 0
             if row['T1_P1'] and row['T2_P1'] and (row['Score_1'] + row['Score_2'] > 0):
                 match_data = {
                     't1_p1': row['T1_P1'], 
@@ -529,12 +537,11 @@ elif sel == "⚡ Batch Entry":
         if valid_batch:
             process_matches(valid_batch, name_to_id, df_players, df_leagues)
             st.success(f"✅ Successfully processed {len(valid_batch)} matches!")
-            # Reset table
             del st.session_state.batch_df
             time.sleep(1)
             st.rerun()
         else:
-            st.warning("⚠️ No valid matches found. Ensure you selected players for Team 1 and Team 2, and entered scores.")
+            st.warning("⚠️ No valid matches found.")
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
@@ -587,16 +594,28 @@ elif sel == "👥 Players":
                 ok, msg = safe_add_player(n, r)
                 if ok: st.success(f"Added {n}!"); time.sleep(1); st.rerun()
                 else: st.error(msg)
+    
+    # --- UPDATED: EDIT PLAYER (NAME + RATING) ---
     with c2:
-        st.subheader("✏️ Edit Rating")
+        st.subheader("✏️ Edit Player")
         p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
         if p_edit:
             curr_row = df_players[df_players['name'] == p_edit].iloc[0]
             curr_start = float(curr_row['starting_rating']) / 400
+            
+            # Form for Name AND Rating
+            new_name = st.text_input("Edit Name", value=p_edit)
             new_start = st.number_input("New Start Rating", 1.0, 7.0, curr_start, step=0.1)
-            if st.button("Update Rating"):
-                supabase.table("players").update({"starting_rating": new_start * 400, "rating": new_start * 400}).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
-                st.success(f"Updated {p_edit} to {new_start}"); time.sleep(1); st.rerun()
+            
+            if st.button("Update Profile"):
+                supabase.table("players").update({
+                    "name": new_name,
+                    "starting_rating": new_start * 400, 
+                    "rating": new_start * 400
+                }).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
+                
+                st.success(f"Updated {new_name}!"); time.sleep(1); st.rerun()
+
     with c3:
         st.subheader("🗑️ Delete")
         to_del = st.selectbox("Select to Remove", [""] + sorted(df_players['name']))
@@ -765,3 +784,23 @@ elif sel == "⚙️ Admin Tools":
                 progress_bar.progress((idx + 1) / len(matches_to_update))
 
             st.success(f"✅ Replayed & Synced {len(all_matches)} matches!"); time.sleep(2); st.rerun()
+
+elif sel == "📘 Admin Guide":
+    st.header("📘 Admin Guide")
+    st.markdown("""
+    ### ⚡ Batch Entry
+    * **Goal:** Digitize a paper clipboard of matches quickly.
+    * **Tip:** You can enter matches for *any* date, but they default to "Now". If you need historical dates, use the CSV upload in Admin Tools.
+    
+    ### 📋 Roster Check
+    * **Goal:** Check if players exist before an event starts.
+    * **Workflow:** Paste your list -> The system flags new names -> You assign ratings -> Click "Save All".
+    
+    ### 🏟️ League Manager (Live)
+    * **Goal:** Manage a live event with multiple courts.
+    * **Format:** Select "4-Player" to generate a Round Robin schedule. 
+    
+    ### ⚙️ Admin Tools
+    * **Recalculate:** Use this if you delete a match or change a player's starting rating. It replays *every match in history* to ensure the current ratings are mathematically perfect.
+    * **Convert to PopUp:** If you accidentally typed "Tusday League" instead of "Tuesday", use this to hide the bad league from the public leaderboard.
+    """)
