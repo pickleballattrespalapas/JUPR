@@ -3,7 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 import time
 from datetime import datetime
-import difflib # REQUIRED for the Fuzzy Detective
+import difflib 
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide")
@@ -245,7 +245,6 @@ else:
 
 nav = ["🏆 Leaderboards", "🔍 Player Search"]
 if st.session_state.admin_logged_in: 
-    # NEW NAVIGATION ITEM ADDED HERE: "📋 Roster Check"
     nav += ["──────────", "📋 Roster Check", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
@@ -349,49 +348,43 @@ elif sel == "🔍 Player Search":
             else:
                 st.info("No matches found.")
 
-# --- NEW PAGE: ROSTER CHECK (Fuzzy Detective) ---
+# --- NEW PAGE: ROSTER CHECK (INDIVIDUAL EDIT) ---
 elif sel == "📋 Roster Check":
     st.header("📋 Roster Check")
     st.markdown("Paste a list of names to check their ratings. Detects typos and helps add new players.")
     
-    # 1. Configuration
     lookup_scope = st.radio("Rating Scope", ["OVERALL"] + (sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else []), horizontal=True)
-    
-    # 2. Input
     raw_names = st.text_area("Paste Names (one per line or comma-separated)", height=100, placeholder="Tom Elliott\nKeith Brand\nNew Player")
     
     if st.button("Analyze List"):
-        # Parse names
+        # Reset any previous session data to ensure fresh start
+        if 'roster_results' in st.session_state: del st.session_state.roster_results
+        if 'df_new_players' in st.session_state: del st.session_state.df_new_players
+
         parsed = [x.strip() for x in raw_names.replace('\n',',').split(',') if x.strip()]
         
         found_data = []
         typo_candidates = []
         new_players = []
-        
         all_db_names = list(name_to_id.keys())
         
         for n in parsed:
             # A. EXACT MATCH
             if n in name_to_id:
                 pid = name_to_id[n]
-                # Get Rating
                 r_val = 1200.0
                 if lookup_scope == "OVERALL":
                     row = df_players[df_players['id'] == pid]
                     if not row.empty: r_val = float(row.iloc[0]['rating'])
                 else:
-                    # Get Island Rating
                     row = df_leagues[(df_leagues['player_id'] == pid) & (df_leagues['league_name'] == lookup_scope)]
-                    if not row.empty: 
-                        r_val = float(row.iloc[0]['rating'])
+                    if not row.empty: r_val = float(row.iloc[0]['rating'])
                     else:
-                        # Fallback to Overall if no island history yet
                         ov_row = df_players[df_players['id'] == pid]
                         if not ov_row.empty: r_val = float(ov_row.iloc[0]['rating'])
                 
                 found_data.append({"Name": n, "Rating": f"{(r_val/400):.3f}", "Status": "✅ Found"})
-            
-            # B. FUZZY MATCH (TYPO DETECTION)
+            # B. FUZZY MATCH
             else:
                 matches = difflib.get_close_matches(n, all_db_names, n=1, cutoff=0.6)
                 if matches:
@@ -399,48 +392,72 @@ elif sel == "📋 Roster Check":
                 else:
                     new_players.append(n)
 
-        # --- RESULTS ---
+        # Store results in Session State to allow editing below
+        st.session_state.roster_results = {
+            'found': found_data,
+            'typos': typo_candidates,
+            'new': new_players
+        }
+
+    # --- RENDER RESULTS FROM STATE ---
+    if 'roster_results' in st.session_state:
+        results = st.session_state.roster_results
         
         # 1. Found Players
-        if found_data:
-            st.success(f"Found {len(found_data)} players.")
-            st.dataframe(pd.DataFrame(found_data), use_container_width=True)
+        if results['found']:
+            st.success(f"Found {len(results['found'])} players.")
+            st.dataframe(pd.DataFrame(results['found']), use_container_width=True)
         
-        # 2. Typos (Interactive Fixer)
-        if typo_candidates:
-            st.warning(f"⚠️ Found {len(typo_candidates)} potential typos.")
-            st.markdown("We found names that look similar. Check the box to use the existing database player.")
+        # 2. Typos
+        if results['typos']:
+            st.warning(f"⚠️ Found {len(results['typos'])} potential typos.")
             with st.form("fix_typos"):
-                # We save the "fixed" list to session state to prevent loop issues
                 accepted_fixes = {}
-                for item in typo_candidates:
+                for item in results['typos']:
                     c1, c2 = st.columns([1, 2])
-                    use_suggestion = c1.checkbox(f"Use '{item['Did you mean?']}'?", value=True, key=f"fix_{item['Input']}")
-                    c2.markdown(f"Input: **{item['Input']}** → Database: **{item['Did you mean?']}**")
-                    if use_suggestion:
-                        accepted_fixes[item['Input']] = item['Did you mean?']
+                    use = c1.checkbox(f"Use '{item['Did you mean?']}'?", value=True, key=f"fix_{item['Input']}")
+                    c2.markdown(f"**{item['Input']}** → **{item['Did you mean?']}**")
+                    if use: accepted_fixes[item['Input']] = item['Did you mean?']
                 
-                if st.form_submit_button("Confirm Fixes (Use Database Names)"):
-                    st.success("✅ Names mapped! You can now treat them as 'Found'.")
-                    
-        # 3. New Players (Bulk Create)
-        if new_players:
-            st.error(f"🛑 Found {len(new_players)} completely new players.")
-            with st.form("create_new_bulk"):
-                st.write("Assign a starting rating for these new players:")
-                c1, c2 = st.columns([2, 1])
-                default_r = c1.number_input("Default Start Rating", 1.0, 7.0, 3.5, step=0.1)
+                if st.form_submit_button("Confirm Fixes"):
+                    st.success("✅ Mapped! Re-run analysis if you want to see them in 'Found'.")
+
+        # 3. New Players (INDIVIDUAL EDIT)
+        if results['new']:
+            st.error(f"🛑 Found {len(results['new'])} completely new players.")
+            st.write("### 🆕 Assign Ratings")
+            
+            # Create/Load DataFrame for Editor
+            if 'df_new_players' not in st.session_state or len(st.session_state.df_new_players) != len(results['new']):
+                st.session_state.df_new_players = pd.DataFrame({
+                    "Name": results['new'],
+                    "Rating": [3.5] * len(results['new'])
+                })
+            
+            # Interactive Table
+            edited_df = st.data_editor(
+                st.session_state.df_new_players,
+                column_config={
+                    "Rating": st.column_config.NumberColumn("Start Rating", min_value=1.0, max_value=7.0, step=0.1, format="%.1f")
+                },
+                disabled=["Name"],
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            if st.button("💾 Save All New Players"):
+                success_count = 0
+                for _, row in edited_df.iterrows():
+                    ok, msg = safe_add_player(row['Name'], row['Rating'])
+                    if ok: success_count += 1
                 
-                if st.form_submit_button("Create All New Players"):
-                    success_count = 0
-                    for np_name in new_players:
-                        ok, msg = safe_add_player(np_name, default_r)
-                        if ok: success_count += 1
-                    
-                    if success_count > 0:
-                        st.success(f"Created {success_count} profiles! Click 'Analyze List' again to see their ratings.")
-                        time.sleep(2)
-                        st.rerun()
+                if success_count > 0:
+                    st.success(f"✅ Created {success_count} profiles!")
+                    time.sleep(1)
+                    # Clear state to reset view
+                    del st.session_state.roster_results
+                    del st.session_state.df_new_players
+                    st.rerun()
 
 elif sel == "🏟️ Live Court Manager":
     st.header("🏟️ Live Court Manager")
