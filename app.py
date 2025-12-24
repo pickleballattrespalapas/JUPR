@@ -3,6 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 import time
 from datetime import datetime
+import difflib 
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide")
@@ -244,7 +245,8 @@ else:
 
 nav = ["🏆 Leaderboards", "🔍 Player Search"]
 if st.session_state.admin_logged_in: 
-    nav += ["──────────", "📋 Roster Check", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
+    # Renamed "Live Court Manager" to "League Manager" per request
+    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
 # --- UI LOGIC ---
@@ -347,7 +349,6 @@ elif sel == "🔍 Player Search":
             else:
                 st.info("No matches found.")
 
-# --- PAGE: ROSTER CHECK (CLEAN) ---
 elif sel == "📋 Roster Check":
     st.header("📋 Roster Check")
     st.markdown("Paste a list of names to check ratings. Any names not found will be added to the 'New Player' table for onboarding.")
@@ -365,7 +366,7 @@ elif sel == "📋 Roster Check":
         new_players = []
         
         for n in parsed:
-            # STRICT CHECK ONLY
+            # STRICT CHECK ONLY (No Fuzzy)
             if n in name_to_id:
                 pid = name_to_id[n]
                 r_val = 1200.0
@@ -388,16 +389,13 @@ elif sel == "📋 Roster Check":
             'new': new_players
         }
 
-    # --- RENDER RESULTS ---
     if 'roster_results' in st.session_state:
         results = st.session_state.roster_results
         
-        # 1. Found Players
         if results['found']:
             st.success(f"Found {len(results['found'])} players.")
             st.dataframe(pd.DataFrame(results['found']), use_container_width=True)
         
-        # 2. New Players (INDIVIDUAL EDIT)
         if results['new']:
             st.error(f"🛑 Found {len(results['new'])} completely new players.")
             st.write("### 🆕 Assign Ratings & Save")
@@ -431,15 +429,17 @@ elif sel == "📋 Roster Check":
                     del st.session_state.df_new_players
                     st.rerun()
 
-elif sel == "🏟️ Live Court Manager":
-    st.header("🏟️ Live Court Manager")
+elif sel == "🏟️ League Manager":
+    st.header("🏟️ League Manager")
+    
+    # 1. FIXED: Court Counter OUTSIDE the form to allow dynamic refreshing
     if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
+    st.session_state.lc_courts = st.number_input("Courts", 1, 10, st.session_state.lc_courts, key="lc_court_input")
     
     with st.form("setup_lc"):
-        num = st.number_input("Courts", 1, 10, st.session_state.lc_courts)
         lg = st.text_input("League Name (Controls Island Rating)", "Tuesday Ladder")
         c_data = []
-        for i in range(num):
+        for i in range(st.session_state.lc_courts):
             c1, c2 = st.columns([1,3])
             t = c1.selectbox(f"T{i}", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
             n = c2.text_area(f"N{i}", height=70)
@@ -479,25 +479,20 @@ elif sel == "🏟️ Live Court Manager":
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
-    if 'rr_courts' not in st.session_state: st.session_state.rr_courts = 1
     
+    # 2. FIXED: Removed multi-court selector here to simplify (per request)
     with st.form("setup_rr"):
-        st.session_state.rr_courts = st.number_input("Courts", 1, 10, st.session_state.rr_courts)
         date_rr = st.date_input("Date", datetime.now())
         lg_rr = st.text_input("Event Name", "PopUp Event")
-        c_data = []
-        for i in range(st.session_state.rr_courts):
-            c1, c2 = st.columns([1,3])
-            t = c1.selectbox(f"Format {i}", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
-            n = c2.text_area(f"Players {i}", height=70)
-            c_data.append({'type':t, 'names':n})
+        c1, c2 = st.columns([1,3])
+        t = c1.selectbox("Format", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
+        n = c2.text_area("Players", height=70)
         
         if st.form_submit_button("Generate Schedule"):
             st.session_state.rr_schedule = []
             st.session_state.rr_league = lg_rr
-            for idx, c in enumerate(c_data):
-                pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                st.session_state.rr_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
+            pl = [x.strip() for x in n.replace('\n',',').split(',') if x.strip()]
+            st.session_state.rr_schedule.append({'c': 1, 'm': get_match_schedule(t, pl)})
             st.rerun()
 
     if 'rr_schedule' in st.session_state:
