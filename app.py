@@ -68,7 +68,6 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # FIX: Sort by ID (Creation Order) instead of Date to ensure specific IDs are found
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
@@ -244,7 +243,8 @@ else:
         st.session_state.admin_logged_in = False
         st.rerun()
 
-nav = ["🏆 Leaderboards", "🔍 Player Search", "ℹ️ System Info"]
+# --- NAVIGATION ---
+nav = ["🏆 Leaderboards", "🔍 Player Search", "❓ FAQs"]
 if st.session_state.admin_logged_in: 
     nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "⚡ Batch Entry", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
@@ -277,15 +277,6 @@ if sel == "🏆 Leaderboards":
     else:
         st.query_params.clear()
     
-    with st.expander("📊 How Ratings Work"):
-        st.markdown("""
-        * **Expectation vs Reality:** We predict the winner based on rating. If you outperform the prediction (e.g., winning 11-0 when it should have been close), you gain more points.
-        * **The Swing:**
-            * **Big Upset:** ~ +0.075 JUPR
-            * **Even Match (11-9):** ~ +0.008 JUPR
-        * **Safety Net:** Winners *never* lose points, even in sloppy wins.
-        """)
-
     if target_league == "OVERALL":
         display_df = df_players.copy()
     else:
@@ -349,26 +340,45 @@ elif sel == "🔍 Player Search":
             else:
                 st.info("No matches found.")
 
-elif sel == "ℹ️ System Info":
-    st.header("ℹ️ System Info")
-    st.markdown("""
-    ### What is JUPR?
-    JUPR (Just a Universal Pickleball Rating) is a hybrid rating system designed for club play. It tracks your performance across all official league matches and round robins.
+elif sel == "❓ FAQs":
+    st.header("❓ Frequently Asked Questions")
+    
+    with st.expander("🤔 What is JUPR?"):
+        st.markdown("""
+        **JUPR (Just a Universal Pickleball Rating)** is a modern rating system designed specifically for our club. 
+        It tracks your performance across all official league matches and round robins to give you an accurate skill rating.
+        """)
 
-    ### How Ratings Work
-    * **Scale:** Ratings typically range from **2.000 to 6.000+**.
-    * **The Math:** We use an Elo-based formula that looks at:
-        1.  **Who you played:** Beating a pro is worth more than beating a beginner.
+    with st.expander("📈 How are ratings calculated?"):
+        st.markdown("""
+        We use an **Elo-based formula** (similar to chess or video games) that considers:
+        1.  **Who you played:** Beating a higher-rated player rewards more points.
         2.  **The Score:** Winning 11-0 is worth more than winning 11-9.
-    
-    ### Key Features
-    * **The Safety Net:** If you win a match, you will *never* lose points, even if you play poorly against a lower-rated team.
-    * **Islands & Overall:** * **Overall Rating:** Your global skill level calculated from *every* match you play.
-        * **League Ratings (Islands):** Specific ratings for individual leagues (e.g., "Tuesday Ladder"). This allows you to have a different standing in different groups while maintaining one "True" rating.
-    
-    ### Pop-Up Events
-    Matches labeled as "Pop-Up" (Round Robins) affect your **Overall Rating** but do not generate a separate League Rating.
-    """)
+        3.  **The Safety Net:** Winners *never* lose points, even if they play a sloppy game against a lower-rated team.
+        """)
+
+    with st.expander("🏝️ Why is my 'Overall' rating different from my 'League' rating?"):
+        st.markdown("""
+        This is normal! You actually have **two** ratings:
+        
+        1.  **Global Rating (Overall):** This tracks *every* match you play, against *everyone*.
+        2.  **League Rating (Island):** This tracks *only* your performance within a specific league (e.g., "Tuesday Ladder").
+        
+        **Why they drift apart:**
+        Imagine you only play in the Tuesday League. You might think your ratings should be identical. However, your *opponents* might play in other leagues on weekends. 
+        
+        * When your opponent improves over the weekend, their **Global Rating** goes up.
+        * When you play them next Tuesday, the math engine sees a "stronger" opponent in the **Global** calculation, but the "same" opponent in the **League** calculation.
+        
+        This slight difference in opponent strength causes your points gained/lost to vary slightly between the two systems.
+        """)
+
+    with st.expander("🎾 Do 'Pop-Up' events count?"):
+        st.markdown("""
+        **Yes and No.**
+        * **Yes:** They count towards your **Overall / Global** rating.
+        * **No:** They do *not* affect your specific League standings (e.g., they won't mess up your ranking in the Fall Ladder).
+        """)
 
 elif sel == "📋 Roster Check":
     st.header("📋 Roster Check")
@@ -496,6 +506,7 @@ elif sel == "🏟️ League Manager":
                     time.sleep(1)
                     st.rerun()
 
+# --- NEW: BATCH ENTRY (ORDERED) ---
 elif sel == "⚡ Batch Entry":
     st.header("⚡ Batch Match Entry")
     st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
