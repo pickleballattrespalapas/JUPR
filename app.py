@@ -3,6 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 import time
 from datetime import datetime
+import difflib # REQUIRED for the Fuzzy Detective
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide")
@@ -14,16 +15,13 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
-# --- MAGIC LINK LOGIN (OPTION B) ---
-# Check URL for admin key to auto-login
+# --- MAGIC LINK LOGIN ---
 query_params = st.query_params
 if "admin_key" in query_params:
     if query_params["admin_key"] == st.secrets["supabase"]["admin_password"]:
         st.session_state.admin_logged_in = True
-        # Optional: Clear the key from URL so it doesn't linger visually (comment out if you prefer it stays)
-        # st.query_params.clear() 
 
-# --- DATABASE CONNECTION (STABLE) ---
+# --- DATABASE CONNECTION ---
 @st.cache_resource
 def init_supabase():
     url = st.secrets["supabase"]["url"]
@@ -59,7 +57,7 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
         
     return final_delta_t1, final_delta_t2
 
-# --- DATA LOADER (WITH RETRY) ---
+# --- DATA LOADER ---
 def load_data():
     max_retries = 3
     for attempt in range(max_retries):
@@ -247,7 +245,8 @@ else:
 
 nav = ["🏆 Leaderboards", "🔍 Player Search"]
 if st.session_state.admin_logged_in: 
-    nav += ["──────────", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
+    # NEW NAVIGATION ITEM ADDED HERE: "📋 Roster Check"
+    nav += ["──────────", "📋 Roster Check", "🏟️ Live Court Manager", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
 # --- UI LOGIC ---
@@ -349,6 +348,99 @@ elif sel == "🔍 Player Search":
                 st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'Raw Pts', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
             else:
                 st.info("No matches found.")
+
+# --- NEW PAGE: ROSTER CHECK (Fuzzy Detective) ---
+elif sel == "📋 Roster Check":
+    st.header("📋 Roster Check")
+    st.markdown("Paste a list of names to check their ratings. Detects typos and helps add new players.")
+    
+    # 1. Configuration
+    lookup_scope = st.radio("Rating Scope", ["OVERALL"] + (sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else []), horizontal=True)
+    
+    # 2. Input
+    raw_names = st.text_area("Paste Names (one per line or comma-separated)", height=100, placeholder="Tom Elliott\nKeith Brand\nNew Player")
+    
+    if st.button("Analyze List"):
+        # Parse names
+        parsed = [x.strip() for x in raw_names.replace('\n',',').split(',') if x.strip()]
+        
+        found_data = []
+        typo_candidates = []
+        new_players = []
+        
+        all_db_names = list(name_to_id.keys())
+        
+        for n in parsed:
+            # A. EXACT MATCH
+            if n in name_to_id:
+                pid = name_to_id[n]
+                # Get Rating
+                r_val = 1200.0
+                if lookup_scope == "OVERALL":
+                    row = df_players[df_players['id'] == pid]
+                    if not row.empty: r_val = float(row.iloc[0]['rating'])
+                else:
+                    # Get Island Rating
+                    row = df_leagues[(df_leagues['player_id'] == pid) & (df_leagues['league_name'] == lookup_scope)]
+                    if not row.empty: 
+                        r_val = float(row.iloc[0]['rating'])
+                    else:
+                        # Fallback to Overall if no island history yet
+                        ov_row = df_players[df_players['id'] == pid]
+                        if not ov_row.empty: r_val = float(ov_row.iloc[0]['rating'])
+                
+                found_data.append({"Name": n, "Rating": f"{(r_val/400):.3f}", "Status": "✅ Found"})
+            
+            # B. FUZZY MATCH (TYPO DETECTION)
+            else:
+                matches = difflib.get_close_matches(n, all_db_names, n=1, cutoff=0.6)
+                if matches:
+                    typo_candidates.append({"Input": n, "Did you mean?": matches[0]})
+                else:
+                    new_players.append(n)
+
+        # --- RESULTS ---
+        
+        # 1. Found Players
+        if found_data:
+            st.success(f"Found {len(found_data)} players.")
+            st.dataframe(pd.DataFrame(found_data), use_container_width=True)
+        
+        # 2. Typos (Interactive Fixer)
+        if typo_candidates:
+            st.warning(f"⚠️ Found {len(typo_candidates)} potential typos.")
+            st.markdown("We found names that look similar. Check the box to use the existing database player.")
+            with st.form("fix_typos"):
+                # We save the "fixed" list to session state to prevent loop issues
+                accepted_fixes = {}
+                for item in typo_candidates:
+                    c1, c2 = st.columns([1, 2])
+                    use_suggestion = c1.checkbox(f"Use '{item['Did you mean?']}'?", value=True, key=f"fix_{item['Input']}")
+                    c2.markdown(f"Input: **{item['Input']}** → Database: **{item['Did you mean?']}**")
+                    if use_suggestion:
+                        accepted_fixes[item['Input']] = item['Did you mean?']
+                
+                if st.form_submit_button("Confirm Fixes (Use Database Names)"):
+                    st.success("✅ Names mapped! You can now treat them as 'Found'.")
+                    
+        # 3. New Players (Bulk Create)
+        if new_players:
+            st.error(f"🛑 Found {len(new_players)} completely new players.")
+            with st.form("create_new_bulk"):
+                st.write("Assign a starting rating for these new players:")
+                c1, c2 = st.columns([2, 1])
+                default_r = c1.number_input("Default Start Rating", 1.0, 7.0, 3.5, step=0.1)
+                
+                if st.form_submit_button("Create All New Players"):
+                    success_count = 0
+                    for np_name in new_players:
+                        ok, msg = safe_add_player(np_name, default_r)
+                        if ok: success_count += 1
+                    
+                    if success_count > 0:
+                        st.success(f"Created {success_count} profiles! Click 'Analyze List' again to see their ratings.")
+                        time.sleep(2)
+                        st.rerun()
 
 elif sel == "🏟️ Live Court Manager":
     st.header("🏟️ Live Court Manager")
