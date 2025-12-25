@@ -68,7 +68,7 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # Load ample history for stats calculation
+            # Sort by ID (Creation Order) to find recent additions
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
@@ -85,8 +85,9 @@ def load_data():
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
-                # Convert date for stats
-                df_matches['date_obj'] = pd.to_datetime(df_matches['date'])
+                
+                # --- FIX: USE format='mixed' TO HANDLE INCONSISTENT DATES ---
+                df_matches['date_obj'] = pd.to_datetime(df_matches['date'], format='mixed')
                 
             return df_players, df_leagues, df_matches, name_to_id, id_to_name
         
@@ -257,7 +258,6 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 League Leaderboards")
     
-    # 1. League Context Selector
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
@@ -266,7 +266,6 @@ if sel == "🏆 Leaderboards":
     c1, c2 = st.columns([3, 1])
     target_league = c1.selectbox("Select League", available_leagues)
     
-    # 2. Week Threshold Slider (Dynamic per league view)
     min_weeks = c2.number_input("Minimum Weeks Required", min_value=1, value=1, help="Filter out players who haven't played this many weeks.")
 
     # 3. Data Prep for Stats
@@ -282,20 +281,14 @@ if sel == "🏆 Leaderboards":
 
     if not base_df.empty and 'rating' in base_df.columns:
         # A. Calculate Extended Stats (Weeks & Rating Delta)
-        # Convert match list to long format to group by player
         stats_map = {}
         
-        # We iterate matches to calculate Weeks and Delta
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
                 # Parse week
                 week_id = m['date_obj'].strftime('%Y-%U') # Year-WeekNumber
                 delta = m['elo_delta']
-                
-                # Identify winners/losers for delta direction
                 t1_won = m['score_t1'] > m['score_t2']
-                
-                # Players involved
                 pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
                 
                 for i, pid in enumerate(pids):
@@ -303,9 +296,6 @@ if sel == "🏆 Leaderboards":
                     if pid not in stats_map: stats_map[pid] = {'weeks': set(), 'total_delta': 0.0}
                     
                     stats_map[pid]['weeks'].add(week_id)
-                    
-                    # Add/Sub Delta
-                    # p1, p2 are indices 0,1 (Team 1). p3, p4 are 2,3 (Team 2)
                     is_t1 = (i <= 1)
                     if (is_t1 and t1_won) or (not is_t1 and not t1_won):
                         stats_map[pid]['total_delta'] += delta
@@ -330,14 +320,12 @@ if sel == "🏆 Leaderboards":
             st.markdown("### 🏅 Top Performers")
             col1, col2, col3, col4 = st.columns(4)
             
-            # 1. Highest Rating
             with col1:
                 st.markdown("**👑 Highest Rating**")
                 top_rating = filtered_df.sort_values('rating', ascending=False).head(5)
                 for _, r in top_rating.iterrows():
                     st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
                     
-            # 2. Most Improved
             with col2:
                 st.markdown("**🔥 Most Improved**")
                 top_gain = filtered_df.sort_values('rating_gain', ascending=False).head(5)
@@ -345,14 +333,12 @@ if sel == "🏆 Leaderboards":
                     val = r['rating_gain'] / 400
                     st.markdown(f"**{'+' if val>0 else ''}{val:.3f}** - {r['name']}")
 
-            # 3. Best Win %
             with col3:
                 st.markdown("**🎯 Best Win %**")
                 top_pct = filtered_df.sort_values('win_pct', ascending=False).head(5)
                 for _, r in top_pct.iterrows():
                     st.markdown(f"**{r['win_pct']:.1f}%** - {r['name']}")
 
-            # 4. Most Wins
             with col4:
                 st.markdown("**🚜 Most Wins**")
                 top_wins = filtered_df.sort_values('wins', ascending=False).head(5)
@@ -363,9 +349,6 @@ if sel == "🏆 Leaderboards":
             
             # --- 5. FULL TABLE ---
             st.markdown("### 📊 Full Standings")
-            display_cols = ['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'win_pct', 'rating_gain']
-            
-            # Formatting for display
             final_view = filtered_df.sort_values('rating', ascending=False).copy()
             final_view['JUPR'] = final_view['JUPR'].map('{:,.3f}'.format)
             final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
@@ -383,7 +366,6 @@ if sel == "🏆 Leaderboards":
                 }
             )
             
-            # Sharing Link
             if target_league != "OVERALL":
                 st.caption(f"👇 Share this league view: `https://jupr-leagues.streamlit.app/?league={target_league.replace(' ', '%20')}`")
 
