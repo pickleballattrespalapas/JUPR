@@ -68,7 +68,7 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # Sort by ID (Creation Order) to find recent additions regardless of match date
+            # Load ample history for stats calculation
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
@@ -85,6 +85,8 @@ def load_data():
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
+                # Convert date for stats
+                df_matches['date_obj'] = pd.to_datetime(df_matches['date'])
                 
             return df_players, df_leagues, df_matches, name_to_id, id_to_name
         
@@ -253,46 +255,140 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 # --- UI LOGIC ---
 
 if sel == "🏆 Leaderboards":
-    st.header("🏆 Leaderboards")
+    st.header("🏆 League Leaderboards")
     
+    # 1. League Context Selector
     available_leagues = ["OVERALL"]
     if not df_leagues.empty:
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
         available_leagues += unique_l
         
-    default_index = 0
-    query_params = st.query_params
-    if "league" in query_params:
-        url_league = query_params["league"]
-        if url_league in available_leagues:
-            default_index = available_leagues.index(url_league)
-            
-    target_league = st.selectbox("Select View", available_leagues, index=default_index)
+    c1, c2 = st.columns([3, 1])
+    target_league = c1.selectbox("Select League", available_leagues)
     
-    if target_league != "OVERALL":
-        st.query_params["league"] = target_league
-        APP_BASE_URL = "https://jupr-leagues.streamlit.app"
-        full_link = f"{APP_BASE_URL}/?league={target_league.replace(' ', '%20')}"
-        st.caption("👇 Share this league:")
-        st.code(full_link, language=None)
-    else:
-        st.query_params.clear()
-    
+    # 2. Week Threshold Slider (Dynamic per league view)
+    min_weeks = c2.number_input("Minimum Weeks Required", min_value=1, value=1, help="Filter out players who haven't played this many weeks.")
+
+    # 3. Data Prep for Stats
     if target_league == "OVERALL":
-        display_df = df_players.copy()
+        base_df = df_players.copy()
+        matches_scope = df_matches
     else:
-        if df_leagues.empty: display_df = pd.DataFrame()
+        if df_leagues.empty: base_df = pd.DataFrame()
         else:
-            display_df = df_leagues[df_leagues['league_name'] == target_league].copy()
-            display_df['name'] = display_df['player_id'].map(id_to_name)
-    
-    if not display_df.empty and 'rating' in display_df.columns:
-        display_df['JUPR'] = (display_df['rating']/400).map('{:,.3f}'.format)
-        display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100).map('{:.1f}%'.format)
-        df_sorted = display_df.sort_values('rating', ascending=False)
-        st.dataframe(df_sorted[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
+            base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
+            base_df['name'] = base_df['player_id'].map(id_to_name)
+        matches_scope = df_matches[df_matches['league'] == target_league]
+
+    if not base_df.empty and 'rating' in base_df.columns:
+        # A. Calculate Extended Stats (Weeks & Rating Delta)
+        # Convert match list to long format to group by player
+        stats_map = {}
+        
+        # We iterate matches to calculate Weeks and Delta
+        if not matches_scope.empty:
+            for _, m in matches_scope.iterrows():
+                # Parse week
+                week_id = m['date_obj'].strftime('%Y-%U') # Year-WeekNumber
+                delta = m['elo_delta']
+                
+                # Identify winners/losers for delta direction
+                t1_won = m['score_t1'] > m['score_t2']
+                
+                # Players involved
+                pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
+                
+                for i, pid in enumerate(pids):
+                    if pd.isna(pid): continue
+                    if pid not in stats_map: stats_map[pid] = {'weeks': set(), 'total_delta': 0.0}
+                    
+                    stats_map[pid]['weeks'].add(week_id)
+                    
+                    # Add/Sub Delta
+                    # p1, p2 are indices 0,1 (Team 1). p3, p4 are 2,3 (Team 2)
+                    is_t1 = (i <= 1)
+                    if (is_t1 and t1_won) or (not is_t1 and not t1_won):
+                        stats_map[pid]['total_delta'] += delta
+                    else:
+                        stats_map[pid]['total_delta'] -= delta
+
+        # Merge stats into base_df
+        base_df['weeks_played'] = base_df.apply(lambda x: len(stats_map.get(x['id'] if 'id' in x else x['player_id'], {}).get('weeks', [])), axis=1)
+        base_df['rating_gain'] = base_df.apply(lambda x: stats_map.get(x['id'] if 'id' in x else x['player_id'], {}).get('total_delta', 0.0), axis=1)
+        
+        # Calculate standard columns
+        base_df['JUPR'] = base_df['rating'] / 400
+        base_df['win_pct'] = (base_df['wins'] / base_df['matches_played'].replace(0, 1)) * 100
+        
+        # B. Filter by Threshold
+        filtered_df = base_df[base_df['weeks_played'] >= min_weeks].copy()
+        
+        if filtered_df.empty:
+            st.warning(f"No players found with {min_weeks}+ weeks of play in this league.")
+        else:
+            # --- 4. DISPLAY TOP 5 GRIDS ---
+            st.markdown("### 🏅 Top Performers")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            # 1. Highest Rating
+            with col1:
+                st.markdown("**👑 Highest Rating**")
+                top_rating = filtered_df.sort_values('rating', ascending=False).head(5)
+                for _, r in top_rating.iterrows():
+                    st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
+                    
+            # 2. Most Improved
+            with col2:
+                st.markdown("**🔥 Most Improved**")
+                top_gain = filtered_df.sort_values('rating_gain', ascending=False).head(5)
+                for _, r in top_gain.iterrows():
+                    val = r['rating_gain'] / 400
+                    st.markdown(f"**{'+' if val>0 else ''}{val:.3f}** - {r['name']}")
+
+            # 3. Best Win %
+            with col3:
+                st.markdown("**🎯 Best Win %**")
+                top_pct = filtered_df.sort_values('win_pct', ascending=False).head(5)
+                for _, r in top_pct.iterrows():
+                    st.markdown(f"**{r['win_pct']:.1f}%** - {r['name']}")
+
+            # 4. Most Wins
+            with col4:
+                st.markdown("**🚜 Most Wins**")
+                top_wins = filtered_df.sort_values('wins', ascending=False).head(5)
+                for _, r in top_wins.iterrows():
+                    st.markdown(f"**{r['wins']} Wins** - {r['name']}")
+
+            st.divider()
+            
+            # --- 5. FULL TABLE ---
+            st.markdown("### 📊 Full Standings")
+            display_cols = ['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'win_pct', 'rating_gain']
+            
+            # Formatting for display
+            final_view = filtered_df.sort_values('rating', ascending=False).copy()
+            final_view['JUPR'] = final_view['JUPR'].map('{:,.3f}'.format)
+            final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
+            final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
+            
+            st.dataframe(
+                final_view[['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'Win %', 'Gain']], 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "name": "Player",
+                    "matches_played": "Matches",
+                    "weeks_played": "Weeks",
+                    "rating_gain": "Gain"
+                }
+            )
+            
+            # Sharing Link
+            if target_league != "OVERALL":
+                st.caption(f"👇 Share this league view: `https://jupr-leagues.streamlit.app/?league={target_league.replace(' ', '%20')}`")
+
     else:
-        st.info("No data for this league yet.")
+        st.info("No data available for this league.")
 
 elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
