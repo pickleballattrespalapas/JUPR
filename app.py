@@ -15,13 +15,6 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
-# 🛠️ ADMIN SETTINGS: Set Minimum Weeks Required per League here
-LEAGUE_MIN_WEEKS = {
-    "Tuesday Ladder": 2,
-    "Fall 2025 Ladder": 3,
-    "DEFAULT": 2
-}
-
 # --- MAGIC LINK LOGIN ---
 query_params = st.query_params
 if "admin_key" in query_params:
@@ -94,9 +87,6 @@ def load_data():
                 df_players = pd.DataFrame(columns=['id', 'name', 'rating', 'wins', 'losses'])
 
             if not df_matches.empty:
-                # Strip whitespace from league names to prevent "Tuesday " vs "Tuesday" mismatch
-                df_matches['league'] = df_matches['league'].astype(str).str.strip()
-                
                 df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
@@ -248,6 +238,7 @@ def process_matches(match_list, name_to_id, df_p, df_l):
 df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name = load_data()
 
 # --- PROCESS META ---
+# Active List for Match Entry (Includes Pop-Ups)
 if not df_meta.empty:
     active_leagues_list = sorted(df_meta[df_meta['is_active'] == True]['league_name'].tolist())
 else:
@@ -278,26 +269,33 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 League Leaderboards")
     
-    # 1. League Context Selector
+    # 1. League Context Selector (Filter out Pop-Ups)
     available_leagues = ["OVERALL"]
     if not df_meta.empty:
-        unique_l = sorted(df_meta['league_name'].unique().tolist())
+        # Only show Standard leagues (not Pop-Ups) in Leaderboard
+        std_leagues = df_meta[df_meta['league_type'] != 'Pop-Up']['league_name'].unique().tolist()
+        unique_l = sorted(std_leagues)
         available_leagues += unique_l
     elif not df_leagues.empty:
+        # Fallback if meta empty
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
         available_leagues += unique_l
         
     c1, c2 = st.columns([3, 1])
     target_league = c1.selectbox("Select League", available_leagues)
     
-    # 2. Threshold Logic
-    threshold_weeks = 1
+    # 2. Threshold Logic (With Slider Override)
+    db_threshold = 1
     if not df_meta.empty and target_league != "OVERALL":
         meta_row = df_meta[df_meta['league_name'] == target_league]
         if not meta_row.empty:
-            threshold_weeks = int(meta_row.iloc[0]['min_weeks'])
+            db_threshold = int(meta_row.iloc[0]['min_weeks'])
     
-    c2.metric("Min Weeks Req.", threshold_weeks)
+    # Show slider to allow user to see "1 week" players even if DB says 2
+    if target_league != "OVERALL":
+        threshold_weeks = c2.number_input("Minimum Weeks Filter", min_value=1, value=db_threshold, help="Default set by Admin. You can lower this to see more players.")
+    else:
+        threshold_weeks = 1 # Overall always shows 1
 
     # 3. Data Prep for Stats
     if target_league == "OVERALL":
@@ -308,8 +306,7 @@ if sel == "🏆 Leaderboards":
         else:
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
-        # Clean string to match
-        matches_scope = df_matches[df_matches['league'] == target_league.strip()]
+        matches_scope = df_matches[df_matches['league'] == target_league]
 
     if not base_df.empty and 'rating' in base_df.columns:
         # A. Calculate Extended Stats (Weeks & Rating Delta)
@@ -317,7 +314,6 @@ if sel == "🏆 Leaderboards":
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                # ISO Calendar (Year, WeekNum) - Robust Week Handling
                 iso_year, iso_week, _ = m['date_obj'].date().isocalendar()
                 week_id = f"{iso_year}-{iso_week}"
                 
@@ -585,7 +581,7 @@ elif sel == "🏟️ League Manager":
     # --- TAB 2: SETTINGS ---
     with lm_tabs[1]:
         if not df_meta.empty:
-            st.info("Edit league settings here. Changes save automatically.")
+            st.info("Uncheck 'Active' to retire a league. It will be hidden from entry forms but remain in history.")
             edit_meta = df_meta[['id', 'league_name', 'league_type', 'min_weeks', 'is_active']].copy()
             edited_leagues = st.data_editor(
                 edit_meta,
@@ -761,17 +757,27 @@ elif sel == "👥 Players":
                 ok, msg = safe_add_player(n, r)
                 if ok: st.success(f"Added {n}!"); time.sleep(1); st.rerun()
                 else: st.error(msg)
+    
     with c2:
         st.subheader("✏️ Edit Player")
         p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
         if p_edit:
             curr_row = df_players[df_players['name'] == p_edit].iloc[0]
             curr_start = float(curr_row['starting_rating']) / 400
+            
+            # Form for Name AND Rating
             new_name = st.text_input("Edit Name", value=p_edit)
             new_start = st.number_input("New Start Rating", 1.0, 7.0, curr_start, step=0.1)
+            
             if st.button("Update Profile"):
-                supabase.table("players").update({"name": new_name, "starting_rating": new_start * 400, "rating": new_start * 400}).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
+                supabase.table("players").update({
+                    "name": new_name,
+                    "starting_rating": new_start * 400, 
+                    "rating": new_start * 400
+                }).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
+                
                 st.success(f"Updated {new_name}!"); time.sleep(1); st.rerun()
+
     with c3:
         st.subheader("🗑️ Delete")
         to_del = st.selectbox("Select to Remove", [""] + sorted(df_players['name']))
@@ -782,6 +788,7 @@ elif sel == "👥 Players":
 
 elif sel == "📝 Match Log":
     st.header("📝 Match Log")
+    
     filter_type = st.radio("Filter Matches", ["All", "League Matches", "Pop-Up Events"], horizontal=True)
     if filter_type == "League Matches": view_df = df_matches[df_matches['match_type'] != 'PopUp']
     elif filter_type == "Pop-Up Events": view_df = df_matches[df_matches['match_type'] == 'PopUp']
@@ -869,6 +876,6 @@ elif sel == "📘 Admin Guide":
     st.markdown("""
     ### 🏟️ League Manager
     * **Live Match Entry:** Use this to generate schedules and enter scores for a live event.
-    * **Manage Active Leagues:** Archive old leagues or change minimum participation weeks here.
+    * **Manage Active Leagues:** Uncheck the "Active?" box to retire a league. It will vanish from input forms but stay in history.
     * **Migration:** Use this if your dropdowns are empty but you have history.
     """)
