@@ -3,7 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 import time
 from datetime import datetime
-import difflib 
+import re
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide")
@@ -100,11 +100,11 @@ def load_data():
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
                 
-                # Date parsing just in case
+                # Date parsing
                 df_matches['date_str'] = df_matches['date'].astype(str).str[:10] 
                 df_matches['date_obj'] = pd.to_datetime(df_matches['date_str'], errors='coerce')
                 
-                # Handle Week Tag (if it exists, otherwise fill empty)
+                # Handle Week Tag
                 if 'week_tag' not in df_matches.columns:
                     df_matches['week_tag'] = "Unknown"
                 else:
@@ -123,19 +123,18 @@ def load_data():
 # --- HELPERS ---
 def get_match_schedule(format_type, players):
     if len(players) < int(format_type.split('-')[0]): return []
-    if format_type == "12-Player":
+    p = players
+    if format_type == "4-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
+    elif format_type == "5-Player": return [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5'}]
+    elif format_type == "6-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5'}]
+    elif format_type == "8-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'}, {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'}, {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'}, {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}]
+    elif format_type == "12-Player":
         raw = [[([2, 5], [3, 10]), ([4, 6], [8, 9]), ([11, 0], [1, 7])], [([5, 8], [6, 2]), ([7, 9], [0, 1]), ([11, 3], [4, 10])], [([10, 1], [3, 4]), ([11, 6], [7, 2]), ([8, 0], [9, 5])], [([11, 9], [10, 5]), ([0, 3], [1, 8]), ([2, 4], [6, 7])], [([3, 6], [4, 0]), ([5, 7], [9, 10]), ([11, 1], [2, 8])], [([8, 10], [1, 2]), ([11, 4], [5, 0]), ([6, 9], [7, 3])], [([11, 7], [8, 3]), ([9, 1], [10, 6]), ([0, 2], [4, 5])], [([1, 4], [2, 9]), ([3, 5], [7, 8]), ([11, 10], [0, 6])], [([6, 8], [10, 0]), ([4, 7], [5, 1]), ([11, 2], [3, 9])], [([11, 5], [6, 1]), ([9, 0], [2, 3]), ([7, 10], [8, 4])], [([10, 2], [0, 7]), ([11, 8], [9, 4]), ([1, 3], [5, 6])]]
         matches = []
         for r_idx, round_pairs in enumerate(raw):
             for m_idx, (t1_idx, t2_idx) in enumerate(round_pairs):
                 matches.append({'desc': f"R{r_idx+1}", 't1': [players[t1_idx[0]], players[t1_idx[1]]], 't2': [players[t2_idx[0]], players[t2_idx[1]]] })
         return matches
-    
-    p = players
-    if format_type == "4-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
-    elif format_type == "5-Player": return [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5'}]
-    elif format_type == "6-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5'}]
-    elif format_type == "8-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1 A'}, {'t1':[p[4],p[5]],'t2':[p[6],p[7]],'desc':'R1 B'}, {'t1':[p[0],p[2]],'t2':[p[4],p[6]],'desc':'R2 A'}, {'t1':[p[1],p[3]],'t2':[p[5],p[7]],'desc':'R2 B'}, {'t1':[p[0],p[3]],'t2':[p[5],p[6]],'desc':'R3 A'}, {'t1':[p[1],p[2]],'t2':[p[4],p[7]],'desc':'R3 B'}, {'t1':[p[0],p[4]],'t2':[p[1],p[5]],'desc':'R4 A'}, {'t1':[p[2],p[6]],'t2':[p[3],p[7]],'desc':'R4 B'}]
     return []
 
 def safe_add_player(name, rating):
@@ -308,16 +307,21 @@ if sel == "🏆 Leaderboards":
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
         
-        matches_scope = df_matches[df_matches['league'] == target_league]
-        if matches_scope.empty:
-            matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
+        # FUZZY MATCH LOGIC
+        def normalize(s): return re.sub(r'[\W_]+', '', str(s)).lower()
+        norm_target = normalize(target_league)
+        
+        if not df_matches.empty:
+            matches_scope = df_matches[df_matches['league'].apply(normalize) == norm_target]
+        else:
+            matches_scope = pd.DataFrame()
 
     if not base_df.empty and 'rating' in base_df.columns:
         stats_map = {}
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                # NEW LOGIC: Use 'week_tag'
+                # Logic: Use week_tag to count weeks
                 week_id = m.get('week_tag', 'Unknown')
                 if pd.isna(week_id) or week_id == "" or week_id == "Unknown": 
                     week_id = "Untagged"
@@ -330,29 +334,42 @@ if sel == "🏆 Leaderboards":
                     if pd.isna(raw_pid) or raw_pid == -1: continue
                     pid_int = int(raw_pid)
                     
-                    if pid_int not in stats_map: stats_map[pid_int] = {'weeks': set(), 'total_delta': 0.0, 'live_matches': 0}
+                    if pid_int not in stats_map: 
+                        stats_map[pid_int] = {'weeks': set(), 'total_delta': 0.0, 'live_matches': 0, 'live_wins': 0, 'live_losses': 0}
+                    
                     if week_id != "Untagged":
                         stats_map[pid_int]['weeks'].add(week_id) 
+                    
                     stats_map[pid_int]['live_matches'] += 1
                     
                     is_t1 = (i <= 1)
-                    if (is_t1 and t1_won) or (not is_t1 and not t1_won):
+                    # Check win for this player
+                    player_won = (is_t1 and t1_won) or (not is_t1 and not t1_won)
+                    
+                    if player_won:
+                        stats_map[pid_int]['live_wins'] += 1
                         stats_map[pid_int]['total_delta'] += delta
                     else:
+                        stats_map[pid_int]['live_losses'] += 1
                         stats_map[pid_int]['total_delta'] -= delta
 
-        # Merge
-        base_df['weeks_played'] = base_df.apply(lambda x: len(stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('weeks', [])), axis=1)
-        base_df['rating_gain'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('total_delta', 0.0), axis=1)
-        base_df['live_matches_count'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('live_matches', 0), axis=1)
+        # Helper to safely get stats
+        def get_stat(row, key, default):
+            pid = int(row['id'] if 'id' in row else row['player_id'])
+            return stats_map.get(pid, {}).get(key, default)
+
+        # Merge Stats
+        base_df['weeks_played'] = base_df.apply(lambda x: len(get_stat(x, 'weeks', [])), axis=1)
+        base_df['rating_gain'] = base_df.apply(lambda x: get_stat(x, 'total_delta', 0.0), axis=1)
         
+        # --- CRITICAL: OVERRIDE GLOBAL STATS WITH LOCAL STATS FOR LEAGUE VIEW ---
         if target_league != "OVERALL":
-             base_df['display_matches'] = base_df['live_matches_count']
-        else:
-             base_df['display_matches'] = base_df['matches_played']
+            base_df['matches_played'] = base_df.apply(lambda x: get_stat(x, 'live_matches', 0), axis=1)
+            base_df['wins'] = base_df.apply(lambda x: get_stat(x, 'live_wins', 0), axis=1)
+            base_df['losses'] = base_df.apply(lambda x: get_stat(x, 'live_losses', 0), axis=1)
 
         base_df['JUPR'] = base_df['rating'] / 400
-        base_df['win_pct'] = (base_df['wins'] / base_df['display_matches'].replace(0, 1)) * 100
+        base_df['win_pct'] = (base_df['wins'] / base_df['matches_played'].replace(0, 1)) * 100
         
         # --- 4. SHOW GRIDS (NO FILTER) ---
         if target_league != "OVERALL":
@@ -518,7 +535,7 @@ elif sel == "🏟️ League Manager":
     
     lm_tabs = st.tabs(["📝 Live Match Entry", "⚙️ League Settings", "🆕 Create League", "🔄 Migration"])
     
-    # --- TAB 1: LIVE MATCH ENTRY (RESTORED) ---
+    # --- TAB 1: LIVE MATCH ENTRY ---
     with lm_tabs[0]:
         st.subheader("Live Court Management")
         
@@ -710,7 +727,6 @@ elif sel == "⚡ Batch Entry":
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
-    
     with st.form("setup_rr"):
         date_rr = st.date_input("Date", datetime.now())
         rr_opts = active_leagues_list if active_leagues_list else ["PopUp Event"]
@@ -813,111 +829,80 @@ elif sel == "📝 Match Log":
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
-    # --- UPDATED: LEAGUE MERGER ---
-    st.subheader("🔗 League Merger")
-    st.markdown("Merge duplicate leagues.")
-    
-    if not df_matches.empty:
-        all_match_names = sorted(df_matches['league'].astype(str).unique().tolist())
-        c1, c2 = st.columns(2)
-        from_league = c1.selectbox("Move Matches FROM:", all_match_names)
-        dest_options = [l for l in active_leagues_list if l != from_league]
-        to_league = c2.selectbox("Move Matches TO:", dest_options)
-        
-        if st.button(f"⚠️ Merge '{from_league}' -> '{to_league}'"):
-            if from_league and to_league:
-                count = df_matches[df_matches['league'].astype(str) == from_league].shape[0]
-                supabase.table("matches").update({"league": to_league}).eq("league", from_league).execute()
-                st.success(f"✅ Moved {count} matches! Now run 'Recalculate League History' below.")
-                time.sleep(2)
-                st.rerun()
-    
-    st.divider()
-    
     st.subheader("📅 Bulk Week Tag Editor")
-    st.markdown("Tag existing matches with a week label (e.g. 'Week 1')")
     with st.form("bulk_week_edit"):
         c1, c2, c3 = st.columns(3)
-        start_id = c1.number_input("Start Match ID", min_value=0)
-        end_id = c2.number_input("End Match ID", min_value=0)
-        new_tag = c3.text_input("New Week Tag (e.g. 'Week 2')")
-        
-        if st.form_submit_button("Update Week Tags"):
-            if start_id > 0 and end_id >= start_id:
-                id_list = list(range(start_id, end_id + 1))
-                try:
-                    supabase.table("matches").update({"week_tag": new_tag}).in_("id", id_list).execute()
-                    st.success(f"✅ Tagged {len(id_list)} matches as '{new_tag}'!")
-                    time.sleep(2)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-            else:
-                st.error("Invalid ID Range")
-
+        start_id = c1.number_input("Start ID", min_value=0); end_id = c2.number_input("End ID", min_value=0); new_tag = c3.text_input("New Tag")
+        if st.form_submit_button("Tag"):
+            if start_id > 0:
+                supabase.table("matches").update({"week_tag": new_tag}).in_("id", list(range(start_id, end_id+1))).execute()
+                st.success("Tagged!"); time.sleep(1); st.rerun()
+    
     st.divider()
-    st.subheader("🔄 Recalculate League History")
-    league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL (Full System Reset)"]
-    target_reset = st.selectbox("Select League to Recalculate", league_options)
-    if st.button(f"⚠️ Replay History for: {target_reset}"):
-        with st.spinner("Crunching numbers..."):
-            all_players = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute().data
-            all_matches = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data
-            p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
-            island_map = {}
-            matches_to_update = []
-            for m in all_matches:
-                if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset: continue
+    st.subheader("🔗 League Merger")
+    if not df_matches.empty:
+        all_names = sorted(df_matches['league'].astype(str).unique().tolist())
+        c1, c2 = st.columns(2)
+        f = c1.selectbox("From:", all_names); t = c2.selectbox("To:", [l for l in active_leagues_list if l != f])
+        if st.button("Merge"):
+            supabase.table("matches").update({"league": t}).eq("league", f).execute()
+            st.success("Merged!"); time.sleep(1); st.rerun()
+    
+    st.divider()
+    st.subheader("🔄 Recalculate History")
+    tr = st.selectbox("League", ["ALL"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL"])
+    if st.button("Recalculate"):
+        with st.spinner("Crunching..."):
+            all_p = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute().data
+            all_m = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data
+            p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_p}
+            i_map = {}
+            for m in all_m:
+                if tr != "ALL" and m['league'] != tr: continue
                 p1, p2, p3, p4 = m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']
                 s1, s2 = m['score_t1'], m['score_t2']
-                league = m['league']
-                is_popup = m.get('match_type') == 'PopUp'
-                def safe_get_r(pid): return 1200.0 if pid is None else p_map[pid]['r']
-                if target_reset == "ALL (Full System Reset)":
-                    ro1, ro2, ro3, ro4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
-                    do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
-                    delta_to_save = do1 if s1 > s2 else do2
-                    matches_to_update.append({'id': m['id'], 'elo_delta': delta_to_save})
-                    win = s1 > s2
-                    for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
-                        if pid is None: continue
-                        p_map[pid]['r'] += delta
-                        p_map[pid]['mp'] += 1
-                        if is_win: p_map[pid]['w'] += 1
-                        else: p_map[pid]['l'] += 1
-                if not is_popup:
-                    def safe_get_i(pid, lg):
+                # Clean league name for internal calc (or use raw?) Using Raw from DB for accuracy in recalc
+                lg = m['league']
+                is_pop = m.get('match_type') == 'PopUp'
+                def sr(pid): return 1200.0 if pid is None else p_map[pid]['r']
+                if tr == "ALL":
+                    ro1,ro2,ro3,ro4 = sr(p1),sr(p2),sr(p3),sr(p4)
+                    do1,do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
+                    supabase.table("matches").update({"elo_delta": do1 if s1>s2 else do2}).eq("id", m['id']).execute()
+                    w = s1 > s2
+                    for pid, d, iw in [(p1,do1,w),(p2,do1,w),(p3,do2,not w),(p4,do2,not w)]:
+                        if pid: 
+                            p_map[pid]['r']+=d; p_map[pid]['mp']+=1
+                            if iw: p_map[pid]['w']+=1
+                            else: p_map[pid]['l']+=1
+                if not is_pop:
+                    def si(pid, l): 
                         if pid is None: return 1200.0
-                        if (pid, lg) not in island_map: island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
-                        return island_map[(pid, lg)]['r']
-                    ri1, ri2, ri3, ri4 = safe_get_i(p1, league), safe_get_i(p2, league), safe_get_i(p3, league), safe_get_i(p4, league)
-                    di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
-                    win = s1 > s2
-                    for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
-                        if pid is None: continue
-                        k = (pid, league)
-                        if k not in island_map: island_map[k] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
-                        island_map[k]['r'] += delta
-                        island_map[k]['mp'] += 1
-                        if is_win: island_map[k]['w'] += 1
-                        else: island_map[k]['l'] += 1
-            if target_reset == "ALL (Full System Reset)":
-                for pid, stats in p_map.items(): supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
-            if target_reset != "ALL (Full System Reset)": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
+                        if (pid,l) not in i_map: i_map[(pid,l)]={'r':p_map[pid]['r'],'w':0,'l':0,'mp':0}
+                        return i_map[(pid,l)]['r']
+                    ri1,ri2,ri3,ri4=si(p1,lg),si(p2,lg),si(p3,lg),si(p4,lg)
+                    di1,di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
+                    w = s1 > s2
+                    for pid, d, iw in [(p1,di1,w),(p2,di1,w),(p3,di2,not w),(p4,di2,not w)]:
+                        if pid:
+                            k=(pid,lg)
+                            if k not in i_map: i_map[k]={'r':p_map[pid]['r'],'w':0,'l':0,'mp':0}
+                            i_map[k]['r']+=d; i_map[k]['mp']+=1
+                            if iw: i_map[k]['w']+=1
+                            else: i_map[k]['l']+=1
+            if tr=="ALL": 
+                for pid, s in p_map.items(): supabase.table("players").update({"rating":s['r'],"wins":s['w'],"losses":s['l'],"matches_played":s['mp']}).eq("id", pid).execute()
+            if tr!="ALL": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", tr).execute()
             else: supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
-            new_islands = [{"club_id": CLUB_ID, "player_id": pid, "league_name": lg, "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']} for (pid, lg), stats in island_map.items()]
-            if new_islands:
-                for i in range(0, len(new_islands), 1000): supabase.table("league_ratings").insert(new_islands[i:i+1000]).execute()
-            progress_bar = st.progress(0)
-            for idx, update in enumerate(matches_to_update):
-                supabase.table("matches").update({"elo_delta": update['elo_delta']}).eq("id", update['id']).execute()
-                progress_bar.progress((idx + 1) / len(matches_to_update))
-            st.success(f"✅ Replayed {len(all_matches)} matches!"); time.sleep(2); st.rerun()
+            new_is = [{"club_id":CLUB_ID,"player_id":p,"league_name":l,"rating":s['r'],"wins":s['w'],"losses":s['l'],"matches_played":s['mp']} for (p,l),s in i_map.items()]
+            if new_is: 
+                for i in range(0, len(new_is), 1000): supabase.table("league_ratings").insert(new_is[i:i+1000]).execute()
+            st.success("Done!"); time.sleep(1); st.rerun()
 
 elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
     st.markdown("""
     ### ⚙️ Admin Tools
     * **League Merger:** Use this to merge "Verified Men's 4.0 -- 2026" into "Verified Men's 4.0".
-    * **Bulk Week Tag Editor:** Use this to label matches as 'Week 1', 'Week 2', etc. This fixes the "0 Weeks Played" issue by giving you manual control.
+    * **Bulk Week Tag Editor:** Use this to label matches as 'Week 1', 'Week 2', etc.
     """)
