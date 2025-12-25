@@ -305,28 +305,35 @@ if sel == "🏆 Leaderboards":
     # 3. Data Prep for Stats
     if target_league == "OVERALL":
         base_df = df_players.copy()
-        matches_scope = df_matches
+        matches_scope = df_matches.copy() # Use .copy() to avoid setting on copy warnings
     else:
         if df_leagues.empty: base_df = pd.DataFrame()
         else:
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
         
-        matches_scope = df_matches[df_matches['league'] == target_league]
+        matches_scope = df_matches[df_matches['league'] == target_league].copy()
         if matches_scope.empty:
-            matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
+            matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()].copy()
+
+    # --- CRITICAL FIX: Ensure day_id exists locally ---
+    # This prevents the KeyError if the data loader cache is stale
+    if not matches_scope.empty and 'day_id' not in matches_scope.columns:
+        matches_scope['day_id'] = matches_scope['date'].astype(str).str[:10]
 
     if not base_df.empty and 'rating' in base_df.columns:
         stats_map = {}
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                day_id = m['day_id']
-                if pd.isna(day_id) or day_id == "nan": continue
+                # SAFETY: Handle missing day_id even after fix attempt
+                day_id = m.get('day_id', str(m.get('date', ''))[:10])
+                if pd.isna(day_id) or day_id == "nan" or day_id == "": continue
                 
                 delta = m['elo_delta']
                 t1_won = m['score_t1'] > m['score_t2']
                 
+                # ... rest of the loop remains the same ...
                 raw_pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
                 for i, raw_pid in enumerate(raw_pids):
                     if pd.isna(raw_pid) or raw_pid == -1: continue
