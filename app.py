@@ -15,6 +15,13 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
+# 🛠️ ADMIN SETTINGS
+LEAGUE_MIN_WEEKS = {
+    "Tuesday Ladder": 2,
+    "Fall 2025 Ladder": 3,
+    "DEFAULT": 2
+}
+
 # --- MAGIC LINK LOGIN ---
 query_params = st.query_params
 if "admin_key" in query_params:
@@ -62,19 +69,15 @@ def load_data():
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 1. Players
             p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
             df_players = pd.DataFrame(p_response.data)
             
-            # 2. Island Ratings
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # 3. Matches (High limit to catch history)
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(50000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
-            # 4. League Metadata
             meta_response = supabase.table("leagues_metadata").select("*").eq("club_id", CLUB_ID).execute()
             df_meta = pd.DataFrame(meta_response.data)
 
@@ -92,7 +95,9 @@ def load_data():
                 df_leagues['player_id'] = pd.to_numeric(df_leagues['player_id'], errors='coerce').fillna(-1).astype(int)
 
             if not df_matches.empty:
-                df_matches['league'] = df_matches['league'].astype(str).str.strip()
+                # Do NOT strip league here - we want to see the raw mismatch in Unifier
+                # df_matches['league'] = df_matches['league'].astype(str).str.strip()
+                
                 for col in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']:
                     df_matches[col] = pd.to_numeric(df_matches[col], errors='coerce').fillna(-1).astype(int)
 
@@ -100,8 +105,6 @@ def load_data():
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
-                
-                # Robust Date Parsing
                 df_matches['date_obj'] = pd.to_datetime(df_matches['date'], errors='coerce')
                 
             return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
@@ -290,7 +293,7 @@ if sel == "🏆 Leaderboards":
         
     target_league = st.selectbox("Select League", available_leagues)
 
-    # 3. Data Prep for Stats
+    # 3. Data Prep
     if target_league == "OVERALL":
         base_df = df_players.copy()
         matches_scope = df_matches
@@ -299,14 +302,14 @@ if sel == "🏆 Leaderboards":
         else:
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
-        matches_scope = df_matches[df_matches['league'] == target_league.strip()]
+        # Using strip() to match, but this is why we need the Unifier Tool
+        matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
 
     if not base_df.empty and 'rating' in base_df.columns:
         stats_map = {}
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                # SAFETY CHECK
                 if pd.isna(m['date_obj']): continue
                 
                 iso_year, iso_week, _ = m['date_obj'].date().isocalendar()
@@ -338,9 +341,7 @@ if sel == "🏆 Leaderboards":
         
         # --- 4. SHOW GRIDS (UNFILTERED) ---
         if target_league != "OVERALL":
-            # Show grids for everyone with >0 matches
             qualified_df = base_df[base_df['matches_played'] > 0].copy()
-            
             if not qualified_df.empty:
                 st.markdown("### 🏅 Top Performers")
                 col1, col2, col3, col4 = st.columns(4)
@@ -776,8 +777,34 @@ elif sel == "📝 Match Log":
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
+    # --- NEW: LEAGUE UNIFIER ---
+    st.subheader("🔗 League Name Unifier")
+    st.markdown("Use this to fix matches that have slightly different league names (e.g., 'Tuesday' vs 'Tuesday League').")
+    
+    if not df_matches.empty:
+        # Get all unique raw league names from matches
+        raw_names = sorted(df_matches['league'].astype(str).unique().tolist())
+        # Filter out ones that are already perfect matches
+        orphan_names = [n for n in raw_names if n not in active_leagues_list]
+        
+        if orphan_names:
+            c1, c2 = st.columns(2)
+            target_orphan = c1.selectbox("Select Orphan Name (From Matches)", orphan_names)
+            target_official = c2.selectbox("Merge Into (Official League)", active_leagues_list if active_leagues_list else ["Create New First"])
+            
+            if st.button("Unify & Move Matches"):
+                if target_official:
+                    count = df_matches[df_matches['league'].astype(str) == target_orphan].shape[0]
+                    supabase.table("matches").update({"league": target_official}).eq("league", target_orphan).execute()
+                    st.success(f"✅ Moved {count} matches from '{target_orphan}' to '{target_official}'!")
+                    time.sleep(2)
+                    st.rerun()
+        else:
+            st.success("✅ All matches belong to valid active leagues.")
+    
+    st.divider()
+    
     st.subheader("📅 Bulk Match Date Editor")
-    st.markdown("Use this to retroactively fix dates for matches uploaded in bulk.")
     with st.form("bulk_date_edit"):
         c1, c2, c3 = st.columns(3)
         start_id = c1.number_input("Start Match ID", min_value=0)
@@ -859,10 +886,7 @@ elif sel == "⚙️ Admin Tools":
 elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
     st.markdown("""
-    ### 🏟️ League Manager
-    * **Manage Active Leagues:** Uncheck the "Active?" box to retire a league. It will vanish from input forms but stay in history.
-    * **Migration:** Use this if your dropdowns are empty but you have history.
-    
     ### ⚙️ Admin Tools
-    * **Bulk Date Editor:** Use this to retroactively fix match dates (e.g., set Matches 100-150 to "Dec 1st").
+    * **League Name Unifier:** Use this to fix the "0 Weeks Played" bug by merging matches with slightly different league names into the official one.
+    * **Bulk Date Editor:** Fix "Everything Happened Today" issues.
     """)
