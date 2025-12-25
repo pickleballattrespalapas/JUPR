@@ -15,6 +15,13 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
+# 🛠️ ADMIN SETTINGS: Set Minimum Weeks Required per League here
+LEAGUE_MIN_WEEKS = {
+    "Tuesday Ladder": 2,
+    "Fall 2025 Ladder": 3,
+    "DEFAULT": 2
+}
+
 # --- MAGIC LINK LOGIN ---
 query_params = st.query_params
 if "admin_key" in query_params:
@@ -22,7 +29,8 @@ if "admin_key" in query_params:
         st.session_state.admin_logged_in = True
 
 # --- DATABASE CONNECTION ---
-@st.cache_resource
+# TTL=1 ensures fresh data on every interaction
+@st.cache_resource(ttl=1)
 def init_supabase():
     url = st.secrets["supabase"]["url"]
     key = st.secrets["supabase"]["key"]
@@ -57,7 +65,7 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
         
     return final_delta_t1, final_delta_t2
 
-# --- DATA LOADER ---
+# --- DATA LOADER (GHOST FLOAT FIX) ---
 def load_data():
     max_retries = 3
     for attempt in range(max_retries):
@@ -70,7 +78,7 @@ def load_data():
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # 3. Matches (Sorted by ID)
+            # 3. Matches
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
@@ -78,7 +86,11 @@ def load_data():
             meta_response = supabase.table("leagues_metadata").select("*").eq("club_id", CLUB_ID).execute()
             df_meta = pd.DataFrame(meta_response.data)
 
+            # --- AGGRESSIVE ID CLEANING ---
             if not df_players.empty:
+                # Force to numeric, turn errors (NaNs) to -1, then force to int
+                df_players['id'] = pd.to_numeric(df_players['id'], errors='coerce').fillna(-1).astype(int)
+                # Build maps AFTER cleaning
                 id_to_name = dict(zip(df_players['id'], df_players['name']))
                 name_to_id = dict(zip(df_players['name'], df_players['id']))
             else:
@@ -86,11 +98,23 @@ def load_data():
                 name_to_id = {}
                 df_players = pd.DataFrame(columns=['id', 'name', 'rating', 'wins', 'losses'])
 
+            if not df_leagues.empty:
+                df_leagues['player_id'] = pd.to_numeric(df_leagues['player_id'], errors='coerce').fillna(-1).astype(int)
+
             if not df_matches.empty:
+                df_matches['league'] = df_matches['league'].astype(str).str.strip()
+                
+                # Clean Match Player IDs
+                for col in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']:
+                    df_matches[col] = pd.to_numeric(df_matches[col], errors='coerce').fillna(-1).astype(int)
+
+                # Map Names using the clean Integer IDs
                 df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
+                
+                # Date Fix
                 df_matches['date_obj'] = pd.to_datetime(df_matches['date'], format='mixed')
                 
             return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
@@ -238,7 +262,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
 df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name = load_data()
 
 # --- PROCESS META ---
-# Active List for Match Entry (Includes Pop-Ups)
 if not df_meta.empty:
     active_leagues_list = sorted(df_meta[df_meta['is_active'] == True]['league_name'].tolist())
 else:
@@ -269,33 +292,32 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 League Leaderboards")
     
-    # 1. League Context Selector (Filter out Pop-Ups)
+    # 1. League Context Selector
     available_leagues = ["OVERALL"]
     if not df_meta.empty:
-        # Only show Standard leagues (not Pop-Ups) in Leaderboard
+        # Exclude Pop-Ups from leaderboard menu
         std_leagues = df_meta[df_meta['league_type'] != 'Pop-Up']['league_name'].unique().tolist()
         unique_l = sorted(std_leagues)
         available_leagues += unique_l
     elif not df_leagues.empty:
-        # Fallback if meta empty
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
         available_leagues += unique_l
         
     c1, c2 = st.columns([3, 1])
     target_league = c1.selectbox("Select League", available_leagues)
     
-    # 2. Threshold Logic (With Slider Override)
+    # 2. Threshold Logic
     db_threshold = 1
     if not df_meta.empty and target_league != "OVERALL":
         meta_row = df_meta[df_meta['league_name'] == target_league]
         if not meta_row.empty:
             db_threshold = int(meta_row.iloc[0]['min_weeks'])
     
-    # Show slider to allow user to see "1 week" players even if DB says 2
+    # Slider only shows for Leagues, not Overall
     if target_league != "OVERALL":
-        threshold_weeks = c2.number_input("Minimum Weeks Filter", min_value=1, value=db_threshold, help="Default set by Admin. You can lower this to see more players.")
+        threshold_weeks = c2.number_input("Minimum Weeks Filter", min_value=1, value=db_threshold)
     else:
-        threshold_weeks = 1 # Overall always shows 1
+        threshold_weeks = 1 
 
     # 3. Data Prep for Stats
     if target_league == "OVERALL":
@@ -306,99 +328,101 @@ if sel == "🏆 Leaderboards":
         else:
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
-        matches_scope = df_matches[df_matches['league'] == target_league]
+        matches_scope = df_matches[df_matches['league'] == target_league.strip()]
 
     if not base_df.empty and 'rating' in base_df.columns:
-        # A. Calculate Extended Stats (Weeks & Rating Delta)
+        # A. Stats Calc
         stats_map = {}
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
                 iso_year, iso_week, _ = m['date_obj'].date().isocalendar()
                 week_id = f"{iso_year}-{iso_week}"
-                
                 delta = m['elo_delta']
                 t1_won = m['score_t1'] > m['score_t2']
-                pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
                 
-                for i, pid in enumerate(pids):
-                    if pd.isna(pid): continue
-                    if pid not in stats_map: stats_map[pid] = {'weeks': set(), 'total_delta': 0.0}
+                # Use safe int casting
+                pids = [int(x) for x in [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']] if pd.notna(x) and x != -1]
+                
+                raw_pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
+                for i, raw_pid in enumerate(raw_pids):
+                    if pd.isna(raw_pid) or raw_pid == -1: continue
+                    pid_int = int(raw_pid)
                     
-                    stats_map[pid]['weeks'].add(week_id)
+                    if pid_int not in stats_map: stats_map[pid_int] = {'weeks': set(), 'total_delta': 0.0}
+                    stats_map[pid_int]['weeks'].add(week_id)
+                    
                     is_t1 = (i <= 1)
                     if (is_t1 and t1_won) or (not is_t1 and not t1_won):
-                        stats_map[pid]['total_delta'] += delta
+                        stats_map[pid_int]['total_delta'] += delta
                     else:
-                        stats_map[pid]['total_delta'] -= delta
+                        stats_map[pid_int]['total_delta'] -= delta
 
-        # Merge stats into base_df
-        base_df['weeks_played'] = base_df.apply(lambda x: len(stats_map.get(x['id'] if 'id' in x else x['player_id'], {}).get('weeks', [])), axis=1)
-        base_df['rating_gain'] = base_df.apply(lambda x: stats_map.get(x['id'] if 'id' in x else x['player_id'], {}).get('total_delta', 0.0), axis=1)
+        # Merge
+        base_df['weeks_played'] = base_df.apply(lambda x: len(stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('weeks', [])), axis=1)
+        base_df['rating_gain'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('total_delta', 0.0), axis=1)
         
-        # Calculate standard columns
         base_df['JUPR'] = base_df['rating'] / 400
         base_df['win_pct'] = (base_df['wins'] / base_df['matches_played'].replace(0, 1)) * 100
         
-        # B. Filter by Threshold
-        filtered_df = base_df[base_df['weeks_played'] >= threshold_weeks].copy()
+        # B. Filter for Top 5
+        qualified_df = base_df[base_df['weeks_played'] >= threshold_weeks].copy()
         
-        if filtered_df.empty:
-            st.warning(f"No players found with {threshold_weeks}+ weeks of play in this league.")
-        else:
-            # --- 4. SHOW GRIDS ONLY IF NOT OVERALL ---
-            if target_league != "OVERALL":
+        # --- 4. SHOW GRIDS (ONLY IF QUALIFIED & NOT OVERALL) ---
+        if target_league != "OVERALL":
+            if not qualified_df.empty:
                 st.markdown("### 🏅 Top Performers")
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
                     st.markdown("**👑 Highest Rating**")
-                    top_rating = filtered_df.sort_values('rating', ascending=False).head(5)
+                    top_rating = qualified_df.sort_values('rating', ascending=False).head(5)
                     for _, r in top_rating.iterrows():
                         st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
-                        
                 with col2:
                     st.markdown("**🔥 Most Improved**")
-                    top_gain = filtered_df.sort_values('rating_gain', ascending=False).head(5)
+                    top_gain = qualified_df.sort_values('rating_gain', ascending=False).head(5)
                     for _, r in top_gain.iterrows():
                         val = r['rating_gain'] / 400
                         st.markdown(f"**{'+' if val>0 else ''}{val:.3f}** - {r['name']}")
-
                 with col3:
                     st.markdown("**🎯 Best Win %**")
-                    top_pct = filtered_df.sort_values('win_pct', ascending=False).head(5)
+                    top_pct = qualified_df.sort_values('win_pct', ascending=False).head(5)
                     for _, r in top_pct.iterrows():
                         st.markdown(f"**{r['win_pct']:.1f}%** - {r['name']}")
-
                 with col4:
                     st.markdown("**🚜 Most Wins**")
-                    top_wins = filtered_df.sort_values('wins', ascending=False).head(5)
+                    top_wins = qualified_df.sort_values('wins', ascending=False).head(5)
                     for _, r in top_wins.iterrows():
                         st.markdown(f"**{r['wins']} Wins** - {r['name']}")
-
                 st.divider()
-            
-            # --- 5. FULL TABLE ---
-            st.markdown("### 📊 Full Standings")
-            final_view = filtered_df.sort_values('rating', ascending=False).copy()
-            final_view['JUPR'] = final_view['JUPR'].map('{:,.3f}'.format)
-            final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
-            final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
-            
-            st.dataframe(
-                final_view[['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'Win %', 'Gain']], 
-                use_container_width=True, 
-                hide_index=True,
-                column_config={
-                    "name": "Player",
-                    "matches_played": "Matches",
-                    "weeks_played": "Weeks",
-                    "rating_gain": "Gain"
-                }
-            )
-            
-            if target_league != "OVERALL":
-                st.caption(f"👇 Share this league view: `https://jupr-leagues.streamlit.app/?league={target_league.replace(' ', '%20')}`")
+            else:
+                st.warning(f"No players meet the {threshold_weeks}-week requirement for Top Awards.")
+
+        # --- 5. FULL TABLE (SHOW EVERYONE) ---
+        st.markdown("### 📊 Full Standings")
+        
+        final_view = base_df.sort_values('rating', ascending=False).copy()
+        final_view['JUPR'] = final_view['JUPR'].map('{:,.3f}'.format)
+        final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
+        final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
+        
+        # Highlight rows that qualify
+        # (Streamlit simple table doesn't support row highlighting easily, so we just show data)
+        st.dataframe(
+            final_view[['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'Win %', 'Gain']], 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "name": "Player",
+                "matches_played": "Matches",
+                "weeks_played": "Weeks",
+                "rating_gain": "Gain"
+            }
+        )
+        
+        if target_league != "OVERALL":
+            st.caption(f"👇 Share this league view: `https://jupr-leagues.streamlit.app/?league={target_league.replace(' ', '%20')}`")
 
     else:
         st.info("No data available for this league.")
@@ -757,27 +781,17 @@ elif sel == "👥 Players":
                 ok, msg = safe_add_player(n, r)
                 if ok: st.success(f"Added {n}!"); time.sleep(1); st.rerun()
                 else: st.error(msg)
-    
     with c2:
         st.subheader("✏️ Edit Player")
         p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
         if p_edit:
             curr_row = df_players[df_players['name'] == p_edit].iloc[0]
             curr_start = float(curr_row['starting_rating']) / 400
-            
-            # Form for Name AND Rating
             new_name = st.text_input("Edit Name", value=p_edit)
             new_start = st.number_input("New Start Rating", 1.0, 7.0, curr_start, step=0.1)
-            
             if st.button("Update Profile"):
-                supabase.table("players").update({
-                    "name": new_name,
-                    "starting_rating": new_start * 400, 
-                    "rating": new_start * 400
-                }).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
-                
+                supabase.table("players").update({"name": new_name, "starting_rating": new_start * 400, "rating": new_start * 400}).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
                 st.success(f"Updated {new_name}!"); time.sleep(1); st.rerun()
-
     with c3:
         st.subheader("🗑️ Delete")
         to_del = st.selectbox("Select to Remove", [""] + sorted(df_players['name']))
@@ -788,7 +802,6 @@ elif sel == "👥 Players":
 
 elif sel == "📝 Match Log":
     st.header("📝 Match Log")
-    
     filter_type = st.radio("Filter Matches", ["All", "League Matches", "Pop-Up Events"], horizontal=True)
     if filter_type == "League Matches": view_df = df_matches[df_matches['match_type'] != 'PopUp']
     elif filter_type == "Pop-Up Events": view_df = df_matches[df_matches['match_type'] == 'PopUp']
@@ -875,7 +888,6 @@ elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
     st.markdown("""
     ### 🏟️ League Manager
-    * **Live Match Entry:** Use this to generate schedules and enter scores for a live event.
     * **Manage Active Leagues:** Uncheck the "Active?" box to retire a league. It will vanish from input forms but stay in history.
     * **Migration:** Use this if your dropdowns are empty but you have history.
     """)
