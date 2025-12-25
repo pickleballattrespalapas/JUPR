@@ -15,13 +15,6 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
-# 🛠️ ADMIN SETTINGS: Set Minimum Weeks Required per League here
-LEAGUE_MIN_WEEKS = {
-    "Tuesday Ladder": 2,
-    "Fall 2025 Ladder": 3,
-    "DEFAULT": 2
-}
-
 # --- MAGIC LINK LOGIN ---
 query_params = st.query_params
 if "admin_key" in query_params:
@@ -29,7 +22,6 @@ if "admin_key" in query_params:
         st.session_state.admin_logged_in = True
 
 # --- DATABASE CONNECTION ---
-# TTL=1 ensures fresh data on every interaction
 @st.cache_resource(ttl=1)
 def init_supabase():
     url = st.secrets["supabase"]["url"]
@@ -65,7 +57,7 @@ def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2):
         
     return final_delta_t1, final_delta_t2
 
-# --- DATA LOADER (GHOST FLOAT FIX) ---
+# --- DATA LOADER ---
 def load_data():
     max_retries = 3
     for attempt in range(max_retries):
@@ -88,9 +80,7 @@ def load_data():
 
             # --- AGGRESSIVE ID CLEANING ---
             if not df_players.empty:
-                # Force to numeric, turn errors (NaNs) to -1, then force to int
                 df_players['id'] = pd.to_numeric(df_players['id'], errors='coerce').fillna(-1).astype(int)
-                # Build maps AFTER cleaning
                 id_to_name = dict(zip(df_players['id'], df_players['name']))
                 name_to_id = dict(zip(df_players['name'], df_players['id']))
             else:
@@ -103,18 +93,13 @@ def load_data():
 
             if not df_matches.empty:
                 df_matches['league'] = df_matches['league'].astype(str).str.strip()
-                
-                # Clean Match Player IDs
                 for col in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']:
                     df_matches[col] = pd.to_numeric(df_matches[col], errors='coerce').fillna(-1).astype(int)
 
-                # Map Names using the clean Integer IDs
                 df_matches['p1'] = df_matches['t1_p1'].map(id_to_name)
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
-                
-                # Date Fix
                 df_matches['date_obj'] = pd.to_datetime(df_matches['date'], format='mixed')
                 
             return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
@@ -295,7 +280,6 @@ if sel == "🏆 Leaderboards":
     # 1. League Context Selector
     available_leagues = ["OVERALL"]
     if not df_meta.empty:
-        # Exclude Pop-Ups from leaderboard menu
         std_leagues = df_meta[df_meta['league_type'] != 'Pop-Up']['league_name'].unique().tolist()
         unique_l = sorted(std_leagues)
         available_leagues += unique_l
@@ -313,9 +297,8 @@ if sel == "🏆 Leaderboards":
         if not meta_row.empty:
             db_threshold = int(meta_row.iloc[0]['min_weeks'])
     
-    # Slider only shows for Leagues, not Overall
     if target_league != "OVERALL":
-        threshold_weeks = c2.number_input("Minimum Weeks Filter", min_value=1, value=db_threshold)
+        threshold_weeks = c2.number_input("Min Weeks Required (Filters Top 5)", min_value=1, value=db_threshold)
     else:
         threshold_weeks = 1 
 
@@ -331,7 +314,6 @@ if sel == "🏆 Leaderboards":
         matches_scope = df_matches[df_matches['league'] == target_league.strip()]
 
     if not base_df.empty and 'rating' in base_df.columns:
-        # A. Stats Calc
         stats_map = {}
         
         if not matches_scope.empty:
@@ -341,7 +323,7 @@ if sel == "🏆 Leaderboards":
                 delta = m['elo_delta']
                 t1_won = m['score_t1'] > m['score_t2']
                 
-                # Use safe int casting
+                # Strict ID casting
                 pids = [int(x) for x in [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']] if pd.notna(x) and x != -1]
                 
                 raw_pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
@@ -365,11 +347,11 @@ if sel == "🏆 Leaderboards":
         base_df['JUPR'] = base_df['rating'] / 400
         base_df['win_pct'] = (base_df['wins'] / base_df['matches_played'].replace(0, 1)) * 100
         
-        # B. Filter for Top 5
-        qualified_df = base_df[base_df['weeks_played'] >= threshold_weeks].copy()
-        
-        # --- 4. SHOW GRIDS (ONLY IF QUALIFIED & NOT OVERALL) ---
+        # --- 4. SHOW GRIDS ONLY IF NOT OVERALL ---
         if target_league != "OVERALL":
+            # Qualified list for Top 5
+            qualified_df = base_df[base_df['weeks_played'] >= threshold_weeks].copy()
+            
             if not qualified_df.empty:
                 st.markdown("### 🏅 Top Performers")
                 col1, col2, col3, col4 = st.columns(4)
@@ -397,9 +379,9 @@ if sel == "🏆 Leaderboards":
                         st.markdown(f"**{r['wins']} Wins** - {r['name']}")
                 st.divider()
             else:
-                st.warning(f"No players meet the {threshold_weeks}-week requirement for Top Awards.")
+                st.info(f"ℹ️ Top 5 Awards hidden until players reach {threshold_weeks} weeks.")
 
-        # --- 5. FULL TABLE (SHOW EVERYONE) ---
+        # --- 5. FULL TABLE (ALWAYS SHOW) ---
         st.markdown("### 📊 Full Standings")
         
         final_view = base_df.sort_values('rating', ascending=False).copy()
@@ -407,8 +389,6 @@ if sel == "🏆 Leaderboards":
         final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         
-        # Highlight rows that qualify
-        # (Streamlit simple table doesn't support row highlighting easily, so we just show data)
         st.dataframe(
             final_view[['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'Win %', 'Gain']], 
             use_container_width=True, 
