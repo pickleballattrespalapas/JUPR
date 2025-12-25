@@ -177,7 +177,6 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         s1, s2 = m['s1'], m['s2']
         league = m['league']
         is_popup = m.get('match_type') == 'PopUp' or m.get('is_popup', False)
-        # Use provided week_tag or default to 'Unknown'
         week_tag = m.get('week_tag', 'Unknown')
         
         def safe_get_o(pid):
@@ -321,8 +320,6 @@ if sel == "🏆 Leaderboards":
                 # NEW LOGIC: Use 'week_tag'
                 week_id = m.get('week_tag', 'Unknown')
                 if pd.isna(week_id) or week_id == "" or week_id == "Unknown": 
-                    # If empty, fallback to date for calculating gain, but not weeks?
-                    # No, let's keep it simple. If tagged, count it.
                     week_id = "Untagged"
                 
                 delta = m['elo_delta']
@@ -447,7 +444,6 @@ elif sel == "🔍 Player Search":
                 h['Δ JUPR'] = stats[1].map('{:+.3f}'.format)
                 h['Raw Pts'] = stats[2]
                 
-                # Show Week Tag in history too
                 h['Week'] = h['week_tag']
                 st.dataframe(h[['date', 'league', 'Week', 'Result', 'Δ JUPR', 'Raw Pts', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
             else:
@@ -529,7 +525,6 @@ elif sel == "🏟️ League Manager":
         active_opts = active_leagues_list if active_leagues_list else ["Default League"]
         lg_live = st.selectbox("Select League", active_opts, key="live_league_selector")
         
-        # New: Week Label Input
         entry_week = st.text_input("Week Label", "Week 1", key="live_week_input", help="Tag these matches (e.g. 'Week 1', 'Finals')")
         
         if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
@@ -653,7 +648,6 @@ elif sel == "🏟️ League Manager":
 elif sel == "⚡ Batch Entry":
     st.header("⚡ Batch Match Entry")
     
-    # NEW: Inputs for Date & Week
     c1, c2 = st.columns(2)
     entry_date = c1.date_input("Match Date", datetime.now(), help="Pick the date these matches actually happened.")
     entry_week = c2.text_input("Week Label", "Week 1", help="Tag this batch (e.g. 'Week 4')")
@@ -703,7 +697,7 @@ elif sel == "⚡ Batch Entry":
                     'date': str(entry_date), 
                     'league': batch_league, 
                     'type': 'Batch Entry', 'match_type': m_type, 'is_popup': (m_type == "PopUp"),
-                    'week_tag': entry_week # Include the tag
+                    'week_tag': entry_week
                 }
                 valid_batch.append(match_data)
         
@@ -716,8 +710,7 @@ elif sel == "⚡ Batch Entry":
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
-    # Same as before, logic doesn't require week tags usually for one-offs, but we can add it if needed.
-    # Leaving standard for now.
+    
     with st.form("setup_rr"):
         date_rr = st.date_input("Date", datetime.now())
         rr_opts = active_leagues_list if active_leagues_list else ["PopUp Event"]
@@ -800,7 +793,8 @@ elif sel == "📝 Match Log":
 
     st.write("### 🗑️ Bulk Delete Matches")
     st.info("Select checkboxes below to delete matches.")
-    # Add week_tag to editor
+    
+    # Add week_tag to editor if exists
     if 'week_tag' in view_df.columns:
         edit_df = view_df.head(5000)[['id', 'date', 'week_tag', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
     else:
