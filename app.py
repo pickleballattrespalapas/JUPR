@@ -15,13 +15,6 @@ if 'admin_logged_in' not in st.session_state:
 K_FACTOR = 32
 CLUB_ID = "tres_palapas" 
 
-# 🛠️ ADMIN SETTINGS
-LEAGUE_MIN_WEEKS = {
-    "Tuesday Ladder": 2,
-    "Fall 2025 Ladder": 3,
-    "DEFAULT": 2
-}
-
 # --- MAGIC LINK LOGIN ---
 query_params = st.query_params
 if "admin_key" in query_params:
@@ -69,15 +62,19 @@ def load_data():
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            # 1. Players
             p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
             df_players = pd.DataFrame(p_response.data)
             
+            # 2. Island Ratings
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
+            # 3. Matches
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(50000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
+            # 4. League Metadata
             meta_response = supabase.table("leagues_metadata").select("*").eq("club_id", CLUB_ID).execute()
             df_meta = pd.DataFrame(meta_response.data)
 
@@ -95,8 +92,7 @@ def load_data():
                 df_leagues['player_id'] = pd.to_numeric(df_leagues['player_id'], errors='coerce').fillna(-1).astype(int)
 
             if not df_matches.empty:
-                # Do NOT strip league here - we want to see the raw mismatch in Unifier
-                # df_matches['league'] = df_matches['league'].astype(str).str.strip()
+                # Do NOT strip league here (handled in logic or Unifier)
                 
                 for col in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']:
                     df_matches[col] = pd.to_numeric(df_matches[col], errors='coerce').fillna(-1).astype(int)
@@ -105,7 +101,10 @@ def load_data():
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
-                df_matches['date_obj'] = pd.to_datetime(df_matches['date'], errors='coerce')
+                
+                # --- FIX: "ACTIVE DAYS" PARSING ---
+                # We strip time info immediately. 2025-12-24 10:00 -> 2025-12-24
+                df_matches['day_id'] = df_matches['date'].astype(str).str[:10] 
                 
             return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
         
@@ -292,8 +291,20 @@ if sel == "🏆 Leaderboards":
         available_leagues += unique_l
         
     target_league = st.selectbox("Select League", available_leagues)
+    
+    # Threshold Logic (Now "Min Active Days")
+    db_threshold = 1
+    if not df_meta.empty and target_league != "OVERALL":
+        meta_row = df_meta[df_meta['league_name'] == target_league]
+        if not meta_row.empty:
+            db_threshold = int(meta_row.iloc[0]['min_weeks'])
+    
+    if target_league != "OVERALL":
+        threshold_days = st.slider("Min Days Played (Filters Awards)", 1, 10, db_threshold)
+    else:
+        threshold_days = 1
 
-    # 3. Data Prep
+    # 3. Data Prep for Stats
     if target_league == "OVERALL":
         base_df = df_players.copy()
         matches_scope = df_matches
@@ -302,30 +313,32 @@ if sel == "🏆 Leaderboards":
         else:
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
-        # Using strip() to match, but this is why we need the Unifier Tool
-        matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
+        
+        # Exact match + Strip Fallback
+        matches_scope = df_matches[df_matches['league'] == target_league]
+        if matches_scope.empty:
+            matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
 
     if not base_df.empty and 'rating' in base_df.columns:
         stats_map = {}
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                if pd.isna(m['date_obj']): continue
+                # NEW LOGIC: Use 'day_id' instead of ISO week
+                day_id = m['day_id']
+                if pd.isna(day_id) or day_id == "nan": continue
                 
-                iso_year, iso_week, _ = m['date_obj'].date().isocalendar()
-                week_id = f"{iso_year}-{iso_week}"
                 delta = m['elo_delta']
                 t1_won = m['score_t1'] > m['score_t2']
-                
-                pids = [int(x) for x in [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']] if pd.notna(x) and x != -1]
                 
                 raw_pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
                 for i, raw_pid in enumerate(raw_pids):
                     if pd.isna(raw_pid) or raw_pid == -1: continue
                     pid_int = int(raw_pid)
                     
-                    if pid_int not in stats_map: stats_map[pid_int] = {'weeks': set(), 'total_delta': 0.0}
-                    stats_map[pid_int]['weeks'].add(week_id)
+                    if pid_int not in stats_map: stats_map[pid_int] = {'days': set(), 'total_delta': 0.0, 'live_matches': 0}
+                    stats_map[pid_int]['days'].add(day_id) # Set of unique YYYY-MM-DD
+                    stats_map[pid_int]['live_matches'] += 1
                     
                     is_t1 = (i <= 1)
                     if (is_t1 and t1_won) or (not is_t1 and not t1_won):
@@ -334,14 +347,23 @@ if sel == "🏆 Leaderboards":
                         stats_map[pid_int]['total_delta'] -= delta
 
         # Merge
-        base_df['weeks_played'] = base_df.apply(lambda x: len(stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('weeks', [])), axis=1)
+        base_df['active_days'] = base_df.apply(lambda x: len(stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('days', [])), axis=1)
         base_df['rating_gain'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('total_delta', 0.0), axis=1)
-        base_df['JUPR'] = base_df['rating'] / 400
-        base_df['win_pct'] = (base_df['wins'] / base_df['matches_played'].replace(0, 1)) * 100
+        base_df['live_matches_count'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('live_matches', 0), axis=1)
         
-        # --- 4. SHOW GRIDS (UNFILTERED) ---
         if target_league != "OVERALL":
-            qualified_df = base_df[base_df['matches_played'] > 0].copy()
+             base_df['display_matches'] = base_df['live_matches_count']
+        else:
+             base_df['display_matches'] = base_df['matches_played']
+
+        base_df['JUPR'] = base_df['rating'] / 400
+        base_df['win_pct'] = (base_df['wins'] / base_df['display_matches'].replace(0, 1)) * 100
+        
+        # --- 4. SHOW GRIDS ---
+        if target_league != "OVERALL":
+            # Qualified list for Top 5
+            qualified_df = base_df[base_df['active_days'] >= threshold_days].copy()
+            
             if not qualified_df.empty:
                 st.markdown("### 🏅 Top Performers")
                 col1, col2, col3, col4 = st.columns(4)
@@ -364,6 +386,8 @@ if sel == "🏆 Leaderboards":
                     top_wins = qualified_df.sort_values('wins', ascending=False).head(5)
                     for _, r in top_wins.iterrows(): st.markdown(f"**{r['wins']} Wins** - {r['name']}")
                 st.divider()
+            else:
+                st.info(f"ℹ️ Top 5 Awards hidden until players reach {threshold_days} active days.")
 
         # --- 5. FULL TABLE ---
         st.markdown("### 📊 Full Standings")
@@ -372,7 +396,15 @@ if sel == "🏆 Leaderboards":
         final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         
-        st.dataframe(final_view[['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'Win %', 'Gain']], use_container_width=True, hide_index=True)
+        # Display 'active_days' as "Days Played"
+        st.dataframe(
+            final_view[['name', 'JUPR', 'matches_played', 'active_days', 'wins', 'losses', 'Win %', 'Gain']], 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "active_days": "Days Played"
+            }
+        )
         if target_league != "OVERALL": st.caption(f"👇 Share: `https://jupr-leagues.streamlit.app/?league={target_league.replace(' ', '%20')}`")
 
     else:
