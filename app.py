@@ -419,6 +419,24 @@ if sel == "🏆 Leaderboards":
     else:
         st.info("No data available for this league.")
 
+    # --- DEBUG SNIPPET (Added per request) ---
+    st.error("🚧 DEBUG MODE ACTIVE 🚧")
+    st.write(f"Total Matches Loaded in Memory: {len(df_matches)}")
+    
+    if not df_matches.empty:
+        unique_leagues = df_matches['league'].unique().tolist()
+        st.write("Leagues found in match history:", unique_leagues)
+        st.write(f"You selected target league: '{target_league}'")
+        
+        # Test normalization
+        norm_target = re.sub(r'[\W_]+', '', str(target_league)).lower()
+        st.write(f"Normalized Target: '{norm_target}'")
+        
+        matches_found = df_matches[df_matches['league'].apply(lambda x: re.sub(r'[\W_]+', '', str(x)).lower()) == norm_target]
+        st.write(f"Matches found for this target: {len(matches_found)}")
+    else:
+        st.write("⚠️ df_matches is empty! (Check Supabase Connection or RLS Policies)")
+
 elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
     p = st.selectbox("Search", [""] + sorted(df_players['name']))
