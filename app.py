@@ -92,8 +92,6 @@ def load_data():
                 df_leagues['player_id'] = pd.to_numeric(df_leagues['player_id'], errors='coerce').fillna(-1).astype(int)
 
             if not df_matches.empty:
-                # Do NOT strip league here (handled in logic or Unifier)
-                
                 for col in ['t1_p1', 't1_p2', 't2_p1', 't2_p2']:
                     df_matches[col] = pd.to_numeric(df_matches[col], errors='coerce').fillna(-1).astype(int)
 
@@ -102,9 +100,9 @@ def load_data():
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
                 
-                # --- FIX: "ACTIVE DAYS" PARSING ---
-                # We strip time info immediately. 2025-12-24 10:00 -> 2025-12-24
-                df_matches['day_id'] = df_matches['date'].astype(str).str[:10] 
+                # --- DATE PARSING (STRIP TIME) ---
+                df_matches['date_str'] = df_matches['date'].astype(str).str[:10] 
+                df_matches['date_obj'] = pd.to_datetime(df_matches['date_str'], errors='coerce')
                 
             return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
         
@@ -292,7 +290,7 @@ if sel == "🏆 Leaderboards":
         
     target_league = st.selectbox("Select League", available_leagues)
     
-    # Threshold Logic (Now "Min Active Days")
+    # Threshold Logic
     db_threshold = 1
     if not df_meta.empty and target_league != "OVERALL":
         meta_row = df_meta[df_meta['league_name'] == target_league]
@@ -314,7 +312,6 @@ if sel == "🏆 Leaderboards":
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
         
-        # Exact match + Strip Fallback
         matches_scope = df_matches[df_matches['league'] == target_league]
         if matches_scope.empty:
             matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
@@ -324,7 +321,6 @@ if sel == "🏆 Leaderboards":
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                # NEW LOGIC: Use 'day_id' instead of ISO week
                 day_id = m['day_id']
                 if pd.isna(day_id) or day_id == "nan": continue
                 
@@ -337,7 +333,7 @@ if sel == "🏆 Leaderboards":
                     pid_int = int(raw_pid)
                     
                     if pid_int not in stats_map: stats_map[pid_int] = {'days': set(), 'total_delta': 0.0, 'live_matches': 0}
-                    stats_map[pid_int]['days'].add(day_id) # Set of unique YYYY-MM-DD
+                    stats_map[pid_int]['days'].add(day_id) 
                     stats_map[pid_int]['live_matches'] += 1
                     
                     is_t1 = (i <= 1)
@@ -361,7 +357,6 @@ if sel == "🏆 Leaderboards":
         
         # --- 4. SHOW GRIDS ---
         if target_league != "OVERALL":
-            # Qualified list for Top 5
             qualified_df = base_df[base_df['active_days'] >= threshold_days].copy()
             
             if not qualified_df.empty:
@@ -396,7 +391,6 @@ if sel == "🏆 Leaderboards":
         final_view['Win %'] = final_view['win_pct'].map('{:.1f}%'.format)
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         
-        # Display 'active_days' as "Days Played"
         st.dataframe(
             final_view[['name', 'JUPR', 'matches_played', 'active_days', 'wins', 'losses', 'Win %', 'Gain']], 
             use_container_width=True, 
@@ -809,30 +803,29 @@ elif sel == "📝 Match Log":
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
-    # --- NEW: LEAGUE UNIFIER ---
-    st.subheader("🔗 League Name Unifier")
-    st.markdown("Use this to fix matches that have slightly different league names (e.g., 'Tuesday' vs 'Tuesday League').")
+    # --- UPDATED: LEAGUE MERGER (FORCE) ---
+    st.subheader("🔗 League Merger")
+    st.markdown("Merge duplicate leagues (e.g. 'Fall 2025' and 'Fall '25').")
     
     if not df_matches.empty:
-        # Get all unique raw league names from matches
-        raw_names = sorted(df_matches['league'].astype(str).unique().tolist())
-        # Filter out ones that are already perfect matches
-        orphan_names = [n for n in raw_names if n not in active_leagues_list]
+        # Get all unique names
+        all_match_names = sorted(df_matches['league'].astype(str).unique().tolist())
         
-        if orphan_names:
-            c1, c2 = st.columns(2)
-            target_orphan = c1.selectbox("Select Orphan Name (From Matches)", orphan_names)
-            target_official = c2.selectbox("Merge Into (Official League)", active_leagues_list if active_leagues_list else ["Create New First"])
-            
-            if st.button("Unify & Move Matches"):
-                if target_official:
-                    count = df_matches[df_matches['league'].astype(str) == target_orphan].shape[0]
-                    supabase.table("matches").update({"league": target_official}).eq("league", target_orphan).execute()
-                    st.success(f"✅ Moved {count} matches from '{target_orphan}' to '{target_official}'!")
-                    time.sleep(2)
-                    st.rerun()
-        else:
-            st.success("✅ All matches belong to valid active leagues.")
+        c1, c2 = st.columns(2)
+        # Any existing league name in matches can be source
+        from_league = c1.selectbox("Move Matches FROM:", all_match_names)
+        
+        # Destination must be in Active list (or create new)
+        dest_options = [l for l in active_leagues_list if l != from_league]
+        to_league = c2.selectbox("Move Matches TO:", dest_options)
+        
+        if st.button(f"⚠️ Merge '{from_league}' -> '{to_league}'"):
+            if from_league and to_league:
+                count = df_matches[df_matches['league'].astype(str) == from_league].shape[0]
+                supabase.table("matches").update({"league": to_league}).eq("league", from_league).execute()
+                st.success(f"✅ Moved {count} matches! Now run 'Recalculate League History' below.")
+                time.sleep(2)
+                st.rerun()
     
     st.divider()
     
@@ -919,6 +912,6 @@ elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
     st.markdown("""
     ### ⚙️ Admin Tools
-    * **League Name Unifier:** Use this to fix the "0 Weeks Played" bug by merging matches with slightly different league names into the official one.
+    * **League Merger:** Use this to merge "Verified Men's 4.0 -- 2026" into "Verified Men's 4.0" to fix the 0 Weeks bug.
     * **Bulk Date Editor:** Fix "Everything Happened Today" issues.
     """)
