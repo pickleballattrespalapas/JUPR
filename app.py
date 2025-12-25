@@ -62,16 +62,22 @@ def load_data():
     max_retries = 3
     for attempt in range(max_retries):
         try:
+            # 1. Players
             p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
             df_players = pd.DataFrame(p_response.data)
             
+            # 2. Island Ratings
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
 
-            # Sort by ID (Creation Order) to find recent additions
+            # 3. Matches (Sorted by ID)
             m_response = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("id", desc=True).limit(5000).execute()
             df_matches = pd.DataFrame(m_response.data)
             
+            # 4. League Metadata (NEW)
+            meta_response = supabase.table("leagues_metadata").select("*").eq("club_id", CLUB_ID).execute()
+            df_meta = pd.DataFrame(meta_response.data)
+
             if not df_players.empty:
                 id_to_name = dict(zip(df_players['id'], df_players['name']))
                 name_to_id = dict(zip(df_players['name'], df_players['id']))
@@ -85,11 +91,9 @@ def load_data():
                 df_matches['p2'] = df_matches['t1_p2'].map(id_to_name)
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
-                
-                # --- FIX: USE format='mixed' TO HANDLE INCONSISTENT DATES ---
                 df_matches['date_obj'] = pd.to_datetime(df_matches['date'], format='mixed')
                 
-            return df_players, df_leagues, df_matches, name_to_id, id_to_name
+            return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
         
         except Exception as e:
             if attempt < max_retries - 1:
@@ -97,7 +101,7 @@ def load_data():
                 continue
             else:
                 st.error(f"⚠️ Network unstable. Please refresh. ({e})")
-                return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}, {}
+                return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}, {}
 
 # --- HELPERS ---
 def get_match_schedule(format_type, players):
@@ -231,7 +235,14 @@ def process_matches(match_list, name_to_id, df_p, df_l):
                 supabase.table("league_ratings").insert(row).execute()
 
 # --- MAIN APP ---
-df_players, df_leagues, df_matches, name_to_id, id_to_name = load_data()
+df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name = load_data()
+
+# --- PROCESS META ---
+# Active Leagues list for dropdowns
+if not df_meta.empty:
+    active_leagues_list = sorted(df_meta[df_meta['is_active'] == True]['league_name'].tolist())
+else:
+    active_leagues_list = []
 
 st.sidebar.title("JUPR Leagues 🌵")
 if not st.session_state.admin_logged_in:
@@ -258,15 +269,28 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 League Leaderboards")
     
+    # 1. League Context Selector (Show all historical, active or not)
     available_leagues = ["OVERALL"]
-    if not df_leagues.empty:
+    if not df_meta.empty:
+        # Show all leagues that exist in metadata
+        unique_l = sorted(df_meta['league_name'].unique().tolist())
+        available_leagues += unique_l
+    elif not df_leagues.empty:
+        # Fallback if meta empty
         unique_l = sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
         available_leagues += unique_l
         
     c1, c2 = st.columns([3, 1])
     target_league = c1.selectbox("Select League", available_leagues)
     
-    min_weeks = c2.number_input("Minimum Weeks Required", min_value=1, value=1, help="Filter out players who haven't played this many weeks.")
+    # 2. Threshold Logic
+    threshold_weeks = 1
+    if not df_meta.empty and target_league != "OVERALL":
+        meta_row = df_meta[df_meta['league_name'] == target_league]
+        if not meta_row.empty:
+            threshold_weeks = int(meta_row.iloc[0]['min_weeks'])
+    
+    c2.metric("Min Weeks Req.", threshold_weeks)
 
     # 3. Data Prep for Stats
     if target_league == "OVERALL":
@@ -285,8 +309,10 @@ if sel == "🏆 Leaderboards":
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                # Parse week
-                week_id = m['date_obj'].strftime('%Y-%U') # Year-WeekNumber
+                # ISO Calendar (Year, WeekNum)
+                iso_year, iso_week, _ = m['date_obj'].date().isocalendar()
+                week_id = f"{iso_year}-{iso_week}"
+                
                 delta = m['elo_delta']
                 t1_won = m['score_t1'] > m['score_t2']
                 pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
@@ -311,10 +337,10 @@ if sel == "🏆 Leaderboards":
         base_df['win_pct'] = (base_df['wins'] / base_df['matches_played'].replace(0, 1)) * 100
         
         # B. Filter by Threshold
-        filtered_df = base_df[base_df['weeks_played'] >= min_weeks].copy()
+        filtered_df = base_df[base_df['weeks_played'] >= threshold_weeks].copy()
         
         if filtered_df.empty:
-            st.warning(f"No players found with {min_weeks}+ weeks of play in this league.")
+            st.warning(f"No players found with {threshold_weeks}+ weeks of play in this league.")
         else:
             # --- 4. DISPLAY TOP 5 GRIDS ---
             st.markdown("### 🏅 Top Performers")
@@ -421,50 +447,18 @@ elif sel == "🔍 Player Search":
 
 elif sel == "❓ FAQs":
     st.header("❓ Frequently Asked Questions")
-    
     with st.expander("🤔 What is JUPR?"):
-        st.markdown("""
-        **JUPR (Just a Universal Pickleball Rating)** is a modern rating system designed specifically for our club. 
-        It tracks your performance across all official league matches and round robins to give you an accurate skill rating.
-        """)
-
+        st.markdown("**JUPR (Just a Universal Pickleball Rating)** is a modern rating system designed specifically for our club.")
     with st.expander("📈 How are ratings calculated?"):
-        st.markdown("""
-        We use an **Elo-based formula** (similar to chess or video games) that considers:
-        1.  **Who you played:** Beating a higher-rated player rewards more points.
-        2.  **The Score:** Winning 11-0 is worth more than winning 11-9.
-        3.  **The Safety Net:** Winners *never* lose points, even if they play a sloppy game against a lower-rated team.
-        """)
-
+        st.markdown("We use an **Elo-based formula**. Winning 11-0 is worth more than winning 11-9.")
     with st.expander("🏝️ Why is my 'Overall' rating different from my 'League' rating?"):
-        st.markdown("""
-        This is normal! You actually have **two** ratings:
-        
-        1.  **Global Rating (Overall):** This tracks *every* match you play, against *everyone*.
-        2.  **League Rating (Island):** This tracks *only* your performance within a specific league (e.g., "Tuesday Ladder").
-        
-        **Why they drift apart:**
-        Imagine you only play in the Tuesday League. You might think your ratings should be identical. However, your *opponents* might play in other leagues on weekends. 
-        
-        * When your opponent improves over the weekend, their **Global Rating** goes up.
-        * When you play them next Tuesday, the math engine sees a "stronger" opponent in the **Global** calculation, but the "same" opponent in the **League** calculation.
-        
-        This slight difference in opponent strength causes your points gained/lost to vary slightly between the two systems.
-        """)
-
-    with st.expander("🎾 Do 'Pop-Up' events count?"):
-        st.markdown("""
-        **Yes and No.**
-        * **Yes:** They count towards your **Overall / Global** rating.
-        * **No:** They do *not* affect your specific League standings (e.g., they won't mess up your ranking in the Fall Ladder).
-        """)
+        st.markdown("Your **Overall** rating includes every match. Your **League** rating only includes matches from that specific league.")
 
 elif sel == "📋 Roster Check":
     st.header("📋 Roster Check")
-    st.markdown("Paste a list of names to check ratings. Any names not found will be added to the 'New Player' table for onboarding.")
-    
-    lookup_scope = st.radio("Rating Scope", ["OVERALL"] + (sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else []), horizontal=True)
-    raw_names = st.text_area("Paste Names (one per line or comma-separated)", height=100, placeholder="Tom Elliott\nKeith Brand\nNew Player")
+    st.markdown("Paste a list of names to check ratings.")
+    lookup_scope = st.selectbox("Rating Scope", ["OVERALL"] + active_leagues_list)
+    raw_names = st.text_area("Paste Names", height=100)
     
     if st.button("Analyze List"):
         if 'roster_results' in st.session_state: del st.session_state.roster_results
@@ -493,104 +487,122 @@ elif sel == "📋 Roster Check":
             else:
                 new_players.append(n)
 
-        st.session_state.roster_results = {
-            'found': found_data,
-            'new': new_players
-        }
+        st.session_state.roster_results = {'found': found_data, 'new': new_players}
 
     if 'roster_results' in st.session_state:
         results = st.session_state.roster_results
-        
         if results['found']:
             st.success(f"Found {len(results['found'])} players.")
             st.dataframe(pd.DataFrame(results['found']), use_container_width=True)
-        
         if results['new']:
-            st.error(f"🛑 Found {len(results['new'])} completely new players.")
-            st.write("### 🆕 Assign Ratings & Save")
+            st.error(f"🛑 Found {len(results['new'])} new players.")
+            if 'df_new_players' not in st.session_state:
+                st.session_state.df_new_players = pd.DataFrame({"Name": results['new'], "Rating": [3.5] * len(results['new'])})
             
-            if 'df_new_players' not in st.session_state or len(st.session_state.df_new_players) != len(results['new']):
-                st.session_state.df_new_players = pd.DataFrame({
-                    "Name": results['new'],
-                    "Rating": [3.5] * len(results['new'])
-                })
+            edited_df = st.data_editor(st.session_state.df_new_players, column_config={"Rating": st.column_config.NumberColumn(min_value=1.0, max_value=7.0, step=0.1)}, hide_index=True, use_container_width=True)
             
-            edited_df = st.data_editor(
-                st.session_state.df_new_players,
-                column_config={
-                    "Rating": st.column_config.NumberColumn("Start Rating", min_value=1.0, max_value=7.0, step=0.1, format="%.1f")
-                },
-                disabled=["Name"],
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            if st.button("💾 Save All New Players"):
-                success_count = 0
+            if st.button("💾 Save New Players"):
                 for _, row in edited_df.iterrows():
-                    ok, msg = safe_add_player(row['Name'], row['Rating'])
-                    if ok: success_count += 1
-                
-                if success_count > 0:
-                    st.success(f"✅ Created {success_count} profiles!")
-                    time.sleep(1)
-                    del st.session_state.roster_results
-                    del st.session_state.df_new_players
-                    st.rerun()
+                    safe_add_player(row['Name'], row['Rating'])
+                st.success("✅ Created profiles!"); time.sleep(1); del st.session_state.roster_results; st.rerun()
 
+# --- NEW: LEAGUE MANAGER TAB ---
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager")
     
-    if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
-    st.session_state.lc_courts = st.number_input("Courts", 1, 10, st.session_state.lc_courts, key="lc_court_input")
+    tabs = st.tabs(["⚡ Manage Active Leagues", "🆕 Create New League", "🔄 Migration Tool"])
     
-    with st.form("setup_lc"):
-        lg = st.text_input("League Name (Controls Island Rating)", "Tuesday Ladder")
-        c_data = []
-        for i in range(st.session_state.lc_courts):
-            c1, c2 = st.columns([1,3])
-            t = c1.selectbox(f"T{i}", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
-            n = c2.text_area(f"N{i}", height=70)
-            c_data.append({'type':t, 'names':n})
-        
-        if st.form_submit_button("Generate Schedule"):
-            st.session_state.lc_schedule = []
-            st.session_state.active_league = lg 
-            for idx, c in enumerate(c_data):
-                pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                st.session_state.lc_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
-            st.rerun()
-
-    if 'lc_schedule' in st.session_state:
-        st.divider()
-        st.info(f"Posting results to: **{st.session_state.get('active_league', 'Unknown')}**")
-        with st.form("scores_lc"):
-            all_res = []
-            for c in st.session_state.lc_schedule:
-                st.markdown(f"**Court {c['c']}**")
-                for i, m in enumerate(c['m']):
-                    c1, c2, c3, c4 = st.columns([3,1,1,3])
-                    c1.text(f"{m['t1'][0]} & {m['t1'][1]}")
-                    s1 = c2.number_input("S1", 0, key=f"lc_{c['c']}_{i}_1")
-                    s2 = c3.number_input("S2", 0, key=f"lc_{c['c']}_{i}_2")
-                    c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                    all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':st.session_state.get('active_league', 'Unknown'), 'type':f"C{c['c']} RR", 'match_type': 'Live Match', 'is_popup': False})
+    # TAB 1: MANAGE EXISTING
+    with tabs[0]:
+        if not df_meta.empty:
+            st.info("Edit league settings here. Changes save automatically.")
             
-            if st.form_submit_button("Submit Scores"):
-                valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
-                if valid:
-                    process_matches(valid, name_to_id, df_players, df_leagues)
-                    st.success("✅ Processed!")
-                    del st.session_state.lc_schedule
-                    time.sleep(1)
-                    st.rerun()
+            # Prepare data for editor
+            edit_meta = df_meta[['id', 'league_name', 'league_type', 'min_weeks', 'is_active']].copy()
+            
+            edited_leagues = st.data_editor(
+                edit_meta,
+                column_config={
+                    "league_name": "League Name",
+                    "league_type": st.column_config.SelectboxColumn("Type", options=["Standard", "Pop-Up"]),
+                    "min_weeks": st.column_config.NumberColumn("Min Weeks", min_value=1, max_value=20),
+                    "is_active": st.column_config.CheckboxColumn("Active?", help="Uncheck to archive (hide from dropdowns)")
+                },
+                disabled=["id", "league_name"], # Prevent renaming here to avoid DB sync issues for now
+                hide_index=True,
+                use_container_width=True,
+                key="league_editor"
+            )
+            
+            # Detect Changes and Save
+            if st.button("💾 Save Changes"):
+                # We iterate and update. In a real heavy app we'd diff, but for <50 leagues this is fine.
+                for index, row in edited_leagues.iterrows():
+                    supabase.table("leagues_metadata").update({
+                        "league_type": row['league_type'],
+                        "min_weeks": row['min_weeks'],
+                        "is_active": row['is_active']
+                    }).eq("id", row['id']).execute()
+                st.success("Settings Updated!"); time.sleep(1); st.rerun()
+        else:
+            st.warning("No leagues found. Go to 'Migration Tool' to import your existing match history.")
 
-# --- NEW: BATCH ENTRY (ORDERED) ---
+    # TAB 2: CREATE NEW
+    with tabs[1]:
+        with st.form("create_league"):
+            new_name = st.text_input("New League Name")
+            new_type = st.selectbox("Type", ["Standard", "Pop-Up"])
+            new_weeks = st.number_input("Min Weeks Required", 1, 20, 4)
+            if st.form_submit_button("Create League"):
+                if new_name:
+                    try:
+                        supabase.table("leagues_metadata").insert({
+                            "club_id": CLUB_ID, "league_name": new_name, 
+                            "league_type": new_type, "min_weeks": new_weeks, "is_active": True
+                        }).execute()
+                        st.success(f"Created {new_name}!"); time.sleep(1); st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+    # TAB 3: MIGRATION
+    with tabs[2]:
+        st.write("### 🔄 Scan & Sync")
+        st.markdown("Use this if you have uploaded matches via CSV that belong to a league not yet in the metadata table.")
+        if st.button("Run Migration Script"):
+            # 1. Get all unique leagues from match history
+            unique_match_leagues = df_matches['league'].unique().tolist()
+            # 2. Get all existing meta leagues
+            existing_meta_leagues = df_meta['league_name'].unique().tolist() if not df_meta.empty else []
+            
+            created_count = 0
+            for lg in unique_match_leagues:
+                if lg not in existing_meta_leagues:
+                    # Create default entry
+                    is_popup = "Pop" in lg
+                    supabase.table("leagues_metadata").insert({
+                        "club_id": CLUB_ID,
+                        "league_name": lg,
+                        "league_type": "Pop-Up" if is_popup else "Standard",
+                        "min_weeks": 1 if is_popup else 4,
+                        "is_active": True
+                    }).execute()
+                    created_count += 1
+            
+            if created_count > 0:
+                st.success(f"✅ Migrated {created_count} new leagues into the system!"); time.sleep(2); st.rerun()
+            else:
+                st.info("System is up to date. No new leagues found in match history.")
+
 elif sel == "⚡ Batch Entry":
     st.header("⚡ Batch Match Entry")
-    st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
     
-    batch_league = st.text_input("League Name for Batch", "Fall 2025 Ladder")
+    # UPDATED: Use Active Leagues from Metadata
+    if active_leagues_list:
+        batch_league = st.selectbox("Select League", active_leagues_list)
+    else:
+        batch_league = st.text_input("League Name (System Empty)", "Fall 2025 Ladder")
+        st.warning("⚠️ No active leagues found in metadata. Run 'Migration Tool' in League Manager.")
+
     player_list = sorted(df_players['name'].tolist())
     
     if 'batch_df' not in st.session_state:
@@ -608,7 +620,7 @@ elif sel == "⚡ Batch Entry":
             "T2_P1": st.column_config.SelectboxColumn("Team 2 - P1", options=player_list, required=True),
             "T2_P2": st.column_config.SelectboxColumn("Team 2 - P2", options=player_list),
         },
-        column_order=("T1_P1", "T1_P2", "Score_1", "Score_2", "T2_P1", "T2_P2"), # FIXED ORDER
+        column_order=("T1_P1", "T1_P2", "Score_1", "Score_2", "T2_P1", "T2_P2"), 
         num_rows="dynamic",
         use_container_width=True
     )
@@ -617,18 +629,19 @@ elif sel == "⚡ Batch Entry":
         valid_batch = []
         for _, row in edited_batch.iterrows():
             if row['T1_P1'] and row['T2_P1'] and (row['Score_1'] + row['Score_2'] > 0):
+                # Lookup type from metadata to set match_type correctly
+                m_type = "Live Match"
+                if not df_meta.empty:
+                    l_row = df_meta[df_meta['league_name'] == batch_league]
+                    if not l_row.empty and l_row.iloc[0]['league_type'] == "Pop-Up":
+                        m_type = "PopUp"
+
                 match_data = {
-                    't1_p1': row['T1_P1'], 
-                    't1_p2': row['T1_P2'], 
-                    't2_p1': row['T2_P1'], 
-                    't2_p2': row['T2_P2'], 
-                    's1': int(row['Score_1']), 
-                    's2': int(row['Score_2']), 
-                    'date': str(datetime.now()), 
-                    'league': batch_league, 
-                    'type': 'Batch Entry', 
-                    'match_type': 'Live Match', 
-                    'is_popup': False
+                    't1_p1': row['T1_P1'], 't1_p2': row['T1_P2'], 
+                    't2_p1': row['T2_P1'], 't2_p2': row['T2_P2'], 
+                    's1': int(row['Score_1']), 's2': int(row['Score_2']), 
+                    'date': str(datetime.now()), 'league': batch_league, 
+                    'type': 'Batch Entry', 'match_type': m_type, 'is_popup': (m_type == "PopUp")
                 }
                 valid_batch.append(match_data)
         
@@ -638,15 +651,16 @@ elif sel == "⚡ Batch Entry":
             del st.session_state.batch_df
             time.sleep(1)
             st.rerun()
-        else:
-            st.warning("⚠️ No valid matches found.")
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
     
     with st.form("setup_rr"):
         date_rr = st.date_input("Date", datetime.now())
-        lg_rr = st.text_input("Event Name", "PopUp Event")
+        # Filter dropdown to only show Pop-Up types if possible, or all active
+        rr_opts = active_leagues_list if active_leagues_list else ["PopUp Event"]
+        lg_rr = st.selectbox("Event Name", rr_opts)
+        
         c1, c2 = st.columns([1,3])
         t = c1.selectbox("Format", ["4-Player","5-Player","6-Player","8-Player","12-Player"])
         n = c2.text_area("Players", height=70)
@@ -692,27 +706,17 @@ elif sel == "👥 Players":
                 ok, msg = safe_add_player(n, r)
                 if ok: st.success(f"Added {n}!"); time.sleep(1); st.rerun()
                 else: st.error(msg)
-    
     with c2:
         st.subheader("✏️ Edit Player")
         p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
         if p_edit:
             curr_row = df_players[df_players['name'] == p_edit].iloc[0]
             curr_start = float(curr_row['starting_rating']) / 400
-            
-            # Form for Name AND Rating
             new_name = st.text_input("Edit Name", value=p_edit)
             new_start = st.number_input("New Start Rating", 1.0, 7.0, curr_start, step=0.1)
-            
             if st.button("Update Profile"):
-                supabase.table("players").update({
-                    "name": new_name,
-                    "starting_rating": new_start * 400, 
-                    "rating": new_start * 400
-                }).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
-                
+                supabase.table("players").update({"name": new_name, "starting_rating": new_start * 400, "rating": new_start * 400}).eq("name", p_edit).eq("club_id", CLUB_ID).execute()
                 st.success(f"Updated {new_name}!"); time.sleep(1); st.rerun()
-
     with c3:
         st.subheader("🗑️ Delete")
         to_del = st.selectbox("Select to Remove", [""] + sorted(df_players['name']))
@@ -723,144 +727,52 @@ elif sel == "👥 Players":
 
 elif sel == "📝 Match Log":
     st.header("📝 Match Log")
-    
-    # Filter controls
     filter_type = st.radio("Filter Matches", ["All", "League Matches", "Pop-Up Events"], horizontal=True)
-    if filter_type == "League Matches":
-        view_df = df_matches[df_matches['match_type'] != 'PopUp']
-    elif filter_type == "Pop-Up Events":
-        view_df = df_matches[df_matches['match_type'] == 'PopUp']
-    else:
-        view_df = df_matches
-
-    # NEW: Filter by specific ID
+    if filter_type == "League Matches": view_df = df_matches[df_matches['match_type'] != 'PopUp']
+    elif filter_type == "Pop-Up Events": view_df = df_matches[df_matches['match_type'] == 'PopUp']
+    else: view_df = df_matches
+    
     col1, col2 = st.columns([1, 4])
     id_filter = col1.number_input("Jump to ID:", min_value=0, value=0)
-    
-    if id_filter > 0:
-        view_df = view_df[view_df['id'] == id_filter]
+    if id_filter > 0: view_df = view_df[view_df['id'] == id_filter]
 
-    # --- BULK DELETE UI (UPDATED) ---
     st.write("### 🗑️ Bulk Delete Matches")
     st.info("Select checkboxes below to delete matches.")
-    
     edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
-    edit_df.insert(0, "Delete", False) # Add checkbox column at start
-
-    edited_log = st.data_editor(
-        edit_df,
-        column_config={
-            "Delete": st.column_config.CheckboxColumn("Delete?", default=False),
-            "elo_delta": st.column_config.NumberColumn("Elo Delta", format="%.1f"),
-        },
-        disabled=["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"],
-        use_container_width=True,
-        hide_index=True
-    )
-
-    to_delete = edited_log[edited_log['Delete'] == True]
+    edit_df.insert(0, "Delete", False) 
+    edited_log = st.data_editor(edit_df, column_config={"Delete": st.column_config.CheckboxColumn("Delete?", default=False), "elo_delta": st.column_config.NumberColumn("Elo Delta", format="%.1f")}, disabled=["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"], use_container_width=True, hide_index=True)
     
+    to_delete = edited_log[edited_log['Delete'] == True]
     if not to_delete.empty:
         st.error(f"⚠️ You have selected {len(to_delete)} matches for deletion.")
         if st.button("Confirm Bulk Delete"):
-            ids_to_kill = to_delete['id'].tolist()
-            supabase.table("matches").delete().in_("id", ids_to_kill).execute()
-            st.success("Deleted!")
-            time.sleep(1)
-            st.rerun()
+            supabase.table("matches").delete().in_("id", to_delete['id'].tolist()).execute()
+            st.success("Deleted!"); time.sleep(1); st.rerun()
 
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
-    
-    zero_pts = df_matches[df_matches['elo_delta'] == 0].shape[0]
-    if zero_pts > 0:
-        st.warning(f"⚠️ Found {zero_pts} matches with 0.0 point impact. Run 'Recalculate' below to fix them.")
-    else:
-        st.success("✅ System Health: All matches have valid point values.")
-
-    st.subheader("🕵️ Match Forensics")
-    debug_id = st.number_input("Enter Match ID to Diagnose", value=0, step=1)
-    if st.button("Run Diagnostics"):
-        m = supabase.table("matches").select("*").eq("id", debug_id).execute().data
-        if not m:
-            st.error("Match not found.")
-        else:
-            m = m[0]
-            st.write("### 1. Match Data Raw")
-            st.json(m)
-
-            p_ids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
-            p_ids = [x for x in p_ids if x is not None]
-
-            st.write("### 2. Player Data")
-            if p_ids:
-                players = supabase.table("players").select("*").in_("id", p_ids).execute().data
-                st.write(players)
-            
-            st.write("### 3. Math Engine Simulation")
-            def mock_get(pid):
-                if pid is None: return 1200.0
-                match_p = next((x for x in players if x['id'] == pid), None)
-                if match_p: return float(match_p['rating'])
-                return 1200.0
-
-            ro1, ro2, ro3, ro4 = mock_get(m['t1_p1']), mock_get(m['t1_p2']), mock_get(m['t2_p1']), mock_get(m['t2_p2'])
-            
-            st.write(f"Team 1 Ratings: {ro1}, {ro2} (Avg: {(ro1+ro2)/2})")
-            st.write(f"Team 2 Ratings: {ro3}, {ro4} (Avg: {(ro3+ro4)/2})")
-            st.write(f"Scores: {m['score_t1']} - {m['score_t2']}")
-            
-            d1, d2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, m['score_t1'], m['score_t2'])
-            st.write(f"**Calculated Delta:** {d1 if m['score_t1'] > m['score_t2'] else d2}")
-    
-    st.divider()
-    
-    st.subheader("🛠️ League Manager")
-    if not df_leagues.empty:
-        active_islands = sorted(df_leagues['league_name'].unique().tolist())
-        to_hide = st.selectbox("Select League to Convert to 'PopUp' (Hides from Leaderboard)", [""] + active_islands)
-        
-        if to_hide and st.button(f"⚠️ Convert '{to_hide}' to PopUp"):
-            supabase.table("matches").update({"match_type": "PopUp"}).eq("league", to_hide).execute()
-            supabase.table("league_ratings").delete().eq("league_name", to_hide).execute()
-            st.success(f"Converted '{to_hide}'! It will now vanish from the Leaderboard.")
-            time.sleep(2)
-            st.rerun()
-
-    st.divider()
-
     st.subheader("🔄 Recalculate League History")
     league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL (Full System Reset)"]
     target_reset = st.selectbox("Select League to Recalculate", league_options)
-
     if st.button(f"⚠️ Replay History for: {target_reset}"):
         with st.spinner("Crunching numbers..."):
             all_players = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute().data
             all_matches = supabase.table("matches").select("*").eq("club_id", CLUB_ID).order("date", desc=False).execute().data
-            
             p_map = {p['id']: {'r': float(p['starting_rating']), 'w': 0, 'l': 0, 'mp': 0, 'name': p['name']} for p in all_players}
             island_map = {}
             matches_to_update = []
-
             for m in all_matches:
                 if target_reset != "ALL (Full System Reset)" and m['league'] != target_reset: continue
-
                 p1, p2, p3, p4 = m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']
                 s1, s2 = m['score_t1'], m['score_t2']
                 league = m['league']
                 is_popup = m.get('match_type') == 'PopUp'
-                
-                def safe_get_r(pid):
-                    if pid is None: return 1200.0
-                    return p_map[pid]['r']
-
+                def safe_get_r(pid): return 1200.0 if pid is None else p_map[pid]['r']
                 if target_reset == "ALL (Full System Reset)":
                     ro1, ro2, ro3, ro4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
                     do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2)
-                    
                     delta_to_save = do1 if s1 > s2 else do2
                     matches_to_update.append({'id': m['id'], 'elo_delta': delta_to_save})
-                    
                     win = s1 > s2
                     for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
                         if pid is None: continue
@@ -868,18 +780,11 @@ elif sel == "⚙️ Admin Tools":
                         p_map[pid]['mp'] += 1
                         if is_win: p_map[pid]['w'] += 1
                         else: p_map[pid]['l'] += 1
-
                 if not is_popup:
-                    def get_i_r(pid, lg):
-                        if (pid, lg) not in island_map: 
-                            curr_r = p_map[pid]['r']
-                            island_map[(pid, lg)] = {'r': curr_r, 'w':0, 'l':0, 'mp':0}
-                        return island_map[(pid, lg)]['r']
-
                     def safe_get_i(pid, lg):
                         if pid is None: return 1200.0
-                        return get_i_r(pid, lg)
-
+                        if (pid, lg) not in island_map: island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
+                        return island_map[(pid, lg)]['r']
                     ri1, ri2, ri3, ri4 = safe_get_i(p1, league), safe_get_i(p2, league), safe_get_i(p3, league), safe_get_i(p4, league)
                     di1, di2 = calculate_hybrid_elo((ri1+ri2)/2, (ri3+ri4)/2, s1, s2)
                     win = s1 > s2
@@ -891,47 +796,26 @@ elif sel == "⚙️ Admin Tools":
                         island_map[k]['mp'] += 1
                         if is_win: island_map[k]['w'] += 1
                         else: island_map[k]['l'] += 1
-
             if target_reset == "ALL (Full System Reset)":
-                for pid, stats in p_map.items():
-                    supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
-            
+                for pid, stats in p_map.items(): supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
             if target_reset != "ALL (Full System Reset)": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
             else: supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
-            
-            new_islands = []
-            for (pid, lg), stats in island_map.items():
-                if target_reset == "ALL (Full System Reset)" or lg == target_reset:
-                    new_islands.append({"club_id": CLUB_ID, "player_id": pid, "league_name": lg, "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']})
-            
+            new_islands = [{"club_id": CLUB_ID, "player_id": pid, "league_name": lg, "rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']} for (pid, lg), stats in island_map.items()]
             if new_islands:
-                chunk_size = 1000
-                for i in range(0, len(new_islands), chunk_size):
-                    supabase.table("league_ratings").insert(new_islands[i:i+chunk_size]).execute()
-
+                for i in range(0, len(new_islands), 1000): supabase.table("league_ratings").insert(new_islands[i:i+1000]).execute()
             progress_bar = st.progress(0)
             for idx, update in enumerate(matches_to_update):
                 supabase.table("matches").update({"elo_delta": update['elo_delta']}).eq("id", update['id']).execute()
                 progress_bar.progress((idx + 1) / len(matches_to_update))
-
-            st.success(f"✅ Replayed & Synced {len(all_matches)} matches!"); time.sleep(2); st.rerun()
+            st.success(f"✅ Replayed {len(all_matches)} matches!"); time.sleep(2); st.rerun()
 
 elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
     st.markdown("""
+    ### 🏟️ League Manager
+    * **Create/Manage:** Use this tab to create new leagues, archive old ones, and set the minimum weeks required for leaderboards.
+    * **Migration:** Use the 'Migration Tool' tab here to auto-import any old leagues found in the match history.
+    
     ### ⚡ Batch Entry
-    * **Goal:** Digitize a paper clipboard of matches quickly.
-    * **Tip:** You can enter matches for *any* date, but they default to "Now". If you need historical dates, use the CSV upload in Admin Tools.
-    
-    ### 📋 Roster Check
-    * **Goal:** Check if players exist before an event starts.
-    * **Workflow:** Paste your list -> The system flags new names -> You assign ratings -> Click "Save All".
-    
-    ### 🏟️ League Manager (Live)
-    * **Goal:** Manage a live event with multiple courts.
-    * **Format:** Select "4-Player" to generate a Round Robin schedule. 
-    
-    ### ⚙️ Admin Tools
-    * **Recalculate:** Use this if you delete a match or change a player's starting rating. It replays *every match in history* to ensure the current ratings are mathematically perfect.
-    * **Convert to PopUp:** If you accidentally typed "Tusday League" instead of "Tuesday", use this to hide the bad league from the public leaderboard.
+    * **Dropdowns:** The League Dropdown now only shows **Active** leagues. If you don't see your league, check the League Manager to ensure it's not Archived.
     """)
