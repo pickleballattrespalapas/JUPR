@@ -100,10 +100,16 @@ def load_data():
                 df_matches['p3'] = df_matches['t2_p1'].map(id_to_name)
                 df_matches['p4'] = df_matches['t2_p2'].map(id_to_name)
                 
-                # --- DATE PARSING (STRIP TIME) ---
+                # Date parsing just in case
                 df_matches['date_str'] = df_matches['date'].astype(str).str[:10] 
                 df_matches['date_obj'] = pd.to_datetime(df_matches['date_str'], errors='coerce')
                 
+                # Handle Week Tag (if it exists, otherwise fill empty)
+                if 'week_tag' not in df_matches.columns:
+                    df_matches['week_tag'] = "Unknown"
+                else:
+                    df_matches['week_tag'] = df_matches['week_tag'].fillna("Unknown")
+
             return df_players, df_leagues, df_matches, df_meta, name_to_id, id_to_name
         
         except Exception as e:
@@ -171,6 +177,8 @@ def process_matches(match_list, name_to_id, df_p, df_l):
         s1, s2 = m['s1'], m['s2']
         league = m['league']
         is_popup = m.get('match_type') == 'PopUp' or m.get('is_popup', False)
+        # Use provided week_tag or default to 'Unknown'
+        week_tag = m.get('week_tag', 'Unknown')
         
         def safe_get_o(pid):
             if pid is None: return 1200.0
@@ -192,7 +200,8 @@ def process_matches(match_list, name_to_id, df_p, df_l):
             "club_id": CLUB_ID, "date": m['date'], "league": league,
             "t1_p1": p1, "t1_p2": p2, "t2_p1": p3, "t2_p2": p4,
             "score_t1": s1, "score_t2": s2, "elo_delta": do1 if s1 > s2 else do2,
-            "match_type": m['match_type']
+            "match_type": m['match_type'],
+            "week_tag": week_tag
         })
 
         win = s1 > s2
@@ -289,58 +298,44 @@ if sel == "🏆 Leaderboards":
         available_leagues += unique_l
         
     target_league = st.selectbox("Select League", available_leagues)
-    
-    # Threshold Logic
-    db_threshold = 1
-    if not df_meta.empty and target_league != "OVERALL":
-        meta_row = df_meta[df_meta['league_name'] == target_league]
-        if not meta_row.empty:
-            db_threshold = int(meta_row.iloc[0]['min_weeks'])
-    
-    if target_league != "OVERALL":
-        threshold_days = st.slider("Min Days Played (Filters Awards)", 1, 10, db_threshold)
-    else:
-        threshold_days = 1
 
     # 3. Data Prep for Stats
     if target_league == "OVERALL":
         base_df = df_players.copy()
-        matches_scope = df_matches.copy() # Use .copy() to avoid setting on copy warnings
+        matches_scope = df_matches
     else:
         if df_leagues.empty: base_df = pd.DataFrame()
         else:
             base_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             base_df['name'] = base_df['player_id'].map(id_to_name)
         
-        matches_scope = df_matches[df_matches['league'] == target_league].copy()
+        matches_scope = df_matches[df_matches['league'] == target_league]
         if matches_scope.empty:
-            matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()].copy()
-
-    # --- CRITICAL FIX: Ensure day_id exists locally ---
-    # This prevents the KeyError if the data loader cache is stale
-    if not matches_scope.empty and 'day_id' not in matches_scope.columns:
-        matches_scope['day_id'] = matches_scope['date'].astype(str).str[:10]
+            matches_scope = df_matches[df_matches['league'].astype(str).str.strip() == target_league.strip()]
 
     if not base_df.empty and 'rating' in base_df.columns:
         stats_map = {}
         
         if not matches_scope.empty:
             for _, m in matches_scope.iterrows():
-                # SAFETY: Handle missing day_id even after fix attempt
-                day_id = m.get('day_id', str(m.get('date', ''))[:10])
-                if pd.isna(day_id) or day_id == "nan" or day_id == "": continue
+                # NEW LOGIC: Use 'week_tag'
+                week_id = m.get('week_tag', 'Unknown')
+                if pd.isna(week_id) or week_id == "" or week_id == "Unknown": 
+                    # If empty, fallback to date for calculating gain, but not weeks?
+                    # No, let's keep it simple. If tagged, count it.
+                    week_id = "Untagged"
                 
                 delta = m['elo_delta']
                 t1_won = m['score_t1'] > m['score_t2']
                 
-                # ... rest of the loop remains the same ...
                 raw_pids = [m['t1_p1'], m['t1_p2'], m['t2_p1'], m['t2_p2']]
                 for i, raw_pid in enumerate(raw_pids):
                     if pd.isna(raw_pid) or raw_pid == -1: continue
                     pid_int = int(raw_pid)
                     
-                    if pid_int not in stats_map: stats_map[pid_int] = {'days': set(), 'total_delta': 0.0, 'live_matches': 0}
-                    stats_map[pid_int]['days'].add(day_id) 
+                    if pid_int not in stats_map: stats_map[pid_int] = {'weeks': set(), 'total_delta': 0.0, 'live_matches': 0}
+                    if week_id != "Untagged":
+                        stats_map[pid_int]['weeks'].add(week_id) 
                     stats_map[pid_int]['live_matches'] += 1
                     
                     is_t1 = (i <= 1)
@@ -350,7 +345,7 @@ if sel == "🏆 Leaderboards":
                         stats_map[pid_int]['total_delta'] -= delta
 
         # Merge
-        base_df['active_days'] = base_df.apply(lambda x: len(stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('days', [])), axis=1)
+        base_df['weeks_played'] = base_df.apply(lambda x: len(stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('weeks', [])), axis=1)
         base_df['rating_gain'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('total_delta', 0.0), axis=1)
         base_df['live_matches_count'] = base_df.apply(lambda x: stats_map.get(int(x['id'] if 'id' in x else x['player_id']), {}).get('live_matches', 0), axis=1)
         
@@ -362,9 +357,9 @@ if sel == "🏆 Leaderboards":
         base_df['JUPR'] = base_df['rating'] / 400
         base_df['win_pct'] = (base_df['wins'] / base_df['display_matches'].replace(0, 1)) * 100
         
-        # --- 4. SHOW GRIDS ---
+        # --- 4. SHOW GRIDS (NO FILTER) ---
         if target_league != "OVERALL":
-            qualified_df = base_df[base_df['active_days'] >= threshold_days].copy()
+            qualified_df = base_df[base_df['matches_played'] > 0].copy()
             
             if not qualified_df.empty:
                 st.markdown("### 🏅 Top Performers")
@@ -388,8 +383,6 @@ if sel == "🏆 Leaderboards":
                     top_wins = qualified_df.sort_values('wins', ascending=False).head(5)
                     for _, r in top_wins.iterrows(): st.markdown(f"**{r['wins']} Wins** - {r['name']}")
                 st.divider()
-            else:
-                st.info(f"ℹ️ Top 5 Awards hidden until players reach {threshold_days} active days.")
 
         # --- 5. FULL TABLE ---
         st.markdown("### 📊 Full Standings")
@@ -399,11 +392,11 @@ if sel == "🏆 Leaderboards":
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         
         st.dataframe(
-            final_view[['name', 'JUPR', 'matches_played', 'active_days', 'wins', 'losses', 'Win %', 'Gain']], 
+            final_view[['name', 'JUPR', 'matches_played', 'weeks_played', 'wins', 'losses', 'Win %', 'Gain']], 
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "active_days": "Days Played"
+                "weeks_played": "Weeks (Tagged)"
             }
         )
         if target_league != "OVERALL": st.caption(f"👇 Share: `https://jupr-leagues.streamlit.app/?league={target_league.replace(' ', '%20')}`")
@@ -454,7 +447,9 @@ elif sel == "🔍 Player Search":
                 h['Δ JUPR'] = stats[1].map('{:+.3f}'.format)
                 h['Raw Pts'] = stats[2]
                 
-                st.dataframe(h[['date', 'league', 'Result', 'Δ JUPR', 'Raw Pts', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
+                # Show Week Tag in history too
+                h['Week'] = h['week_tag']
+                st.dataframe(h[['date', 'league', 'Week', 'Result', 'Δ JUPR', 'Raw Pts', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']], use_container_width=True, hide_index=True)
             else:
                 st.info("No matches found.")
 
@@ -534,6 +529,9 @@ elif sel == "🏟️ League Manager":
         active_opts = active_leagues_list if active_leagues_list else ["Default League"]
         lg_live = st.selectbox("Select League", active_opts, key="live_league_selector")
         
+        # New: Week Label Input
+        entry_week = st.text_input("Week Label", "Week 1", key="live_week_input", help="Tag these matches (e.g. 'Week 1', 'Finals')")
+        
         if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
         st.session_state.lc_courts = st.number_input("Number of Courts", 1, 10, st.session_state.lc_courts, key="lc_court_input")
         
@@ -555,7 +553,7 @@ elif sel == "🏟️ League Manager":
 
         if 'lc_schedule' in st.session_state:
             st.divider()
-            st.info(f"Posting results to: **{st.session_state.get('lc_active_league', 'Unknown')}**")
+            st.info(f"Posting results to: **{st.session_state.get('lc_active_league', 'Unknown')}** | Tag: **{entry_week}**")
             with st.form("scores_lc"):
                 all_res = []
                 for c in st.session_state.lc_schedule:
@@ -570,7 +568,8 @@ elif sel == "🏟️ League Manager":
                             't1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1],
                             's1':s1, 's2':s2, 'date':str(datetime.now()), 
                             'league':st.session_state.get('lc_active_league', 'Unknown'), 
-                            'type':f"C{c['c']} RR", 'match_type': 'Live Match', 'is_popup': False
+                            'type':f"C{c['c']} RR", 'match_type': 'Live Match', 'is_popup': False,
+                            'week_tag': entry_week
                         })
                 
                 if st.form_submit_button("Submit Scores"):
@@ -585,7 +584,7 @@ elif sel == "🏟️ League Manager":
     # --- TAB 2: SETTINGS ---
     with lm_tabs[1]:
         if not df_meta.empty:
-            st.info("Uncheck 'Active' to retire a league. It will be hidden from entry forms but remain in history.")
+            st.info("Uncheck 'Active' to retire a league.")
             edit_meta = df_meta[['id', 'league_name', 'league_type', 'min_weeks', 'is_active']].copy()
             edited_leagues = st.data_editor(
                 edit_meta,
@@ -654,7 +653,10 @@ elif sel == "🏟️ League Manager":
 elif sel == "⚡ Batch Entry":
     st.header("⚡ Batch Match Entry")
     
-    entry_date = st.date_input("Match Date", datetime.now(), help="Pick the date these matches actually happened.")
+    # NEW: Inputs for Date & Week
+    c1, c2 = st.columns(2)
+    entry_date = c1.date_input("Match Date", datetime.now(), help="Pick the date these matches actually happened.")
+    entry_week = c2.text_input("Week Label", "Week 1", help="Tag this batch (e.g. 'Week 4')")
     
     if active_leagues_list:
         batch_league = st.selectbox("Select League", active_leagues_list)
@@ -700,20 +702,22 @@ elif sel == "⚡ Batch Entry":
                     's1': int(row['Score_1']), 's2': int(row['Score_2']), 
                     'date': str(entry_date), 
                     'league': batch_league, 
-                    'type': 'Batch Entry', 'match_type': m_type, 'is_popup': (m_type == "PopUp")
+                    'type': 'Batch Entry', 'match_type': m_type, 'is_popup': (m_type == "PopUp"),
+                    'week_tag': entry_week # Include the tag
                 }
                 valid_batch.append(match_data)
         
         if valid_batch:
             process_matches(valid_batch, name_to_id, df_players, df_leagues)
-            st.success(f"✅ Successfully processed {len(valid_batch)} matches for {entry_date}!")
+            st.success(f"✅ Successfully processed {len(valid_batch)} matches for {entry_week}!")
             del st.session_state.batch_df
             time.sleep(1)
             st.rerun()
 
 elif sel == "🔄 Pop-Up RR":
     st.header("🔄 Pop-Up Round Robin")
-    
+    # Same as before, logic doesn't require week tags usually for one-offs, but we can add it if needed.
+    # Leaving standard for now.
     with st.form("setup_rr"):
         date_rr = st.date_input("Date", datetime.now())
         rr_opts = active_leagues_list if active_leagues_list else ["PopUp Event"]
@@ -796,7 +800,12 @@ elif sel == "📝 Match Log":
 
     st.write("### 🗑️ Bulk Delete Matches")
     st.info("Select checkboxes below to delete matches.")
-    edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    # Add week_tag to editor
+    if 'week_tag' in view_df.columns:
+        edit_df = view_df.head(5000)[['id', 'date', 'week_tag', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    else:
+        edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+    
     edit_df.insert(0, "Delete", False) 
     edited_log = st.data_editor(edit_df, column_config={"Delete": st.column_config.CheckboxColumn("Delete?", default=False), "elo_delta": st.column_config.NumberColumn("Elo Delta", format="%.1f")}, disabled=["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"], use_container_width=True, hide_index=True)
     
@@ -810,19 +819,14 @@ elif sel == "📝 Match Log":
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
     
-    # --- UPDATED: LEAGUE MERGER (FORCE) ---
+    # --- UPDATED: LEAGUE MERGER ---
     st.subheader("🔗 League Merger")
-    st.markdown("Merge duplicate leagues (e.g. 'Fall 2025' and 'Fall '25').")
+    st.markdown("Merge duplicate leagues.")
     
     if not df_matches.empty:
-        # Get all unique names
         all_match_names = sorted(df_matches['league'].astype(str).unique().tolist())
-        
         c1, c2 = st.columns(2)
-        # Any existing league name in matches can be source
         from_league = c1.selectbox("Move Matches FROM:", all_match_names)
-        
-        # Destination must be in Active list (or create new)
         dest_options = [l for l in active_leagues_list if l != from_league]
         to_league = c2.selectbox("Move Matches TO:", dest_options)
         
@@ -836,19 +840,20 @@ elif sel == "⚙️ Admin Tools":
     
     st.divider()
     
-    st.subheader("📅 Bulk Match Date Editor")
-    with st.form("bulk_date_edit"):
+    st.subheader("📅 Bulk Week Tag Editor")
+    st.markdown("Tag existing matches with a week label (e.g. 'Week 1')")
+    with st.form("bulk_week_edit"):
         c1, c2, c3 = st.columns(3)
         start_id = c1.number_input("Start Match ID", min_value=0)
         end_id = c2.number_input("End Match ID", min_value=0)
-        new_date = c3.date_input("New Date")
+        new_tag = c3.text_input("New Week Tag (e.g. 'Week 2')")
         
-        if st.form_submit_button("Update Match Dates"):
+        if st.form_submit_button("Update Week Tags"):
             if start_id > 0 and end_id >= start_id:
                 id_list = list(range(start_id, end_id + 1))
                 try:
-                    supabase.table("matches").update({"date": str(new_date)}).in_("id", id_list).execute()
-                    st.success(f"✅ Updated {len(id_list)} matches to {new_date}!")
+                    supabase.table("matches").update({"week_tag": new_tag}).in_("id", id_list).execute()
+                    st.success(f"✅ Tagged {len(id_list)} matches as '{new_tag}'!")
                     time.sleep(2)
                     st.rerun()
                 except Exception as e:
@@ -919,6 +924,6 @@ elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
     st.markdown("""
     ### ⚙️ Admin Tools
-    * **League Merger:** Use this to merge "Verified Men's 4.0 -- 2026" into "Verified Men's 4.0" to fix the 0 Weeks bug.
-    * **Bulk Date Editor:** Fix "Everything Happened Today" issues.
+    * **League Merger:** Use this to merge "Verified Men's 4.0 -- 2026" into "Verified Men's 4.0".
+    * **Bulk Week Tag Editor:** Use this to label matches as 'Week 1', 'Week 2', etc. This fixes the "0 Weeks Played" issue by giving you manual control.
     """)
