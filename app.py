@@ -3,10 +3,18 @@ import pandas as pd
 from supabase import create_client, Client
 import time
 from datetime import datetime
-import difflib 
 
 # --- 1. PAGE CONFIG ---
-st.set_page_config(page_title="JUPR Leagues", layout="wide")
+st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
+
+# Custom CSS to make it look less "Spreadsheet-y"
+st.markdown("""
+<style>
+    .stDataFrame { font-size: 1.1rem; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem; color: #00C0F2; }
+    div[data-testid="stVerticalBlock"] > div:has(div.stDataFrame) { padding-top: 10px; }
+</style>
+""", unsafe_allow_html=True)
 
 if 'admin_logged_in' not in st.session_state:
     st.session_state.admin_logged_in = False
@@ -105,11 +113,12 @@ def load_data():
 
 # --- HELPERS ---
 def get_match_schedule(format_type, players):
-    # (Same schedule logic as before - kept for brevity)
+    # (Same schedule logic)
     if len(players) < int(format_type.split('-')[0]): return []
     if format_type == "4-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
     elif format_type == "5-Player": return [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5'}]
-    return [] # Add 6/8/12 if needed
+    elif format_type == "6-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5'}]
+    return []
 
 def safe_add_player(name, rating):
     try:
@@ -121,13 +130,12 @@ def safe_add_player(name, rating):
     except Exception as e:
         return False, str(e)
 
-# --- PROCESSOR (UPDATED WITH SNAPSHOTS) ---
+# --- PROCESSOR (WITH SNAPSHOTS) ---
 def process_matches(match_list, name_to_id, df_p, df_l, df_meta):
     db_matches = []
     overall_updates = {} 
     island_updates = {}
 
-    # Helper: Get K-Factor for a league
     def get_k(lg_name):
         if df_meta.empty: return DEFAULT_K_FACTOR
         row = df_meta[df_meta['league_name'] == lg_name]
@@ -158,11 +166,11 @@ def process_matches(match_list, name_to_id, df_p, df_l, df_meta):
         league = m['league']
         is_popup = m.get('match_type') == 'PopUp' or m.get('is_popup', False)
         
-        # 1. Global Calculation
+        # 1. Global
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
         do1, do2 = calculate_hybrid_elo((ro1+ro2)/2, (ro3+ro4)/2, s1, s2, k_factor=DEFAULT_K_FACTOR)
         
-        # 2. Island Calculation (with specific K-Factor)
+        # 2. Island
         di1, di2 = 0, 0
         if not is_popup:
             k_val = get_k(league)
@@ -175,7 +183,6 @@ def process_matches(match_list, name_to_id, df_p, df_l, df_meta):
             "score_t1": s1, "score_t2": s2, 
             "elo_delta": do1 if s1 > s2 else do2,
             "match_type": m['match_type'],
-            # NEW: SNAPSHOTS
             "t1_p1_r": ro1, "t1_p2_r": ro2, "t2_p1_r": ro3, "t2_p2_r": ro4
         })
 
@@ -185,7 +192,6 @@ def process_matches(match_list, name_to_id, df_p, df_l, df_meta):
         for pid, d_overall, d_island, won in participants:
             if pid is None: continue 
             
-            # Update Global
             if pid not in overall_updates:
                 row = df_p[df_p['id'] == pid].iloc[0]
                 overall_updates[pid] = {'r': float(row['rating']), 'w': int(row['wins']), 'l': int(row['losses']), 'mp': int(row['matches_played'])}
@@ -194,7 +200,6 @@ def process_matches(match_list, name_to_id, df_p, df_l, df_meta):
             if won: overall_updates[pid]['w'] += 1
             else: overall_updates[pid]['l'] += 1
             
-            # Update Island
             if not is_popup:
                 key = (pid, league)
                 if key not in island_updates:
@@ -259,20 +264,18 @@ sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 if sel == "🏆 Leaderboards":
     st.header("🏆 Leaderboards")
     
-    # 1. Determine available leagues from CONFIG (Active only)
+    # 1. Menu Logic
     if not df_meta.empty:
-        # Sort by display order or name. Here we filter by is_active.
         active_meta = df_meta[df_meta['is_active'] == True]
         available_leagues = ["OVERALL"] + sorted(active_meta['league_name'].unique().tolist())
     elif not df_leagues.empty:
-        # Fallback if no config
         available_leagues = ["OVERALL"] + sorted([l for l in df_leagues['league_name'].unique().tolist() if "Pop" not in l])
     else:
         available_leagues = ["OVERALL"]
         
     target_league = st.selectbox("Select View", available_leagues)
     
-    # 2. Get Config for this league
+    # 2. Get Rules
     min_games_req = 0
     desc_text = ""
     if target_league != "OVERALL" and not df_meta.empty:
@@ -286,8 +289,6 @@ if sel == "🏆 Leaderboards":
     # 3. Filter Data
     if target_league == "OVERALL":
         display_df = df_players.copy()
-        # For overall, maybe use a default min games?
-        min_games_req = 5 
     else:
         if df_leagues.empty: display_df = pd.DataFrame()
         else:
@@ -295,36 +296,61 @@ if sel == "🏆 Leaderboards":
             display_df['name'] = display_df['player_id'].map(id_to_name)
     
     if not display_df.empty and 'rating' in display_df.columns:
+        # Pre-calc columns
         display_df['JUPR'] = (display_df['rating']/400)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100)
         
-        # 4. QUALIFIED DATAFRAME (For Top 5 Widgets)
-        qualified_df = display_df[display_df['matches_played'] >= min_games_req].copy()
-        
-        if not qualified_df.empty:
-            st.markdown(f"### 🏅 Top Performers (Min {min_games_req} Games)")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown("**👑 Highest Rating**")
-                top = qualified_df.sort_values('rating', ascending=False).head(5)
-                for _, r in top.iterrows(): st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
-            with c2:
-                st.markdown("**🎯 Best Win %**")
-                top = qualified_df.sort_values('Win %', ascending=False).head(5)
-                for _, r in top.iterrows(): st.markdown(f"**{r['Win %']:.1f}%** - {r['name']}")
-            with c3:
-                st.markdown("**🚜 Most Wins**")
-                top = qualified_df.sort_values('wins', ascending=False).head(5)
-                for _, r in top.iterrows(): st.markdown(f"**{r['wins']} Wins** - {r['name']}")
-            st.divider()
+        # --- TOP 5 WIDGETS (Conditional: NOT on OVERALL) ---
+        if target_league != "OVERALL":
+            qualified_df = display_df[display_df['matches_played'] >= min_games_req].copy()
+            if not qualified_df.empty:
+                st.markdown(f"### 🏅 Top Performers (Min {min_games_req} Games)")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.markdown("**👑 Highest Rating**")
+                    top = qualified_df.sort_values('rating', ascending=False).head(5)
+                    for _, r in top.iterrows(): st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
+                with c2:
+                    st.markdown("**🎯 Best Win %**")
+                    top = qualified_df.sort_values('Win %', ascending=False).head(5)
+                    for _, r in top.iterrows(): st.markdown(f"**{r['Win %']:.1f}%** - {r['name']}")
+                with c3:
+                    st.markdown("**🚜 Most Wins**")
+                    top = qualified_df.sort_values('wins', ascending=False).head(5)
+                    for _, r in top.iterrows(): st.markdown(f"**{r['wins']} Wins** - {r['name']}")
+                st.divider()
 
-        # 5. FULL TABLE (Everyone)
-        st.markdown("### 📊 Full Standings")
-        final_view = display_df.sort_values('rating', ascending=False).copy()
-        final_view['JUPR'] = final_view['JUPR'].map('{:,.3f}'.format)
-        final_view['Win %'] = final_view['Win %'].map('{:.1f}%'.format)
+        # --- STYLED TABLE ---
+        st.markdown("### 📊 Standings")
         
-        st.dataframe(final_view[['name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
+        # Sort and Add Rank
+        final_view = display_df.sort_values('rating', ascending=False).copy()
+        final_view['Rank'] = range(1, len(final_view) + 1)
+        
+        # Medal Logic
+        def get_medal(r):
+            if r == 1: return "🥇"
+            if r == 2: return "🥈"
+            if r == 3: return "🥉"
+            return str(r)
+        
+        final_view['Rank'] = final_view['Rank'].apply(get_medal)
+        
+        # Show Styled DataFrame
+        st.dataframe(
+            final_view[['Rank', 'name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Rank": st.column_config.Column("Rank", width="small"),
+                "name": st.column_config.Column("Player", width="medium"),
+                "JUPR": st.column_config.NumberColumn("Rating", format="%.3f"),
+                "Win %": st.column_config.ProgressColumn("Win %", format="%.1f%%", min_value=0, max_value=100),
+                "matches_played": st.column_config.NumberColumn("Matches"),
+                "wins": st.column_config.NumberColumn("W"),
+                "losses": st.column_config.NumberColumn("L")
+            }
+        )
     else:
         st.info("No data for this league yet.")
 
@@ -332,7 +358,6 @@ elif sel == "🔍 Player Search":
     st.header("🔍 Player History")
     p = st.selectbox("Search", [""] + sorted(df_players['name']))
     if p:
-        # (Same Logic as before)
         p_row = df_players[df_players['name'] == p]
         if not p_row.empty:
             st.metric("Current JUPR", f"{(float(p_row.iloc[0]['rating'])/400):.3f}")
@@ -341,22 +366,23 @@ elif sel == "🔍 Player Search":
             mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
             h = df_matches[mask].copy()
             if not h.empty:
-                # Add Snapshot Logic
                 def get_snapshot(r):
-                    # Try to find the snapshot column
-                    # This logic assumes the columns exist. If not, it falls back gracefully
                     if p == r['p1']: return r.get('t1_p1_r', 0)
                     if p == r['p2']: return r.get('t1_p2_r', 0)
                     if p == r['p3']: return r.get('t2_p1_r', 0)
                     if p == r['p4']: return r.get('t2_p2_r', 0)
                     return 0
                 
-                h['Rating Before'] = h.apply(get_snapshot, axis=1)
+                # Check if snapshot exists
+                if 't1_p1_r' in h.columns:
+                    h['Rating Before'] = h.apply(get_snapshot, axis=1).apply(lambda x: f"{(x/400):.3f}" if x > 0 else "-")
+                
                 h['Result'] = h.apply(lambda x: "✅ Win" if (p in [x['p1'], x['p2']] and x['score_t1']>x['score_t2']) or (p in [x['p3'], x['p4']] and x['score_t2']>x['score_t1']) else "❌ Loss", axis=1)
                 
-                # Format
-                display_h = h[['date', 'league', 'Result', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']].copy()
-                st.dataframe(display_h, use_container_width=True, hide_index=True)
+                cols = ['date', 'league', 'Result', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']
+                if 'Rating Before' in h.columns: cols.insert(2, 'Rating Before')
+                
+                st.dataframe(h[cols], use_container_width=True, hide_index=True)
 
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager")
@@ -367,7 +393,6 @@ elif sel == "🏟️ League Manager":
     with tabs[0]:
         st.markdown("Manage which leagues appear on the leaderboard and their rules.")
         if not df_meta.empty:
-            # We edit a copy
             editor_df = df_meta[['id', 'league_name', 'is_active', 'min_games', 'description', 'k_factor']].copy()
             
             edited_leagues = st.data_editor(
@@ -385,18 +410,13 @@ elif sel == "🏟️ League Manager":
             )
             
             if st.button("💾 Save Config Changes"):
-                # We need to loop and update. 
-                # Ideally Supabase upsert would be better but simple loop works for small lists.
-                changes = 0
                 for index, row in edited_leagues.iterrows():
-                    # Only update if changed? For now just update all active rows for simplicity or check diff
                     supabase.table("leagues_metadata").update({
                         "is_active": row['is_active'],
                         "min_games": row['min_games'],
                         "description": row['description'],
                         "k_factor": row['k_factor']
                     }).eq("id", row['id']).execute()
-                    changes += 1
                 st.success("Settings Updated!"); time.sleep(1); st.rerun()
                 
             st.divider()
@@ -414,12 +434,10 @@ elif sel == "🏟️ League Manager":
 
     # --- TAB 2: LIVE COURTS ---
     with tabs[1]:
-        # (Your existing Live Court code goes here)
         if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
         st.session_state.lc_courts = st.number_input("Courts", 1, 10, st.session_state.lc_courts, key="lc_court_input")
         
         with st.form("setup_lc"):
-            # Use ACTIVE leagues from metadata for dropdown
             active_opts = sorted(df_meta[df_meta['is_active']==True]['league_name'].tolist()) if not df_meta.empty else ["Default"]
             lg = st.selectbox("Select League", active_opts)
             
@@ -462,12 +480,8 @@ elif sel == "🏟️ League Manager":
                         time.sleep(1)
                         st.rerun()
 
-# --- OTHER TABS (Batch, Players, Admin) ---
-# (I'll keep these brief as they are largely unchanged, but I need to update Recalculate)
-
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
-    
     st.subheader("🔄 Recalculate & Snapshot History")
     league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL"]
     target_reset = st.selectbox("Select League", league_options)
@@ -493,13 +507,9 @@ elif sel == "⚙️ Admin Tools":
                     if pid is None: return 1200.0
                     return p_map[pid]['r']
 
-                # CAPTURE SNAPSHOTS
                 snap_r1, snap_r2, snap_r3, snap_r4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
-                
-                # --- GLOBAL CALC ---
                 do1, do2 = calculate_hybrid_elo((snap_r1+snap_r2)/2, (snap_r3+snap_r4)/2, s1, s2)
                 
-                # Update P_MAP
                 win = s1 > s2
                 for pid, delta, is_win in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
                     if pid is None: continue
@@ -508,21 +518,13 @@ elif sel == "⚙️ Admin Tools":
                     if is_win: p_map[pid]['w'] += 1
                     else: p_map[pid]['l'] += 1
 
-                # --- ISLAND CALC ---
                 if not is_popup:
                     def get_i_r(pid, lg):
                         if (pid, lg) not in island_map: 
-                            # Initialize island rating with current GLOBAL rating at that moment? 
-                            # Or default 1200? Usually starting with current global is fair, or seed.
-                            # For pure island, start 1200 or player start. Let's use player start (safe) or current global.
-                            # Simpler: Use current global snapshot.
                             island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
                         return island_map[(pid, lg)]['r']
                     
                     ir1, ir2, ir3, ir4 = get_i_r(p1, league), get_i_r(p2, league), get_i_r(p3, league), get_i_r(p4, league)
-                    
-                    # Look up K-Factor
-                    # (Simplified for recalc speed: assume 32 unless we fetch per row. Let's use 32 default)
                     di1, di2 = calculate_hybrid_elo((ir1+ir2)/2, (ir3+ir4)/2, s1, s2, k_factor=32)
                     
                     for pid, delta, is_win in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
@@ -534,7 +536,6 @@ elif sel == "⚙️ Admin Tools":
                         if is_win: island_map[k]['w'] += 1
                         else: island_map[k]['l'] += 1
 
-                # QUEUE UPDATE with Snapshots
                 matches_to_update.append({
                     'id': m['id'], 
                     'elo_delta': do1 if s1 > s2 else do2,
@@ -542,7 +543,6 @@ elif sel == "⚙️ Admin Tools":
                     't2_p1_r': snap_r3, 't2_p2_r': snap_r4
                 })
 
-            # SAVE EVERYTHING
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
                     supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
@@ -559,18 +559,69 @@ elif sel == "⚙️ Admin Tools":
                 for i in range(0, len(new_islands), 1000):
                     supabase.table("league_ratings").insert(new_islands[i:i+1000]).execute()
 
-            # Batch update matches is hard in Supabase API without a stored procedure or loop
-            # We will use loop + progress bar
             progress_bar = st.progress(0)
             for idx, update in enumerate(matches_to_update):
-                # Update delta AND snapshots
                 supabase.table("matches").update(update).eq("id", update['id']).execute()
                 progress_bar.progress((idx + 1) / len(matches_to_update))
 
             st.success(f"✅ Replayed & Backfilled {len(all_matches)} matches!"); time.sleep(2); st.rerun()
 
+elif sel == "⚡ Batch Entry":
+    st.header("⚡ Batch Match Entry")
+    st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
+    
+    batch_league = st.text_input("League Name for Batch", "Fall 2025 Ladder")
+    player_list = sorted(df_players['name'].tolist())
+    
+    if 'batch_df' not in st.session_state:
+        st.session_state.batch_df = pd.DataFrame(
+            [{'T1_P1': None, 'T1_P2': None, 'Score_1': 0, 'Score_2': 0, 'T2_P1': None, 'T2_P2': None} for _ in range(5)]
+        )
+
+    edited_batch = st.data_editor(
+        st.session_state.batch_df,
+        column_config={
+            "T1_P1": st.column_config.SelectboxColumn("Team 1 - P1", options=player_list, required=True),
+            "T1_P2": st.column_config.SelectboxColumn("Team 1 - P2", options=player_list),
+            "Score_1": st.column_config.NumberColumn("Score 1", min_value=0, max_value=30, step=1),
+            "Score_2": st.column_config.NumberColumn("Score 2", min_value=0, max_value=30, step=1),
+            "T2_P1": st.column_config.SelectboxColumn("Team 2 - P1", options=player_list, required=True),
+            "T2_P2": st.column_config.SelectboxColumn("Team 2 - P2", options=player_list),
+        },
+        column_order=("T1_P1", "T1_P2", "Score_1", "Score_2", "T2_P1", "T2_P2"),
+        num_rows="dynamic",
+        use_container_width=True
+    )
+
+    if st.button("Process Batch"):
+        valid_batch = []
+        for _, row in edited_batch.iterrows():
+            if row['T1_P1'] and row['T2_P1'] and (row['Score_1'] + row['Score_2'] > 0):
+                match_data = {
+                    't1_p1': row['T1_P1'], 
+                    't1_p2': row['T1_P2'], 
+                    't2_p1': row['T2_P1'], 
+                    't2_p2': row['T2_P2'], 
+                    's1': int(row['Score_1']), 
+                    's2': int(row['Score_2']), 
+                    'date': str(datetime.now()), 
+                    'league': batch_league, 
+                    'type': 'Batch Entry', 
+                    'match_type': 'Live Match', 
+                    'is_popup': False
+                }
+                valid_batch.append(match_data)
+        
+        if valid_batch:
+            process_matches(valid_batch, name_to_id, df_players, df_leagues, df_meta)
+            st.success(f"✅ Successfully processed {len(valid_batch)} matches!")
+            del st.session_state.batch_df
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.warning("⚠️ No valid matches found.")
+
 elif sel == "👥 Players":
-    # (Same Player Code as before)
     st.header("Player Management")
     c1, c2, c3 = st.columns(3)
     with c1:
