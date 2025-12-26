@@ -7,7 +7,7 @@ from datetime import datetime
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
 
-# Custom CSS to make it look less "Spreadsheet-y"
+# Custom CSS
 st.markdown("""
 <style>
     .stDataFrame { font-size: 1.1rem; }
@@ -113,7 +113,7 @@ def load_data():
 
 # --- HELPERS ---
 def get_match_schedule(format_type, players):
-    # (Same schedule logic)
+    # Same logic as before
     if len(players) < int(format_type.split('-')[0]): return []
     if format_type == "4-Player": return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
     elif format_type == "5-Player": return [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5'}]
@@ -256,7 +256,7 @@ else:
 # --- NAVIGATION ---
 nav = ["🏆 Leaderboards", "🔍 Player Search", "❓ FAQs"]
 if st.session_state.admin_logged_in: 
-    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "⚡ Batch Entry", "🔄 Pop-Up RR", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
+    nav += ["──────────", "📋 Roster Check", "🏟️ League Manager", "📝 Match Uploader", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
 # --- UI LOGIC ---
@@ -385,72 +385,151 @@ elif sel == "🔍 Player Search":
                 st.dataframe(h[cols], use_container_width=True, hide_index=True)
 
 elif sel == "🏟️ League Manager":
-    st.header("🏟️ League Manager")
+    st.header("🏟️ League Manager (Settings)")
+    st.markdown("Manage which leagues appear on the leaderboard and their rules.")
     
-    tabs = st.tabs(["⚙️ Settings (Config)", "📝 Live Courts"])
-    
-    # --- TAB 1: SETTINGS ---
-    with tabs[0]:
-        st.markdown("Manage which leagues appear on the leaderboard and their rules.")
-        if not df_meta.empty:
-            editor_df = df_meta[['id', 'league_name', 'is_active', 'min_games', 'description', 'k_factor']].copy()
+    if not df_meta.empty:
+        editor_df = df_meta[['id', 'league_name', 'is_active', 'min_games', 'description', 'k_factor']].copy()
+        
+        edited_leagues = st.data_editor(
+            editor_df,
+            column_config={
+                "league_name": "League Name",
+                "is_active": st.column_config.CheckboxColumn("Active?", help="Show in Dropdown"),
+                "min_games": st.column_config.NumberColumn("Min Games", help="Required to be in Top 5 widgets"),
+                "description": st.column_config.TextColumn("Description", width="large"),
+                "k_factor": st.column_config.NumberColumn("K-Factor", min_value=10, max_value=100)
+            },
+            disabled=["id", "league_name"],
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        if st.button("💾 Save Config Changes"):
+            for index, row in edited_leagues.iterrows():
+                supabase.table("leagues_metadata").update({
+                    "is_active": row['is_active'],
+                    "min_games": row['min_games'],
+                    "description": row['description'],
+                    "k_factor": row['k_factor']
+                }).eq("id", row['id']).execute()
+            st.success("Settings Updated!"); time.sleep(1); st.rerun()
             
-            edited_leagues = st.data_editor(
-                editor_df,
-                column_config={
-                    "league_name": "League Name",
-                    "is_active": st.column_config.CheckboxColumn("Active?", help="Show in Dropdown"),
-                    "min_games": st.column_config.NumberColumn("Min Games", help="Required to be in Top 5 widgets"),
-                    "description": st.column_config.TextColumn("Description", width="large"),
-                    "k_factor": st.column_config.NumberColumn("K-Factor", min_value=10, max_value=100)
-                },
-                disabled=["id", "league_name"],
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            if st.button("💾 Save Config Changes"):
-                for index, row in edited_leagues.iterrows():
-                    supabase.table("leagues_metadata").update({
-                        "is_active": row['is_active'],
-                        "min_games": row['min_games'],
-                        "description": row['description'],
-                        "k_factor": row['k_factor']
-                    }).eq("id", row['id']).execute()
-                st.success("Settings Updated!"); time.sleep(1); st.rerun()
-                
-            st.divider()
-            st.write("#### 🆕 Create New League")
-            with st.form("new_lg"):
-                n = st.text_input("Name")
-                k = st.number_input("K-Factor", 32)
-                mg = st.number_input("Min Games", 12)
-                if st.form_submit_button("Create"):
-                    supabase.table("leagues_metadata").insert({
-                        "club_id": CLUB_ID, "league_name": n, "league_type": "Standard", 
-                        "is_active": True, "min_games": mg, "k_factor": k
-                    }).execute()
-                    st.rerun()
+        st.divider()
+        st.write("#### 🆕 Create New League")
+        with st.form("new_lg"):
+            n = st.text_input("Name")
+            k = st.number_input("K-Factor", 32)
+            mg = st.number_input("Min Games", 12)
+            if st.form_submit_button("Create"):
+                supabase.table("leagues_metadata").insert({
+                    "club_id": CLUB_ID, "league_name": n, "league_type": "Standard", 
+                    "is_active": True, "min_games": mg, "k_factor": k
+                }).execute()
+                st.rerun()
 
-    # --- TAB 2: LIVE COURTS ---
-    with tabs[1]:
+elif sel == "📝 Match Uploader":
+    st.header("📝 Match Uploader")
+    
+    # 1. Context Selector
+    c1, c2 = st.columns(2)
+    ctx_type = c1.radio("Match Context", ["🏆 Official League Match", "🎉 Pop-Up / Event"], horizontal=True)
+    
+    selected_league = ""
+    is_popup = False
+    
+    if ctx_type == "🏆 Official League Match":
+        # Show active leagues
+        active_opts = sorted(df_meta[df_meta['is_active']==True]['league_name'].tolist()) if not df_meta.empty else ["Default"]
+        selected_league = c2.selectbox("Select League", active_opts)
+        match_type_db = "Live Match" # Or whatever you use for standard
+    else:
+        # Pop Up
+        selected_league = c2.text_input("Event Name", "Saturday Social")
+        is_popup = True
+        match_type_db = "PopUp"
+
+    st.divider()
+    
+    # 2. Method Selector
+    entry_method = st.radio("Entry Method", ["📋 Manual / Batch Entry", "🏟️ Live Round Robin"], horizontal=True)
+    st.write("") # Spacer
+
+    # --- METHOD A: BATCH ---
+    if entry_method == "📋 Manual / Batch Entry":
+        player_list = sorted(df_players['name'].tolist())
+        
+        if 'batch_df' not in st.session_state:
+            st.session_state.batch_df = pd.DataFrame(
+                [{'T1_P1': None, 'T1_P2': None, 'Score_1': 0, 'Score_2': 0, 'T2_P1': None, 'T2_P2': None} for _ in range(5)]
+            )
+
+        edited_batch = st.data_editor(
+            st.session_state.batch_df,
+            column_config={
+                "T1_P1": st.column_config.SelectboxColumn("Team 1 - P1", options=player_list, required=True),
+                "T1_P2": st.column_config.SelectboxColumn("Team 1 - P2", options=player_list),
+                "Score_1": st.column_config.NumberColumn("Score 1", min_value=0, max_value=30, step=1),
+                "Score_2": st.column_config.NumberColumn("Score 2", min_value=0, max_value=30, step=1),
+                "T2_P1": st.column_config.SelectboxColumn("Team 2 - P1", options=player_list, required=True),
+                "T2_P2": st.column_config.SelectboxColumn("Team 2 - P2", options=player_list),
+            },
+            column_order=("T1_P1", "T1_P2", "Score_1", "Score_2", "T2_P1", "T2_P2"),
+            num_rows="dynamic",
+            use_container_width=True
+        )
+
+        if st.button("Submit Batch"):
+            valid_batch = []
+            for _, row in edited_batch.iterrows():
+                if row['T1_P1'] and row['T2_P1'] and (row['Score_1'] + row['Score_2'] > 0):
+                    match_data = {
+                        't1_p1': row['T1_P1'], 
+                        't1_p2': row['T1_P2'], 
+                        't2_p1': row['T2_P1'], 
+                        't2_p2': row['T2_P2'], 
+                        's1': int(row['Score_1']), 
+                        's2': int(row['Score_2']), 
+                        'date': str(datetime.now()), 
+                        'league': selected_league, 
+                        'type': 'Batch Entry', 
+                        'match_type': match_type_db, 
+                        'is_popup': is_popup
+                    }
+                    valid_batch.append(match_data)
+            
+            if valid_batch:
+                process_matches(valid_batch, name_to_id, df_players, df_leagues, df_meta)
+                st.success(f"✅ Successfully processed {len(valid_batch)} matches for {selected_league}!")
+                # Reset batch
+                st.session_state.batch_df = pd.DataFrame(
+                [{'T1_P1': None, 'T1_P2': None, 'Score_1': 0, 'Score_2': 0, 'T2_P1': None, 'T2_P2': None} for _ in range(5)]
+                )
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.warning("⚠️ No valid matches found (check names & scores).")
+
+    # --- METHOD B: LIVE RR ---
+    else:
         if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
-        st.session_state.lc_courts = st.number_input("Courts", 1, 10, st.session_state.lc_courts, key="lc_court_input")
+        st.session_state.lc_courts = st.number_input("Number of Courts", 1, 10, st.session_state.lc_courts)
         
         with st.form("setup_lc"):
-            active_opts = sorted(df_meta[df_meta['is_active']==True]['league_name'].tolist()) if not df_meta.empty else ["Default"]
-            lg = st.selectbox("Select League", active_opts)
-            
+            st.write(f"Generating Schedule for: **{selected_league}**")
             c_data = []
             for i in range(st.session_state.lc_courts):
                 c1, c2 = st.columns([1,3])
-                t = c1.selectbox(f"T{i}", ["4-Player","5-Player","6-Player"], key=f"t_{i}")
-                n = c2.text_area(f"N{i}", height=70, key=f"n_{i}")
+                t = c1.selectbox(f"Format C{i+1}", ["4-Player","5-Player","6-Player"], key=f"t_{i}")
+                n = c2.text_area(f"Players C{i+1}", height=70, key=f"n_{i}", placeholder="Paste names here...")
                 c_data.append({'type':t, 'names':n})
             
             if st.form_submit_button("Generate Schedule"):
                 st.session_state.lc_schedule = []
-                st.session_state.active_league = lg 
+                st.session_state.active_league_name = selected_league 
+                st.session_state.active_is_popup = is_popup
+                st.session_state.active_match_type = match_type_db
+
                 for idx, c in enumerate(c_data):
                     pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
                     st.session_state.lc_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
@@ -458,7 +537,7 @@ elif sel == "🏟️ League Manager":
 
         if 'lc_schedule' in st.session_state:
             st.divider()
-            st.info(f"Posting results to: **{st.session_state.get('active_league', 'Unknown')}**")
+            st.info(f"Posting results to: **{st.session_state.get('active_league_name', 'Unknown')}**")
             with st.form("scores_lc"):
                 all_res = []
                 for c in st.session_state.lc_schedule:
@@ -469,7 +548,16 @@ elif sel == "🏟️ League Manager":
                         s1 = c2.number_input("S1", 0, key=f"lc_{c['c']}_{i}_1")
                         s2 = c3.number_input("S2", 0, key=f"lc_{c['c']}_{i}_2")
                         c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                        all_res.append({'t1_p1':m['t1'][0], 't1_p2':m['t1'][1], 't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 's1':s1, 's2':s2, 'date':str(datetime.now()), 'league':st.session_state.get('active_league', 'Unknown'), 'type':f"C{c['c']} RR", 'match_type': 'Live Match', 'is_popup': False})
+                        all_res.append({
+                            't1_p1':m['t1'][0], 't1_p2':m['t1'][1], 
+                            't2_p1':m['t2'][0], 't2_p2':m['t2'][1], 
+                            's1':s1, 's2':s2, 
+                            'date':str(datetime.now()), 
+                            'league': st.session_state.get('active_league_name', 'Unknown'), 
+                            'type':f"C{c['c']} RR", 
+                            'match_type': st.session_state.get('active_match_type', 'Live Match'), 
+                            'is_popup': st.session_state.get('active_is_popup', False)
+                        })
                 
                 if st.form_submit_button("Submit Scores"):
                     valid = [x for x in all_res if x['s1'] > 0 or x['s2'] > 0]
@@ -566,61 +654,6 @@ elif sel == "⚙️ Admin Tools":
 
             st.success(f"✅ Replayed & Backfilled {len(all_matches)} matches!"); time.sleep(2); st.rerun()
 
-elif sel == "⚡ Batch Entry":
-    st.header("⚡ Batch Match Entry")
-    st.markdown("Enter multiple matches at once. Fill in the table and click 'Process Batch'.")
-    
-    batch_league = st.text_input("League Name for Batch", "Fall 2025 Ladder")
-    player_list = sorted(df_players['name'].tolist())
-    
-    if 'batch_df' not in st.session_state:
-        st.session_state.batch_df = pd.DataFrame(
-            [{'T1_P1': None, 'T1_P2': None, 'Score_1': 0, 'Score_2': 0, 'T2_P1': None, 'T2_P2': None} for _ in range(5)]
-        )
-
-    edited_batch = st.data_editor(
-        st.session_state.batch_df,
-        column_config={
-            "T1_P1": st.column_config.SelectboxColumn("Team 1 - P1", options=player_list, required=True),
-            "T1_P2": st.column_config.SelectboxColumn("Team 1 - P2", options=player_list),
-            "Score_1": st.column_config.NumberColumn("Score 1", min_value=0, max_value=30, step=1),
-            "Score_2": st.column_config.NumberColumn("Score 2", min_value=0, max_value=30, step=1),
-            "T2_P1": st.column_config.SelectboxColumn("Team 2 - P1", options=player_list, required=True),
-            "T2_P2": st.column_config.SelectboxColumn("Team 2 - P2", options=player_list),
-        },
-        column_order=("T1_P1", "T1_P2", "Score_1", "Score_2", "T2_P1", "T2_P2"),
-        num_rows="dynamic",
-        use_container_width=True
-    )
-
-    if st.button("Process Batch"):
-        valid_batch = []
-        for _, row in edited_batch.iterrows():
-            if row['T1_P1'] and row['T2_P1'] and (row['Score_1'] + row['Score_2'] > 0):
-                match_data = {
-                    't1_p1': row['T1_P1'], 
-                    't1_p2': row['T1_P2'], 
-                    't2_p1': row['T2_P1'], 
-                    't2_p2': row['T2_P2'], 
-                    's1': int(row['Score_1']), 
-                    's2': int(row['Score_2']), 
-                    'date': str(datetime.now()), 
-                    'league': batch_league, 
-                    'type': 'Batch Entry', 
-                    'match_type': 'Live Match', 
-                    'is_popup': False
-                }
-                valid_batch.append(match_data)
-        
-        if valid_batch:
-            process_matches(valid_batch, name_to_id, df_players, df_leagues, df_meta)
-            st.success(f"✅ Successfully processed {len(valid_batch)} matches!")
-            del st.session_state.batch_df
-            time.sleep(1)
-            st.rerun()
-        else:
-            st.warning("⚠️ No valid matches found.")
-
 elif sel == "👥 Players":
     st.header("Player Management")
     c1, c2, c3 = st.columns(3)
@@ -632,3 +665,109 @@ elif sel == "👥 Players":
                 safe_add_player(n, r)
                 st.rerun()
     st.dataframe(df_players)
+
+elif sel == "📝 Match Log":
+    st.header("📝 Match Log")
+    filter_type = st.radio("Filter Matches", ["All", "League Matches", "Pop-Up Events"], horizontal=True)
+    if filter_type == "League Matches": view_df = df_matches[df_matches['match_type'] != 'PopUp']
+    elif filter_type == "Pop-Up Events": view_df = df_matches[df_matches['match_type'] == 'PopUp']
+    else: view_df = df_matches
+    
+    col1, col2 = st.columns([1, 4])
+    id_filter = col1.number_input("Jump to ID:", min_value=0, value=0)
+    if id_filter > 0: view_df = view_df[view_df['id'] == id_filter]
+
+    st.write("### 🗑️ Bulk Delete Matches")
+    st.info("Select checkboxes below to delete matches.")
+    
+    if not view_df.empty:
+        # Prepare editable df
+        edit_df = view_df.head(5000)[['id', 'date', 'league', 'match_type', 'elo_delta', 'p1', 'p2', 'p3', 'p4', 'score_t1', 'score_t2']].copy()
+        edit_df.insert(0, "Delete", False) 
+
+        edited_log = st.data_editor(
+            edit_df,
+            column_config={
+                "Delete": st.column_config.CheckboxColumn("Delete?", default=False),
+                "elo_delta": st.column_config.NumberColumn("Elo Delta", format="%.1f"),
+            },
+            disabled=["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        to_delete = edited_log[edited_log['Delete'] == True]
+        if not to_delete.empty:
+            st.error(f"⚠️ You have selected {len(to_delete)} matches for deletion.")
+            if st.button("Confirm Bulk Delete"):
+                supabase.table("matches").delete().in_("id", to_delete['id'].tolist()).execute()
+                st.success("Deleted!"); time.sleep(1); st.rerun()
+
+elif sel == "📋 Roster Check":
+    st.header("📋 Roster Check")
+    st.markdown("Paste a list of names to check ratings. Any names not found will be added to the 'New Player' table for onboarding.")
+    
+    lookup_scope = st.radio("Rating Scope", ["OVERALL"] + (sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else []), horizontal=True)
+    raw_names = st.text_area("Paste Names (one per line or comma-separated)", height=100, placeholder="Tom Elliott\nKeith Brand\nNew Player")
+    
+    if st.button("Analyze List"):
+        if 'roster_results' in st.session_state: del st.session_state.roster_results
+        if 'df_new_players' in st.session_state: del st.session_state.df_new_players
+
+        parsed = [x.strip() for x in raw_names.replace('\n',',').split(',') if x.strip()]
+        
+        found_data = []
+        new_players = []
+        
+        for n in parsed:
+            if n in name_to_id:
+                pid = name_to_id[n]
+                r_val = 1200.0
+                if lookup_scope == "OVERALL":
+                    row = df_players[df_players['id'] == pid]
+                    if not row.empty: r_val = float(row.iloc[0]['rating'])
+                else:
+                    row = df_leagues[(df_leagues['player_id'] == pid) & (df_leagues['league_name'] == lookup_scope)]
+                    if not row.empty: r_val = float(row.iloc[0]['rating'])
+                    else:
+                        ov_row = df_players[df_players['id'] == pid]
+                        if not ov_row.empty: r_val = float(ov_row.iloc[0]['rating'])
+                
+                found_data.append({"Name": n, "Rating": f"{(r_val/400):.3f}", "Status": "✅ Found"})
+            else:
+                new_players.append(n)
+
+        st.session_state.roster_results = {
+            'found': found_data,
+            'new': new_players
+        }
+
+    if 'roster_results' in st.session_state:
+        results = st.session_state.roster_results
+        if results['found']:
+            st.success(f"Found {len(results['found'])} players.")
+            st.dataframe(pd.DataFrame(results['found']), use_container_width=True)
+        if results['new']:
+            st.error(f"🛑 Found {len(results['new'])} new players.")
+            if 'df_new_players' not in st.session_state:
+                st.session_state.df_new_players = pd.DataFrame({"Name": results['new'], "Rating": [3.5] * len(results['new'])})
+            edited_df = st.data_editor(st.session_state.df_new_players, column_config={"Rating": st.column_config.NumberColumn(min_value=1.0, max_value=7.0, step=0.1)}, hide_index=True, use_container_width=True)
+            if st.button("💾 Save New Players"):
+                for _, row in edited_df.iterrows():
+                    safe_add_player(row['Name'], row['Rating'])
+                st.success("✅ Created profiles!"); time.sleep(1); del st.session_state.roster_results; st.rerun()
+
+elif sel == "📘 Admin Guide":
+    st.header("📘 Admin Guide")
+    st.markdown("""
+    ### 📝 Match Uploader
+    * **One tool for everything:** Use this tab to enter matches for official leagues OR casual pop-up events.
+    * **Batch Entry:** Best for entering results from a clipboard after the games are done.
+    * **Live Round Robin:** Best for running an event live. It generates the schedule for you.
+
+    ### 🏟️ League Manager
+    * **Settings Only:** Use this tab to create new leagues, archive old ones (uncheck 'Active'), or change the "Min Games" requirement for the leaderboard.
+    
+    ### ⚙️ Admin Tools
+    * **Recalculate:** If you change a K-Factor or delete a bad match, run this to fix everyone's ratings.
+    """)
