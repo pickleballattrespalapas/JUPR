@@ -304,43 +304,47 @@ if sel == "🏆 Leaderboards":
         # We only calculate this for the "Qualified" players to save speed, or everyone if fast enough.
         # Let's do it for display_df to allow sorting in main table later if wanted.
         
-        def calculate_gain(row):
+       def calculate_gain(row):
             pid = row['id'] if 'id' in row else row['player_id']
             curr_r = row['rating']
             
-            # If OVERALL, we use the player's static starting_rating
-            if target_league == "OVERALL":
-                start_r = row.get('starting_rating', 1200.0) # Default from DB
-                return curr_r - start_r
+            # 1. Get a default starting point (Fail-safe)
+            # If we can't find a history snapshot, we assume they started at their base rating.
+            # We look up the player in df_players to get their 'starting_rating'
+            base_start = 1200.0
+            if not df_players.empty:
+                p_rec = df_players[df_players['id'] == pid]
+                if not p_rec.empty:
+                    base_start = float(p_rec.iloc[0]['starting_rating'])
 
-            # If LEAGUE, we find their first match in this league
+            # If OVERALL, always use static starting_rating
+            if target_league == "OVERALL":
+                return curr_r - base_start
+
+            # If LEAGUE, try to find the specific match snapshot
+            if df_matches.empty: return curr_r - base_start
+            
             # Filter matches for this league involving this player
-            if df_matches.empty: return 0.0
-            
-            # Find matches where this player played in this league
-            # We assume df_matches is sorted desc (newest first), so we take the LAST one (oldest)
-            # OR we just sort by date inside this function
-            
             relevant = df_matches[
                 (df_matches['league'] == target_league) & 
                 ((df_matches['t1_p1'] == pid) | (df_matches['t1_p2'] == pid) | (df_matches['t2_p1'] == pid) | (df_matches['t2_p2'] == pid))
             ]
             
-            if relevant.empty: return 0.0
+            if relevant.empty: return curr_r - base_start
             
-            # Get oldest match
+            # Get oldest match (last in list)
             oldest = relevant.iloc[-1] 
             
             # Get the snapshot rating *before* that match
+            snap = 0
             if pid == oldest['t1_p1']: snap = oldest.get('t1_p1_r', 0)
             elif pid == oldest['t1_p2']: snap = oldest.get('t1_p2_r', 0)
             elif pid == oldest['t2_p1']: snap = oldest.get('t2_p1_r', 0)
             elif pid == oldest['t2_p2']: snap = oldest.get('t2_p2_r', 0)
-            else: snap = 0
             
-            # Fallback if snapshot is missing (0) -> Assume 1200 or starting_rating?
-            # Ideally we used Recalculate so snapshots are populated. 
-            if snap == 0 or pd.isna(snap): return 0.0 
+            # 🚨 FAIL-SAFE: If snapshot is missing/0 (due to cache issues), use base_start
+            if snap == 0 or pd.isna(snap): 
+                snap = base_start
             
             return curr_r - snap
 
