@@ -300,21 +300,74 @@ if sel == "🏆 Leaderboards":
         display_df['JUPR'] = (display_df['rating']/400)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100)
         
-        # --- TOP 5 WIDGETS (Conditional: NOT on OVERALL) ---
+        # --- CALCULATE GAIN (Using Snapshots) ---
+        # We only calculate this for the "Qualified" players to save speed, or everyone if fast enough.
+        # Let's do it for display_df to allow sorting in main table later if wanted.
+        
+        def calculate_gain(row):
+            pid = row['id'] if 'id' in row else row['player_id']
+            curr_r = row['rating']
+            
+            # If OVERALL, we use the player's static starting_rating
+            if target_league == "OVERALL":
+                start_r = row.get('starting_rating', 1200.0) # Default from DB
+                return curr_r - start_r
+
+            # If LEAGUE, we find their first match in this league
+            # Filter matches for this league involving this player
+            if df_matches.empty: return 0.0
+            
+            # Find matches where this player played in this league
+            # We assume df_matches is sorted desc (newest first), so we take the LAST one (oldest)
+            # OR we just sort by date inside this function
+            
+            relevant = df_matches[
+                (df_matches['league'] == target_league) & 
+                ((df_matches['t1_p1'] == pid) | (df_matches['t1_p2'] == pid) | (df_matches['t2_p1'] == pid) | (df_matches['t2_p2'] == pid))
+            ]
+            
+            if relevant.empty: return 0.0
+            
+            # Get oldest match
+            oldest = relevant.iloc[-1] 
+            
+            # Get the snapshot rating *before* that match
+            if pid == oldest['t1_p1']: snap = oldest.get('t1_p1_r', 0)
+            elif pid == oldest['t1_p2']: snap = oldest.get('t1_p2_r', 0)
+            elif pid == oldest['t2_p1']: snap = oldest.get('t2_p1_r', 0)
+            elif pid == oldest['t2_p2']: snap = oldest.get('t2_p2_r', 0)
+            else: snap = 0
+            
+            # Fallback if snapshot is missing (0) -> Assume 1200 or starting_rating?
+            # Ideally we used Recalculate so snapshots are populated. 
+            if snap == 0 or pd.isna(snap): return 0.0 
+            
+            return curr_r - snap
+
+        # Apply calculation
+        display_df['rating_gain'] = display_df.apply(calculate_gain, axis=1)
+
+        # --- TOP WIDGETS (Conditional: NOT on OVERALL) ---
         if target_league != "OVERALL":
             qualified_df = display_df[display_df['matches_played'] >= min_games_req].copy()
             if not qualified_df.empty:
                 st.markdown(f"### 🏅 Top Performers (Min {min_games_req} Games)")
-                c1, c2, c3 = st.columns(3)
+                c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     st.markdown("**👑 Highest Rating**")
                     top = qualified_df.sort_values('rating', ascending=False).head(5)
                     for _, r in top.iterrows(): st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
                 with c2:
+                    st.markdown("**🔥 Most Improved**")
+                    top = qualified_df.sort_values('rating_gain', ascending=False).head(5)
+                    for _, r in top.iterrows(): 
+                        gain_val = r['rating_gain'] / 400
+                        st.markdown(f"**{'+' if gain_val>0 else ''}{gain_val:.3f}** - {r['name']}")
+                with c3:
                     st.markdown("**🎯 Best Win %**")
                     top = qualified_df.sort_values('Win %', ascending=False).head(5)
                     for _, r in top.iterrows(): st.markdown(f"**{r['Win %']:.1f}%** - {r['name']}")
-                with c3:
+                with c4:
                     st.markdown("**🚜 Most Wins**")
                     top = qualified_df.sort_values('wins', ascending=False).head(5)
                     for _, r in top.iterrows(): st.markdown(f"**{r['wins']} Wins** - {r['name']}")
@@ -335,16 +388,18 @@ if sel == "🏆 Leaderboards":
             return str(r)
         
         final_view['Rank'] = final_view['Rank'].apply(get_medal)
+        final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         
         # Show Styled DataFrame
         st.dataframe(
-            final_view[['Rank', 'name', 'JUPR', 'matches_played', 'wins', 'losses', 'Win %']], 
+            final_view[['Rank', 'name', 'JUPR', 'Gain', 'matches_played', 'wins', 'losses', 'Win %']], 
             use_container_width=True, 
             hide_index=True,
             column_config={
                 "Rank": st.column_config.Column("Rank", width="small"),
                 "name": st.column_config.Column("Player", width="medium"),
                 "JUPR": st.column_config.NumberColumn("Rating", format="%.3f"),
+                "Gain": st.column_config.Column("Gain", help="Rating Change since first match in this league"),
                 "Win %": st.column_config.ProgressColumn("Win %", format="%.1f%%", min_value=0, max_value=100),
                 "matches_played": st.column_config.NumberColumn("Matches"),
                 "wins": st.column_config.NumberColumn("W"),
@@ -353,36 +408,6 @@ if sel == "🏆 Leaderboards":
         )
     else:
         st.info("No data for this league yet.")
-
-elif sel == "🔍 Player Search":
-    st.header("🔍 Player History")
-    p = st.selectbox("Search", [""] + sorted(df_players['name']))
-    if p:
-        p_row = df_players[df_players['name'] == p]
-        if not p_row.empty:
-            st.metric("Current JUPR", f"{(float(p_row.iloc[0]['rating'])/400):.3f}")
-
-        if not df_matches.empty:
-            mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
-            h = df_matches[mask].copy()
-            if not h.empty:
-                def get_snapshot(r):
-                    if p == r['p1']: return r.get('t1_p1_r', 0)
-                    if p == r['p2']: return r.get('t1_p2_r', 0)
-                    if p == r['p3']: return r.get('t2_p1_r', 0)
-                    if p == r['p4']: return r.get('t2_p2_r', 0)
-                    return 0
-                
-                # Check if snapshot exists
-                if 't1_p1_r' in h.columns:
-                    h['Rating Before'] = h.apply(get_snapshot, axis=1).apply(lambda x: f"{(x/400):.3f}" if x > 0 else "-")
-                
-                h['Result'] = h.apply(lambda x: "✅ Win" if (p in [x['p1'], x['p2']] and x['score_t1']>x['score_t2']) or (p in [x['p3'], x['p4']] and x['score_t2']>x['score_t1']) else "❌ Loss", axis=1)
-                
-                cols = ['date', 'league', 'Result', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']
-                if 'Rating Before' in h.columns: cols.insert(2, 'Rating Before')
-                
-                st.dataframe(h[cols], use_container_width=True, hide_index=True)
 
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager (Settings)")
