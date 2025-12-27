@@ -595,6 +595,48 @@ elif sel == "📝 Match Uploader":
 
 elif sel == "⚙️ Admin Tools":
     st.header("⚙️ Admin Tools")
+    
+    # --- 1. SYSTEM HEALTH CHECK ---
+    st.subheader("🏥 System Health Check")
+    st.markdown("Use this to debug why 'Gain' might be showing 0.")
+    if st.button("Run Diagnostics"):
+        with st.status("Checking System...", expanded=True) as status:
+            # Check 1: Columns
+            st.write("1️⃣ Checking Database Columns...")
+            try:
+                sample = supabase.table("matches").select("*").limit(1).execute()
+                if sample.data:
+                    keys = sample.data[0].keys()
+                    if 't1_p1_r' in keys:
+                        st.success("✅ Snapshot columns exist.")
+                    else:
+                        st.error("❌ Snapshot columns MISSING in Supabase.")
+                        st.code("ALTER TABLE matches ADD COLUMN IF NOT EXISTS t1_p1_r float, ADD COLUMN IF NOT EXISTS t1_p2_r float, ADD COLUMN IF NOT EXISTS t2_p1_r float, ADD COLUMN IF NOT EXISTS t2_p2_r float;")
+                else:
+                    st.warning("⚠️ No matches found to check columns.")
+            except Exception as e:
+                st.error(f"Error checking columns: {e}")
+
+            # Check 2: Data Quality
+            st.write("2️⃣ Checking Snapshot Data...")
+            try:
+                # Count matches where snapshot is null
+                null_snaps = supabase.table("matches").select("id", "t1_p1_r").is_("t1_p1_r", "null").limit(5000).execute()
+                null_count = len(null_snaps.data)
+                
+                if null_count > 0:
+                    st.error(f"❌ Found {null_count} matches with EMPTY snapshots.")
+                    st.info("👉 This is why 'Gain' is 0. You must run the 'Recalculate' tool below and let it finish.")
+                else:
+                    st.success("✅ All matches have snapshot data.")
+            except Exception as e:
+                st.error(f"Error checking data: {e}")
+            
+            status.update(label="Diagnostics Complete", state="complete", expanded=True)
+
+    st.divider()
+
+    # --- 2. RECALCULATE ---
     st.subheader("🔄 Recalculate & Snapshot History")
     league_options = ["ALL (Full System Reset)"] + sorted(df_leagues['league_name'].unique().tolist()) if not df_leagues.empty else ["ALL"]
     target_reset = st.selectbox("Select League", league_options)
@@ -620,7 +662,10 @@ elif sel == "⚙️ Admin Tools":
                     if pid is None: return 1200.0
                     return p_map[pid]['r']
 
+                # CAPTURE SNAPSHOTS (Global Rating BEFORE the match)
                 snap_r1, snap_r2, snap_r3, snap_r4 = safe_get_r(p1), safe_get_r(p2), safe_get_r(p3), safe_get_r(p4)
+                
+                # Global Calc
                 do1, do2 = calculate_hybrid_elo((snap_r1+snap_r2)/2, (snap_r3+snap_r4)/2, s1, s2)
                 
                 win = s1 > s2
@@ -631,9 +676,11 @@ elif sel == "⚙️ Admin Tools":
                     if is_win: p_map[pid]['w'] += 1
                     else: p_map[pid]['l'] += 1
 
+                # Island Calc
                 if not is_popup:
                     def get_i_r(pid, lg):
                         if (pid, lg) not in island_map: 
+                            # Initialize island with current global rating
                             island_map[(pid, lg)] = {'r': p_map[pid]['r'], 'w':0, 'l':0, 'mp':0}
                         return island_map[(pid, lg)]['r']
                     
@@ -656,10 +703,12 @@ elif sel == "⚙️ Admin Tools":
                     't2_p1_r': snap_r3, 't2_p2_r': snap_r4
                 })
 
+            # SAVE PLAYERS
             if target_reset == "ALL (Full System Reset)":
                 for pid, stats in p_map.items():
                     supabase.table("players").update({"rating": stats['r'], "wins": stats['w'], "losses": stats['l'], "matches_played": stats['mp']}).eq("id", pid).execute()
             
+            # SAVE ISLANDS
             if target_reset != "ALL (Full System Reset)": supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", target_reset).execute()
             else: supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
             
@@ -672,12 +721,19 @@ elif sel == "⚙️ Admin Tools":
                 for i in range(0, len(new_islands), 1000):
                     supabase.table("league_ratings").insert(new_islands[i:i+1000]).execute()
 
+            # SAVE MATCHES (The slow part - ensure this finishes!)
             progress_bar = st.progress(0)
+            status_text = st.empty()
+            total = len(matches_to_update)
+            
             for idx, update in enumerate(matches_to_update):
+                # Update snapshots
                 supabase.table("matches").update(update).eq("id", update['id']).execute()
-                progress_bar.progress((idx + 1) / len(matches_to_update))
+                progress = (idx + 1) / total
+                progress_bar.progress(progress)
+                status_text.text(f"Updating match {idx+1}/{total}...")
 
-            st.success(f"✅ Replayed & Backfilled {len(all_matches)} matches!"); time.sleep(2); st.rerun()
+            st.success(f"✅ Successfully Replayed & Backfilled {total} matches!"); time.sleep(2); st.rerun()
 
 elif sel == "👥 Players":
     st.header("Player Management")
