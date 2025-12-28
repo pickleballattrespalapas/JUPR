@@ -546,6 +546,76 @@ elif sel == "🔍 Player Search":
             h['Result'] = h.apply(lambda x: "✅ Win" if (p in [x['p1'], x['p2']] and x['score_t1']>x['score_t2']) or (p in [x['p3'], x['p4']] and x['score_t2']>x['score_t1']) else "❌ Loss", axis=1)
             st.dataframe(h[['date','league','week_tag','Result','Rating Before','score_t1','score_t2']], use_container_width=True, hide_index=True)
 
+elif sel == "📋 Roster Check":
+    st.header("📋 Roster Check")
+    st.markdown("Paste a list of names to check ratings. Any names not found will be added to the 'New Player' table for onboarding.")
+    
+    # --- SAFER LEAGUE LOADING ---
+    available_scopes = ["OVERALL"]
+    if not df_leagues.empty and 'league_name' in df_leagues.columns:
+        unique_l = sorted(df_leagues['league_name'].unique().tolist())
+        available_scopes += unique_l
+        
+    lookup_scope = st.radio("Rating Scope", available_scopes, horizontal=True)
+    raw_names = st.text_area("Paste Names (one per line or comma-separated)", height=100, placeholder="Tom Elliott\nKeith Brand\nNew Player")
+    
+    if st.button("Analyze List"):
+        if 'roster_results' in st.session_state: del st.session_state.roster_results
+        if 'df_new_players' in st.session_state: del st.session_state.df_new_players
+
+        parsed = [x.strip() for x in raw_names.replace('\n',',').split(',') if x.strip()]
+        
+        found_data = []
+        new_players = []
+        
+        for n in parsed:
+            if n in name_to_id:
+                pid = name_to_id[n]
+                r_val = 1200.0
+                if lookup_scope == "OVERALL":
+                    row = df_players[df_players['id'] == pid]
+                    if not row.empty: r_val = float(row.iloc[0]['rating'])
+                else:
+                    # Check if league data exists for this player
+                    if not df_leagues.empty and 'league_name' in df_leagues.columns:
+                        row = df_leagues[(df_leagues['player_id'] == pid) & (df_leagues['league_name'] == lookup_scope)]
+                        if not row.empty: 
+                            r_val = float(row.iloc[0]['rating'])
+                        else:
+                            # Fallback to overall if not found in specific league
+                            ov_row = df_players[df_players['id'] == pid]
+                            if not ov_row.empty: r_val = float(ov_row.iloc[0]['rating'])
+                    else:
+                         # Fallback if df_leagues is empty
+                         ov_row = df_players[df_players['id'] == pid]
+                         if not ov_row.empty: r_val = float(ov_row.iloc[0]['rating'])
+                
+                found_data.append({"Name": n, "Rating": f"{(r_val/400):.3f}", "Status": "✅ Found"})
+            else:
+                new_players.append(n)
+
+        st.session_state.roster_results = {
+            'found': found_data,
+            'new': new_players
+        }
+
+    if 'roster_results' in st.session_state:
+        results = st.session_state.roster_results
+        if results['found']:
+            st.success(f"Found {len(results['found'])} players.")
+            st.dataframe(pd.DataFrame(results['found']), use_container_width=True)
+        if results['new']:
+            st.error(f"🛑 Found {len(results['new'])} new players.")
+            if 'df_new_players' not in st.session_state:
+                st.session_state.df_new_players = pd.DataFrame({"Name": results['new'], "Rating": [3.5] * len(results['new'])})
+            
+            edited_df = st.data_editor(st.session_state.df_new_players, column_config={"Rating": st.column_config.NumberColumn(min_value=1.0, max_value=7.0, step=0.1)}, hide_index=True, use_container_width=True)
+            
+            if st.button("💾 Save New Players"):
+                for _, row in edited_df.iterrows():
+                    safe_add_player(row['Name'], row['Rating'])
+                st.success("✅ Created profiles!"); time.sleep(1); del st.session_state.roster_results; st.rerun()
+
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager (Settings)")
     if not df_meta.empty:
