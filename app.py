@@ -3,6 +3,7 @@ import pandas as pd
 from supabase import create_client, Client
 import time
 from datetime import datetime
+import re
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
@@ -116,17 +117,68 @@ def load_data():
                 st.error(f"⚠️ Network unstable. Please refresh. ({e})")
                 return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}, {}
 
-# --- HELPERS ---
-def get_match_schedule(format_type, players):
-    p = players  # <--- THIS WAS MISSING
-    if len(p) < int(format_type.split('-')[0]): return []
+# --- HELPERS (UPDATED ROTATIONS) ---
+def get_match_schedule(format_type, players, custom_text=None):
+    p = players # Fixed missing reference
+    matches = []
+    
+    # --- CUSTOM OVERRIDE ---
+    if custom_text and len(custom_text.strip()) > 5:
+        lines = custom_text.strip().split('\n')
+        r_num = 1
+        for line in lines:
+            nums = [int(x) for x in re.findall(r'\d+', line)]
+            if len(nums) >= 4:
+                idx = [n-1 for n in nums[:4]]
+                if all(0 <= i < len(p) for i in idx):
+                    matches.append({'t1': [p[idx[0]], p[idx[1]]], 't2': [p[idx[2]], p[idx[3]]], 'desc': f"Game {r_num}"})
+                    r_num += 1
+        if matches: return matches
+
+    # --- YOUR CUSTOM ROTATIONS ---
+    required = int(format_type.split('-')[0])
+    if len(p) < required: return []
     
     if format_type == "4-Player": 
-        return [{'t1':[p[0],p[1]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[1],p[2]],'desc':'R3'}]
+        return [
+            {'t1': [p[1], p[0]], 't2': [p[2], p[3]], 'desc': 'Rnd 1'},
+            {'t1': [p[3], p[1]], 't2': [p[0], p[2]], 'desc': 'Rnd 2'},
+            {'t1': [p[3], p[0]], 't2': [p[1], p[2]], 'desc': 'Rnd 3'}
+        ]
     elif format_type == "5-Player": 
-        return [{'t1':[p[1],p[4]],'t2':[p[2],p[3]],'desc':'R1'}, {'t1':[p[0],p[4]],'t2':[p[1],p[2]],'desc':'R2'}, {'t1':[p[0],p[3]],'t2':[p[2],p[4]],'desc':'R3'}, {'t1':[p[0],p[1]],'t2':[p[3],p[4]],'desc':'R4'}, {'t1':[p[0],p[2]],'t2':[p[1],p[3]],'desc':'R5'}]
+        return [
+            {'t1': [p[0], p[1]], 't2': [p[2], p[3]], 'desc': 'Rnd 1'},
+            {'t1': [p[1], p[3]], 't2': [p[2], p[4]], 'desc': 'Rnd 2'},
+            {'t1': [p[0], p[4]], 't2': [p[1], p[2]], 'desc': 'Rnd 3'},
+            {'t1': [p[0], p[2]], 't2': [p[3], p[4]], 'desc': 'Rnd 4'},
+            {'t1': [p[0], p[3]], 't2': [p[1], p[4]], 'desc': 'Rnd 5'}
+        ]
     elif format_type == "6-Player": 
         return [{'t1':[p[0],p[1]],'t2':[p[2],p[4]],'desc':'R1'}, {'t1':[p[2],p[5]],'t2':[p[0],p[4]],'desc':'R2'}, {'t1':[p[1],p[3]],'t2':[p[4],p[5]],'desc':'R3'}, {'t1':[p[0],p[5]],'t2':[p[1],p[2]],'desc':'R4'}, {'t1':[p[0],p[3]],'t2':[p[1],p[4]],'desc':'R5'}]
+    elif format_type == "8-Player":
+        return [
+            {'t1': [p[0], p[5]], 't2': [p[1], p[4]], 'desc': 'Rnd 1 (Ct 1)'}, {'t1': [p[2], p[7]], 't2': [p[3], p[6]], 'desc': 'Rnd 1 (Ct 2)'},
+            {'t1': [p[1], p[2]], 't2': [p[4], p[7]], 'desc': 'Rnd 2 (Ct 1)'}, {'t1': [p[0], p[3]], 't2': [p[5], p[6]], 'desc': 'Rnd 2 (Ct 2)'},
+            {'t1': [p[0], p[7]], 't2': [p[2], p[5]], 'desc': 'Rnd 3 (Ct 1)'}, {'t1': [p[1], p[6]], 't2': [p[3], p[4]], 'desc': 'Rnd 3 (Ct 2)'},
+            {'t1': [p[0], p[1]], 't2': [p[2], p[3]], 'desc': 'Rnd 4 (Ct 1)'}, {'t1': [p[4], p[5]], 't2': [p[6], p[7]], 'desc': 'Rnd 4 (Ct 2)'},
+            {'t1': [p[0], p[6]], 't2': [p[1], p[7]], 'desc': 'Rnd 5 (Ct 1)'}, {'t1': [p[2], p[4]], 't2': [p[3], p[5]], 'desc': 'Rnd 5 (Ct 2)'},
+            {'t1': [p[1], p[5]], 't2': [p[2], p[6]], 'desc': 'Rnd 6 (Ct 1)'}, {'t1': [p[0], p[4]], 't2': [p[3], p[7]], 'desc': 'Rnd 6 (Ct 2)'},
+            {'t1': [p[1], p[3]], 't2': [p[5], p[7]], 'desc': 'Rnd 7 (Ct 1)'}, {'t1': [p[0], p[2]], 't2': [p[4], p[6]], 'desc': 'Rnd 7 (Ct 2)'}
+        ]
+    elif format_type == "12-Player":
+        return [
+            {'t1': [p[2], p[5]], 't2': [p[3], p[10]], 'desc': 'Rnd 1 (Ct 1)'}, {'t1': [p[4], p[6]], 't2': [p[8], p[9]], 'desc': 'Rnd 1 (Ct 2)'}, {'t1': [p[11], p[0]], 't2': [p[1], p[7]], 'desc': 'Rnd 1 (Ct 3)'},
+            {'t1': [p[5], p[8]], 't2': [p[6], p[2]], 'desc': 'Rnd 2 (Ct 1)'}, {'t1': [p[7], p[9]], 't2': [p[0], p[1]], 'desc': 'Rnd 2 (Ct 2)'}, {'t1': [p[11], p[3]], 't2': [p[4], p[10]], 'desc': 'Rnd 2 (Ct 3)'},
+            {'t1': [p[10], p[1]], 't2': [p[3], p[4]], 'desc': 'Rnd 3 (Ct 1)'}, {'t1': [p[11], p[6]], 't2': [p[7], p[2]], 'desc': 'Rnd 3 (Ct 2)'}, {'t1': [p[8], p[0]], 't2': [p[9], p[5]], 'desc': 'Rnd 3 (Ct 3)'},
+            {'t1': [p[11], p[9]], 't2': [p[10], p[5]], 'desc': 'Rnd 4 (Ct 1)'}, {'t1': [p[0], p[3]], 't2': [p[1], p[8]], 'desc': 'Rnd 4 (Ct 2)'}, {'t1': [p[2], p[4]], 't2': [p[6], p[7]], 'desc': 'Rnd 4 (Ct 3)'},
+            {'t1': [p[3], p[6]], 't2': [p[4], p[0]], 'desc': 'Rnd 5 (Ct 1)'}, {'t1': [p[5], p[7]], 't2': [p[9], p[10]], 'desc': 'Rnd 5 (Ct 2)'}, {'t1': [p[11], p[1]], 't2': [p[2], p[8]], 'desc': 'Rnd 5 (Ct 3)'},
+            {'t1': [p[8], p[10]], 't2': [p[1], p[2]], 'desc': 'Rnd 6 (Ct 1)'}, {'t1': [p[11], p[4]], 't2': [p[5], p[0]], 'desc': 'Rnd 6 (Ct 2)'}, {'t1': [p[6], p[9]], 't2': [p[7], p[3]], 'desc': 'Rnd 6 (Ct 3)'},
+            {'t1': [p[11], p[7]], 't2': [p[8], p[3]], 'desc': 'Rnd 7 (Ct 1)'}, {'t1': [p[9], p[1]], 't2': [p[10], p[6]], 'desc': 'Rnd 7 (Ct 2)'}, {'t1': [p[0], p[2]], 't2': [p[4], p[5]], 'desc': 'Rnd 7 (Ct 3)'},
+            {'t1': [p[1], p[4]], 't2': [p[2], p[9]], 'desc': 'Rnd 8 (Ct 1)'}, {'t1': [p[3], p[5]], 't2': [p[7], p[8]], 'desc': 'Rnd 8 (Ct 2)'}, {'t1': [p[11], p[10]], 't2': [p[0], p[6]], 'desc': 'Rnd 8 (Ct 3)'},
+            {'t1': [p[6], p[8]], 't2': [p[10], p[0]], 'desc': 'Rnd 9 (Ct 1)'}, {'t1': [p[4], p[7]], 't2': [p[5], p[1]], 'desc': 'Rnd 9 (Ct 2)'}, {'t1': [p[11], p[2]], 't2': [p[3], p[9]], 'desc': 'Rnd 9 (Ct 3)'},
+            {'t1': [p[11], p[5]], 't2': [p[6], p[1]], 'desc': 'Rnd 10 (Ct 1)'}, {'t1': [p[9], p[0]], 't2': [p[2], p[3]], 'desc': 'Rnd 10 (Ct 2)'}, {'t1': [p[7], p[10]], 't2': [p[8], p[4]], 'desc': 'Rnd 10 (Ct 3)'},
+            {'t1': [p[10], p[2]], 't2': [p[0], p[7]], 'desc': 'Rnd 11 (Ct 1)'}, {'t1': [p[11], p[8]], 't2': [p[9], p[4]], 'desc': 'Rnd 11 (Ct 2)'}, {'t1': [p[1], p[3]], 't2': [p[5], p[6]], 'desc': 'Rnd 11 (Ct 3)'}
+        ]
     return []
 
 def safe_add_player(name, rating):
@@ -315,26 +367,21 @@ if sel == "🏆 Leaderboards":
         display_df['JUPR'] = (display_df['rating']/400)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100)
         
-        # --- ROBUST GAIN CALCULATION ---
+        # Gain Calc
         def calculate_gain(row):
             pid = row['id'] if 'id' in row else row['player_id']
             curr_r = row['rating']
-            
-            # Default: Compare to starting_rating
             base_start = 1200.0
             if not df_players.empty:
                 p_rec = df_players[df_players['id'] == pid]
                 if not p_rec.empty: base_start = float(p_rec.iloc[0]['starting_rating'])
 
-            if target_league == "OVERALL" or df_matches.empty:
-                return curr_r - base_start
+            if target_league == "OVERALL" or df_matches.empty: return curr_r - base_start
 
-            # Find First Match in League
             relevant = df_matches[
                 (df_matches['league'] == target_league) & 
                 ((df_matches['t1_p1'] == pid) | (df_matches['t1_p2'] == pid) | (df_matches['t2_p1'] == pid) | (df_matches['t2_p2'] == pid))
             ]
-            
             if relevant.empty: return curr_r - base_start
             
             oldest = relevant.iloc[-1] 
@@ -344,14 +391,11 @@ if sel == "🏆 Leaderboards":
             elif pid == oldest['t2_p1']: snap = oldest.get('t2_p1_r', 0)
             elif pid == oldest['t2_p2']: snap = oldest.get('t2_p2_r', 0)
             
-            # Safety: If snapshot is 0/None, fallback to base
             if snap is None or snap == 0: snap = base_start
-            
             return curr_r - snap
 
         display_df['rating_gain'] = display_df.apply(calculate_gain, axis=1)
 
-        # Top Widgets
         if target_league != "OVERALL":
             qualified_df = display_df[display_df['matches_played'] >= min_games_req].copy()
             if not qualified_df.empty:
@@ -377,7 +421,6 @@ if sel == "🏆 Leaderboards":
                     for _, r in top.iterrows(): st.markdown(f"**{r['wins']} Wins** - {r['name']}")
                 st.divider()
 
-        # Table
         st.markdown("### 📊 Standings")
         final_view = display_df.sort_values('rating', ascending=False).copy()
         final_view['Rank'] = range(1, len(final_view) + 1)
@@ -544,13 +587,19 @@ elif sel == "📝 Match Uploader":
     else:
         if 'lc_courts' not in st.session_state: st.session_state.lc_courts = 1
         st.session_state.lc_courts = st.number_input("Courts", 1, 10, st.session_state.lc_courts)
+        
         with st.form("setup_lc"):
             c_data = []
             for i in range(st.session_state.lc_courts):
                 c1, c2 = st.columns([1,3])
-                t = c1.selectbox(f"F{i}", ["4-Player","5-Player"], key=f"t_{i}")
-                n = c2.text_area(f"P{i}", height=70, key=f"n_{i}")
+                # UPDATED DROPDOWN with 8 and 12
+                t = c1.selectbox(f"Format C{i+1}", ["4-Player","5-Player","6-Player","8-Player","12-Player"], key=f"t_{i}")
+                n = c2.text_area(f"Players C{i+1}", height=70, key=f"n_{i}")
                 c_data.append({'type':t, 'names':n})
+            
+            st.markdown("---")
+            custom_sched = st.text_area("Overrides: Paste Custom Schedule Here (e.g., '1 2 3 4')", help="Overrides the format selection above.")
+            
             if st.form_submit_button("Generate"):
                 st.session_state.lc_schedule = []
                 st.session_state.active_lg = selected_league
@@ -559,7 +608,7 @@ elif sel == "📝 Match Uploader":
                 st.session_state.active_mt = match_type_db
                 for idx, c in enumerate(c_data):
                     pl = [x.strip() for x in c['names'].replace('\n',',').split(',') if x.strip()]
-                    st.session_state.lc_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl)})
+                    st.session_state.lc_schedule.append({'c': idx+1, 'm': get_match_schedule(c['type'], pl, custom_text=custom_sched)})
                 st.rerun()
         
         if 'lc_schedule' in st.session_state:
@@ -710,6 +759,7 @@ elif sel == "📘 Admin Guide":
     * **One tool for everything:** Use this tab to enter matches for official leagues OR casual pop-up events.
     * **Batch Entry:** Best for entering results from a clipboard after the games are done.
     * **Live Round Robin:** Best for running an event live. It generates the schedule for you.
+    * **Override Schedule:** If the generated order is wrong, paste your own schedule text (e.g. `1 2 3 4`) into the text box.
 
     ### 🏟️ League Manager
     * **Settings Only:** Use this tab to create new leagues, archive old ones (uncheck 'Active'), or change the "Min Games" requirement for the leaderboard.
