@@ -356,8 +356,6 @@ elif sel == "🔍 Player Search":
 
         # --- HELPER: CONVERT ELO TO JUPR ---
         def elo_to_jupr(elo_score):
-            # Standard conversion: Elo / 400. 
-            # If your club uses a different starting point (e.g. 1200 / 400 = 3.0), this works perfectly.
             return elo_score / 400.0 
 
         # 1. FETCH ACTIVE PLAYERS
@@ -380,17 +378,18 @@ elif sel == "🔍 Player Search":
 
             col1, col2 = st.columns(2)
             col1.metric("Player Name", selected_player['name'])
-            col2.metric("Current JUPR", f"{display_rating:.2f}")
+            col2.metric("Current JUPR", f"{display_rating:.3f}")
             
             # 2. FETCH MATCH HISTORY
-            # We select "*" to be safe and use safe getters below
-            response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).execute()
+            # Added 'id' to the select so we can use it as a tie-breaker for sorting
+            # We sort by date DESC, then ID DESC to ensure newest matches are truly first
+            response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).order("id", desc=True).execute()
             matches_data = response.data
 
             if not matches_data:
                 st.info("This player has no recorded matches yet.")
             else:
-                # --- LOGIC: COMPARE SCORES & CALCULATE +/- ---
+                # --- LOGIC: PROCESS MATCHES ---
                 processed_matches = []
                 
                 for match in matches_data:
@@ -400,64 +399,73 @@ elif sel == "🔍 Player Search":
                     else:
                         my_team = 2
                     
-                    # B. Get Scores directly
+                    # B. Get Scores
                     s1 = match.get('score_t1', 0)
                     s2 = match.get('score_t2', 0)
-                    
                     display_score = f"{s1}-{s2}"
 
                     # C. Determine Winner
                     winner_team = 0
-                    if s1 > s2:
-                        winner_team = 1
-                    elif s2 > s1:
-                        winner_team = 2
+                    if s1 > s2: winner_team = 1
+                    elif s2 > s1: winner_team = 2
                     
-                    # D. Determine +/- Sign for RAW ELO points
-                    # HERE IS THE FIX: Using 'elo_delta'
-                    raw_change = match.get('elo_delta', 0)
+                    # D. Get Raw Elo Delta
+                    raw_delta = match.get('elo_delta', 0)
                     
+                    # E. Calculate Sign
                     if winner_team == 0:
-                        final_change = raw_change 
+                        signed_elo = raw_delta 
                     elif winner_team == my_team:
-                        final_change = abs(raw_change) # Win = Positive
+                        signed_elo = abs(raw_delta)
                     else:
-                        final_change = -1 * abs(raw_change) # Loss = Negative
+                        signed_elo = -1 * abs(raw_delta)
+                    
+                    # F. Convert to JUPR
+                    jupr_change = signed_elo / 400.0
 
                     processed_matches.append({
                         'Date': match.get('date'), 
                         'Score': display_score,
-                        'JUPR Change': final_change
+                        'JUPR Change': jupr_change
                     })
 
                 display_df = pd.DataFrame(processed_matches)
                 
-                # --- CRASH FIX: HANDLE BAD DATES ---
+                # --- PREPARE GRAPH DATA ---
                 display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce')
                 display_df = display_df.dropna(subset=['Date'])
 
-                # 4. THE GRAPH
-                st.subheader("Performance History")
-                st.caption("Points gained/lost per match (Raw Elo)")
+                # 1. Reverse the order so the graph goes Oldest -> Newest (Left to Right)
+                graph_df = display_df.iloc[::-1].reset_index(drop=True)
                 
-                chart = alt.Chart(display_df.head(20)).mark_bar().encode(
-                    x='Date',
-                    y='JUPR Change',
+                # 2. Create a "Match Sequence" column (1, 2, 3...)
+                # This ensures every match gets its own slot on the X-axis
+                graph_df['Match Sequence'] = graph_df.index + 1
+
+                # 4. THE GRAPH (Sequential Axis)
+                st.subheader("Performance History")
+                st.caption("Rating change per match (Match-by-Match Sequence)")
+                
+                chart = alt.Chart(graph_df.tail(30)).mark_bar().encode(
+                    # X-AXIS CHANGE: Use 'Match Sequence' instead of 'Date'
+                    x=alt.X('Match Sequence', axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                    y=alt.Y('JUPR Change', format='.3f'),
                     color=alt.condition(
                         alt.datum['JUPR Change'] > 0,
                         alt.value("green"),
                         alt.value("red")
                     ),
-                    tooltip=['Date', 'Score', 'JUPR Change']
+                    # Tooltip still shows the Date so you know when it happened
+                    tooltip=['Match Sequence', 'Date', 'Score', alt.Tooltip('JUPR Change', format='.4f')]
                 ).interactive()
                 
                 st.altair_chart(chart, use_container_width=True)
 
-                # 5. DETAILED TABLE
+                # 5. DETAILED TABLE (Keep Newest First)
                 st.subheader("Match Log")
-                # Clean format for table view
                 table_df = display_df.copy()
                 table_df['Date'] = table_df['Date'].dt.strftime('%Y-%m-%d')
+                table_df['JUPR Change'] = table_df['JUPR Change'].map('{:+.4f}'.format)
                 
                 st.dataframe(
                     table_df[['Date', 'Score', 'JUPR Change']], 
