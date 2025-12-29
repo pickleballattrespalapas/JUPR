@@ -294,79 +294,34 @@ if sel == "🏆 Leaderboards":
     # 1. SETUP DISPLAY DATAFRAME
     if target_league == "OVERALL": 
         display_df = df_players.copy()
+        # For Overall, we use the player's global starting rating
+        if 'starting_rating' not in display_df.columns:
+            display_df['starting_rating'] = 1200.0 # Fallback
     else:
         if df_leagues.empty: display_df = pd.DataFrame()
         else:
             display_df = df_leagues[df_leagues['league_name'] == target_league].copy()
             display_df['name'] = display_df['player_id'].map(id_to_name)
+            # For Leagues, we now use the NEW column we just created
+            if 'starting_rating' not in display_df.columns:
+                 # If column missing (cached data), force reload or default
+                 display_df['starting_rating'] = display_df['rating'] 
     
     if not display_df.empty and 'rating' in display_df.columns:
         # Standard Metrics
         display_df['JUPR'] = (display_df['rating']/400)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100)
         
-        # --- NEW LOGIC: CALCULATE GAIN BY SUMMING MATCH HISTORY ---
+        # --- NEW SIMPLIFIED LOGIC ---
+        # Gain = Current Rating - Starting Rating
+        # This works for both Overall and League views now!
         
-        # FIX 1: Robust Filtering (Handle spaces/typos)
-        if target_league == "OVERALL":
-            relevant_matches = df_matches
-        else:
-            # We strip whitespace to ensure "Tuesday " matches "Tuesday"
-            clean_target = str(target_league).strip()
-            
-            # Create a temporary clean column for filtering
-            # We use a mask to avoid SettingWithCopy warnings
-            mask = df_matches['league'].astype(str).str.strip() == clean_target
-            relevant_matches = df_matches[mask]
+        def calc_gain(row):
+            current = float(row['rating'])
+            start = float(row.get('starting_rating', current)) # Default to 0 gain if missing
+            return current - start
 
-        # DEBUG HELPER: If we expected matches but found none, tell the user why
-        if target_league != "OVERALL" and relevant_matches.empty:
-            with st.expander(f"⚠️ Debug: Why is {target_league} showing 0 gain?"):
-                st.write(f"We looked for matches labeled: '{target_league}'")
-                st.write("But in the 'matches' database, we only found these league names:")
-                st.write(df_matches['league'].unique().tolist())
-                st.write("If the names don't match exactly, the gains will be 0.")
-
-        # B. Calculate Gains Dictionary
-        player_gains = {} 
-        
-        if not relevant_matches.empty:
-            for _, m in relevant_matches.iterrows():
-                s1, s2 = m.get('score_t1', 0), m.get('score_t2', 0)
-                delta = m.get('elo_delta', 0)
-                
-                # Helper to track gains
-                def add_gain(pid, amount):
-                    if pid is not None and not pd.isna(pid) and pid != 0:
-                        current = player_gains.get(pid, 0.0)
-                        player_gains[pid] = current + amount
-
-                # Team 1
-                for pid in [m.get('t1_p1'), m.get('t1_p2')]:
-                    if s1 > s2: add_gain(pid, delta)
-                    elif s2 > s1: add_gain(pid, -delta)
-
-                # Team 2
-                for pid in [m.get('t2_p1'), m.get('t2_p2')]:
-                    if s2 > s1: add_gain(pid, delta)
-                    elif s1 > s2: add_gain(pid, -delta)
-
-        # C. Map Gains to DataFrame (ROBUST STRING MERGE)
-        join_col = 'id' if 'id' in display_df.columns else 'player_id'
-        
-        gains_df = pd.DataFrame(list(player_gains.items()), columns=[join_col, 'calc_gain'])
-        
-        if not gains_df.empty:
-            # FIX 2: Convert BOTH sides to String to ensure "12" == "12.0"
-            display_df['merge_key'] = display_df[join_col].astype(str).apply(lambda x: x.split('.')[0])
-            gains_df['merge_key'] = gains_df[join_col].astype(str).apply(lambda x: x.split('.')[0])
-            
-            display_df = display_df.merge(gains_df[['merge_key', 'calc_gain']], on='merge_key', how='left')
-            display_df['rating_gain'] = display_df['calc_gain'].fillna(0.0)
-            
-            display_df = display_df.drop(columns=['merge_key'])
-        else:
-            display_df['rating_gain'] = 0.0
+        display_df['rating_gain'] = display_df.apply(calc_gain, axis=1)
 
         # -----------------------------------------------------------
 
@@ -405,6 +360,133 @@ if sel == "🏆 Leaderboards":
         
         st.dataframe(final_view[cols_to_show], use_container_width=True, hide_index=True)
     else: st.info("No data.")
+
+elif sel == "🔍 Player Search":
+    st.header("🕵️ Player Search & Audit")
+
+    # --- HELPER: CONVERT ELO TO JUPR ---
+    def elo_to_jupr(elo_score):
+        return elo_score / 400.0 
+
+    # 1. FETCH ACTIVE PLAYERS
+    players_response = supabase.table("players").select("id, name, rating").eq("active", True).execute()
+    players_df = pd.DataFrame(players_response.data)
+
+    if players_df.empty:
+        st.warning("No active players found.")
+    else:
+        # Dropdown
+        player_names = sorted(players_df['name'].tolist())
+        selected_name = st.selectbox("Select a Player:", player_names)
+
+        selected_player = players_df[players_df['name'] == selected_name].iloc[0]
+        p_id = int(selected_player['id'])
+        
+        # --- TOP METRICS ---
+        raw_elo = selected_player['rating']
+        current_jupr_rating = elo_to_jupr(raw_elo)
+
+        col1, col2 = st.columns(2)
+        col1.metric("Player Name", selected_player['name'])
+        col2.metric("Current JUPR", f"{current_jupr_rating:.3f}")
+        
+        # 2. FETCH MATCH HISTORY
+        response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).order("id", desc=True).execute()
+        matches_data = response.data
+
+        if not matches_data:
+            st.info("This player has no recorded matches yet.")
+        else:
+            # --- LOGIC: PROCESS MATCHES ---
+            processed_matches = []
+            
+            for match in matches_data:
+                # A. Identify Team
+                if match.get('t1_p1') == p_id or match.get('t1_p2') == p_id:
+                    my_team = 1
+                else:
+                    my_team = 2
+                
+                # B. Get Scores
+                s1 = match.get('score_t1', 0)
+                s2 = match.get('score_t2', 0)
+                display_score = f"{s1}-{s2}"
+
+                # C. Determine Winner
+                winner_team = 0
+                if s1 > s2: winner_team = 1
+                elif s2 > s1: winner_team = 2
+                
+                # D. Get Raw Elo Delta
+                raw_delta = match.get('elo_delta', 0)
+                
+                # E. Calculate Sign
+                if winner_team == 0:
+                    signed_elo = raw_delta 
+                elif winner_team == my_team:
+                    signed_elo = abs(raw_delta)
+                else:
+                    signed_elo = -1 * abs(raw_delta)
+                
+                # F. Convert to JUPR Change
+                jupr_change = signed_elo / 400.0
+
+                processed_matches.append({
+                    'Date': match.get('date'), 
+                    'Score': display_score,
+                    'JUPR Change': jupr_change
+                })
+
+            # Create DataFrame (Newest matches at top)
+            display_df = pd.DataFrame(processed_matches)
+            
+            # --- NEW LOGIC: CALCULATE HISTORICAL RATING ---
+            # We start with the CURRENT rating and work backwards.
+            # Rating AFTER Match 1 (Newest) = Current Rating.
+            # Rating AFTER Match 2 = Current Rating - (Match 1 Change).
+            
+            # 1. Shift the changes down by one row to simulate "undoing" the matches
+            display_df['Undo Amount'] = display_df['JUPR Change'].shift(1).fillna(0)
+            
+            # 2. Cumulative sum of the undo amounts tells us how far back to go
+            display_df['Cumulative Backtrack'] = display_df['Undo Amount'].cumsum()
+            
+            # 3. Calculate what the rating was at that moment in time
+            display_df['Rating After Match'] = current_jupr_rating - display_df['Cumulative Backtrack']
+
+            # --- PREPARE GRAPH DATA ---
+            display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce')
+            display_df = display_df.dropna(subset=['Date'])
+
+            # Reverse order for the graph (Oldest -> Newest)
+            graph_df = display_df.iloc[::-1].reset_index(drop=True)
+            graph_df['Match Sequence'] = graph_df.index + 1
+
+            # 4. THE GRAPH (Line Chart of RATING)
+            st.subheader("Rating Trend")
+            st.caption("JUPR rating progression over recent matches")
+            
+            # We use mark_line with point=True to show the dots
+            chart = alt.Chart(graph_df.tail(30)).mark_line(point=True).encode(
+                x=alt.X('Match Sequence', axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                y=alt.Y('Rating After Match', axis=alt.Axis(format='.3f'), title="JUPR Rating", scale=alt.Scale(zero=False)),
+                tooltip=['Match Sequence', 'Date', 'Score', alt.Tooltip('Rating After Match', format='.3f'), alt.Tooltip('JUPR Change', format='.4f')]
+            ).interactive()
+            
+            st.altair_chart(chart, use_container_width=True)
+
+            # 5. DETAILED TABLE (Showing the math)
+            st.subheader("Match Log")
+            table_df = display_df.copy()
+            table_df['Date'] = table_df['Date'].dt.strftime('%Y-%m-%d')
+            table_df['JUPR Change'] = table_df['JUPR Change'].map('{:+.4f}'.format)
+            table_df['Rating After Match'] = table_df['Rating After Match'].map('{:.3f}'.format)
+            
+            st.dataframe(
+                table_df[['Date', 'Score', 'JUPR Change', 'Rating After Match']], 
+                use_container_width=True,
+                hide_index=True
+            )
 
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager")
