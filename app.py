@@ -110,9 +110,23 @@ def load_data():
             else: st.error(f"⚠️ Network Error: {e}"); return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {}, {}
 
 # --- HELPERS ---
-def get_match_schedule(format_type, players):
+def get_match_schedule(format_type, players, custom_text=None):
     p = players
-    # YOUR CUSTOM ROTATIONS
+    # --- CUSTOM OVERRIDE ---
+    if custom_text and len(custom_text.strip()) > 5:
+        matches = []
+        lines = custom_text.strip().split('\n')
+        r_num = 1
+        for line in lines:
+            nums = [int(x) for x in re.findall(r'\d+', line)]
+            if len(nums) >= 4:
+                idx = [n-1 for n in nums[:4]]
+                if all(0 <= i < len(p) for i in idx):
+                    matches.append({'t1': [p[idx[0]], p[idx[1]]], 't2': [p[idx[2]], p[idx[3]]], 'desc': f"Game {r_num}"})
+                    r_num += 1
+        if matches: return matches
+
+    # --- CUSTOM ROTATIONS ---
     if len(p) < int(format_type.split('-')[0]): return []
     
     if format_type == "4-Player": 
@@ -255,7 +269,6 @@ else:
 # --- NAVIGATION ---
 nav = ["🏆 Leaderboards", "🔍 Player Search", "❓ FAQs"]
 if st.session_state.admin_logged_in: 
-    # Removed "Roster Check", Updated Structure
     nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
@@ -347,8 +360,6 @@ elif sel == "🏟️ League Manager":
         # STATE MANAGEMENT
         if 'ladder_state' not in st.session_state: st.session_state.ladder_state = 'SETUP'
         if 'ladder_roster' not in st.session_state: st.session_state.ladder_roster = []
-        if 'ladder_config' not in st.session_state: st.session_state.ladder_config = {}
-        if 'ladder_matches' not in st.session_state: st.session_state.ladder_matches = []
         
         # 1. SETUP PHASE
         if st.session_state.ladder_state == 'SETUP':
@@ -360,7 +371,10 @@ elif sel == "🏟️ League Manager":
             raw = st.text_area("Paste Player List (one per line)", height=150)
             
             if st.button("Analyze & Seed"):
-                # Logic: Check players, get ratings
+                # **FIX**: SAVE LEAGUE AND WEEK TO PERMANENT SESSION STATE
+                st.session_state.saved_ladder_lg = lg_select
+                st.session_state.saved_ladder_wk = week_select
+                
                 parsed = [x.strip() for x in raw.replace('\n',',').split(',') if x.strip()]
                 roster_data = []
                 new_ps = []
@@ -368,7 +382,6 @@ elif sel == "🏟️ League Manager":
                 for n in parsed:
                     if n in name_to_id:
                         pid = name_to_id[n]
-                        # Try to get league rating, then global
                         r = 1200.0
                         if not df_leagues.empty:
                             row = df_leagues[(df_leagues['player_id'] == pid) & (df_leagues['league_name'] == lg_select)]
@@ -392,8 +405,6 @@ elif sel == "🏟️ League Manager":
         # 2. REVIEW / NEW PLAYERS
         if st.session_state.ladder_state == 'REVIEW_ROSTER':
             st.markdown("#### Step 2: Confirm Roster")
-            
-            # Handle New Players
             if st.session_state.ladder_temp_new:
                 st.warning(f"Found {len(st.session_state.ladder_temp_new)} new players.")
                 df_new = pd.DataFrame({'Name': st.session_state.ladder_temp_new, 'Rating': [3.5]*len(st.session_state.ladder_temp_new)})
@@ -402,9 +413,7 @@ elif sel == "🏟️ League Manager":
                 if st.button("Save New Players & Continue"):
                     for _, r in edited_new.iterrows():
                         safe_add_player(r['Name'], r['Rating'])
-                        # Add to roster with converting rating
-                        st.session_state.ladder_temp_roster.append({'name': r['Name'], 'rating': r['Rating']*400, 'id': None, 'status': 'New'}) # ID will be missing until refresh, careful. 
-                        # Actually we need IDs. Force reload? simpler to just skip ID requirement for now and rely on name matching in process logic (since we pass name strings to process_matches)
+                        st.session_state.ladder_temp_roster.append({'name': r['Name'], 'rating': r['Rating']*400, 'id': None, 'status': 'New'})
                     
                     st.session_state.ladder_roster = sorted(st.session_state.ladder_temp_roster, key=lambda x: x['rating'], reverse=True)
                     st.session_state.ladder_state = 'CONFIG_COURTS'
@@ -423,8 +432,6 @@ elif sel == "🏟️ League Manager":
             st.info(f"Total Players: {total_p}")
             
             num_courts = st.number_input("Number of Courts", 1, 10, 3)
-            
-            # Dynamic Inputs
             court_sizes = []
             cols = st.columns(num_courts)
             for i in range(num_courts):
@@ -435,8 +442,7 @@ elif sel == "🏟️ League Manager":
             if sum(court_sizes) != total_p:
                 st.error(f"Court sizes sum to {sum(court_sizes)}, but you have {total_p} players.")
             else:
-                if st.button("Generate First Round"):
-                    # Assign Seeded Players to Courts
+                if st.button("Preview Assignments"):
                     current_idx = 0
                     final_assignments = []
                     for c_idx, size in enumerate(court_sizes):
@@ -448,18 +454,46 @@ elif sel == "🏟️ League Manager":
                     
                     st.session_state.ladder_live_roster = pd.DataFrame(final_assignments)
                     st.session_state.ladder_court_sizes = court_sizes
-                    st.session_state.ladder_round_num = 1
-                    st.session_state.ladder_state = 'PLAY_ROUND'
+                    st.session_state.ladder_state = 'CONFIRM_START' # New state
                     st.rerun()
+
+        # 3.5. CONFIRM START (NEW!)
+        if st.session_state.ladder_state == 'CONFIRM_START':
+            st.markdown("#### Step 4: Confirm Starting Positions")
+            st.markdown("Verify the court assignments before play starts. You can manually adjust the 'court' number if needed.")
+            
+            # Allow editing courts
+            edited_roster = st.data_editor(
+                st.session_state.ladder_live_roster[['name', 'rating', 'court']],
+                column_config={
+                    "court": st.column_config.NumberColumn("Court", min_value=1, max_value=10, step=1),
+                    "rating": st.column_config.NumberColumn("Rating", format="%.1f", disabled=True)
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            if st.button("✅ Start Event (Round 1)"):
+                # Save the final edited roster
+                # Re-sort to be safe so court groups are clean
+                final_roster = edited_roster.sort_values('court')
+                
+                # Update court sizes based on user edits?
+                # It's safer to recalculate sizes in case they moved someone from Ct 1 to Ct 2
+                new_sizes = final_roster['court'].value_counts().sort_index().tolist()
+                st.session_state.ladder_court_sizes = new_sizes
+                st.session_state.ladder_live_roster = final_roster
+                
+                st.session_state.ladder_round_num = 1
+                st.session_state.ladder_state = 'PLAY_ROUND'
+                st.rerun()
 
         # 4. PLAY ROUND
         if st.session_state.ladder_state == 'PLAY_ROUND':
             st.markdown(f"### 🎾 Round {st.session_state.ladder_round_num} - Live")
             
-            # Generate Schedule if not exists for this round
             if 'current_schedule' not in st.session_state:
                 schedule = []
-                # Group by court
                 for c_idx in range(len(st.session_state.ladder_court_sizes)):
                     c_num = c_idx + 1
                     players = st.session_state.ladder_live_roster[st.session_state.ladder_live_roster['court'] == c_num]['name'].tolist()
@@ -468,7 +502,6 @@ elif sel == "🏟️ League Manager":
                     schedule.append({'c': c_num, 'matches': matches})
                 st.session_state.current_schedule = schedule
 
-            # Display Inputs
             all_results = []
             with st.form("round_score_form"):
                 for c_data in st.session_state.current_schedule:
@@ -479,33 +512,24 @@ elif sel == "🏟️ League Manager":
                         s1 = c2.number_input("S1", 0, key=f"r{st.session_state.ladder_round_num}_c{c_data['c']}_m{m_idx}_1")
                         s2 = c3.number_input("S2", 0, key=f"r{st.session_state.ladder_round_num}_c{c_data['c']}_m{m_idx}_2")
                         c4.text(f"{m['t2'][0]} & {m['t2'][1]}")
-                        
-                        all_results.append({
-                            'court': c_data['c'],
-                            't1_p1': m['t1'][0], 't1_p2': m['t1'][1],
-                            't2_p1': m['t2'][0], 't2_p2': m['t2'][1],
-                            's1': s1, 's2': s2
-                        })
+                        all_results.append({'court': c_data['c'], 't1_p1': m['t1'][0], 't1_p2': m['t1'][1], 't2_p1': m['t2'][0], 't2_p2': m['t2'][1], 's1': s1, 's2': s2})
                 
                 if st.form_submit_button("Submit Round & Calculate Movement"):
-                    # 1. Save Matches to DB Immediately
                     valid_matches = []
                     for r in all_results:
                         if r['s1'] > 0 or r['s2'] > 0:
                             valid_matches.append({
                                 't1_p1': r['t1_p1'], 't1_p2': r['t1_p2'], 't2_p1': r['t2_p1'], 't2_p2': r['t2_p2'],
                                 's1': r['s1'], 's2': r['s2'], 'date': str(datetime.now()),
-                                'league': st.session_state.ladder_lg,
-                                'match_type': 'Live Match', 'week_tag': st.session_state.ladder_wk,
+                                'league': st.session_state.saved_ladder_lg, # USE SAVED
+                                'match_type': 'Live Match', 'week_tag': st.session_state.saved_ladder_wk, # USE SAVED
                                 'is_popup': False
                             })
                     if valid_matches:
                         process_matches(valid_matches, name_to_id, df_players, df_leagues, df_meta)
                         st.success("Matches Saved to Database!")
                         
-                        # 2. Calculate Stats for Movement
-                        # Create a mini stats table for this round
-                        round_stats = {} # name -> {w, pts, diff}
+                        round_stats = {} 
                         all_names = st.session_state.ladder_live_roster['name'].unique()
                         for n in all_names: round_stats[n] = {'w':0, 'diff':0, 'pts':0}
                         
@@ -521,34 +545,21 @@ elif sel == "🏟️ League Manager":
                                 round_stats[p]['diff'] += -diff if win else diff
                                 if not win: round_stats[p]['w'] += 1
                         
-                        # 3. Apply Logic
                         df_roster = st.session_state.ladder_live_roster.copy()
                         df_roster['Round Wins'] = df_roster['name'].map(lambda x: round_stats.get(x, {}).get('w', 0))
                         df_roster['Round Diff'] = df_roster['name'].map(lambda x: round_stats.get(x, {}).get('diff', 0))
                         df_roster['Round Pts'] = df_roster['name'].map(lambda x: round_stats.get(x, {}).get('pts', 0))
                         
-                        # Sort within court
                         df_roster = df_roster.sort_values(by=['court', 'Round Wins', 'Round Diff', 'Round Pts'], ascending=[True, False, False, False])
-                        
-                        # Determine New Courts (Provisional)
                         df_roster['Proposed Court'] = df_roster['court']
                         
-                        # Logic: Top goes Up (Court - 1), Bottom goes Down (Court + 1)
-                        # We iterate court by court
                         for c_num in sorted(df_roster['court'].unique()):
                             court_group = df_roster[df_roster['court'] == c_num]
                             if len(court_group) == 0: continue
-                            
                             top_player = court_group.iloc[0]['name']
                             btm_player = court_group.iloc[-1]['name']
-                            
-                            # Top moves up (unless Court 1)
-                            if c_num > 1:
-                                df_roster.loc[df_roster['name'] == top_player, 'Proposed Court'] = c_num - 1
-                            
-                            # Bottom moves down (unless Last Court)
-                            if c_num < len(st.session_state.ladder_court_sizes):
-                                df_roster.loc[df_roster['name'] == btm_player, 'Proposed Court'] = c_num + 1
+                            if c_num > 1: df_roster.loc[df_roster['name'] == top_player, 'Proposed Court'] = c_num - 1
+                            if c_num < len(st.session_state.ladder_court_sizes): df_roster.loc[df_roster['name'] == btm_player, 'Proposed Court'] = c_num + 1
                         
                         st.session_state.ladder_movement_preview = df_roster
                         st.session_state.ladder_state = 'CONFIRM_MOVEMENT'
@@ -557,32 +568,15 @@ elif sel == "🏟️ League Manager":
 
         # 5. CONFIRM MOVEMENT
         if st.session_state.ladder_state == 'CONFIRM_MOVEMENT':
-            st.markdown("#### Step 4: Confirm/Edit Next Round Seeding")
-            st.info("Review the results. You can manually change the 'Proposed Court' column if needed.")
-            
-            editor_df = st.data_editor(
-                st.session_state.ladder_movement_preview[['name', 'court', 'Round Wins', 'Round Diff', 'Round Pts', 'Proposed Court']],
-                column_config={
-                    "court": st.column_config.NumberColumn("Old Ct", disabled=True),
-                    "Proposed Court": st.column_config.NumberColumn("New Ct", min_value=1, max_value=10, step=1)
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
+            st.markdown("#### Confirm Next Round Seeding")
+            editor_df = st.data_editor(st.session_state.ladder_movement_preview[['name', 'court', 'Round Wins', 'Round Diff', 'Round Pts', 'Proposed Court']], column_config={"court": st.column_config.NumberColumn("Old Ct", disabled=True), "Proposed Court": st.column_config.NumberColumn("New Ct", min_value=1, max_value=10, step=1)}, hide_index=True, use_container_width=True)
             if st.button("Start Next Round"):
-                # Apply changes
                 new_roster = editor_df.copy()
                 new_roster['court'] = new_roster['Proposed Court']
-                # Re-sort for display (Court 1 top, etc) - though order inside court doesn't strictly matter for RR generation logic usually
                 new_roster = new_roster.sort_values('court')
-                
-                # Update Sizes config if people moved unevenly?
-                # Actually, if 5 people end up in Court 1, we must update ladder_court_sizes for the generator to work!
                 new_sizes = new_roster['court'].value_counts().sort_index().tolist()
                 st.session_state.ladder_court_sizes = new_sizes
-                
-                st.session_state.ladder_live_roster = new_roster[['name', 'rating', 'id', 'status', 'court']]
+                st.session_state.ladder_live_roster = new_roster[['name', 'court']] # keep minimal
                 st.session_state.ladder_round_num += 1
                 st.session_state.ladder_state = 'PLAY_ROUND'
                 st.rerun()
@@ -800,8 +794,9 @@ elif sel == "📘 Admin Guide":
     This is the main tool for running a Ladder Night.
     1.  **Setup:** Select league and paste your player list.
     2.  **Seeding:** The system sorts players by rating and assigns them to courts. You define the size of each court (e.g., 4, 4, 5).
-    3.  **Play:** Enter scores for the round. **Scores save immediately.**
-    4.  **Movement:** The system calculates who moves Up/Down based on wins & points. You can override this before starting the next round.
+    3.  **Confirm:** Review the starting lineup before play begins.
+    4.  **Play:** Enter scores for the round. **Scores save immediately.**
+    5.  **Movement:** The system calculates who moves Up/Down based on wins & points. You can override this before starting the next round.
 
     ### 📝 Match Uploader
     Use this for pop-up events or entering data from paper sheets later.
