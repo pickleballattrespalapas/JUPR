@@ -356,7 +356,7 @@ elif sel == "🔍 Player Search":
 
         # --- HELPER: CONVERT ELO TO JUPR ---
         def elo_to_jupr(elo_score):
-            # STANDARD CONVERSION: Adjust this formula if your club uses different math!
+            # Standard conversion: Elo / 400. Adjust if your club uses different math.
             return elo_score / 400.0 
 
         # 1. FETCH ACTIVE PLAYERS
@@ -374,17 +374,15 @@ elif sel == "🔍 Player Search":
             p_id = int(selected_player['id'])
             
             # --- TOP METRICS ---
-            # Calculate the display rating
             raw_elo = selected_player['rating']
             display_rating = elo_to_jupr(raw_elo)
 
             col1, col2 = st.columns(2)
             col1.metric("Player Name", selected_player['name'])
-            # Display converted JUPR (e.g., 4.89) instead of raw Elo (1957)
             col2.metric("Current JUPR", f"{display_rating:.2f}")
             
-            # 2. FETCH MATCH HISTORY (Using correct t1_p1 columns)
-            response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("match_date", desc=True).execute()
+            # 2. FETCH MATCH HISTORY (Fixed: using 'date' instead of 'match_date')
+            response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).execute()
             matches_data = response.data
 
             if not matches_data:
@@ -423,9 +421,9 @@ elif sel == "🔍 Player Search":
                         final_change = -1 * abs(raw_change)
 
                     processed_matches.append({
-                        'Date': match['match_date'],
+                        'Date': match['date'], # Fixed column name
                         'Score': match['score'],
-                        'JUPR Change': final_change # We keep this as raw points for the graph (easier to read)
+                        'JUPR Change': final_change
                     })
 
                 display_df = pd.DataFrame(processed_matches)
