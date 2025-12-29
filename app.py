@@ -1089,6 +1089,64 @@ elif sel == "⚙️ Admin Tools":
             
             status.update(label="Migration Complete!", state="complete")
             st.success("✅ Database updated. You can now use the new Leaderboard logic.")
+            st.divider()
+    st.subheader("📊 Reports & Exports")
+    
+    report_league = st.selectbox("Select League for Report", ["OVERALL"] + sorted(df_meta['league_name'].unique().tolist()) if not df_meta.empty else ["OVERALL"])
+    
+    if st.button("Generate Report"):
+        # 1. Prepare Data (Same logic as Leaderboard)
+        if report_league == "OVERALL": 
+            rep_df = df_players.copy()
+            if 'starting_rating' not in rep_df.columns: rep_df['starting_rating'] = 1200.0
+        else:
+            rep_df = df_leagues[df_leagues['league_name'] == report_league].copy()
+            rep_df['name'] = rep_df['player_id'].map(id_to_name)
+            if 'starting_rating' not in rep_df.columns: rep_df['starting_rating'] = rep_df['rating']
+
+        if not rep_df.empty:
+            rep_df['JUPR'] = (rep_df['rating']/400)
+            rep_df['Win %'] = (rep_df['wins'] / rep_df['matches_played'].replace(0,1) * 100)
+            rep_df['Gain'] = rep_df['rating'] - rep_df.get('starting_rating', 1200.0)
+            
+            # 2. Display Top Performers nicely for screenshots
+            st.markdown(f"### 📄 {report_league} - Top Performers")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("##### 👑 Highest Rating")
+                st.dataframe(rep_df.sort_values('rating', ascending=False).head(5)[['name', 'JUPR']], hide_index=True, use_container_width=True)
+                
+                st.markdown("##### 🎯 Best Win % (Min 5 games)")
+                mask = rep_df['matches_played'] >= 5
+                st.dataframe(rep_df[mask].sort_values('Win %', ascending=False).head(5)[['name', 'Win %']], hide_index=True, use_container_width=True)
+
+            with c2:
+                st.markdown("##### 🔥 Most Improved")
+                # Format gain for display
+                disp = rep_df.copy()
+                disp['Gain'] = (disp['Gain']/400).map('{:+.3f}'.format)
+                st.dataframe(disp.sort_values('Gain', ascending=False).head(5)[['name', 'Gain']], hide_index=True, use_container_width=True)
+
+                st.markdown("##### 🚜 Most Wins")
+                st.dataframe(rep_df.sort_values('wins', ascending=False).head(5)[['name', 'wins']], hide_index=True, use_container_width=True)
+
+            # 3. Export Button
+            st.divider()
+            st.write("#### 📥 Export Data")
+            
+            # Clean up for CSV
+            export_df = rep_df[['name', 'JUPR', 'wins', 'losses', 'matches_played', 'Win %', 'Gain']].copy()
+            export_df['Gain'] = export_df['Gain'] / 400
+            
+            csv = export_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label=f"Download {report_league} Standings (CSV)",
+                data=csv,
+                file_name=f"{report_league}_Report_{str(datetime.now().date())}.csv",
+                mime='text/csv',
+            )
+        else:
+            st.error("No data found for this league.")
 
 elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
