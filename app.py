@@ -398,11 +398,10 @@ elif sel == "🔍 Player Search":
                     else:
                         my_team = 2
                     
-                    # B. Get Scores directly (Handle missing data safely with .get(key, 0))
+                    # B. Get Scores directly
                     s1 = match.get('score_t1', 0)
                     s2 = match.get('score_t2', 0)
                     
-                    # Create display string for the table (e.g. "11-5")
                     display_score = f"{s1}-{s2}"
 
                     # C. Determine Winner
@@ -416,11 +415,11 @@ elif sel == "🔍 Player Search":
                     raw_change = match.get('elo_change', 0)
                     
                     if winner_team == 0:
-                        final_change = raw_change # Tie or error
+                        final_change = raw_change 
                     elif winner_team == my_team:
-                        final_change = abs(raw_change) # Win = Positive
+                        final_change = abs(raw_change) 
                     else:
-                        final_change = -1 * abs(raw_change) # Loss = Negative
+                        final_change = -1 * abs(raw_change)
 
                     processed_matches.append({
                         'Date': match.get('date'), 
@@ -429,7 +428,13 @@ elif sel == "🔍 Player Search":
                     })
 
                 display_df = pd.DataFrame(processed_matches)
-                display_df['Date'] = pd.to_datetime(display_df['Date'])
+                
+                # --- CRASH FIX: HANDLE BAD DATES ---
+                # errors='coerce' turns bad dates into NaT (Not a Time) instead of crashing
+                display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce')
+                
+                # Drop rows where the date is broken/missing so the graph doesn't fail
+                display_df = display_df.dropna(subset=['Date'])
 
                 # 4. THE GRAPH
                 st.subheader("Performance History")
@@ -450,8 +455,13 @@ elif sel == "🔍 Player Search":
 
                 # 5. DETAILED TABLE
                 st.subheader("Match Log")
+                # Format the date nicely for the table (YYYY-MM-DD)
+                # We create a temporary column for display so we don't break the graph's timestamp object
+                table_df = display_df.copy()
+                table_df['Date'] = table_df['Date'].dt.strftime('%Y-%m-%d')
+                
                 st.dataframe(
-                    display_df[['Date', 'Score', 'JUPR Change']], 
+                    table_df[['Date', 'Score', 'JUPR Change']], 
                     use_container_width=True,
                     hide_index=True
                 )
