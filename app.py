@@ -356,7 +356,8 @@ elif sel == "🔍 Player Search":
 
         # --- HELPER: CONVERT ELO TO JUPR ---
         def elo_to_jupr(elo_score):
-            # Standard conversion: Elo / 400. Adjust if your club uses different math.
+            # Standard conversion: Elo / 400. 
+            # If your club uses a different starting point (e.g. 1200 / 400 = 3.0), this works perfectly.
             return elo_score / 400.0 
 
         # 1. FETCH ACTIVE PLAYERS
@@ -382,6 +383,7 @@ elif sel == "🔍 Player Search":
             col2.metric("Current JUPR", f"{display_rating:.2f}")
             
             # 2. FETCH MATCH HISTORY
+            # We select "*" to be safe and use safe getters below
             response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).execute()
             matches_data = response.data
 
@@ -412,14 +414,15 @@ elif sel == "🔍 Player Search":
                         winner_team = 2
                     
                     # D. Determine +/- Sign for RAW ELO points
-                    raw_change = match.get('elo_change', 0)
+                    # HERE IS THE FIX: Using 'elo_delta'
+                    raw_change = match.get('elo_delta', 0)
                     
                     if winner_team == 0:
                         final_change = raw_change 
                     elif winner_team == my_team:
-                        final_change = abs(raw_change) 
+                        final_change = abs(raw_change) # Win = Positive
                     else:
-                        final_change = -1 * abs(raw_change)
+                        final_change = -1 * abs(raw_change) # Loss = Negative
 
                     processed_matches.append({
                         'Date': match.get('date'), 
@@ -430,10 +433,7 @@ elif sel == "🔍 Player Search":
                 display_df = pd.DataFrame(processed_matches)
                 
                 # --- CRASH FIX: HANDLE BAD DATES ---
-                # errors='coerce' turns bad dates into NaT (Not a Time) instead of crashing
                 display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce')
-                
-                # Drop rows where the date is broken/missing so the graph doesn't fail
                 display_df = display_df.dropna(subset=['Date'])
 
                 # 4. THE GRAPH
@@ -455,8 +455,7 @@ elif sel == "🔍 Player Search":
 
                 # 5. DETAILED TABLE
                 st.subheader("Match Log")
-                # Format the date nicely for the table (YYYY-MM-DD)
-                # We create a temporary column for display so we don't break the graph's timestamp object
+                # Clean format for table view
                 table_df = display_df.copy()
                 table_df['Date'] = table_df['Date'].dt.strftime('%Y-%m-%d')
                 
