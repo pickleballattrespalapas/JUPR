@@ -306,45 +306,53 @@ if sel == "🏆 Leaderboards":
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100)
         
         # --- NEW LOGIC: CALCULATE GAIN BY SUMMING MATCH HISTORY ---
-        # We calculate exactly how many points were won/lost in the filtered matches.
-        
         # A. Filter Matches based on view
         if target_league == "OVERALL":
             relevant_matches = df_matches
         else:
             relevant_matches = df_matches[df_matches['league'] == target_league]
 
-        # B. Calculate Gains Dictionary (Fast One-Pass)
+        # B. Calculate Gains Dictionary
         player_gains = {} # {player_id: total_points_gained}
         
         if not relevant_matches.empty:
             for _, m in relevant_matches.iterrows():
-                # 1. Identify Winner
                 s1, s2 = m['score_t1'], m['score_t2']
-                delta = m['elo_delta'] # This is the magnitude (always positive)
+                delta = m['elo_delta']
                 
-                # 2. Assign Points
-                # Team 1 Players
+                # Team 1
                 for pid in [m['t1_p1'], m['t1_p2']]:
-                    if pid: # Check if not None
+                    if pid:
                         current = player_gains.get(pid, 0.0)
-                        if s1 > s2: player_gains[pid] = current + delta # Win
-                        elif s2 > s1: player_gains[pid] = current - delta # Loss
-                        # If tie, no change (or custom logic)
+                        if s1 > s2: player_gains[pid] = current + delta
+                        elif s2 > s1: player_gains[pid] = current - delta
 
-                # Team 2 Players
+                # Team 2
                 for pid in [m['t2_p1'], m['t2_p2']]:
                     if pid:
                         current = player_gains.get(pid, 0.0)
-                        if s2 > s1: player_gains[pid] = current + delta # Win
-                        elif s1 > s2: player_gains[pid] = current - delta # Loss
+                        if s2 > s1: player_gains[pid] = current + delta
+                        elif s1 > s2: player_gains[pid] = current - delta
 
-        # C. Map Gains to DataFrame
-        # We use 'id' for Overall table, 'player_id' for League table
+        # C. Map Gains to DataFrame (CRASH FIX: Using Merge instead of Map)
         join_col = 'id' if 'id' in display_df.columns else 'player_id'
         
-        # Map the calculated gain, default to 0 if they haven't played
-        display_df['rating_gain'] = display_df[join_col].map(player_gains).fillna(0.0)
+        # Convert dictionary to DataFrame for a safe merge
+        gains_df = pd.DataFrame(list(player_gains.items()), columns=[join_col, 'calc_gain'])
+        
+        if not gains_df.empty:
+            # Ensure data types match (Integers) to prevent merge failure
+            try:
+                gains_df[join_col] = gains_df[join_col].astype(display_df[join_col].dtype)
+            except:
+                pass 
+            
+            # Left Merge: Keeps all players, adds gain info where available
+            display_df = display_df.merge(gains_df, on=join_col, how='left')
+            display_df['rating_gain'] = display_df['calc_gain'].fillna(0.0)
+        else:
+            display_df['rating_gain'] = 0.0
+
         # -----------------------------------------------------------
 
         if target_league != "OVERALL":
@@ -358,7 +366,6 @@ if sel == "🏆 Leaderboards":
                     for _, r in top.iterrows(): st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
                 with c2:
                     st.markdown("**🔥 Most Improved**")
-                    # Using our new summation logic
                     top = qualified_df.sort_values('rating_gain', ascending=False).head(5)
                     for _, r in top.iterrows(): st.markdown(f"**{'+' if r['rating_gain']>0 else ''}{r['rating_gain']/400:.3f}** - {r['name']}")
                 with c3:
@@ -376,7 +383,14 @@ if sel == "🏆 Leaderboards":
         final_view['Rank'] = range(1, len(final_view) + 1)
         final_view['Rank'] = final_view['Rank'].apply(lambda r: "🥇" if r==1 else "🥈" if r==2 else "🥉" if r==3 else str(r))
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
-        st.dataframe(final_view[['Rank', 'name', 'JUPR', 'Gain', 'matches_played', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
+        
+        # Select columns to display
+        # Note: We filter columns carefully to avoid duplicates from the merge
+        cols_to_show = ['Rank', 'name', 'JUPR', 'Gain', 'matches_played', 'wins', 'losses', 'Win %']
+        # Filter out any cols that might not exist if data is empty
+        cols_to_show = [c for c in cols_to_show if c in final_view.columns]
+        
+        st.dataframe(final_view[cols_to_show], use_container_width=True, hide_index=True)
     else: st.info("No data.")
 
 elif sel == "🔍 Player Search":
