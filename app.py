@@ -374,11 +374,11 @@ elif sel == "🔍 Player Search":
             
             # --- TOP METRICS ---
             raw_elo = selected_player['rating']
-            display_rating = elo_to_jupr(raw_elo)
+            current_jupr_rating = elo_to_jupr(raw_elo)
 
             col1, col2 = st.columns(2)
             col1.metric("Player Name", selected_player['name'])
-            col2.metric("Current JUPR", f"{display_rating:.3f}")
+            col2.metric("Current JUPR", f"{current_jupr_rating:.3f}")
             
             # 2. FETCH MATCH HISTORY
             response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).order("id", desc=True).execute()
@@ -418,7 +418,7 @@ elif sel == "🔍 Player Search":
                     else:
                         signed_elo = -1 * abs(raw_delta)
                     
-                    # F. Convert to JUPR
+                    # F. Convert to JUPR Change
                     jupr_change = signed_elo / 400.0
 
                     processed_matches.append({
@@ -427,44 +427,53 @@ elif sel == "🔍 Player Search":
                         'JUPR Change': jupr_change
                     })
 
+                # Create DataFrame (Newest matches at top)
                 display_df = pd.DataFrame(processed_matches)
                 
+                # --- NEW LOGIC: CALCULATE HISTORICAL RATING ---
+                # We start with the CURRENT rating and work backwards.
+                # Rating AFTER Match 1 (Newest) = Current Rating.
+                # Rating AFTER Match 2 = Current Rating - (Match 1 Change).
+                
+                # 1. Shift the changes down by one row to simulate "undoing" the matches
+                display_df['Undo Amount'] = display_df['JUPR Change'].shift(1).fillna(0)
+                
+                # 2. Cumulative sum of the undo amounts tells us how far back to go
+                display_df['Cumulative Backtrack'] = display_df['Undo Amount'].cumsum()
+                
+                # 3. Calculate what the rating was at that moment in time
+                display_df['Rating After Match'] = current_jupr_rating - display_df['Cumulative Backtrack']
+
                 # --- PREPARE GRAPH DATA ---
                 display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce')
                 display_df = display_df.dropna(subset=['Date'])
 
-                # 1. Reverse order for the graph (Oldest -> Newest)
+                # Reverse order for the graph (Oldest -> Newest)
                 graph_df = display_df.iloc[::-1].reset_index(drop=True)
-                
-                # 2. Create Sequence
                 graph_df['Match Sequence'] = graph_df.index + 1
 
-                # 4. THE GRAPH (Fixed Syntax)
-                st.subheader("Performance History")
-                st.caption("Rating change per match (Match-by-Match Sequence)")
+                # 4. THE GRAPH (Line Chart of RATING)
+                st.subheader("Rating Trend")
+                st.caption("JUPR rating progression over recent matches")
                 
-                chart = alt.Chart(graph_df.tail(30)).mark_bar().encode(
+                # We use mark_line with point=True to show the dots
+                chart = alt.Chart(graph_df.tail(30)).mark_line(point=True).encode(
                     x=alt.X('Match Sequence', axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                    # FIX: 'format' must be inside 'axis=alt.Axis()'
-                    y=alt.Y('JUPR Change', axis=alt.Axis(format='.3f')), 
-                    color=alt.condition(
-                        alt.datum['JUPR Change'] > 0,
-                        alt.value("green"),
-                        alt.value("red")
-                    ),
-                    tooltip=['Match Sequence', 'Date', 'Score', alt.Tooltip('JUPR Change', format='.4f')]
+                    y=alt.Y('Rating After Match', axis=alt.Axis(format='.3f'), title="JUPR Rating", scale=alt.Scale(zero=False)),
+                    tooltip=['Match Sequence', 'Date', 'Score', alt.Tooltip('Rating After Match', format='.3f'), alt.Tooltip('JUPR Change', format='.4f')]
                 ).interactive()
                 
                 st.altair_chart(chart, use_container_width=True)
 
-                # 5. DETAILED TABLE
+                # 5. DETAILED TABLE (Showing the math)
                 st.subheader("Match Log")
                 table_df = display_df.copy()
                 table_df['Date'] = table_df['Date'].dt.strftime('%Y-%m-%d')
                 table_df['JUPR Change'] = table_df['JUPR Change'].map('{:+.4f}'.format)
+                table_df['Rating After Match'] = table_df['Rating After Match'].map('{:.3f}'.format)
                 
                 st.dataframe(
-                    table_df[['Date', 'Score', 'JUPR Change']], 
+                    table_df[['Date', 'Score', 'JUPR Change', 'Rating After Match']], 
                     use_container_width=True,
                     hide_index=True
                 )
