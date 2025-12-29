@@ -946,6 +946,67 @@ elif sel == "⚙️ Admin Tools":
             bar = st.progress(0)
             for i,u in enumerate(matches_to_update): supabase.table("matches").update(u).eq("id",u['id']).execute(); bar.progress((i+1)/len(matches_to_update))
             st.success("Done!"); time.sleep(1); st.rerun()
+            st.divider()
+    st.subheader("🛠️ Database Migration: Backfill League Start Ratings")
+    st.info("Run this ONCE after adding the 'starting_rating' column to Supabase. It calculates where every player started based on their match history.")
+    
+    if st.button("🚀 Run Backfill Migration"):
+        with st.status("Backfilling starting ratings...", expanded=True) as status:
+            # 1. Fetch all league ratings
+            l_ratings = supabase.table("league_ratings").select("*").execute().data
+            
+            # 2. Fetch all matches
+            matches = supabase.table("matches").select("*").execute().data
+            df_m = pd.DataFrame(matches)
+            
+            updates = []
+            
+            for lr in l_ratings:
+                pid = lr['player_id']
+                lg = lr['league_name']
+                curr = float(lr['rating'])
+                
+                # Calculate total points won/lost in this league
+                total_change = 0
+                if not df_m.empty:
+                    # Filter matches for this league and player
+                    # Robust string check to handle spaces
+                    rel = df_m[df_m['league'].astype(str).str.strip() == lg.strip()]
+                    
+                    # Sum changes
+                    for _, m in rel.iterrows():
+                        delta = m['elo_delta']
+                        s1, s2 = m['score_t1'], m['score_t2']
+                        
+                        # Was player on Team 1?
+                        if m['t1_p1'] == pid or m['t1_p2'] == pid:
+                            if s1 > s2: total_change += delta
+                            elif s2 > s1: total_change -= delta
+                            
+                        # Was player on Team 2?
+                        elif m['t2_p1'] == pid or m['t2_p2'] == pid:
+                            if s2 > s1: total_change += delta
+                            elif s1 > s2: total_change -= delta
+
+                # Starting Rating = Current - Total Change
+                start_r = curr - total_change
+                
+                updates.append({
+                    'id': lr['id'],
+                    'starting_rating': start_r
+                })
+            
+            # 3. Batch Update
+            st.write(f"Calculated starting ratings for {len(updates)} records. Saving...")
+            
+            # Update in chunks to be safe
+            for i in range(0, len(updates), 100):
+                chunk = updates[i:i+100]
+                for item in chunk:
+                     supabase.table("league_ratings").update({'starting_rating': item['starting_rating']}).eq('id', item['id']).execute()
+            
+            status.update(label="Migration Complete!", state="complete")
+            st.success("✅ Database updated. You can now use the new Leaderboard logic.")
 
 elif sel == "📘 Admin Guide":
     st.header("📘 Admin Guide")
