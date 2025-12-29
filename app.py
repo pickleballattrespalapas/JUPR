@@ -320,34 +320,42 @@ if sel == "🏆 Leaderboards":
                 s1, s2 = m['score_t1'], m['score_t2']
                 delta = m['elo_delta']
                 
+                # Helper: Only process valid PIDs
+                # We check "if pid" AND "not NaN" to avoid type errors
+                def add_gain(pid, amount):
+                    if pid is not None and not pd.isna(pid) and pid != 0:
+                        current = player_gains.get(pid, 0.0)
+                        player_gains[pid] = current + amount
+
                 # Team 1
                 for pid in [m['t1_p1'], m['t1_p2']]:
-                    if pid:
-                        current = player_gains.get(pid, 0.0)
-                        if s1 > s2: player_gains[pid] = current + delta
-                        elif s2 > s1: player_gains[pid] = current - delta
+                    if s1 > s2: add_gain(pid, delta)
+                    elif s2 > s1: add_gain(pid, -delta)
 
                 # Team 2
                 for pid in [m['t2_p1'], m['t2_p2']]:
-                    if pid:
-                        current = player_gains.get(pid, 0.0)
-                        if s2 > s1: player_gains[pid] = current + delta
-                        elif s1 > s2: player_gains[pid] = current - delta
+                    if s2 > s1: add_gain(pid, delta)
+                    elif s1 > s2: add_gain(pid, -delta)
 
-        # C. Map Gains to DataFrame (CRASH FIX: Using Merge instead of Map)
+        # C. Map Gains to DataFrame (ROBUST MERGE)
         join_col = 'id' if 'id' in display_df.columns else 'player_id'
         
-        # Convert dictionary to DataFrame for a safe merge
+        # 1. Create DataFrame from dict
         gains_df = pd.DataFrame(list(player_gains.items()), columns=[join_col, 'calc_gain'])
         
         if not gains_df.empty:
-            # Ensure data types match (Integers) to prevent merge failure
-            try:
-                gains_df[join_col] = gains_df[join_col].astype(display_df[join_col].dtype)
-            except:
-                pass 
+            # 2. DROP BAD DATA (Crucial: Remove NaNs so we can convert types)
+            gains_df = gains_df.dropna(subset=[join_col])
             
-            # Left Merge: Keeps all players, adds gain info where available
+            # 3. FORCE TYPE MATCH (Float -> Int)
+            # This ensures 12.0 matches 12
+            try:
+                target_type = display_df[join_col].dtype
+                gains_df[join_col] = gains_df[join_col].astype(target_type)
+            except:
+                pass # If this fails, we try merging anyway, but usually this fixes it
+
+            # 4. MERGE
             display_df = display_df.merge(gains_df, on=join_col, how='left')
             display_df['rating_gain'] = display_df['calc_gain'].fillna(0.0)
         else:
@@ -384,10 +392,8 @@ if sel == "🏆 Leaderboards":
         final_view['Rank'] = final_view['Rank'].apply(lambda r: "🥇" if r==1 else "🥈" if r==2 else "🥉" if r==3 else str(r))
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         
-        # Select columns to display
-        # Note: We filter columns carefully to avoid duplicates from the merge
+        # Filter columns to only show what exists
         cols_to_show = ['Rank', 'name', 'JUPR', 'Gain', 'matches_played', 'wins', 'losses', 'Win %']
-        # Filter out any cols that might not exist if data is empty
         cols_to_show = [c for c in cols_to_show if c in final_view.columns]
         
         st.dataframe(final_view[cols_to_show], use_container_width=True, hide_index=True)
