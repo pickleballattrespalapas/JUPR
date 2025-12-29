@@ -381,48 +381,50 @@ elif sel == "🔍 Player Search":
             col1.metric("Player Name", selected_player['name'])
             col2.metric("Current JUPR", f"{display_rating:.2f}")
             
-            # 2. FETCH MATCH HISTORY (Fixed: using 'date' instead of 'match_date')
+            # 2. FETCH MATCH HISTORY
             response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).execute()
             matches_data = response.data
 
             if not matches_data:
                 st.info("This player has no recorded matches yet.")
             else:
-                # --- LOGIC: PARSE SCORE & CALCULATE +/- ---
+                # --- LOGIC: COMPARE SCORES & CALCULATE +/- ---
                 processed_matches = []
                 
                 for match in matches_data:
                     # A. Identify Team
-                    if match['t1_p1'] == p_id or match['t1_p2'] == p_id:
+                    if match.get('t1_p1') == p_id or match.get('t1_p2') == p_id:
                         my_team = 1
                     else:
                         my_team = 2
                     
-                    # B. Parse Score
-                    score_text = str(match['score'])
-                    winner_team = 0 
-                    try:
-                        parts = score_text.split('-')
-                        score1 = int(parts[0])
-                        score2 = int(parts[1])
-                        if score1 > score2: winner_team = 1
-                        else: winner_team = 2
-                    except:
-                        pass
+                    # B. Get Scores directly (Handle missing data safely with .get(key, 0))
+                    s1 = match.get('score_t1', 0)
+                    s2 = match.get('score_t2', 0)
+                    
+                    # Create display string for the table (e.g. "11-5")
+                    display_score = f"{s1}-{s2}"
 
-                    # C. Determine +/- Sign for RAW ELO points
-                    raw_change = match['elo_change']
+                    # C. Determine Winner
+                    winner_team = 0
+                    if s1 > s2:
+                        winner_team = 1
+                    elif s2 > s1:
+                        winner_team = 2
+                    
+                    # D. Determine +/- Sign for RAW ELO points
+                    raw_change = match.get('elo_change', 0)
                     
                     if winner_team == 0:
-                        final_change = raw_change 
+                        final_change = raw_change # Tie or error
                     elif winner_team == my_team:
-                        final_change = abs(raw_change)
+                        final_change = abs(raw_change) # Win = Positive
                     else:
-                        final_change = -1 * abs(raw_change)
+                        final_change = -1 * abs(raw_change) # Loss = Negative
 
                     processed_matches.append({
-                        'Date': match['date'], # Fixed column name
-                        'Score': match['score'],
+                        'Date': match.get('date'), 
+                        'Score': display_score,
                         'JUPR Change': final_change
                     })
 
