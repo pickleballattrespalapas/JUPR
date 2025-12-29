@@ -282,13 +282,18 @@ if sel == "🏆 Leaderboards":
         active_meta = df_meta[df_meta['is_active'] == True]
         available_leagues = ["OVERALL"] + sorted(active_meta['league_name'].unique().tolist())
     else: available_leagues = ["OVERALL"]
+    
     target_league = st.selectbox("Select View", available_leagues)
+    
+    # Get Min Games Requirement
     min_games_req = 0
     if target_league != "OVERALL" and not df_meta.empty:
         cfg = df_meta[df_meta['league_name'] == target_league]
         if not cfg.empty: min_games_req = cfg.iloc[0].get('min_games', 0)
 
-    if target_league == "OVERALL": display_df = df_players.copy()
+    # 1. SETUP DISPLAY DATAFRAME
+    if target_league == "OVERALL": 
+        display_df = df_players.copy()
     else:
         if df_leagues.empty: display_df = pd.DataFrame()
         else:
@@ -296,29 +301,51 @@ if sel == "🏆 Leaderboards":
             display_df['name'] = display_df['player_id'].map(id_to_name)
     
     if not display_df.empty and 'rating' in display_df.columns:
+        # Standard Metrics
         display_df['JUPR'] = (display_df['rating']/400)
         display_df['Win %'] = (display_df['wins'] / display_df['matches_played'].replace(0,1) * 100)
         
-        def calculate_gain(row):
-            pid = row['id'] if 'id' in row else row['player_id']
-            curr_r = row['rating']
-            base_start = 1200.0
-            if not df_players.empty:
-                p_rec = df_players[df_players['id'] == pid]
-                if not p_rec.empty: base_start = float(p_rec.iloc[0]['starting_rating'])
-            if target_league == "OVERALL" or df_matches.empty: return curr_r - base_start
-            relevant = df_matches[(df_matches['league'] == target_league) & ((df_matches['t1_p1'] == pid) | (df_matches['t1_p2'] == pid) | (df_matches['t2_p1'] == pid) | (df_matches['t2_p2'] == pid))]
-            if relevant.empty: return curr_r - base_start
-            oldest = relevant.iloc[-1] 
-            snap = 0
-            if pid == oldest['t1_p1']: snap = oldest.get('t1_p1_r', 0)
-            elif pid == oldest['t1_p2']: snap = oldest.get('t1_p2_r', 0)
-            elif pid == oldest['t2_p1']: snap = oldest.get('t2_p1_r', 0)
-            elif pid == oldest['t2_p2']: snap = oldest.get('t2_p2_r', 0)
-            if snap is None or snap == 0: snap = base_start
-            return curr_r - snap
+        # --- NEW LOGIC: CALCULATE GAIN BY SUMMING MATCH HISTORY ---
+        # We calculate exactly how many points were won/lost in the filtered matches.
+        
+        # A. Filter Matches based on view
+        if target_league == "OVERALL":
+            relevant_matches = df_matches
+        else:
+            relevant_matches = df_matches[df_matches['league'] == target_league]
 
-        display_df['rating_gain'] = display_df.apply(calculate_gain, axis=1)
+        # B. Calculate Gains Dictionary (Fast One-Pass)
+        player_gains = {} # {player_id: total_points_gained}
+        
+        if not relevant_matches.empty:
+            for _, m in relevant_matches.iterrows():
+                # 1. Identify Winner
+                s1, s2 = m['score_t1'], m['score_t2']
+                delta = m['elo_delta'] # This is the magnitude (always positive)
+                
+                # 2. Assign Points
+                # Team 1 Players
+                for pid in [m['t1_p1'], m['t1_p2']]:
+                    if pid: # Check if not None
+                        current = player_gains.get(pid, 0.0)
+                        if s1 > s2: player_gains[pid] = current + delta # Win
+                        elif s2 > s1: player_gains[pid] = current - delta # Loss
+                        # If tie, no change (or custom logic)
+
+                # Team 2 Players
+                for pid in [m['t2_p1'], m['t2_p2']]:
+                    if pid:
+                        current = player_gains.get(pid, 0.0)
+                        if s2 > s1: player_gains[pid] = current + delta # Win
+                        elif s1 > s2: player_gains[pid] = current - delta # Loss
+
+        # C. Map Gains to DataFrame
+        # We use 'id' for Overall table, 'player_id' for League table
+        join_col = 'id' if 'id' in display_df.columns else 'player_id'
+        
+        # Map the calculated gain, default to 0 if they haven't played
+        display_df['rating_gain'] = display_df[join_col].map(player_gains).fillna(0.0)
+        # -----------------------------------------------------------
 
         if target_league != "OVERALL":
             qualified_df = display_df[display_df['matches_played'] >= min_games_req].copy()
@@ -331,6 +358,7 @@ if sel == "🏆 Leaderboards":
                     for _, r in top.iterrows(): st.markdown(f"**{r['JUPR']:.3f}** - {r['name']}")
                 with c2:
                     st.markdown("**🔥 Most Improved**")
+                    # Using our new summation logic
                     top = qualified_df.sort_values('rating_gain', ascending=False).head(5)
                     for _, r in top.iterrows(): st.markdown(f"**{'+' if r['rating_gain']>0 else ''}{r['rating_gain']/400:.3f}** - {r['name']}")
                 with c3:
