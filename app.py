@@ -268,7 +268,7 @@ else:
 # --- NAVIGATION ---
 nav = ["🏆 Leaderboards", "🔍 Player Search", "❓ FAQs"]
 if st.session_state.admin_logged_in: 
-    nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Players", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
+    nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
 # --- UI LOGIC ---
@@ -347,6 +347,37 @@ if sel == "🏆 Leaderboards":
         final_view['Gain'] = (final_view['rating_gain']/400).map('{:+.3f}'.format)
         st.dataframe(final_view[['Rank', 'name', 'JUPR', 'Gain', 'matches_played', 'wins', 'losses', 'Win %']], use_container_width=True, hide_index=True)
     else: st.info("No data.")
+
+elif sel == "🔍 Player Search":
+    st.header("🔍 Player History")
+    p = st.selectbox("Search", [""] + sorted(df_players['name']))
+    if p:
+        p_row = df_players[df_players['name'] == p]
+        if not p_row.empty:
+            st.metric("Current JUPR", f"{(float(p_row.iloc[0]['rating'])/400):.3f}")
+
+        if not df_matches.empty:
+            mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
+            h = df_matches[mask].copy()
+            if not h.empty:
+                def get_snapshot(r):
+                    val = 0
+                    if p == r['p1']: val = r.get('t1_p1_r', 0)
+                    elif p == r['p2']: val = r.get('t1_p2_r', 0)
+                    elif p == r['p3']: val = r.get('t2_p1_r', 0)
+                    elif p == r['p4']: val = r.get('t2_p2_r', 0)
+                    if val is None or pd.isna(val): return 0.0
+                    return float(val)
+                
+                if 't1_p1_r' in h.columns:
+                    h['Rating Before'] = h.apply(get_snapshot, axis=1).apply(lambda x: f"{(x/400):.3f}" if x > 0 else "-")
+                
+                h['Result'] = h.apply(lambda x: "✅ Win" if (p in [x['p1'], x['p2']] and x['score_t1']>x['score_t2']) or (p in [x['p3'], x['p4']] and x['score_t2']>x['score_t1']) else "❌ Loss", axis=1)
+                
+                cols = ['date', 'league', 'Result', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']
+                if 'Rating Before' in h.columns: cols.insert(2, 'Rating Before')
+                
+                st.dataframe(h[cols], use_container_width=True, hide_index=True)
 
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager")
@@ -643,6 +674,21 @@ elif sel == "🏟️ League Manager":
             if st.button("Save Config"):
                 for _,r in editor.iterrows(): supabase.table("leagues_metadata").update({"is_active":r['is_active'],"min_games":r['min_games'],"k_factor":r['k_factor'],"description":r['description']}).eq("id",r['id']).execute()
                 st.rerun()
+        
+        # --- NEW DANGER ZONE ---
+        st.divider()
+        st.subheader("🗑️ Danger Zone")
+        if not df_meta.empty:
+            del_lg = st.selectbox("Select League to Delete", [""] + sorted(df_meta['league_name'].tolist()))
+            if del_lg:
+                st.error(f"⚠️ Are you sure you want to delete '{del_lg}'? This removes it from menus but keeps match history.")
+                if st.button(f"Permanently Delete '{del_lg}'", type="primary"):
+                    supabase.table("leagues_metadata").delete().eq("league_name", del_lg).eq("club_id", CLUB_ID).execute()
+                    st.success(f"Deleted {del_lg}!")
+                    time.sleep(1)
+                    st.rerun()
+
+        st.divider()
         st.write("#### 🆕 Create New League")
         with st.form("new"):
             n=st.text_input("Name"); k=st.number_input("K",32); mg=st.number_input("Min Games",12)
@@ -730,32 +776,63 @@ elif sel == "📝 Match Uploader":
                      process_matches([x for x in all_res if x['s1']>0 or x['s2']>0], name_to_id, df_players, df_leagues, df_meta)
                      st.success("✅ Done!"); del st.session_state.lc_schedule; time.sleep(1); st.rerun()
 
-elif sel == "👥 Players":
-    st.header("Player Management")
-    c1, c2, c3 = st.columns(3)
-    with c1:
+elif sel == "👥 Player Editor":
+    st.header("👥 Player Management")
+
+    # --- TOP: ADD PLAYER ---
+    with st.expander("➕ Add New Player", expanded=False):
         with st.form("add_p"):
             n = st.text_input("Name")
-            r = st.number_input("Rating", 1.0, 7.0, 3.0)
+            r = st.number_input("Rating", 1.0, 7.0, 3.5, step=0.1)
             if st.form_submit_button("Add Player"):
                 safe_add_player(n, r)
                 st.rerun()
-    with c2:
-        st.subheader("✏️ Edit")
-        p_edit = st.selectbox("Select Player", [""] + sorted(df_players['name']))
+
+    st.divider()
+
+    # --- MAIN LAYOUT: LIST vs MANAGE ---
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("Current Roster")
+        # Display table sorted by name
+        display_roster = df_players.sort_values("name")[['name', 'rating', 'wins', 'losses', 'matches_played']]
+        # Convert rating for display
+        display_roster['rating'] = display_roster['rating'] / 400
+        st.dataframe(
+            display_roster, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={"rating": st.column_config.NumberColumn("JUPR", format="%.3f")}
+        )
+
+    with col2:
+        st.subheader("Manage Player")
+        p_edit = st.selectbox("Select Player to Edit/Delete", [""] + sorted(df_players['name'].tolist()))
+
         if p_edit:
             curr = df_players[df_players['name'] == p_edit].iloc[0]
-            new_n = st.text_input("Edit Name", value=p_edit)
-            new_r = st.number_input("Rating", 1.0, 7.0, float(curr['rating'])/400)
-            if st.button("Update"):
-                supabase.table("players").update({"name": new_n, "rating": new_r*400}).eq("id", int(curr['id'])).execute()
-                st.success("Updated!"); time.sleep(1); st.rerun()
-    with c3:
-        st.subheader("🗑️ Delete")
-        if p_edit and st.button("Delete"):
-            supabase.table("players").delete().eq("name", p_edit).eq("club_id", CLUB_ID).execute()
-            st.success("Deleted!"); st.rerun()
-    st.dataframe(df_players)
+            
+            # EDIT FORM
+            with st.form("edit_form"):
+                st.caption(f"Editing: {p_edit}")
+                new_n = st.text_input("Name", value=p_edit)
+                new_r = st.number_input("Rating", 1.0, 7.0, float(curr['rating'])/400, step=0.01)
+                
+                if st.form_submit_button("Update Player"):
+                    supabase.table("players").update({"name": new_n, "rating": new_r*400}).eq("id", int(curr['id'])).execute()
+                    st.success("Updated!")
+                    time.sleep(1)
+                    st.rerun()
+            
+            # DELETE BUTTON
+            st.write("---")
+            st.write("**Danger Zone**")
+            if st.button("🗑️ Delete Player", type="primary"):
+                supabase.table("players").delete().eq("id", int(curr['id'])).execute()
+                st.error(f"Deleted {p_edit}")
+                time.sleep(1)
+                st.rerun()
 
 elif sel == "📝 Match Log":
     st.header("📝 Match Log")
