@@ -354,6 +354,11 @@ if sel == "🏆 Leaderboards":
 elif sel == "🔍 Player Search":
         st.header("🕵️ Player Search & Audit")
 
+        # --- HELPER: CONVERT ELO TO JUPR ---
+        def elo_to_jupr(elo_score):
+            # STANDARD CONVERSION: Adjust this formula if your club uses different math!
+            return elo_score / 400.0 
+
         # 1. FETCH ACTIVE PLAYERS
         players_response = supabase.table("players").select("id, name, rating").eq("active", True).execute()
         players_df = pd.DataFrame(players_response.data)
@@ -369,68 +374,66 @@ elif sel == "🔍 Player Search":
             p_id = int(selected_player['id'])
             
             # --- TOP METRICS ---
+            # Calculate the display rating
+            raw_elo = selected_player['rating']
+            display_rating = elo_to_jupr(raw_elo)
+
             col1, col2 = st.columns(2)
             col1.metric("Player Name", selected_player['name'])
-            col2.metric("Current JUPR", selected_player['rating'])
+            # Display converted JUPR (e.g., 4.89) instead of raw Elo (1957)
+            col2.metric("Current JUPR", f"{display_rating:.2f}")
             
-            # 2. FETCH MATCH HISTORY
-            response = supabase.table("matches").select("*").or_(f"player1_id.eq.{p_id},player2_id.eq.{p_id},player3_id.eq.{p_id},player4_id.eq.{p_id}").order("match_date", desc=True).execute()
+            # 2. FETCH MATCH HISTORY (Using correct t1_p1 columns)
+            response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("match_date", desc=True).execute()
             matches_data = response.data
 
             if not matches_data:
                 st.info("This player has no recorded matches yet.")
             else:
-                # --- NEW LOGIC: PARSE SCORE TO FIND WINNER ---
+                # --- LOGIC: PARSE SCORE & CALCULATE +/- ---
                 processed_matches = []
                 
                 for match in matches_data:
-                    # A. Figure out which team the selected player was on
-                    if match['player1_id'] == p_id or match['player2_id'] == p_id:
+                    # A. Identify Team
+                    if match['t1_p1'] == p_id or match['t1_p2'] == p_id:
                         my_team = 1
                     else:
                         my_team = 2
                     
-                    # B. Parse the Score (e.g., "11-9") to find the winner
+                    # B. Parse Score
                     score_text = str(match['score'])
-                    winner_team = 0 # Default to unknown
-                    
+                    winner_team = 0 
                     try:
-                        # Assumes format "11-9"
                         parts = score_text.split('-')
                         score1 = int(parts[0])
                         score2 = int(parts[1])
-                        
-                        if score1 > score2:
-                            winner_team = 1
-                        else:
-                            winner_team = 2
+                        if score1 > score2: winner_team = 1
+                        else: winner_team = 2
                     except:
-                        # If score format is weird (e.g. "Win", "Forfeit"), we can't guess.
                         pass
 
-                    # C. Determine +/- Sign
+                    # C. Determine +/- Sign for RAW ELO points
                     raw_change = match['elo_change']
                     
                     if winner_team == 0:
-                        # Fallback: if we can't read the score, assume positive to be safe
                         final_change = raw_change 
                     elif winner_team == my_team:
-                        final_change = abs(raw_change) # Ensure it's positive
+                        final_change = abs(raw_change)
                     else:
-                        final_change = -1 * abs(raw_change) # Ensure it's negative
+                        final_change = -1 * abs(raw_change)
 
                     processed_matches.append({
                         'Date': match['match_date'],
                         'Score': match['score'],
-                        'JUPR Change': final_change
+                        'JUPR Change': final_change # We keep this as raw points for the graph (easier to read)
                     })
 
-                # Create DataFrame
                 display_df = pd.DataFrame(processed_matches)
                 display_df['Date'] = pd.to_datetime(display_df['Date'])
 
-                # 4. THE "AUDITOR" GRAPH
-                st.subheader("JUPR Movement History")
+                # 4. THE GRAPH
+                st.subheader("Performance History")
+                st.caption("Points gained/lost per match (Raw Elo)")
                 
                 chart = alt.Chart(display_df.head(20)).mark_bar().encode(
                     x='Date',
