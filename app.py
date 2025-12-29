@@ -82,6 +82,8 @@ def load_data():
         try:
             p_response = supabase.table("players").select("*").eq("club_id", CLUB_ID).execute()
             df_players = pd.DataFrame(p_response.data)
+            # Add .eq("active", True) to your fetch queries
+            response = supabase.table("players").select("*").eq("active", True).execute()
             
             l_response = supabase.table("league_ratings").select("*").eq("club_id", CLUB_ID).execute()
             df_leagues = pd.DataFrame(l_response.data)
