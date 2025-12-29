@@ -381,8 +381,6 @@ elif sel == "🔍 Player Search":
             col2.metric("Current JUPR", f"{display_rating:.3f}")
             
             # 2. FETCH MATCH HISTORY
-            # Added 'id' to the select so we can use it as a tie-breaker for sorting
-            # We sort by date DESC, then ID DESC to ensure newest matches are truly first
             response = supabase.table("matches").select("*").or_(f"t1_p1.eq.{p_id},t1_p2.eq.{p_id},t2_p1.eq.{p_id},t2_p2.eq.{p_id}").order("date", desc=True).order("id", desc=True).execute()
             matches_data = response.data
 
@@ -435,33 +433,31 @@ elif sel == "🔍 Player Search":
                 display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce')
                 display_df = display_df.dropna(subset=['Date'])
 
-                # 1. Reverse the order so the graph goes Oldest -> Newest (Left to Right)
+                # 1. Reverse order for the graph (Oldest -> Newest)
                 graph_df = display_df.iloc[::-1].reset_index(drop=True)
                 
-                # 2. Create a "Match Sequence" column (1, 2, 3...)
-                # This ensures every match gets its own slot on the X-axis
+                # 2. Create Sequence
                 graph_df['Match Sequence'] = graph_df.index + 1
 
-                # 4. THE GRAPH (Sequential Axis)
+                # 4. THE GRAPH (Fixed Syntax)
                 st.subheader("Performance History")
                 st.caption("Rating change per match (Match-by-Match Sequence)")
                 
                 chart = alt.Chart(graph_df.tail(30)).mark_bar().encode(
-                    # X-AXIS CHANGE: Use 'Match Sequence' instead of 'Date'
                     x=alt.X('Match Sequence', axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                    y=alt.Y('JUPR Change', format='.3f'),
+                    # FIX: 'format' must be inside 'axis=alt.Axis()'
+                    y=alt.Y('JUPR Change', axis=alt.Axis(format='.3f')), 
                     color=alt.condition(
                         alt.datum['JUPR Change'] > 0,
                         alt.value("green"),
                         alt.value("red")
                     ),
-                    # Tooltip still shows the Date so you know when it happened
                     tooltip=['Match Sequence', 'Date', 'Score', alt.Tooltip('JUPR Change', format='.4f')]
                 ).interactive()
                 
                 st.altair_chart(chart, use_container_width=True)
 
-                # 5. DETAILED TABLE (Keep Newest First)
+                # 5. DETAILED TABLE
                 st.subheader("Match Log")
                 table_df = display_df.copy()
                 table_df['Date'] = table_df['Date'].dt.strftime('%Y-%m-%d')
