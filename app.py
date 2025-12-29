@@ -4,6 +4,7 @@ from supabase import create_client, Client
 import time
 from datetime import datetime
 import re
+import altair as alt
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
@@ -351,35 +352,106 @@ if sel == "🏆 Leaderboards":
     else: st.info("No data.")
 
 elif sel == "🔍 Player Search":
-    st.header("🔍 Player History")
-    p = st.selectbox("Search", [""] + sorted(df_players['name']))
-    if p:
-        p_row = df_players[df_players['name'] == p]
-        if not p_row.empty:
-            st.metric("Current JUPR", f"{(float(p_row.iloc[0]['rating'])/400):.3f}")
+        st.header("🕵️ Player Search & Audit")
 
-        if not df_matches.empty:
-            mask = (df_matches['p1'] == p) | (df_matches['p2'] == p) | (df_matches['p3'] == p) | (df_matches['p4'] == p)
-            h = df_matches[mask].copy()
-            if not h.empty:
-                def get_snapshot(r):
-                    val = 0
-                    if p == r['p1']: val = r.get('t1_p1_r', 0)
-                    elif p == r['p2']: val = r.get('t1_p2_r', 0)
-                    elif p == r['p3']: val = r.get('t2_p1_r', 0)
-                    elif p == r['p4']: val = r.get('t2_p2_r', 0)
-                    if val is None or pd.isna(val): return 0.0
-                    return float(val)
+        # 1. FETCH ACTIVE PLAYERS
+        players_response = supabase.table("players").select("id, name, rating").eq("active", True).execute()
+        players_df = pd.DataFrame(players_response.data)
+
+        if players_df.empty:
+            st.warning("No active players found.")
+        else:
+            # Dropdown
+            player_names = sorted(players_df['name'].tolist())
+            selected_name = st.selectbox("Select a Player:", player_names)
+
+            selected_player = players_df[players_df['name'] == selected_name].iloc[0]
+            p_id = int(selected_player['id'])
+            
+            # --- TOP METRICS ---
+            col1, col2 = st.columns(2)
+            col1.metric("Player Name", selected_player['name'])
+            col2.metric("Current JUPR", selected_player['rating'])
+            
+            # 2. FETCH MATCH HISTORY
+            response = supabase.table("matches").select("*").or_(f"player1_id.eq.{p_id},player2_id.eq.{p_id},player3_id.eq.{p_id},player4_id.eq.{p_id}").order("match_date", desc=True).execute()
+            matches_data = response.data
+
+            if not matches_data:
+                st.info("This player has no recorded matches yet.")
+            else:
+                # --- NEW LOGIC: PARSE SCORE TO FIND WINNER ---
+                processed_matches = []
                 
-                if 't1_p1_r' in h.columns:
-                    h['Rating Before'] = h.apply(get_snapshot, axis=1).apply(lambda x: f"{(x/400):.3f}" if x > 0 else "-")
+                for match in matches_data:
+                    # A. Figure out which team the selected player was on
+                    if match['player1_id'] == p_id or match['player2_id'] == p_id:
+                        my_team = 1
+                    else:
+                        my_team = 2
+                    
+                    # B. Parse the Score (e.g., "11-9") to find the winner
+                    score_text = str(match['score'])
+                    winner_team = 0 # Default to unknown
+                    
+                    try:
+                        # Assumes format "11-9"
+                        parts = score_text.split('-')
+                        score1 = int(parts[0])
+                        score2 = int(parts[1])
+                        
+                        if score1 > score2:
+                            winner_team = 1
+                        else:
+                            winner_team = 2
+                    except:
+                        # If score format is weird (e.g. "Win", "Forfeit"), we can't guess.
+                        pass
+
+                    # C. Determine +/- Sign
+                    raw_change = match['elo_change']
+                    
+                    if winner_team == 0:
+                        # Fallback: if we can't read the score, assume positive to be safe
+                        final_change = raw_change 
+                    elif winner_team == my_team:
+                        final_change = abs(raw_change) # Ensure it's positive
+                    else:
+                        final_change = -1 * abs(raw_change) # Ensure it's negative
+
+                    processed_matches.append({
+                        'Date': match['match_date'],
+                        'Score': match['score'],
+                        'JUPR Change': final_change
+                    })
+
+                # Create DataFrame
+                display_df = pd.DataFrame(processed_matches)
+                display_df['Date'] = pd.to_datetime(display_df['Date'])
+
+                # 4. THE "AUDITOR" GRAPH
+                st.subheader("JUPR Movement History")
                 
-                h['Result'] = h.apply(lambda x: "✅ Win" if (p in [x['p1'], x['p2']] and x['score_t1']>x['score_t2']) or (p in [x['p3'], x['p4']] and x['score_t2']>x['score_t1']) else "❌ Loss", axis=1)
+                chart = alt.Chart(display_df.head(20)).mark_bar().encode(
+                    x='Date',
+                    y='JUPR Change',
+                    color=alt.condition(
+                        alt.datum['JUPR Change'] > 0,
+                        alt.value("green"),
+                        alt.value("red")
+                    ),
+                    tooltip=['Date', 'Score', 'JUPR Change']
+                ).interactive()
                 
-                cols = ['date', 'league', 'Result', 'score_t1', 'score_t2', 'p1', 'p2', 'p3', 'p4']
-                if 'Rating Before' in h.columns: cols.insert(2, 'Rating Before')
-                
-                st.dataframe(h[cols], use_container_width=True, hide_index=True)
+                st.altair_chart(chart, use_container_width=True)
+
+                # 5. DETAILED TABLE
+                st.subheader("Match Log")
+                st.dataframe(
+                    display_df[['Date', 'Score', 'JUPR Change']], 
+                    use_container_width=True,
+                    hide_index=True
+                )
 
 elif sel == "🏟️ League Manager":
     st.header("🏟️ League Manager")
