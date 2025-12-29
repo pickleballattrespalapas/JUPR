@@ -829,7 +829,9 @@ elif sel == "👥 Player Editor":
             st.write("---")
             st.write("**Danger Zone**")
             if st.button("🗑️ Delete Player", type="primary"):
-                supabase.table("players").delete().eq("id", int(curr['id'])).execute()
+                # The new soft-delete way
+                supabase.table("players").update({"active": False}).eq("id", int(curr['id'])).execute()
+                st.success(f"Player {curr['name']} has been deactivated.")
                 st.error(f"Deleted {p_edit}")
                 time.sleep(1)
                 st.rerun()
