@@ -44,9 +44,9 @@ DEFAULT_K_FACTOR = 32
 CLUB_ID = "tres_palapas"
 
 # --- MAGIC LINK LOGIN ---
-query_params = st.query_params
-if "admin_key" in query_params:
-    if str(query_params["admin_key"]) == st.secrets["supabase"]["admin_password"]:
+admin_key = qp_get("admin_key", "")
+if admin_key:
+    if admin_key == st.secrets["supabase"]["admin_password"]:
         st.session_state.admin_logged_in = True
 
 # --- QUERY PARAM HELPERS / DEEP LINKS ---
@@ -450,7 +450,9 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
         key = (pid, league_name)
         if key in island_updates:
             return
-        island_updates[key] = {"r": float(get_island_r(pid, league_name)), "w": 0, "l": 0, "mp": 0}
+        start = float(get_island_r(pid, league_name))  # BEFORE this batch applies changes
+        island_updates[key] = {"r": start, "start": start, "w": 0, "l": 0, "mp": 0}
+
 
     for m in match_list:
         # map names -> ids
@@ -587,21 +589,22 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
 
             if existing.data:
                 cur = existing.data[0]
-                # accumulate totals
+
                 payload["wins"] += int(cur.get("wins", 0) or 0)
                 payload["losses"] += int(cur.get("losses", 0) or 0)
                 payload["matches_played"] += int(cur.get("matches_played", 0) or 0)
 
-                # preserve starting_rating if present; otherwise set to first known rating (fallback to current overall)
+                # preserve starting_rating if present, otherwise use the true league-entry snapshot we captured
                 if cur.get("starting_rating") is not None:
                     payload["starting_rating"] = float(cur["starting_rating"])
                 else:
-                    payload["starting_rating"] = float(get_overall_r(int(pid)))
+                    payload["starting_rating"] = float(island_updates[(pid, league_name)].get("start", get_overall_r(int(pid))))
 
                 supabase.table("league_ratings").update(payload).eq("id", int(cur["id"])).execute()
             else:
-                payload["starting_rating"] = float(get_overall_r(int(pid)))
+                payload["starting_rating"] = float(island_updates[(pid, league_name)].get("start", get_overall_r(int(pid))))
                 supabase.table("league_ratings").insert(payload).execute()
+
 
 # -------------------------
 # MAIN APP LOAD
@@ -1141,7 +1144,8 @@ if sel == "🏟️ League Manager":
 
                     final_roster = pd.DataFrame(final_assignments)
 
-                    final_roster = final_roster.sort_values(["court", "name"]).copy()
+                    final_roster = final_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
+
                     final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
 
                     st.session_state.ladder_live_roster = final_roster[["name", "rating", "court", "slot"]].copy()
@@ -1168,20 +1172,24 @@ if sel == "🏟️ League Manager":
                 use_container_width=True,
             )
 
-         if st.button("✅ Start Event (Round 1)"):
-            final_roster = edited_roster.copy()
-            final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
-            final_roster = final_roster.sort_values("court")
+            if st.button("✅ Start Event (Round 1)"):
+                final_roster = edited_roster.copy()
+                final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
 
-            new_sizes = final_roster["court"].value_counts().sort_index().tolist()
-            st.session_state.ladder_court_sizes = new_sizes
-            st.session_state.ladder_live_roster = final_roster[["name", "rating", "court"]].copy()
+                # IMPORTANT: enforce stable ordering + slots so schedule is deterministic
+                final_roster = final_roster.sort_values(["court", "name"]).copy()
+                final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
 
-            st.session_state.ladder_round_num = 1
-            st.session_state.ladder_state = "PLAY_ROUND"
-            if "current_schedule" in st.session_state:
-                del st.session_state.current_schedule
-            st.rerun()
+                new_sizes = final_roster["court"].value_counts().sort_index().tolist()
+                st.session_state.ladder_court_sizes = new_sizes
+                st.session_state.ladder_live_roster = final_roster[["name", "rating", "court", "slot"]].copy()
+
+                st.session_state.ladder_round_num = 1
+                st.session_state.ladder_state = "PLAY_ROUND"
+                if "current_schedule" in st.session_state:
+                    del st.session_state.current_schedule
+                st.rerun()
+
 
         # ---- 4) PLAY ROUND ----
         if st.session_state.ladder_state == "PLAY_ROUND":
