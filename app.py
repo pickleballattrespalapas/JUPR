@@ -1059,18 +1059,24 @@ if sel == "🏟️ League Manager":
                 "Total Rounds to Play",
                 1, 20,
                 value=int(st.session_state.get("ladder_total_rounds", 5)),
-                key="ladder_total_rounds",
+                step=1,
+                key="ladder_total_rounds_input",
             )
-            raw = st.text_area("Paste Player List (one per line)", height=150, key="ladder_raw")
+
+            raw = st.text_area("Paste Player List (one per line)", height=150, key="ladder_raw_input")
+
 
 
             if st.button("Analyze & Seed"):
                 st.session_state.saved_ladder_lg = st.session_state.ladder_lg
                 st.session_state.saved_ladder_wk = st.session_state.ladder_wk
-                st.session_state.ladder_total_rounds = int(st.session_state.ladder_total_rounds)
 
-                raw = st.session_state.ladder_raw or ""
-                parsed = [x.strip() for x in raw.replace("\n", ",").split(",") if x.strip()]
+                # ✅ store the rounds value from the widget into your real variable
+                st.session_state.ladder_total_rounds = int(st.session_state.get("ladder_total_rounds_input", 5))
+
+                raw_txt = st.session_state.get("ladder_raw_input", "") or ""
+                parsed = [x.strip() for x in raw_txt.replace("\n", ",").split(",") if x.strip()]
+
                 
                 roster_data = []
                 new_ps = []
