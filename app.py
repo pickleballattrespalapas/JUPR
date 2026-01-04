@@ -1835,135 +1835,97 @@ elif sel == "📝 Match Log":
             view_df = view_df[view_df["id"] == int(id_filter)]
 
         st.divider()
-    st.subheader("🔎 Find Duplicate Matches")
 
-    import math
+        # -------------------------
+        # DUPLICATE SCANNER
+        # -------------------------
+        st.subheader("🔎 Find Duplicate Matches")
+        st.caption("Detects duplicates even if teammates or teams are swapped (scores normalized too).")
 
-def to_int_or_neg1(x):
-    """Convert to int if possible; return -1 for None/NaN/blank/bad values."""
-    try:
-        if x is None:
-            return -1
-        # pandas NaN check (works for floats + numpy/pandas NaN)
-        if isinstance(x, float) and math.isnan(x):
-            return -1
-        s = str(x).strip()
-        if s == "" or s.lower() in ("nan", "none", "null"):
-            return -1
-        return int(float(s))  # handles "12.0" safely too
-    except Exception:
-        return -1
+        dup_scan_df = view_df.copy()
 
-def canonical_dup_key(row):
-    """
-    Canonical key that matches duplicates even if:
-    - players inside a team are swapped
-    - team1/team2 are swapped (scores swapped too)
-    """
-    a1 = to_int_or_neg1(row.get("t1_p1"))
-    a2 = to_int_or_neg1(row.get("t1_p2"))
-    b1 = to_int_or_neg1(row.get("t2_p1"))
-    b2 = to_int_or_neg1(row.get("t2_p2"))
-
-    teamA = sorted([a1, a2])
-    teamB = sorted([b1, b2])
-
-    s1 = to_int_or_neg1(row.get("score_t1"))
-    s2 = to_int_or_neg1(row.get("score_t2"))
-
-    # normalize team ordering; if swapped, swap scores so key stays identical
-    if tuple(teamB) < tuple(teamA):
-        teamA, teamB = teamB, teamA
-        s1, s2 = s2, s1
-
-    league = str(row.get("league", "") or "").strip()
-    week = str(row.get("week_tag", "") or "").strip()
-    mtype = str(row.get("match_type", "") or "").strip()
-
-    return f"{CLUB_ID}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
-
-
-    # Use the already loaded df_matches/view_df if you can; otherwise pull more rows
-    # (view_df might be filtered, which is often what you want)
-    dup_scan_df = view_df.copy()
-
-    if dup_scan_df.empty:
-        st.info("No matches to scan.")
-    else:
-        # Build duplicate keys
-        dup_scan_df["dup_key"] = [canonical_dup_key(r) for _, r in dup_scan_df.iterrows()]
-
-        # Find keys with count > 1
-        counts = dup_scan_df["dup_key"].value_counts()
-        dup_keys = counts[counts > 1].index.tolist()
-
-        if not dup_keys:
-            st.success("✅ No duplicates found in the current view/filter.")
+        if dup_scan_df.empty:
+            st.info("No matches to scan.")
         else:
-            st.error(f"⚠️ Found {len(dup_keys)} duplicate groups.")
+            dup_scan_df["dup_key"] = [
+                canonical_dup_key(r, CLUB_ID) for _, r in dup_scan_df.iterrows()
+            ]
 
-            dup_only = dup_scan_df[dup_scan_df["dup_key"].isin(dup_keys)].copy()
+            counts = dup_scan_df["dup_key"].value_counts()
+            dup_keys = counts[counts > 1].index.tolist()
 
-            # rank duplicates within each group so we can keep the oldest
-            dup_only = dup_only.sort_values(["dup_key", "id"], ascending=[True, True])
-            dup_only["dup_rank"] = dup_only.groupby("dup_key").cumcount() + 1
-            dup_only["dup_count"] = dup_only.groupby("dup_key")["id"].transform("count")
+            if not dup_keys:
+                st.success("✅ No duplicates found in the current view/filter.")
+            else:
+                st.error(f"⚠️ Found {len(dup_keys)} duplicate groups.")
 
-            # Summary table (one row per dup group)
-            summary = (
-                dup_only.groupby("dup_key")
-                .agg(
-                    dup_count=("id", "count"),
-                    keep_id=("id", "min"),
-                    delete_ids=("id", lambda x: ", ".join(map(str, sorted(x.tolist())[1:]))),
-                    league=("league", "first"),
-                    week_tag=("week_tag", "first"),
-                    match_type=("match_type", "first"),
+                dup_only = dup_scan_df[dup_scan_df["dup_key"].isin(dup_keys)].copy()
+                dup_only = dup_only.sort_values(["dup_key", "id"], ascending=[True, True])
+                dup_only["dup_rank"] = dup_only.groupby("dup_key").cumcount() + 1
+                dup_only["dup_count"] = dup_only.groupby("dup_key")["id"].transform("count")
+
+                summary = (
+                    dup_only.groupby("dup_key")
+                    .agg(
+                        dup_count=("id", "count"),
+                        keep_id=("id", "min"),
+                        delete_ids=("id", lambda x: ", ".join(map(str, sorted(x.tolist())[1:]))),
+                        league=("league", "first"),
+                        week_tag=("week_tag", "first"),
+                        match_type=("match_type", "first"),
+                    )
+                    .reset_index(drop=True)
+                    .sort_values(["league", "week_tag", "match_type"])
                 )
-                .reset_index(drop=True)
-                .sort_values(["league", "week_tag", "match_type"])
-            )
 
-            st.write("### Duplicate Groups (keep oldest, delete rest)")
-            st.dataframe(summary, use_container_width=True, hide_index=True)
+                st.write("### Duplicate Groups (keep oldest, delete rest)")
+                st.dataframe(summary, use_container_width=True, hide_index=True)
 
-            st.write("### Duplicate Rows (detailed)")
-            show_cols = [c for c in [
-                "id", "date", "league", "week_tag", "match_type",
-                "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2",
-                "dup_rank", "dup_count"
-            ] if c in dup_only.columns]
-            st.dataframe(dup_only[show_cols], use_container_width=True, hide_index=True)
+                st.write("### Duplicate Rows (detailed)")
+                show_cols = [c for c in [
+                    "id", "date", "league", "week_tag", "match_type",
+                    "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2",
+                    "dup_rank", "dup_count"
+                ] if c in dup_only.columns]
+                st.dataframe(dup_only[show_cols], use_container_width=True, hide_index=True)
 
-            # Delete button
-            delete_mode = st.radio(
-                "Delete mode",
-                ["Delete duplicates (keep oldest in each group)", "I’ll delete manually"],
-                horizontal=True,
-            )
+                delete_mode = st.radio(
+                    "Delete mode",
+                    ["Delete duplicates (keep oldest in each group)", "I’ll delete manually"],
+                    horizontal=True,
+                )
 
-            if delete_mode == "Delete duplicates (keep oldest in each group)":
-                # everything rank > 1 gets deleted
-                ids_to_delete = dup_only[dup_only["dup_rank"] > 1]["id"].astype(int).tolist()
+                if delete_mode == "Delete duplicates (keep oldest in each group)":
+                    ids_to_delete = dup_only[dup_only["dup_rank"] > 1]["id"].astype(int).tolist()
+                    st.warning(
+                        f"Ready to delete {len(ids_to_delete)} duplicated match rows "
+                        f"(keeping the oldest copy per group)."
+                    )
 
-                st.warning(f"Ready to delete {len(ids_to_delete)} duplicated match rows (keeping the oldest copy per group).")
+                    if st.button("🗑️ Delete duplicates now", type="primary"):
+                        if ids_to_delete:
+                            sb_retry(lambda: (
+                                supabase.table("matches")
+                                .delete()
+                                .eq("club_id", CLUB_ID)
+                                .in_("id", ids_to_delete)
+                                .execute()
+                            ))
+                            st.success("Deleted duplicates. Now run ALL (Full System Reset) replay.")
+                            time.sleep(1)
+                            st.rerun()
 
-                if st.button("🗑️ Delete duplicates now", type="primary"):
-                    if ids_to_delete:
-                        sb_retry(lambda: (
-                            supabase.table("matches")
-                            .delete()
-                            .eq("club_id", CLUB_ID)
-                            .in_("id", ids_to_delete)
-                            .execute()
-                        ))
-                        st.success("Deleted duplicates. Now run ALL (Full System Reset) replay.")
-                        time.sleep(1)
-                        st.rerun()
+        st.divider()
 
-        
+        # -------------------------
+        # EXISTING BULK DELETE
+        # -------------------------
         st.write("### 🗑️ Bulk Delete (first 500 rows shown)")
-        edit_cols = [c for c in ["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"] if c in view_df.columns]
+        edit_cols = [c for c in [
+            "id", "date", "league", "match_type", "elo_delta",
+            "p1", "p2", "p3", "p4", "score_t1", "score_t2"
+        ] if c in view_df.columns]
+
         edit_df = view_df.head(500)[edit_cols].copy()
         edit_df.insert(0, "Delete", False)
 
@@ -1977,10 +1939,14 @@ def canonical_dup_key(row):
         to_delete = edited_log[edited_log["Delete"] == True]
         if not to_delete.empty:
             if st.button(f"Delete {len(to_delete)} Matches"):
-                supabase.table("matches").delete().in_("id", to_delete["id"].astype(int).tolist()).eq("club_id", CLUB_ID).execute()
+                supabase.table("matches").delete().in_(
+                    "id", to_delete["id"].astype(int).tolist()
+                ).eq("club_id", CLUB_ID).execute()
                 st.success("Deleted!")
                 time.sleep(1)
                 st.rerun()
+
+
 
 # -------------------------
 # PAGE: ADMIN TOOLS
