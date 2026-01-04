@@ -1132,6 +1132,70 @@ def move_within_court(roster_df: pd.DataFrame, player: str, new_slot: int) -> pd
 
     return normalize_slots(df)
 
+def compress_courts(roster_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Re-map court numbers to be contiguous 1..N (fixes gaps if a court becomes empty).
+    """
+    df = roster_df.copy()
+    courts = sorted(df["court"].astype(int).unique().tolist())
+    mapping = {old: i + 1 for i, old in enumerate(courts)}
+    df["court"] = df["court"].astype(int).map(mapping)
+    return normalize_slots(df)
+
+def move_player_to_court(roster_df: pd.DataFrame, player: str, target_court: int, target_slot: int = 1) -> pd.DataFrame:
+    """
+    Move a player to a different court and insert them at target_slot within that court.
+    Court sizes will change accordingly. Slots are normalized after.
+    """
+    df = roster_df.copy()
+    if player not in df["name"].astype(str).tolist():
+        return df
+
+    target_court = int(target_court)
+    target_slot = int(target_slot)
+
+    # Remove player row
+    row = df[df["name"] == player].iloc[0].copy()
+    df = df[df["name"] != player].copy()
+
+    # Ensure courts/slots are stable before insert
+    df = normalize_slots(df)
+
+    # Build target court name order, insert player
+    target_names = df[df["court"] == target_court].sort_values("slot")["name"].tolist()
+    target_slot = max(1, min(target_slot, len(target_names) + 1))
+    target_names.insert(target_slot - 1, player)
+
+    # Apply target court ordering
+    for i, nm in enumerate(target_names, start=1):
+        df.loc[(df["court"] == target_court) & (df["name"] == nm), "slot"] = i
+
+    # Add player back on target court (if it wasn’t already in df)
+    if player not in df["name"].tolist():
+        df = pd.concat([df, pd.DataFrame([{
+            "name": player,
+            "rating": float(row.get("rating", 1200.0)),
+            "court": target_court,
+            "slot": target_slot
+        }])], ignore_index=True)
+
+    # Normalize + compress (handles empty courts)
+    df = normalize_slots(df)
+    df = compress_courts(df)
+    return df
+
+def sync_ladder_court_sizes_from_roster(roster_df: pd.DataFrame):
+    """
+    Update ladder_court_sizes to match current roster distribution.
+    Assumes courts are contiguous (use compress_courts first).
+    """
+    courts = sorted(roster_df["court"].astype(int).unique().tolist())
+    sizes = []
+    for c in courts:
+        sizes.append(int((roster_df["court"].astype(int) == c).sum()))
+    st.session_state.ladder_court_sizes = sizes
+
+
 # -------------------------
 # PAGE: LEAGUE MANAGER
 # -------------------------
@@ -1381,32 +1445,81 @@ if sel == "🏟️ League Manager":
 
             with st.expander("✏️ Quick court edits (before scoring)", expanded=False):
                 roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
+                roster_df = compress_courts(roster_df)  # ✅ keep courts contiguous
                 names_now = roster_df["name"].tolist()
 
+                # -------------------------
+                # A) Swap players (keeps court sizes constant)
+                # -------------------------
                 cA, cB, cC = st.columns([2, 2, 1])
                 a = cA.selectbox("Swap Player A", names_now, key=f"swap_a_r{current_r}")
                 b = cB.selectbox("with Player B", names_now, key=f"swap_b_r{current_r}", index=1 if len(names_now) > 1 else 0)
                 if cC.button("Swap", key=f"swap_btn_r{current_r}"):
-                    st.session_state.ladder_live_roster = swap_players(roster_df, a, b)
+                    st.session_state.ladder_live_roster = compress_courts(swap_players(roster_df, a, b))
+                    sync_ladder_court_sizes_from_roster(st.session_state.ladder_live_roster)
                     if "current_schedule" in st.session_state:
                         del st.session_state.current_schedule
                     st.rerun()
 
                 st.divider()
 
+                # -------------------------
+                # B) Reorder within court (does NOT change court sizes)
+                # -------------------------
                 c1, c2, c3 = st.columns([2, 2, 1])
                 court_list = sorted(roster_df["court"].unique().tolist())
                 chosen_court = c1.selectbox("Court to reorder", court_list, key=f"re_ct_r{current_r}")
                 court_players = roster_df[roster_df["court"] == int(chosen_court)].sort_values("slot")["name"].tolist()
 
                 p = c2.selectbox("Player", court_players, key=f"re_p_r{current_r}")
-                new_pos = c3.number_input("New position", min_value=1, max_value=max(1, len(court_players)), value=1, step=1, key=f"re_pos_r{current_r}")
+                new_pos = c3.number_input(
+                    "New position",
+                    min_value=1,
+                    max_value=max(1, len(court_players)),
+                    value=1,
+                    step=1,
+                    key=f"re_pos_r{current_r}",
+                )
 
                 if st.button("Apply reorder", key=f"re_btn_r{current_r}"):
-                    st.session_state.ladder_live_roster = move_within_court(roster_df, p, int(new_pos))
+                    st.session_state.ladder_live_roster = compress_courts(move_within_court(roster_df, p, int(new_pos)))
+                    sync_ladder_court_sizes_from_roster(st.session_state.ladder_live_roster)
                     if "current_schedule" in st.session_state:
                         del st.session_state.current_schedule
                     st.rerun()
+
+                st.divider()
+
+                # -------------------------
+                # C) Move player to a DIFFERENT court (changes court sizes ✅)
+                # -------------------------
+                st.markdown("#### 🔁 Move player to a different court (fix court sizes)")
+
+                m1, m2, m3, m4 = st.columns([2, 1, 1, 1])
+                mv_player = m1.selectbox("Player to move", names_now, key=f"mv_p_r{current_r}")
+
+                # choose target court from existing courts
+                target_court = m2.selectbox("To court", court_list, key=f"mv_ct_r{current_r}")
+
+                # position inside target court
+                target_names = roster_df[roster_df["court"] == int(target_court)].sort_values("slot")["name"].tolist()
+                target_pos = m3.number_input(
+                    "Insert pos",
+                    min_value=1,
+                    max_value=max(1, len(target_names) + 1),
+                    value=1,
+                    step=1,
+                    key=f"mv_pos_r{current_r}",
+                )
+
+                if m4.button("Move", key=f"mv_btn_r{current_r}"):
+                    new_df = move_player_to_court(roster_df, mv_player, int(target_court), int(target_pos))
+                    st.session_state.ladder_live_roster = new_df
+                    sync_ladder_court_sizes_from_roster(st.session_state.ladder_live_roster)
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
+                    st.rerun()
+
 
             if "current_schedule" not in st.session_state:
                 schedule = []
