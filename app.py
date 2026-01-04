@@ -87,6 +87,28 @@ else:
             st.session_state["preselect_league"] = DEEP_LEAGUE
         st.session_state.deep_link_applied = True
 
+def build_standings_link(league_name: str, public: bool = True) -> str:
+    """
+    Returns a shareable URL for public leaderboards, pre-selected to a league.
+
+    Requires:
+      - st.secrets["PUBLIC_BASE_URL"] (recommended), e.g. "https://juprleagues.com"
+        If missing, it falls back to a relative URL like "?page=leaderboards&league=..."
+    """
+    try:
+        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
+    except Exception:
+        base = ""
+
+    params = {
+        "page": "leaderboards",
+        "league": str(league_name),
+    }
+    if public:
+        params["public"] = "1"
+
+    q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
+    return f"{base}/?{q}" if base else f"?{q}"
 
 
 
@@ -111,26 +133,6 @@ def sync_url_from_nav(selected_nav: str):
         st.query_params["page"] = NAV_TO_PAGE.get(selected_nav, "leaderboards")
     except Exception:
         pass
-
-def apply_deeplink_once():
-    """If URL has page=..., set the initial sidebar selection ONCE per session."""
-    if "deep_link_applied" not in st.session_state:
-        st.session_state.deep_link_applied = False
-
-    if st.session_state.deep_link_applied:
-        return
-
-    page = qp_get("page", "").lower().strip()
-    if page in PAGE_TO_NAV:
-        st.session_state["main_nav"] = PAGE_TO_NAV[page]
-
-    # league deep link (your existing behavior)
-    league = qp_get("league", "").strip()
-    if league:
-        st.session_state["preselect_league"] = league
-
-    st.session_state.deep_link_applied = True
-
 
 # --- DATABASE CONNECTION ---
 @st.cache_resource
