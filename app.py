@@ -1055,16 +1055,23 @@ if sel == "🏟️ League Manager":
 
             lg_select = st.selectbox("Select League", opts, key="ladder_lg")
             week_select = st.selectbox("Week", [f"Week {i}" for i in range(1, 13)] + ["Playoffs"], key="ladder_wk")
-            num_rounds = st.number_input("Total Rounds to Play", 1, 20, 5)
+            num_rounds = st.number_input(
+                "Total Rounds to Play",
+                1, 20,
+                value=int(st.session_state.get("ladder_total_rounds", 5)),
+                key="ladder_total_rounds",
+            )
+            raw = st.text_area("Paste Player List (one per line)", height=150, key="ladder_raw")
 
-            raw = st.text_area("Paste Player List (one per line)", height=150)
 
-            if st.button("Analyze & Seed"):
-                st.session_state.saved_ladder_lg = lg_select
-                st.session_state.saved_ladder_wk = week_select
-                st.session_state.ladder_total_rounds = int(num_rounds)
+                if st.button("Analyze & Seed"):
+                st.session_state.saved_ladder_lg = st.session_state.ladder_lg
+                st.session_state.saved_ladder_wk = st.session_state.ladder_wk
+                st.session_state.ladder_total_rounds = int(st.session_state.ladder_total_rounds)
 
+                raw = st.session_state.ladder_raw or ""
                 parsed = [x.strip() for x in raw.replace("\n", ",").split(",") if x.strip()]
+                
                 roster_data = []
                 new_ps = []
 
@@ -1098,6 +1105,10 @@ if sel == "🏟️ League Manager":
 
         # ---- 2) REVIEW / NEW PLAYERS ----
         if st.session_state.ladder_state == "REVIEW_ROSTER":
+            c_back, _ = st.columns([1, 5])
+            if c_back.button("⬅️ Back (edit league/week/rounds/roster)"):
+                st.session_state.ladder_state = "SETUP"
+                st.rerun()
             st.markdown("#### Step 2: Confirm Roster")
 
             if st.session_state.ladder_temp_new:
@@ -1155,11 +1166,16 @@ if sel == "🏟️ League Manager":
 
         # ---- 3) CONFIG COURTS ----
         if st.session_state.ladder_state == "CONFIG_COURTS":
+            c_back, _ = st.columns([1, 5])
+            if c_back.button("⬅️ Back (edit roster)"):
+                st.session_state.ladder_state = "REVIEW_ROSTER"
+                st.rerun()
+
             st.markdown("#### Step 3: Configure Courts")
             total_p = len(st.session_state.ladder_roster)
             st.info(f"Total Players: {total_p}")
 
-            num_courts = st.number_input("Number of Courts", 1, 10, 3)
+            num_courts = st.number_input("Number of Courts", 1, 10, key="ladder_num_courts", value=st.session_state.get("ladder_num_courts", 3))
             court_sizes = []
             cols = st.columns(int(num_courts))
             for i in range(int(num_courts)):
@@ -1193,6 +1209,14 @@ if sel == "🏟️ League Manager":
 
         # ---- 3.5) CONFIRM START ----
         if st.session_state.ladder_state == "CONFIRM_START":
+            c_back, _ = st.columns([1, 5])
+            if c_back.button("⬅️ Back (edit courts)"):
+        # optional: clear preview so it forces a fresh preview next time
+                if "ladder_live_roster" in st.session_state:
+                    del st.session_state.ladder_live_roster
+                st.session_state.ladder_state = "CONFIG_COURTS"
+                st.rerun()
+
             st.markdown("#### Step 4: Confirm Starting Positions")
             st.markdown("Verify the court assignments. Ratings shown in **JUPR**.")
 
