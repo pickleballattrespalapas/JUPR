@@ -70,44 +70,23 @@ PAGE_MAP = {
 }
 
 # Apply deep-links ONLY once per session, otherwise it overrides sidebar clicks on every rerun
+# Apply deep-links ONLY once per session
 if "deep_link_applied" not in st.session_state:
     st.session_state.deep_link_applied = False
-    
-if not PUBLIC_MODE:
-    apply_deeplink_once()
 
 if PUBLIC_MODE:
     st.session_state.admin_logged_in = False
     st.session_state["main_nav"] = "🏆 Leaderboards"
-    st.markdown(
-        "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>", unsafe_allow_html=True)
     st.session_state.deep_link_applied = True
-
 else:
-    # Only set the nav from URL the FIRST time we load this session
-    if not st.session_state.deep_link_applied and DEEP_PAGE in PAGE_MAP:
-        st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
-    st.session_state.deep_link_applied = True
+    if not st.session_state.deep_link_applied:
+        if DEEP_PAGE in PAGE_MAP:
+            st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
+        if DEEP_LEAGUE:
+            st.session_state["preselect_league"] = DEEP_LEAGUE
+        st.session_state.deep_link_applied = True
 
-
-if DEEP_LEAGUE:
-    st.session_state["preselect_league"] = DEEP_LEAGUE
-
-def build_standings_link(league_name: str, public: bool = True) -> str:
-    base = ""
-    try:
-        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
-    except Exception:
-        base = ""
-
-    params = {"page": "leaderboards", "league": league_name}
-    if public:
-        params["public"] = "1"
-
-    q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
-    return f"{base}/?{q}" if base else f"?{q}"
 
 
 
