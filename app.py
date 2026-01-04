@@ -1834,6 +1834,116 @@ elif sel == "📝 Match Log":
         if id_filter > 0:
             view_df = view_df[view_df["id"] == int(id_filter)]
 
+        st.divider()
+    st.subheader("🔎 Find Duplicate Matches")
+
+    def canonical_dup_key(row):
+        """
+        Builds a canonical key so duplicates match even if:
+        - players inside a team are swapped
+        - team1/team2 are swapped (we normalize ordering and swap scores accordingly)
+        """
+        # pull ids
+        a1, a2 = row.get("t1_p1"), row.get("t1_p2")
+        b1, b2 = row.get("t2_p1"), row.get("t2_p2")
+
+        # sort within teams (None-safe)
+        teamA = sorted([int(a1) if a1 is not None else -1, int(a2) if a2 is not None else -1])
+        teamB = sorted([int(b1) if b1 is not None else -1, int(b2) if b2 is not None else -1])
+
+        s1 = int(row.get("score_t1", 0) or 0)
+        s2 = int(row.get("score_t2", 0) or 0)
+
+        # order teams consistently; if swapped, swap scores to match
+        if tuple(teamB) < tuple(teamA):
+            teamA, teamB = teamB, teamA
+            s1, s2 = s2, s1
+
+        league = str(row.get("league", "") or "").strip()
+        week = str(row.get("week_tag", "") or "").strip()
+        mtype = str(row.get("match_type", "") or "").strip()
+
+        return f"{CLUB_ID}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
+
+    # Use the already loaded df_matches/view_df if you can; otherwise pull more rows
+    # (view_df might be filtered, which is often what you want)
+    dup_scan_df = view_df.copy()
+
+    if dup_scan_df.empty:
+        st.info("No matches to scan.")
+    else:
+        # Build duplicate keys
+        dup_scan_df["dup_key"] = dup_scan_df.apply(canonical_dup_key, axis=1)
+
+        # Find keys with count > 1
+        counts = dup_scan_df["dup_key"].value_counts()
+        dup_keys = counts[counts > 1].index.tolist()
+
+        if not dup_keys:
+            st.success("✅ No duplicates found in the current view/filter.")
+        else:
+            st.error(f"⚠️ Found {len(dup_keys)} duplicate groups.")
+
+            dup_only = dup_scan_df[dup_scan_df["dup_key"].isin(dup_keys)].copy()
+
+            # rank duplicates within each group so we can keep the oldest
+            dup_only = dup_only.sort_values(["dup_key", "id"], ascending=[True, True])
+            dup_only["dup_rank"] = dup_only.groupby("dup_key").cumcount() + 1
+            dup_only["dup_count"] = dup_only.groupby("dup_key")["id"].transform("count")
+
+            # Summary table (one row per dup group)
+            summary = (
+                dup_only.groupby("dup_key")
+                .agg(
+                    dup_count=("id", "count"),
+                    keep_id=("id", "min"),
+                    delete_ids=("id", lambda x: ", ".join(map(str, sorted(x.tolist())[1:]))),
+                    league=("league", "first"),
+                    week_tag=("week_tag", "first"),
+                    match_type=("match_type", "first"),
+                )
+                .reset_index(drop=True)
+                .sort_values(["league", "week_tag", "match_type"])
+            )
+
+            st.write("### Duplicate Groups (keep oldest, delete rest)")
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+
+            st.write("### Duplicate Rows (detailed)")
+            show_cols = [c for c in [
+                "id", "date", "league", "week_tag", "match_type",
+                "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2",
+                "dup_rank", "dup_count"
+            ] if c in dup_only.columns]
+            st.dataframe(dup_only[show_cols], use_container_width=True, hide_index=True)
+
+            # Delete button
+            delete_mode = st.radio(
+                "Delete mode",
+                ["Delete duplicates (keep oldest in each group)", "I’ll delete manually"],
+                horizontal=True,
+            )
+
+            if delete_mode == "Delete duplicates (keep oldest in each group)":
+                # everything rank > 1 gets deleted
+                ids_to_delete = dup_only[dup_only["dup_rank"] > 1]["id"].astype(int).tolist()
+
+                st.warning(f"Ready to delete {len(ids_to_delete)} duplicated match rows (keeping the oldest copy per group).")
+
+                if st.button("🗑️ Delete duplicates now", type="primary"):
+                    if ids_to_delete:
+                        sb_retry(lambda: (
+                            supabase.table("matches")
+                            .delete()
+                            .eq("club_id", CLUB_ID)
+                            .in_("id", ids_to_delete)
+                            .execute()
+                        ))
+                        st.success("Deleted duplicates. Now run ALL (Full System Reset) replay.")
+                        time.sleep(1)
+                        st.rerun()
+
+        
         st.write("### 🗑️ Bulk Delete (first 500 rows shown)")
         edit_cols = [c for c in ["id", "date", "league", "match_type", "elo_delta", "p1", "p2", "p3", "p4", "score_t1", "score_t2"] if c in view_df.columns]
         edit_df = view_df.head(500)[edit_cols].copy()
