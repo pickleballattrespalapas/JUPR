@@ -690,6 +690,7 @@ if st.session_state.admin_logged_in:
     nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
+
 if not PUBLIC_MODE:
     sync_url_from_nav(sel)
 
