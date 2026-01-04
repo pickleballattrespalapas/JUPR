@@ -43,12 +43,6 @@ if "admin_logged_in" not in st.session_state:
 DEFAULT_K_FACTOR = 32
 CLUB_ID = "tres_palapas"
 
-# --- MAGIC LINK LOGIN ---
-admin_key = qp_get("admin_key", "")
-if admin_key:
-    if admin_key == st.secrets["supabase"]["admin_password"]:
-        st.session_state.admin_logged_in = True
-
 # --- QUERY PARAM HELPERS / DEEP LINKS ---
 def qp_get(key: str, default: str = "") -> str:
     """Streamlit query params can be str or list depending on version."""
@@ -59,6 +53,12 @@ def qp_get(key: str, default: str = "") -> str:
     if isinstance(v, list):
         return v[0] if v else default
     return str(v) if v is not None else default
+
+# --- MAGIC LINK LOGIN ---
+admin_key = qp_get("admin_key", "")
+if admin_key:
+    if admin_key == st.secrets["supabase"]["admin_password"]:
+        st.session_state.admin_logged_in = True
 
 PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
 DEEP_PAGE = qp_get("page", "").lower().strip()
