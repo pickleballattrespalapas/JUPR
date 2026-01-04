@@ -69,6 +69,13 @@ PAGE_MAP = {
     "faqs": "❓ FAQs",
 }
 
+# Apply deep-links ONLY once per session, otherwise it overrides sidebar clicks on every rerun
+if "deep_link_applied" not in st.session_state:
+    st.session_state.deep_link_applied = False
+    
+if not PUBLIC_MODE:
+    apply_deeplink_once()
+
 if PUBLIC_MODE:
     st.session_state.admin_logged_in = False
     st.session_state["main_nav"] = "🏆 Leaderboards"
@@ -76,9 +83,14 @@ if PUBLIC_MODE:
         "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
         unsafe_allow_html=True,
     )
+    st.session_state.deep_link_applied = True
+
 else:
-    if DEEP_PAGE in PAGE_MAP:
+    # Only set the nav from URL the FIRST time we load this session
+    if not st.session_state.deep_link_applied and DEEP_PAGE in PAGE_MAP:
         st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
+    st.session_state.deep_link_applied = True
+
 
 if DEEP_LEAGUE:
     st.session_state["preselect_league"] = DEEP_LEAGUE
@@ -97,6 +109,48 @@ def build_standings_link(league_name: str, public: bool = True) -> str:
     q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
     return f"{base}/?{q}" if base else f"?{q}"
 
+
+
+# --- NAV <-> URL SYNC HELPERS ---
+NAV_TO_PAGE = {
+    "🏆 Leaderboards": "leaderboards",
+    "🔍 Player Search": "players",
+    "❓ FAQs": "faqs",
+    "🏟️ League Manager": "league_manager",
+    "📝 Match Uploader": "match_uploader",
+    "👥 Player Editor": "player_editor",
+    "📝 Match Log": "match_log",
+    "⚙️ Admin Tools": "admin_tools",
+    "📘 Admin Guide": "admin_guide",
+}
+
+PAGE_TO_NAV = {v: k for k, v in NAV_TO_PAGE.items()}
+
+def sync_url_from_nav(selected_nav: str):
+    """Write the current page into the URL (but don't force sidebar selection)."""
+    try:
+        st.query_params["page"] = NAV_TO_PAGE.get(selected_nav, "leaderboards")
+    except Exception:
+        pass
+
+def apply_deeplink_once():
+    """If URL has page=..., set the initial sidebar selection ONCE per session."""
+    if "deep_link_applied" not in st.session_state:
+        st.session_state.deep_link_applied = False
+
+    if st.session_state.deep_link_applied:
+        return
+
+    page = qp_get("page", "").lower().strip()
+    if page in PAGE_TO_NAV:
+        st.session_state["main_nav"] = PAGE_TO_NAV[page]
+
+    # league deep link (your existing behavior)
+    league = qp_get("league", "").strip()
+    if league:
+        st.session_state["preselect_league"] = league
+
+    st.session_state.deep_link_applied = True
 
 
 # --- DATABASE CONNECTION ---
@@ -636,6 +690,8 @@ if st.session_state.admin_logged_in:
     nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
+if not PUBLIC_MODE:
+    sync_url_from_nav(sel)
 
 # =========================
 # UI PAGES (PART 1)
