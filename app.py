@@ -11,19 +11,38 @@ from datetime import datetime
 import re
 import altair as alt
 import urllib.parse
+from postgrest.exceptions import APIError
+
 
 def sb_retry(fn, retries: int = 4, base_sleep: float = 0.6):
     """
     Retries transient Supabase/httpx failures.
+    DOES NOT retry PostgREST APIErrors (those are usually permanent: RLS/constraints).
     """
     last = None
     for attempt in range(retries):
         try:
             return fn()
+        except APIError as e:
+            # APIError contains a dict payload; don't retry it—surface it.
+            payload = e.args[0] if e.args else {}
+            msg = payload.get("message", str(e))
+            details = payload.get("details", "")
+            hint = payload.get("hint", "")
+            code = payload.get("code", "")
+
+            st.error(f"Supabase APIError ({code}): {msg}")
+            if details:
+                st.code(details)
+            if hint:
+                st.info(hint)
+
+            raise  # stop retrying; this won't fix itself with sleep
         except Exception as e:
             last = e
             time.sleep(base_sleep * (2 ** attempt))
     raise last
+
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
