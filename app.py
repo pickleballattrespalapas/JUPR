@@ -596,9 +596,12 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             }
         )
 
-        # Write matches
+    # Write matches
     if db_matches:
-        sb_retry(lambda: supabase.table("matches").insert(db_matches).execute())
+    CHUNK_M = 300
+    for i in range(0, len(db_matches), CHUNK_M):
+        chunk = db_matches[i : i + CHUNK_M]
+        sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
 
     # ---- Overall player updates (BULK, chunked) ----
     def upsert_players_chunk(chunk_rows):
@@ -641,7 +644,7 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             # ... keep the rest of your existing league upsert logic ...
 
 
-            existing = (
+            existing = sb_retry(lambda: (
                 supabase.table("league_ratings")
                 .select("id,wins,losses,matches_played,starting_rating")
                 .eq("club_id", CLUB_ID)
@@ -649,7 +652,8 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
                 .eq("league_name", league_name)
                 .limit(1)
                 .execute()
-            )
+            ))
+
 
             if existing.data:
                 cur = existing.data[0]
