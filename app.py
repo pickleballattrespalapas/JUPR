@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 import re
 import altair as alt
+import urllib.parse
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
@@ -47,6 +48,69 @@ query_params = st.query_params
 if "admin_key" in query_params:
     if str(query_params["admin_key"]) == st.secrets["supabase"]["admin_password"]:
         st.session_state.admin_logged_in = True
+        # --- QUERY PARAM HELPERS / DEEP LINKS ---
+def qp_get(key: str, default: str = "") -> str:
+    """Streamlit query params can be str or list depending on version."""
+    try:
+        v = st.query_params.get(key, default)
+    except Exception:
+        return default
+    if isinstance(v, list):
+        return v[0] if v else default
+    return str(v) if v is not None else default
+
+PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
+DEEP_PAGE = qp_get("page", "").lower().strip()
+DEEP_LEAGUE = qp_get("league", "").strip()
+
+# If someone hits a deep link, steer the app there.
+PAGE_MAP = {
+    "leaderboards": "🏆 Leaderboards",
+    "players": "🔍 Player Search",
+    "faqs": "❓ FAQs",
+}
+
+if PUBLIC_MODE:
+    # Force public view to Leaderboards, and never treat as admin.
+    st.session_state.admin_logged_in = False
+    st.session_state["main_nav"] = "🏆 Leaderboards"
+    # Hide the sidebar for a clean “standings board” experience.
+    st.markdown(
+        "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
+        unsafe_allow_html=True,
+    )
+else:
+    if DEEP_PAGE in PAGE_MAP:
+        st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
+
+# Remember a league preselect for the Leaderboards selectbox.
+if DEEP_LEAGUE:
+    st.session_state["preselect_league"] = DEEP_LEAGUE
+
+def build_standings_link(league_name: str, public: bool = True) -> str:
+    """
+    Returns a shareable link.
+    If you set st.secrets["PUBLIC_BASE_URL"], this becomes a full URL.
+    Otherwise it returns a querystring you append to your app URL.
+    """
+    base = ""
+    try:
+        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
+    except Exception:
+        base = ""
+
+    params = {
+        "page": "leaderboards",
+        "league": league_name,
+    }
+    if public:
+        params["public"] = "1"
+
+    q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
+    if base:
+        return f"{base}/?{q}"
+    return f"?{q}"
+
 
 # --- DATABASE CONNECTION ---
 @st.cache_resource
@@ -596,7 +660,32 @@ if sel == "🏆 Leaderboards":
     else:
         available_leagues = ["OVERALL"]
 
-    target_league = st.selectbox("Select View", available_leagues)
+    # Preselect league if the URL provided one
+pre = st.session_state.get("preselect_league", "")
+default_idx = 0
+if pre and pre in available_leagues:
+    default_idx = available_leagues.index(pre)
+
+target_league = st.selectbox("Select View", available_leagues, index=default_idx, key="lb_league")
+
+# Keep URL in sync (handy even in private mode)
+try:
+    st.query_params["page"] = "leaderboards"
+    st.query_params["league"] = target_league
+    if PUBLIC_MODE:
+        st.query_params["public"] = "1"
+except Exception:
+    pass
+
+# Shareable link
+st.caption("Share standings:")
+share_link = build_standings_link(target_league, public=True)
+st.text_input("Public standings link", value=share_link)
+try:
+    st.link_button("Open Public Standings", share_link)
+except Exception:
+    pass
+
 
     # min games
     min_games_req = 0
