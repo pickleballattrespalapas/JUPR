@@ -947,6 +947,54 @@ Expected outcome is based on both teams’ average ratings and the score ratio, 
 # JUPR Leagues (PART 2 / 2)
 # Paste this after PART 1.
 # =========================
+def normalize_slots(roster_df: pd.DataFrame) -> pd.DataFrame:
+    df = roster_df.copy()
+    if "slot" not in df.columns:
+        df["slot"] = 1
+    df["court"] = df["court"].astype(int)
+    df["slot"] = df["slot"].astype(int)
+
+    for c in sorted(df["court"].unique()):
+        idx = df[df["court"] == c].sort_values("slot").index
+        df.loc[idx, "slot"] = list(range(1, len(idx) + 1))
+    return df.sort_values(["court", "slot"]).reset_index(drop=True)
+
+def swap_players(roster_df: pd.DataFrame, a: str, b: str) -> pd.DataFrame:
+    df = roster_df.copy()
+    ia = df.index[df["name"] == a]
+    ib = df.index[df["name"] == b]
+    if len(ia) != 1 or len(ib) != 1:
+        return df
+    ia, ib = int(ia[0]), int(ib[0])
+
+    # Swap court+slot (keeps court sizes constant)
+    ca, sa = int(df.at[ia, "court"]), int(df.at[ia, "slot"])
+    cb, sb = int(df.at[ib, "court"]), int(df.at[ib, "slot"])
+    df.at[ia, "court"], df.at[ia, "slot"] = cb, sb
+    df.at[ib, "court"], df.at[ib, "slot"] = ca, sa
+    return normalize_slots(df)
+
+def move_within_court(roster_df: pd.DataFrame, player: str, new_slot: int) -> pd.DataFrame:
+    df = roster_df.copy()
+    if player not in df["name"].tolist():
+        return df
+    row = df[df["name"] == player].iloc[0]
+    c = int(row["court"])
+
+    grp = df[df["court"] == c].sort_values("slot").copy()
+    names = grp["name"].tolist()
+    if player not in names:
+        return df
+
+    names.remove(player)
+    new_slot = max(1, min(int(new_slot), len(names) + 1))
+    names.insert(new_slot - 1, player)
+
+    # Write back slot order
+    for i, nm in enumerate(names, start=1):
+        df.loc[(df["court"] == c) & (df["name"] == nm), "slot"] = i
+
+    return normalize_slots(df)
 
 # -------------------------
 # PAGE: LEAGUE MANAGER
@@ -1103,7 +1151,9 @@ if sel == "🏟️ League Manager":
                             final_assignments.append({"name": pl["name"], "rating": pl["rating"], "court": c_idx + 1})
                         current_idx += size
 
-                    st.session_state.ladder_live_roster = pd.DataFrame(final_assignments)
+                    final_roster = final_roster.sort_values(["court", "name"]).copy()
+                    final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
+                    st.session_state.ladder_live_roster = final_roster[["name", "rating", "court", "slot"]].copy()
                     st.session_state.ladder_court_sizes = court_sizes
                     st.session_state.ladder_state = "CONFIRM_START"
                     st.rerun()
@@ -1147,12 +1197,51 @@ if sel == "🏟️ League Manager":
             total_r = int(st.session_state.ladder_total_rounds)
 
             st.markdown(f"### 🎾 Round {current_r} / {total_r}")
+            # Ensure roster has slots (older sessions)
+            if "slot" not in st.session_state.ladder_live_roster.columns:
+                tmp = st.session_state.ladder_live_roster.copy()
+                tmp = tmp.sort_values(["court", "name"]).copy()
+                tmp["slot"] = tmp.groupby("court").cumcount() + 1
+                st.session_state.ladder_live_roster = tmp
+
+            with st.expander("✏️ Quick court edits (before scoring)", expanded=False):
+                roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
+                names_now = roster_df["name"].tolist()
+
+                cA, cB, cC = st.columns([2, 2, 1])
+                a = cA.selectbox("Swap Player A", names_now, key=f"swap_a_r{current_r}")
+                b = cB.selectbox("with Player B", names_now, key=f"swap_b_r{current_r}", index=1 if len(names_now) > 1 else 0)
+                if cC.button("Swap", key=f"swap_btn_r{current_r}"):
+                    st.session_state.ladder_live_roster = swap_players(roster_df, a, b)
+                if "current_schedule" in st.session_state:
+                    del st.session_state.current_schedule
+                st.rerun()
+
+                st.divider()
+
+                c1, c2, c3 = st.columns([2, 2, 1])
+                court_list = sorted(roster_df["court"].unique().tolist())
+                chosen_court = c1.selectbox("Court to reorder", court_list, key=f"re_ct_r{current_r}")
+                court_players = roster_df[roster_df["court"] == int(chosen_court)].sort_values("slot")["name"].tolist()
+
+                p = c2.selectbox("Player", court_players, key=f"re_p_r{current_r}")
+                new_pos = c3.number_input("New position", min_value=1, max_value=max(1, len(court_players)), value=1, step=1, key=f"re_pos_r{current_r}")
+
+                if st.button("Apply reorder", key=f"re_btn_r{current_r}"):
+                    st.session_state.ladder_live_roster = move_within_court(roster_df, p, int(new_pos))
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
+                    st.rerun()
 
             if "current_schedule" not in st.session_state:
                 schedule = []
                 for c_idx in range(len(st.session_state.ladder_court_sizes)):
                     c_num = c_idx + 1
-                    players = st.session_state.ladder_live_roster[st.session_state.ladder_live_roster["court"] == c_num]["name"].tolist()
+                    court_df = st.session_state.ladder_live_roster[st.session_state.ladder_live_roster["court"] == c_num].copy()
+                    if "slot" in court_df.columns:
+                        court_df = court_df.sort_values("slot")
+                    players = court_df["name"].tolist()
+
                     fmt = f"{len(players)}-Player"
                     matches = get_match_schedule(fmt, players)
                     schedule.append({"c": c_num, "matches": matches})
@@ -1282,7 +1371,9 @@ if sel == "🏟️ League Manager":
             st.info("If the arrows look right, click 'Start Next Round'. Otherwise, edit 'New Ct' below.")
 
             editor_df = st.data_editor(
-                st.session_state.ladder_movement_preview[["name", "court", "Round Wins", "Round Diff", "Proposed Court"]],
+                new_roster = new_roster.sort_values(["court", "name"]).copy()
+                new_roster["slot"] = new_roster.groupby("court").cumcount() + 1
+                st.session_state.ladder_live_roster = new_roster[["name", "rating", "court", "slot"]].copy()
                 column_config={
                     "court": st.column_config.NumberColumn("Old Ct", disabled=True),
                     "Proposed Court": st.column_config.NumberColumn("New Ct", min_value=1, max_value=10, step=1),
