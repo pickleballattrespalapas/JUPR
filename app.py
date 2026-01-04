@@ -661,31 +661,30 @@ if sel == "🏆 Leaderboards":
         available_leagues = ["OVERALL"]
 
     # Preselect league if the URL provided one
-pre = st.session_state.get("preselect_league", "")
-default_idx = 0
-if pre and pre in available_leagues:
-    default_idx = available_leagues.index(pre)
+    pre = st.session_state.get("preselect_league", "")
+    default_idx = 0
+    if pre and pre in available_leagues:
+        default_idx = available_leagues.index(pre)
 
-target_league = st.selectbox("Select View", available_leagues, index=default_idx, key="lb_league")
+    target_league = st.selectbox("Select View", available_leagues, index=default_idx, key="lb_league")
 
-# Keep URL in sync (handy even in private mode)
-try:
-    st.query_params["page"] = "leaderboards"
-    st.query_params["league"] = target_league
-    if PUBLIC_MODE:
-        st.query_params["public"] = "1"
-except Exception:
-    pass
+    # Keep URL in sync (handy even in private mode)
+    try:
+        st.query_params["page"] = "leaderboards"
+        st.query_params["league"] = target_league
+        if PUBLIC_MODE:
+            st.query_params["public"] = "1"
+    except Exception:
+        pass
 
-# Shareable link
-st.caption("Share standings:")
-share_link = build_standings_link(target_league, public=True)
-st.text_input("Public standings link", value=share_link)
-try:
-    st.link_button("Open Public Standings", share_link)
-except Exception:
-    pass
-
+    # Shareable link
+    st.caption("Share standings:")
+    share_link = build_standings_link(target_league, public=True)
+    st.text_input("Public standings link", value=share_link)
+    try:
+        st.link_button("Open Public Standings", share_link)
+    except Exception:
+        pass
 
     # min games
     min_games_req = 0
@@ -769,7 +768,9 @@ except Exception:
         st.markdown("### 📊 Standings")
         final_view = display_df.sort_values("rating", ascending=False).copy()
         final_view["Rank"] = range(1, len(final_view) + 1)
-        final_view["Rank"] = final_view["Rank"].apply(lambda r: "🥇" if r == 1 else "🥈" if r == 2 else "🥉" if r == 3 else str(r))
+        final_view["Rank"] = final_view["Rank"].apply(
+            lambda r: "🥇" if r == 1 else "🥈" if r == 2 else "🥉" if r == 3 else str(r)
+        )
         final_view["Gain"] = (final_view["rating_gain"].astype(float) / 400.0).map("{:+.3f}".format)
 
         cols_to_show = ["Rank", "name", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]
