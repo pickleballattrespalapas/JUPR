@@ -622,20 +622,31 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
         chunk = db_matches[i : i + CHUNK_M]
         sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
 
-    # ---- Overall player updates (BULK, chunked) ----
-    def upsert_players_chunk(chunk_rows):
-        # supabase-py versions differ slightly; handle both
-        try:
-            return supabase.table("players").upsert(chunk_rows, on_conflict="id").execute()
-        except TypeError:
-            return supabase.table("players").upsert(chunk_rows).execute()
+        # ---- Overall player updates (SAFE) ----
+    # Upsert is fragile if 'id' isn't a unique constraint target or if club_id is immutable under RLS.
+    # Update-by-id is much more reliable for your use case (these players already exist).
+
+    def update_player_row(row):
+        pid = int(row["id"])
+        payload = {
+            "rating": float(row["rating"]),
+            "wins": int(row["wins"]),
+            "losses": int(row["losses"]),
+            "matches_played": int(row["matches_played"]),
+        }
+        # Update existing row
+        res = supabase.table("players").update(payload).eq("club_id", CLUB_ID).eq("id", pid).execute()
+
+        # If nothing updated (rare), fall back to insert
+        if not res.data:
+            payload_ins = {"club_id": CLUB_ID, "id": pid, **payload}
+            supabase.table("players").insert(payload_ins).execute()
 
     player_rows = []
     for pid, stats in overall_updates.items():
         player_rows.append(
             {
                 "id": int(pid),
-                "club_id": CLUB_ID,  # keep RLS / filters happy
                 "rating": float(stats["r"]),
                 "wins": int(stats["w"]),
                 "losses": int(stats["l"]),
@@ -643,10 +654,10 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             }
         )
 
-    CHUNK = 200
-    for i in range(0, len(player_rows), CHUNK):
-        chunk = player_rows[i : i + CHUNK]
-        sb_retry(lambda chunk=chunk: upsert_players_chunk(chunk))
+    # Chunking still fine, but each row is updated safely
+    for row in player_rows:
+        sb_retry(lambda row=row: update_player_row(row))
+
 
     # ---- League ratings updates (your existing code continues) ----
     if island_updates:
