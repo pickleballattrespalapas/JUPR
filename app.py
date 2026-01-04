@@ -56,8 +56,7 @@ def qp_get(key: str, default: str = "") -> str:
 
 # --- MAGIC LINK LOGIN ---
 admin_key = qp_get("admin_key", "")
-if admin_key:
-    if admin_key == st.secrets["supabase"]["admin_password"]:
+if admin_key == st.secrets["supabase"]["admin_password"]:
         st.session_state.admin_logged_in = True
 
 PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
