@@ -48,7 +48,8 @@ query_params = st.query_params
 if "admin_key" in query_params:
     if str(query_params["admin_key"]) == st.secrets["supabase"]["admin_password"]:
         st.session_state.admin_logged_in = True
-        # --- QUERY PARAM HELPERS / DEEP LINKS ---
+
+# --- QUERY PARAM HELPERS / DEEP LINKS ---
 def qp_get(key: str, default: str = "") -> str:
     """Streamlit query params can be str or list depending on version."""
     try:
@@ -63,7 +64,6 @@ PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
 DEEP_PAGE = qp_get("page", "").lower().strip()
 DEEP_LEAGUE = qp_get("league", "").strip()
 
-# If someone hits a deep link, steer the app there.
 PAGE_MAP = {
     "leaderboards": "🏆 Leaderboards",
     "players": "🔍 Player Search",
@@ -71,10 +71,8 @@ PAGE_MAP = {
 }
 
 if PUBLIC_MODE:
-    # Force public view to Leaderboards, and never treat as admin.
     st.session_state.admin_logged_in = False
     st.session_state["main_nav"] = "🏆 Leaderboards"
-    # Hide the sidebar for a clean “standings board” experience.
     st.markdown(
         "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
         unsafe_allow_html=True,
@@ -83,33 +81,23 @@ else:
     if DEEP_PAGE in PAGE_MAP:
         st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
 
-# Remember a league preselect for the Leaderboards selectbox.
 if DEEP_LEAGUE:
     st.session_state["preselect_league"] = DEEP_LEAGUE
 
 def build_standings_link(league_name: str, public: bool = True) -> str:
-    """
-    Returns a shareable link.
-    If you set st.secrets["PUBLIC_BASE_URL"], this becomes a full URL.
-    Otherwise it returns a querystring you append to your app URL.
-    """
     base = ""
     try:
         base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
     except Exception:
         base = ""
 
-    params = {
-        "page": "leaderboards",
-        "league": league_name,
-    }
+    params = {"page": "leaderboards", "league": league_name}
     if public:
         params["public"] = "1"
 
     q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
-    if base:
-        return f"{base}/?{q}"
-    return f"?{q}"
+    return f"{base}/?{q}" if base else f"?{q}"
+
 
 
 # --- DATABASE CONNECTION ---
@@ -1151,12 +1139,16 @@ if sel == "🏟️ League Manager":
                             final_assignments.append({"name": pl["name"], "rating": pl["rating"], "court": c_idx + 1})
                         current_idx += size
 
+                    final_roster = pd.DataFrame(final_assignments)
+
                     final_roster = final_roster.sort_values(["court", "name"]).copy()
                     final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
+
                     st.session_state.ladder_live_roster = final_roster[["name", "rating", "court", "slot"]].copy()
                     st.session_state.ladder_court_sizes = court_sizes
                     st.session_state.ladder_state = "CONFIRM_START"
                     st.rerun()
+
 
         # ---- 3.5) CONFIRM START ----
         if st.session_state.ladder_state == "CONFIRM_START":
@@ -1176,20 +1168,20 @@ if sel == "🏟️ League Manager":
                 use_container_width=True,
             )
 
-            if st.button("✅ Start Event (Round 1)"):
-                final_roster = edited_roster.copy()
-                final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
-                final_roster = final_roster.sort_values("court")
+         if st.button("✅ Start Event (Round 1)"):
+            final_roster = edited_roster.copy()
+            final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
+            final_roster = final_roster.sort_values("court")
 
-                new_sizes = final_roster["court"].value_counts().sort_index().tolist()
-                st.session_state.ladder_court_sizes = new_sizes
-                st.session_state.ladder_live_roster = final_roster[["name", "rating", "court"]].copy()
+            new_sizes = final_roster["court"].value_counts().sort_index().tolist()
+            st.session_state.ladder_court_sizes = new_sizes
+            st.session_state.ladder_live_roster = final_roster[["name", "rating", "court"]].copy()
 
-                st.session_state.ladder_round_num = 1
-                st.session_state.ladder_state = "PLAY_ROUND"
-                if "current_schedule" in st.session_state:
-                    del st.session_state.current_schedule
-                st.rerun()
+            st.session_state.ladder_round_num = 1
+            st.session_state.ladder_state = "PLAY_ROUND"
+            if "current_schedule" in st.session_state:
+                del st.session_state.current_schedule
+            st.rerun()
 
         # ---- 4) PLAY ROUND ----
         if st.session_state.ladder_state == "PLAY_ROUND":
@@ -1213,9 +1205,9 @@ if sel == "🏟️ League Manager":
                 b = cB.selectbox("with Player B", names_now, key=f"swap_b_r{current_r}", index=1 if len(names_now) > 1 else 0)
                 if cC.button("Swap", key=f"swap_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = swap_players(roster_df, a, b)
-                if "current_schedule" in st.session_state:
-                    del st.session_state.current_schedule
-                st.rerun()
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
+                    st.rerun()
 
                 st.divider()
 
@@ -1370,10 +1362,13 @@ if sel == "🏟️ League Manager":
             st.markdown("#### 🛠️ Manual Override")
             st.info("If the arrows look right, click 'Start Next Round'. Otherwise, edit 'New Ct' below.")
 
+            preview_df = st.session_state.ladder_movement_preview.copy()
+
+            # Only show what we need to edit
+            edit_view = preview_df[["name", "rating", "court", "Proposed Court"]].copy()
+
             editor_df = st.data_editor(
-                new_roster = new_roster.sort_values(["court", "name"]).copy()
-                new_roster["slot"] = new_roster.groupby("court").cumcount() + 1
-                st.session_state.ladder_live_roster = new_roster[["name", "rating", "court", "slot"]].copy()
+                edit_view,
                 column_config={
                     "court": st.column_config.NumberColumn("Old Ct", disabled=True),
                     "Proposed Court": st.column_config.NumberColumn("New Ct", min_value=1, max_value=10, step=1),
@@ -1396,19 +1391,25 @@ if sel == "🏟️ League Manager":
                 else:
                     new_roster = editor_df.copy()
                     new_roster["court"] = new_roster["Proposed Court"].astype(int)
-                    new_roster = new_roster.sort_values("court")
+
+                    # keep rating column from prior roster (editor already has rating, but keep safe)
+                    rating_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["rating"]))
+                    new_roster["rating"] = new_roster["name"].map(lambda x: float(rating_map.get(x, 1200.0)))
+
+                    # sort + slots
+                    new_roster = new_roster.sort_values(["court", "name"]).copy()
+                    new_roster["slot"] = new_roster.groupby("court").cumcount() + 1
 
                     new_sizes = new_roster["court"].value_counts().sort_index().tolist()
                     st.session_state.ladder_court_sizes = new_sizes
-
-                    # keep rating column from prior roster
-                    rating_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["rating"]))
-                    new_roster["rating"] = new_roster["name"].map(lambda x: float(rating_map.get(x, 1200.0)))
-                    st.session_state.ladder_live_roster = new_roster[["name", "rating", "court"]].copy()
+                    st.session_state.ladder_live_roster = new_roster[["name", "rating", "court", "slot"]].copy()
 
                     st.session_state.ladder_round_num = int(st.session_state.ladder_round_num) + 1
                     st.session_state.ladder_state = "PLAY_ROUND"
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
                     st.rerun()
+
 
     # ---------- TAB 2: SETTINGS ----------
     with tabs[1]:
