@@ -748,6 +748,48 @@ def canonical_dup_key(row, club_id: str):
 
     return f"{club_id}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
 
+def ensure_league_row(player_id: int, league_name: str, base_rating_elo: float = 1200.0):
+    """
+    Create league_ratings row if missing.
+    """
+    existing = (
+        supabase.table("league_ratings")
+        .select("id")
+        .eq("club_id", CLUB_ID)
+        .eq("player_id", int(player_id))
+        .eq("league_name", str(league_name))
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]["id"]
+
+    ins = (
+        supabase.table("league_ratings")
+        .insert({
+            "club_id": CLUB_ID,
+            "player_id": int(player_id),
+            "league_name": str(league_name),
+            "rating": float(base_rating_elo),
+            "starting_rating": float(base_rating_elo),
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+        })
+        .execute()
+    )
+    # supabase returns inserted row(s) depending on config; safest: re-fetch
+    existing2 = (
+        supabase.table("league_ratings")
+        .select("id")
+        .eq("club_id", CLUB_ID)
+        .eq("player_id", int(player_id))
+        .eq("league_name", str(league_name))
+        .limit(1)
+        .execute()
+    )
+    return existing2.data[0]["id"] if existing2.data else None
+
 # -------------------------
 # MAIN APP LOAD
 # -------------------------
@@ -1980,6 +2022,100 @@ elif sel == "👥 Player Editor":
                 st.success(f"Player {curr['name']} has been deactivated.")
                 time.sleep(1)
                 st.rerun()
+            st.divider()
+            
+            st.subheader("🏟️ League Ratings (Edit per League)")
+
+            # Pull this player’s league rows
+            lr_resp = (
+                supabase.table("league_ratings")
+                .select("id,league_name,rating,starting_rating,wins,losses,matches_played")
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", int(pid))
+                .execute()
+            )
+            lr_df = pd.DataFrame(lr_resp.data)
+
+            # League options (from metadata if available)
+            if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+                league_opts = sorted(df_meta["league_name"].dropna().unique().tolist())
+            else:
+                league_opts = sorted(lr_df["league_name"].dropna().unique().tolist()) if not lr_df.empty else []
+
+            cA, cB, cC = st.columns([2, 2, 2])
+
+            with cA:
+                add_league = st.selectbox("Add / ensure league row", [""] + league_opts, key=f"add_lg_{pid}")
+            with cB:
+                set_mode = st.selectbox("Quick set", ["(none)", "Set league rating = overall rating", "Apply + / - adjustment"], key=f"lg_set_mode_{pid}")
+            with cC:
+                adj_val = st.number_input("Adj (JUPR)", value=0.00, step=0.01, key=f"lg_adj_{pid}")
+
+            if st.button("➕ Ensure League Row"):
+                if add_league:
+                    base_elo = float(curr.get("rating", 1200.0) or 1200.0)
+                    ensure_league_row(pid, add_league, base_rating_elo=base_elo)
+                    st.success("League row ready.")
+                    time.sleep(0.5)
+                    st.rerun()
+
+            if lr_df.empty:
+                st.info("No league ratings found for this player yet. Use 'Ensure League Row' to create one.")
+            else:
+                # Convert to display
+                lr_df = lr_df.copy()
+                lr_df["JUPR"] = lr_df["rating"].astype(float) / 400.0
+                lr_df["Start JUPR"] = lr_df["starting_rating"].astype(float) / 400.0
+
+                # Optional quick actions (apply to ALL rows displayed)
+                if set_mode == "Set league rating = overall rating":
+                    base = float(curr.get("rating", 1200.0) or 1200.0) / 400.0
+                    lr_df["JUPR"] = base
+                elif set_mode == "Apply + / - adjustment":
+                    lr_df["JUPR"] = lr_df["JUPR"].astype(float) + float(adj_val)
+
+                edit_cols = ["league_name", "JUPR", "Start JUPR", "wins", "losses", "matches_played"]
+                editable = lr_df[["id"] + edit_cols].copy()
+
+                edited = st.data_editor(
+                    editable,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "league_name": st.column_config.TextColumn("League", disabled=True),
+                        "JUPR": st.column_config.NumberColumn("League JUPR", min_value=1.0, max_value=7.0, step=0.01),
+                        "Start JUPR": st.column_config.NumberColumn("Start JUPR", min_value=1.0, max_value=7.0, step=0.01),
+                        "wins": st.column_config.NumberColumn("W", min_value=0, step=1),
+                        "losses": st.column_config.NumberColumn("L", min_value=0, step=1),
+                        "matches_played": st.column_config.NumberColumn("MP", min_value=0, step=1),
+                    },
+                    disabled=["id"],
+                )
+
+                c1, c2 = st.columns([1, 3])
+                if c1.button("💾 Save League Edits"):
+                    for _, r in edited.iterrows():
+                        payload = {
+                            "rating": float(r["JUPR"]) * 400.0,
+                            "starting_rating": float(r["Start JUPR"]) * 400.0,
+                            "wins": int(r["wins"]),
+                            "losses": int(r["losses"]),
+                            "matches_played": int(r["matches_played"]),
+                        }
+                        sb_retry(lambda rid=int(r["id"]), payload=payload: (
+                            supabase.table("league_ratings")
+                            .update(payload)
+                            .eq("club_id", CLUB_ID)
+                            .eq("id", rid)
+                            .execute()
+                        ))
+                    st.success("Saved league ratings.")
+                    time.sleep(0.5)
+                    st.rerun()
+
+                with c2:
+                    st.caption("Heads up: manual edits change leaderboard/seeding going forward. Past match snapshots won’t be rewritten unless you run a Replay.")
+
 
 # -------------------------
 # PAGE: MATCH LOG
