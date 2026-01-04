@@ -598,7 +598,7 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
 
     # Write matches
     if db_matches:
-    CHUNK_M = 300
+        CHUNK_M = 300
     for i in range(0, len(db_matches), CHUNK_M):
         chunk = db_matches[i : i + CHUNK_M]
         sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
