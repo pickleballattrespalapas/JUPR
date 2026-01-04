@@ -1064,7 +1064,7 @@ if sel == "🏟️ League Manager":
             raw = st.text_area("Paste Player List (one per line)", height=150, key="ladder_raw")
 
 
-                if st.button("Analyze & Seed"):
+            if st.button("Analyze & Seed"):
                 st.session_state.saved_ladder_lg = st.session_state.ladder_lg
                 st.session_state.saved_ladder_wk = st.session_state.ladder_wk
                 st.session_state.ladder_total_rounds = int(st.session_state.ladder_total_rounds)
