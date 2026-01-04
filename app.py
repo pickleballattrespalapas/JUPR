@@ -1415,9 +1415,18 @@ if sel == "🏟️ League Manager":
                 final_roster = edited_roster.copy()
                 final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
 
-                # IMPORTANT: enforce stable ordering + slots so schedule is deterministic
-                final_roster = final_roster.sort_values(["court", "name"]).copy()
+                # ✅ Keep existing within-court order (slot) so RR schedule stays consistent
+                # If slot exists (it should), use it. Otherwise fall back to rating desc.
+                if "slot" in st.session_state.ladder_live_roster.columns:
+                    slot_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["slot"]))
+                    final_roster["slot"] = final_roster["name"].map(lambda x: int(slot_map.get(x, 999)))
+                    final_roster = final_roster.sort_values(["court", "slot"], ascending=[True, True]).copy()
+                else:
+                    final_roster = final_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
+
+                # re-number slots cleanly within each court
                 final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
+
 
                 new_sizes = final_roster["court"].value_counts().sort_index().tolist()
                 st.session_state.ladder_court_sizes = new_sizes
@@ -1541,7 +1550,8 @@ if sel == "🏟️ League Manager":
                     st.markdown(f"<div class='court-header'>Court {c_data['c']}</div>", unsafe_allow_html=True)
                     for m_idx, mm in enumerate(c_data["matches"]):
                         c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
-                        c1.text(f"{mm['t1'][0]} & {mm['t1'][1]}")
+                        label = mm.get("desc", f"Game {m_idx+1}")
+                        c1.text(f"{label}: {mm['t1'][0]} & {mm['t1'][1]}")
                         s1 = c2.number_input("S1", 0, key=f"r{current_r}_c{c_data['c']}_m{m_idx}_1")
                         s2 = c3.number_input("S2", 0, key=f"r{current_r}_c{c_data['c']}_m{m_idx}_2")
                         c4.text(f"{mm['t2'][0]} & {mm['t2'][1]}")
@@ -1693,8 +1703,11 @@ if sel == "🏟️ League Manager":
                     new_roster["rating"] = new_roster["name"].map(lambda x: float(rating_map.get(x, 1200.0)))
 
                     # sort + slots
-                    new_roster = new_roster.sort_values(["court", "name"]).copy()
+                    # ✅ Preserve “top-to-bottom” feel on each court for next round:
+                    # sort by rating desc (or keep existing slot if you prefer)
+                    new_roster = new_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
                     new_roster["slot"] = new_roster.groupby("court").cumcount() + 1
+
 
                     new_sizes = new_roster["court"].value_counts().sort_index().tolist()
                     st.session_state.ladder_court_sizes = new_sizes
