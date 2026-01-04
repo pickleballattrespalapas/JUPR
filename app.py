@@ -12,6 +12,19 @@ import re
 import altair as alt
 import urllib.parse
 
+def sb_retry(fn, retries: int = 4, base_sleep: float = 0.6):
+    """
+    Retries transient Supabase/httpx failures.
+    """
+    last = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            time.sleep(base_sleep * (2 ** attempt))
+    raise last
+
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
 
@@ -583,22 +596,37 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             }
         )
 
-    # Write matches
+        # Write matches
     if db_matches:
-        supabase.table("matches").insert(db_matches).execute()
+        sb_retry(lambda: supabase.table("matches").insert(db_matches).execute())
 
-    # Write overall player updates
+    # ---- Overall player updates (BULK, chunked) ----
+    def upsert_players_chunk(chunk_rows):
+        # supabase-py versions differ slightly; handle both
+        try:
+            return supabase.table("players").upsert(chunk_rows, on_conflict="id").execute()
+        except TypeError:
+            return supabase.table("players").upsert(chunk_rows).execute()
+
+    player_rows = []
     for pid, stats in overall_updates.items():
-        supabase.table("players").update(
+        player_rows.append(
             {
+                "id": int(pid),
+                "club_id": CLUB_ID,  # keep RLS / filters happy
                 "rating": float(stats["r"]),
                 "wins": int(stats["w"]),
                 "losses": int(stats["l"]),
                 "matches_played": int(stats["mp"]),
             }
-        ).eq("id", int(pid)).execute()
+        )
 
-    # Write league ratings updates (upsert-style)
+    CHUNK = 200
+    for i in range(0, len(player_rows), CHUNK):
+        chunk = player_rows[i : i + CHUNK]
+        sb_retry(lambda chunk=chunk: upsert_players_chunk(chunk))
+
+    # ---- League ratings updates (your existing code continues) ----
     if island_updates:
         for (pid, league_name), stats in island_updates.items():
             payload = {
@@ -610,6 +638,8 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
                 "losses": int(stats["l"]),
                 "matches_played": int(stats["mp"]),
             }
+            # ... keep the rest of your existing league upsert logic ...
+
 
             existing = (
                 supabase.table("league_ratings")
