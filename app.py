@@ -1837,33 +1837,51 @@ elif sel == "📝 Match Log":
         st.divider()
     st.subheader("🔎 Find Duplicate Matches")
 
-    def canonical_dup_key(row):
-        """
-        Builds a canonical key so duplicates match even if:
-        - players inside a team are swapped
-        - team1/team2 are swapped (we normalize ordering and swap scores accordingly)
-        """
-        # pull ids
-        a1, a2 = row.get("t1_p1"), row.get("t1_p2")
-        b1, b2 = row.get("t2_p1"), row.get("t2_p2")
+    import math
 
-        # sort within teams (None-safe)
-        teamA = sorted([int(a1) if a1 is not None else -1, int(a2) if a2 is not None else -1])
-        teamB = sorted([int(b1) if b1 is not None else -1, int(b2) if b2 is not None else -1])
+def to_int_or_neg1(x):
+    """Convert to int if possible; return -1 for None/NaN/blank/bad values."""
+    try:
+        if x is None:
+            return -1
+        # pandas NaN check (works for floats + numpy/pandas NaN)
+        if isinstance(x, float) and math.isnan(x):
+            return -1
+        s = str(x).strip()
+        if s == "" or s.lower() in ("nan", "none", "null"):
+            return -1
+        return int(float(s))  # handles "12.0" safely too
+    except Exception:
+        return -1
 
-        s1 = int(row.get("score_t1", 0) or 0)
-        s2 = int(row.get("score_t2", 0) or 0)
+def canonical_dup_key(row):
+    """
+    Canonical key that matches duplicates even if:
+    - players inside a team are swapped
+    - team1/team2 are swapped (scores swapped too)
+    """
+    a1 = to_int_or_neg1(row.get("t1_p1"))
+    a2 = to_int_or_neg1(row.get("t1_p2"))
+    b1 = to_int_or_neg1(row.get("t2_p1"))
+    b2 = to_int_or_neg1(row.get("t2_p2"))
 
-        # order teams consistently; if swapped, swap scores to match
-        if tuple(teamB) < tuple(teamA):
-            teamA, teamB = teamB, teamA
-            s1, s2 = s2, s1
+    teamA = sorted([a1, a2])
+    teamB = sorted([b1, b2])
 
-        league = str(row.get("league", "") or "").strip()
-        week = str(row.get("week_tag", "") or "").strip()
-        mtype = str(row.get("match_type", "") or "").strip()
+    s1 = to_int_or_neg1(row.get("score_t1"))
+    s2 = to_int_or_neg1(row.get("score_t2"))
 
-        return f"{CLUB_ID}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
+    # normalize team ordering; if swapped, swap scores so key stays identical
+    if tuple(teamB) < tuple(teamA):
+        teamA, teamB = teamB, teamA
+        s1, s2 = s2, s1
+
+    league = str(row.get("league", "") or "").strip()
+    week = str(row.get("week_tag", "") or "").strip()
+    mtype = str(row.get("match_type", "") or "").strip()
+
+    return f"{CLUB_ID}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
+
 
     # Use the already loaded df_matches/view_df if you can; otherwise pull more rows
     # (view_df might be filtered, which is often what you want)
@@ -1873,7 +1891,7 @@ elif sel == "📝 Match Log":
         st.info("No matches to scan.")
     else:
         # Build duplicate keys
-        dup_scan_df["dup_key"] = dup_scan_df.apply(canonical_dup_key, axis=1)
+        dup_scan_df["dup_key"] = [canonical_dup_key(r) for _, r in dup_scan_df.iterrows()]
 
         # Find keys with count > 1
         counts = dup_scan_df["dup_key"].value_counts()
