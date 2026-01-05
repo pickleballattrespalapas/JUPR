@@ -2511,98 +2511,98 @@ elif sel == "⚙️ Admin Tools":
     st.info("Run this ONCE after adding the 'starting_rating' column to league_ratings. It estimates each player's league starting rating by reversing their league match deltas.")
 
     if st.button("🚀 Run Backfill Migration"):
-    with st.status("Backfilling starting ratings...", expanded=True) as status:
-        l_ratings = (
-            supabase.table("league_ratings")
-            .select("id,player_id,league_name,rating,starting_rating")
-            .eq("club_id", CLUB_ID)
-            .execute()
-            .data
-        )
+        with st.status("Backfilling starting ratings...", expanded=True) as status:
+            l_ratings = (
+                supabase.table("league_ratings")
+                .select("id,player_id,league_name,rating,starting_rating")
+                .eq("club_id", CLUB_ID)
+                .execute()
+                .data
+            )
 
         # Pull league matches with snapshot columns (overall snapshots)
-        matches = (
-            supabase.table("matches")
-            .select(
-                "id,date,league,match_type,"
-                "t1_p1,t1_p2,t2_p1,t2_p2,"
-                "t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
+            matches = (
+                supabase.table("matches")
+                .select(
+                    "id,date,league,match_type,"
+                    "t1_p1,t1_p2,t2_p1,t2_p2,"
+                    "t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
+                )
+                .eq("club_id", CLUB_ID)
+                .execute()
+                .data
             )
-            .eq("club_id", CLUB_ID)
-            .execute()
-            .data
-        )
 
-        df_m = pd.DataFrame(matches)
-        if df_m.empty:
-            st.error("No matches found. Cannot backfill.")
-            status.update(label="Migration failed", state="error")
-            st.stop()
+            df_m = pd.DataFrame(matches)
+            if df_m.empty:
+                st.error("No matches found. Cannot backfill.")
+                status.update(label="Migration failed", state="error")
+                st.stop()
 
-        # Ensure sortable
-        df_m["date"] = pd.to_datetime(df_m["date"], errors="coerce")
-        df_m = df_m.dropna(subset=["date"])
-        df_m["league"] = df_m["league"].astype(str).str.strip()
-        df_m["match_type"] = df_m["match_type"].astype(str)
+            # Ensure sortable
+            df_m["date"] = pd.to_datetime(df_m["date"], errors="coerce")
+            df_m = df_m.dropna(subset=["date"])
+            df_m["league"] = df_m["league"].astype(str).str.strip()
+            df_m["match_type"] = df_m["match_type"].astype(str)
 
-        def start_snap_for_player(row, pid: int):
-            """Return the start snapshot rating for pid from a match row, else None."""
-            try:
-                pid = int(pid)
-            except Exception:
+            def start_snap_for_player(row, pid: int):
+                """Return the start snapshot rating for pid from a match row, else None."""
+                try:
+                    pid = int(pid)
+                except Exception:
+                    return None
+    
+                if int(row.get("t1_p1") or -1) == pid:
+                    return row.get("t1_p1_r")
+                if int(row.get("t1_p2") or -1) == pid:
+                    return row.get("t1_p2_r")
+                if int(row.get("t2_p1") or -1) == pid:
+                    return row.get("t2_p1_r")
+                if int(row.get("t2_p2") or -1) == pid:
+                    return row.get("t2_p2_r")
                 return None
 
-            if int(row.get("t1_p1") or -1) == pid:
-                return row.get("t1_p1_r")
-            if int(row.get("t1_p2") or -1) == pid:
-                return row.get("t1_p2_r")
-            if int(row.get("t2_p1") or -1) == pid:
-                return row.get("t2_p1_r")
-            if int(row.get("t2_p2") or -1) == pid:
-                return row.get("t2_p2_r")
-            return None
+            updates = []
+            for lr in l_ratings:
+                lr_id = int(lr["id"])
+                pid = int(lr["player_id"])
+                lg = str(lr["league_name"]).strip()
 
-        updates = []
-        for lr in l_ratings:
-            lr_id = int(lr["id"])
-            pid = int(lr["player_id"])
-            lg = str(lr["league_name"]).strip()
+                 # Find earliest non-PopUp match in that league where this player appears
+                rel = df_m[(df_m["league"] == lg) & (df_m["match_type"] != "PopUp")].copy()
+                if rel.empty:
+                    continue
 
-            # Find earliest non-PopUp match in that league where this player appears
-            rel = df_m[(df_m["league"] == lg) & (df_m["match_type"] != "PopUp")].copy()
-            if rel.empty:
-                continue
+                # filter to matches containing pid
+                rel = rel[
+                    (rel["t1_p1"] == pid) | (rel["t1_p2"] == pid) | (rel["t2_p1"] == pid) | (rel["t2_p2"] == pid)
+                ].copy()
 
-            # filter to matches containing pid
-            rel = rel[
-                (rel["t1_p1"] == pid) | (rel["t1_p2"] == pid) | (rel["t2_p1"] == pid) | (rel["t2_p2"] == pid)
-            ].copy()
+                if rel.empty:
+                    continue
 
-            if rel.empty:
-                continue
+                rel = rel.sort_values(["date", "id"], ascending=[True, True])
+                first = rel.iloc[0].to_dict()
 
-            rel = rel.sort_values(["date", "id"], ascending=[True, True])
-            first = rel.iloc[0].to_dict()
+                start_r = start_snap_for_player(first, pid)
 
-            start_r = start_snap_for_player(first, pid)
+                # If snapshot missing, fall back to current rating as last resort
+                if start_r is None:
+                    start_r = float(lr.get("rating", 1200.0) or 1200.0)
 
-            # If snapshot missing, fall back to current rating as last resort
-            if start_r is None:
-                start_r = float(lr.get("rating", 1200.0) or 1200.0)
+                updates.append({"id": lr_id, "starting_rating": float(start_r)})
 
-            updates.append({"id": lr_id, "starting_rating": float(start_r)})
+            st.write(f"Calculated starting ratings for {len(updates)} records. Saving...")
 
-        st.write(f"Calculated starting ratings for {len(updates)} records. Saving...")
+            for i in range(0, len(updates), 100):
+                chunk = updates[i : i + 100]
+                for item in chunk:
+                    supabase.table("league_ratings").update(
+                        {"starting_rating": item["starting_rating"]}
+                    ).eq("club_id", CLUB_ID).eq("id", int(item["id"])).execute()
 
-        for i in range(0, len(updates), 100):
-            chunk = updates[i : i + 100]
-            for item in chunk:
-                supabase.table("league_ratings").update(
-                    {"starting_rating": item["starting_rating"]}
-                ).eq("club_id", CLUB_ID).eq("id", int(item["id"])).execute()
-
-        status.update(label="Migration Complete!", state="complete")
-        st.success("✅ Database updated. Leaderboards can now compute Gain accurately.")
+            status.update(label="Migration Complete!", state="complete")
+            st.success("✅ Database updated. Leaderboards can now compute Gain accurately.")
 
 
     # ---------- Reports ----------
