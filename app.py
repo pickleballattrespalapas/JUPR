@@ -1069,14 +1069,58 @@ elif sel == "🔍 Player Search":
                     jupr_change = signed_elo / 400.0
                     rating_after = None
 
+                            processed = []
+            for match in matches_data:
+                s1 = int(match.get("score_t1", 0) or 0)
+                s2 = int(match.get("score_t2", 0) or 0)
+                display_score = f"{s1}-{s2}"
+
+                # ✅/❌ based on score + which team the player was on
+                on_team1 = (match.get("t1_p1") == p_id) or (match.get("t1_p2") == p_id)
+                on_team2 = (match.get("t2_p1") == p_id) or (match.get("t2_p2") == p_id)
+
+                if s1 == s2:
+                    result_icon = "➖"
+                elif (on_team1 and s1 > s2) or (on_team2 and s2 > s1):
+                    result_icon = "✅"
+                elif (on_team1 and s1 < s2) or (on_team2 and s2 < s1):
+                    result_icon = "❌"
+                else:
+                    # should not happen unless row is malformed
+                    result_icon = "➖"
+
+                start_elo, end_elo = get_player_snap(match, p_id)
+
+                if start_elo is not None and end_elo is not None:
+                    start_elo = float(start_elo)
+                    end_elo = float(end_elo)
+                    jupr_change = (end_elo - start_elo) / 400.0
+                    rating_after = end_elo / 400.0
+                else:
+                    # fallback for any legacy rows without snapshots
+                    raw_delta = float(match.get("elo_delta", 0) or 0)
+                    my_team = 1 if on_team1 else 2
+                    winner_team = 1 if s1 > s2 else 2 if s2 > s1 else 0
+                    if winner_team == 0:
+                        signed_elo = 0.0
+                    elif winner_team == my_team:
+                        signed_elo = abs(raw_delta)
+                    else:
+                        signed_elo = -abs(raw_delta)
+
+                    jupr_change = signed_elo / 400.0
+                    rating_after = None
+
                 processed.append(
                     {
                         "Date": match.get("date"),
+                        "Result": result_icon,          # ✅/❌
                         "Score": display_score,
                         "JUPR Change": jupr_change,
                         "Rating After Match": rating_after,
                     }
                 )
+
 
             display_df = pd.DataFrame(processed)
             display_df["Date"] = pd.to_datetime(display_df["Date"], errors="coerce")
@@ -1131,10 +1175,11 @@ elif sel == "🔍 Player Search":
                 table_df["Rating After Match"] = table_df["Rating After Match"].map(lambda x: f"{float(x):.3f}")
 
                 st.dataframe(
-                    table_df[["Date", "Score", "JUPR Change", "Rating After Match"]],
+                    table_df[["Date", "Result", "Score", "JUPR Change", "Rating After Match"]],
                     use_container_width=True,
                     hide_index=True,
                 )
+
 
 elif sel == "❓ FAQs":
     st.header("❓ FAQs")
