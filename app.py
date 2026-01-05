@@ -1204,7 +1204,7 @@ elif sel == "❓ FAQs":
 
     st.markdown(
         """
-JUPR (Joe’s Universal Pickleball Rating) is Tres Palapas’ **in-house rating system** used to create better matchups, seed events, and keep leveled play fair.
+JUPR (Joe’s Unique Pickleball Ratings) is Tres Palapas’ **in-house rating system** used to create better matchups, seed events, and keep leveled play fair.
 
 ---
 
