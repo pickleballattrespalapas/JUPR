@@ -850,6 +850,14 @@ if st.session_state.admin_logged_in:
     nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 
 sel = st.sidebar.radio("Go to:", nav, key="main_nav")
+# Reset Player Search selection when user navigates to that page
+if "last_nav" not in st.session_state:
+    st.session_state.last_nav = None
+
+if st.session_state.last_nav != sel:
+    if sel == "🔍 Player Search":
+        st.session_state["player_search_name"] = ""  # start blank on entry
+    st.session_state.last_nav = sel
 
 if not PUBLIC_MODE:
     sync_url_from_nav(sel)
@@ -1014,7 +1022,17 @@ elif sel == "🔍 Player Search":
         st.warning("No active players found.")
     else:
         player_names = sorted(players_df["name"].astype(str).tolist())
-        selected_name = st.selectbox("Select a Player:", player_names)
+        selected_name = st.selectbox(
+            "Select a Player:",
+            [""] + player_names,
+            index=0,
+            key="player_search_name",
+        )
+        
+        if not selected_name:
+            st.info("Start typing a name to search.")
+            st.stop()
+
 
         selected_player = players_df[players_df["name"] == selected_name].iloc[0]
         p_id = int(selected_player["id"])
