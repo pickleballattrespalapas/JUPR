@@ -1224,25 +1224,13 @@ You get a JUPR rating once you have **recorded matches** in the system from a JU
 
 ## What matches count toward JUPR?
 **Counts (JUPR-eligible):**
-- Official ladders where scores are entered
-- JUPR round robins / leveled sessions that require ratings
-- Leagues with recorded match entry
+- Official JUPR Ladders and JUPR Round Robins
 - Tournaments run through Tres Palapas with official score entry
 
 **Does not count (not recorded / not JUPR-eligible):**
-- Casual open play where scores are not entered
-- Drills and clinics (unless explicitly run as a scored/rated event)
-- Friendly games not submitted into the system
-
-If a match result is not recorded, it **cannot** affect ratings.
-
----
-
-## When do ratings update?
-Ratings update **after scores are entered** for a match.
-Depending on the event workflow, you may see changes:
-- immediately after entry, or
-- after an organizer completes the round / finalizes results.
+- Open Play
+- Social Round Robins
+- Drills and clinics
 
 ---
 
@@ -1257,12 +1245,12 @@ JUPR is performance-based. Rating movement depends on:
 
 ## Can my rating go up after a loss?
 Yes, it can happen.
-If you **perform better than expected** (for example: a very close loss against a significantly higher-rated team), your rating may stay the same or increase slightly.
+If you **perform better than expected** (for example: a very close loss against a significantly higher-rated team), your rating may increase.
 
 ---
 
 ## Can my rating go down after a win?
-No, winning is rewarded.
+No, winning is rewarded, not punished.
 However, because scores matter, a win that is **far below expected performance** can result in minimal movement but will never result in a loss of rating. 
 
 ---
@@ -1282,13 +1270,6 @@ This means playing with different partners over time helps the system find your 
 - **League JUPR** (if shown): your rating **within a specific league** or series.
 
 If you only play one league, your league rating and overall rating may look similar. If you play multiple formats/events, they can differ.
-
----
-
-## Do pop-up events affect ratings?
-By default:
-- **Pop-ups update Overall JUPR only** (unless the event is designated as a league-rated event).
-If you ever see a pop-up labeled as “JUPR Rated,” it will affect ratings as described on that event page.
 
 ---
 
