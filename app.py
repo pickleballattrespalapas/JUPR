@@ -74,6 +74,8 @@ if "admin_logged_in" not in st.session_state:
 # --- CONFIGURATION ---
 DEFAULT_K_FACTOR = 32
 CLUB_ID = "tres_palapas"
+MIN_WIN_DELTA_ELO = 1.0          # winner must gain at least +1 Elo
+CAP_LOSER_GAIN_ELO = 16.0        # ONLY cap: if loser would gain, cap the gain to this Elo
 
 # --- QUERY PARAM HELPERS / DEEP LINKS ---
 def qp_get(key: str, default: str = "") -> str:
@@ -182,38 +184,65 @@ except Exception as e:
 # -------------------------
 # LOGIC ENGINES
 # -------------------------
-def calculate_hybrid_elo(t1_avg, t2_avg, score_t1, score_t2, k_factor=32):
+def calculate_hybrid_elo(
+    t1_avg,
+    t2_avg,
+    score_t1,
+    score_t2,
+    k_factor=32,
+    min_win_delta=1.0,
+    cap_loser_gain=16,
+):
     """
     Returns (delta_for_team1_players, delta_for_team2_players) in ELO points (not JUPR).
-    Deltas returned are "as applied" (winner positive, loser negative), never both positive.
+
+    Policy:
+      - Winner hard rule: winner delta must be > 0. If computed <= 0, set to +min_win_delta.
+      - Loser may gain if they beat expectations (non-zero-sum behavior).
+      - ONLY cap: if the loser delta is positive, cap it to cap_loser_gain.
     """
+    # Normalize inputs
+    s1 = int(score_t1 or 0)
+    s2 = int(score_t2 or 0)
+
+    # No movement on ties or empty scores
+    total_points = s1 + s2
+    if total_points <= 0 or s1 == s2:
+        return 0.0, 0.0
+
+    # Expected outcomes from ratings
     expected_t1 = 1 / (1 + 10 ** ((t2_avg - t1_avg) / 400))
     expected_t2 = 1 - expected_t1
 
-    total_points = score_t1 + score_t2
-    if total_points == 0:
-        return 0.0, 0.0
+    # Observed performance proxy from score share
+    share_t1 = s1 / total_points
+    share_t2 = 1.0 - share_t1
 
-    raw_delta_t1 = k_factor * 2 * ((score_t1 / total_points) - expected_t1)
-    raw_delta_t2 = k_factor * 2 * ((score_t2 / total_points) - expected_t2)
+    # Base deltas (symmetric)
+    d1 = float(k_factor) * 2.0 * (share_t1 - expected_t1)
+    d2 = float(k_factor) * 2.0 * (share_t2 - expected_t2)  # == -d1
 
-    # enforce win/loss direction
-    if score_t1 > score_t2:
-        d1 = max(0.0, raw_delta_t1)
-        if d1 == 0.0:
-            d1 = 1.0
-        d2 = -abs(raw_delta_t2) if raw_delta_t2 != 0 else -1.0
-        return d1, d2
+    # Apply winner floor + loser-positive cap only
+    if s1 > s2:
+        # Team 1 wins
+        if d1 <= 0:
+            d1 = float(min_win_delta)
 
-    if score_t2 > score_t1:
-        d2 = max(0.0, raw_delta_t2)
-        if d2 == 0.0:
-            d2 = 1.0
-        d1 = -abs(raw_delta_t1) if raw_delta_t1 != 0 else -1.0
-        return d1, d2
+        if cap_loser_gain is not None and d2 > 0:
+            d2 = min(d2, float(cap_loser_gain))
 
-    # tie
-    return 0.0, 0.0
+        return float(d1), float(d2)
+
+    else:
+        # Team 2 wins
+        if d2 <= 0:
+            d2 = float(min_win_delta)
+
+        if cap_loser_gain is not None and d1 > 0:
+            d1 = min(d1, float(cap_loser_gain))
+
+        return float(d1), float(d2)
+
 
 # -------------------------
 # DATA LOADER
@@ -2482,64 +2511,99 @@ elif sel == "⚙️ Admin Tools":
     st.info("Run this ONCE after adding the 'starting_rating' column to league_ratings. It estimates each player's league starting rating by reversing their league match deltas.")
 
     if st.button("🚀 Run Backfill Migration"):
-        with st.status("Backfilling starting ratings...", expanded=True) as status:
-            l_ratings = (
-                supabase.table("league_ratings")
-                .select("*")
-                .eq("club_id", CLUB_ID)
-                .execute()
-                .data
+    with st.status("Backfilling starting ratings...", expanded=True) as status:
+        l_ratings = (
+            supabase.table("league_ratings")
+            .select("id,player_id,league_name,rating,starting_rating")
+            .eq("club_id", CLUB_ID)
+            .execute()
+            .data
+        )
+
+        # Pull league matches with snapshot columns (overall snapshots)
+        matches = (
+            supabase.table("matches")
+            .select(
+                "id,date,league,match_type,"
+                "t1_p1,t1_p2,t2_p1,t2_p2,"
+                "t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
             )
+            .eq("club_id", CLUB_ID)
+            .execute()
+            .data
+        )
 
-            matches = (
-                supabase.table("matches")
-                .select("id,league,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,elo_delta")
-                .eq("club_id", CLUB_ID)
-                .execute()
-                .data
-            )
-            df_m = pd.DataFrame(matches)
+        df_m = pd.DataFrame(matches)
+        if df_m.empty:
+            st.error("No matches found. Cannot backfill.")
+            status.update(label="Migration failed", state="error")
+            st.stop()
 
-            updates = []
-            for lr in l_ratings:
-                pid = int(lr["player_id"])
-                lg = str(lr["league_name"]).strip()
-                curr = float(lr["rating"])
+        # Ensure sortable
+        df_m["date"] = pd.to_datetime(df_m["date"], errors="coerce")
+        df_m = df_m.dropna(subset=["date"])
+        df_m["league"] = df_m["league"].astype(str).str.strip()
+        df_m["match_type"] = df_m["match_type"].astype(str)
 
-                total_change = 0.0
-                if not df_m.empty:
-                    rel = df_m[df_m["league"].astype(str).str.strip() == lg]
-                    rel = rel[rel["match_type"].astype(str) != "PopUp"]
+        def start_snap_for_player(row, pid: int):
+            """Return the start snapshot rating for pid from a match row, else None."""
+            try:
+                pid = int(pid)
+            except Exception:
+                return None
 
-                    for _, mm in rel.iterrows():
-                        delta = float(mm.get("elo_delta", 0) or 0)
-                        s1, s2 = int(mm.get("score_t1", 0) or 0), int(mm.get("score_t2", 0) or 0)
+            if int(row.get("t1_p1") or -1) == pid:
+                return row.get("t1_p1_r")
+            if int(row.get("t1_p2") or -1) == pid:
+                return row.get("t1_p2_r")
+            if int(row.get("t2_p1") or -1) == pid:
+                return row.get("t2_p1_r")
+            if int(row.get("t2_p2") or -1) == pid:
+                return row.get("t2_p2_r")
+            return None
 
-                        if int(mm.get("t1_p1", -1) or -1) == pid or int(mm.get("t1_p2", -1) or -1) == pid:
-                            if s1 > s2:
-                                total_change += abs(delta)
-                            elif s2 > s1:
-                                total_change -= abs(delta)
+        updates = []
+        for lr in l_ratings:
+            lr_id = int(lr["id"])
+            pid = int(lr["player_id"])
+            lg = str(lr["league_name"]).strip()
 
-                        elif int(mm.get("t2_p1", -1) or -1) == pid or int(mm.get("t2_p2", -1) or -1) == pid:
-                            if s2 > s1:
-                                total_change += abs(delta)
-                            elif s1 > s2:
-                                total_change -= abs(delta)
+            # Find earliest non-PopUp match in that league where this player appears
+            rel = df_m[(df_m["league"] == lg) & (df_m["match_type"] != "PopUp")].copy()
+            if rel.empty:
+                continue
 
-                start_r = curr - total_change
-                updates.append({"id": int(lr["id"]), "starting_rating": float(start_r)})
+            # filter to matches containing pid
+            rel = rel[
+                (rel["t1_p1"] == pid) | (rel["t1_p2"] == pid) | (rel["t2_p1"] == pid) | (rel["t2_p2"] == pid)
+            ].copy()
 
-            st.write(f"Calculated starting ratings for {len(updates)} records. Saving...")
+            if rel.empty:
+                continue
 
-            for i in range(0, len(updates), 100):
-                chunk = updates[i : i + 100]
-                for item in chunk:
-                    supabase.table("league_ratings").update({"starting_rating": item["starting_rating"]}).eq("club_id", CLUB_ID).eq("id", int(item["id"])).execute()
+            rel = rel.sort_values(["date", "id"], ascending=[True, True])
+            first = rel.iloc[0].to_dict()
 
-            status.update(label="Migration Complete!", state="complete")
-            st.success("✅ Database updated. Leaderboards can now compute Gain accurately.")
-            st.divider()
+            start_r = start_snap_for_player(first, pid)
+
+            # If snapshot missing, fall back to current rating as last resort
+            if start_r is None:
+                start_r = float(lr.get("rating", 1200.0) or 1200.0)
+
+            updates.append({"id": lr_id, "starting_rating": float(start_r)})
+
+        st.write(f"Calculated starting ratings for {len(updates)} records. Saving...")
+
+        for i in range(0, len(updates), 100):
+            chunk = updates[i : i + 100]
+            for item in chunk:
+                supabase.table("league_ratings").update(
+                    {"starting_rating": item["starting_rating"]}
+                ).eq("club_id", CLUB_ID).eq("id", int(item["id"])).execute()
+
+        status.update(label="Migration Complete!", state="complete")
+        st.success("✅ Database updated. Leaderboards can now compute Gain accurately.")
+
 
     # ---------- Reports ----------
     st.subheader("📊 Reports & Exports")
