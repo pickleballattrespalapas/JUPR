@@ -1069,7 +1069,7 @@ elif sel == "🔍 Player Search":
                     jupr_change = signed_elo / 400.0
                     rating_after = None
 
-                            processed = []
+            processed = []
             for match in matches_data:
                 s1 = int(match.get("score_t1", 0) or 0)
                 s2 = int(match.get("score_t2", 0) or 0)
