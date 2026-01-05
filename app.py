@@ -1200,19 +1200,119 @@ elif sel == "🔍 Player Search":
 
 
 elif sel == "❓ FAQs":
-    st.header("❓ FAQs")
+    st.header("❓ JUPR Rating FAQs")
+
     st.markdown(
         """
-**What is JUPR?**  
-JUPR is our internal rating system for Tres Palapas. Ratings update from match results and are displayed as a 1.000–7.000 style number.
+JUPR (Joe’s Universal Pickleball Rating) is Tres Palapas’ **in-house rating system** used to create better matchups, seed events, and keep leveled play fair.
 
-**Do pop-up events affect official league ratings?**  
-No. Pop-ups update overall ratings only (unless you decide otherwise later).
+---
 
-**Why do I see rating changes even in close games?**  
-Expected outcome is based on both teams’ average ratings and the score ratio, not just win/loss.
+## What is a JUPR rating?
+- JUPR is a **single player rating** displayed on a **1.000–7.000** scale.
+- Ratings update based on **recorded match results** from JUPR-eligible events at Tres Palapas.
+- The decimals help show *small* movement over time, but they are not meant to imply “perfect precision.”
+
+---
+
+## How do I get a JUPR rating?
+You get a JUPR rating once you have **recorded matches** in the system from a JUPR-eligible event (examples below).
+- If you haven’t played a recorded event yet, you may show as **Unrated / No JUPR**.
+- Your first set of results can move your rating more quickly while the system “learns” your level.
+
+---
+
+## What matches count toward JUPR?
+**Counts (JUPR-eligible):**
+- Official ladders where scores are entered
+- JUPR round robins / leveled sessions that require ratings
+- Leagues with recorded match entry
+- Tournaments run through Tres Palapas with official score entry
+
+**Does not count (not recorded / not JUPR-eligible):**
+- Casual open play where scores are not entered
+- Drills and clinics (unless explicitly run as a scored/rated event)
+- Friendly games not submitted into the system
+
+If a match result is not recorded, it **cannot** affect ratings.
+
+---
+
+## When do ratings update?
+Ratings update **after scores are entered** for a match.
+Depending on the event workflow, you may see changes:
+- immediately after entry, or
+- after an organizer completes the round / finalizes results.
+
+---
+
+## What affects how much my rating moves?
+JUPR is performance-based. Rating movement depends on:
+- **Opponent strength** (beating stronger opponents moves you more)
+- **Expected outcome** (results that surprise the system move you more)
+- **Game score** (the score matters—not only win/loss)
+- **Consistency over time** (repeated results matter more than one match)
+
+---
+
+## Can my rating go up after a loss?
+Yes, it can happen.
+If you **perform better than expected** (for example: a very close loss against a significantly higher-rated team), your rating may stay the same or increase slightly.
+
+---
+
+## Can my rating go down after a win?
+In general, winning is rewarded.
+However, because scores matter, a win that is **far below expected performance** can result in minimal movement and, in rare cases, a small drop.
+(Example: winning by a margin that is much tighter than expected against a much lower-rated team.)
+
+---
+
+## How does JUPR work for doubles?
+JUPR is an **individual rating**, but doubles results are used to update each player.
+In doubles:
+- the system evaluates the matchup based on **both teams** (each team’s strength is derived from the two players),
+- then adjusts each player based on the outcome and score.
+
+This means playing with different partners over time helps the system find your true level faster.
+
+---
+
+## What is the difference between “Overall” and “League” ratings?
+- **Overall JUPR**: your rating across all JUPR-eligible matches at Tres Palapas.
+- **League JUPR** (if shown): your rating **within a specific league** or series.
+
+If you only play one league, your league rating and overall rating may look similar. If you play multiple formats/events, they can differ.
+
+---
+
+## Do pop-up events affect ratings?
+By default:
+- **Pop-ups update Overall JUPR only** (unless the event is designated as a league-rated event).
+If you ever see a pop-up labeled as “JUPR Rated,” it will affect ratings as described on that event page.
+
+---
+
+## What if a score was entered wrong?
+If you believe there is a data-entry error (wrong score, wrong partner, wrong opponent):
+- report it to the organizer as soon as possible.
+Once corrected, the system will recompute the rating impact from the accurate result.
+
+---
+
+## How should I use my JUPR rating?
+Use it to:
+- join the right leveled sessions,
+- seed ladders and tournaments fairly,
+- track improvement over time,
+- create competitive, enjoyable matches.
+
+JUPR is designed to reflect **performance at Tres Palapas** based on recorded play.
+
+---
 """
     )
+
 # =========================
 # JUPR Leagues (PART 2 / 2)
 # Paste this after PART 1.
