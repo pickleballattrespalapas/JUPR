@@ -2327,15 +2327,15 @@ elif sel == "⚙️ Admin Tools":
 
     st.divider()
 
-    # ---------- Recalculate / Replay ----------
+        # ---------- Recalculate / Replay ----------
     st.subheader("🔄 Recalculate / Replay History")
-
+    
     league_opts = ["ALL (Full System Reset)"]
     if df_leagues is not None and not df_leagues.empty and "league_name" in df_leagues.columns:
         league_opts += sorted(df_leagues["league_name"].dropna().unique().tolist())
-
+    
     target_reset = st.selectbox("League", league_opts)
-
+    
     if st.button(f"⚠️ Replay History for: {target_reset}"):
         with st.spinner("Crunching..."):
             all_players = (
@@ -2345,6 +2345,7 @@ elif sel == "⚙️ Admin Tools":
                 .execute()
                 .data
             )
+    
             all_matches = (
                 supabase.table("matches")
                 .select("*")
@@ -2354,8 +2355,10 @@ elif sel == "⚙️ Admin Tools":
                 .execute()
                 .data
             )
-
-            # build k map from metadata
+    
+            # -------------------------
+            # Build K map from metadata
+            # -------------------------
             k_map = {}
             if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
                 for _, r in df_meta.iterrows():
@@ -2363,41 +2366,99 @@ elif sel == "⚙️ Admin Tools":
                         k_map[str(r["league_name"])] = int(r.get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
                     except Exception:
                         pass
-
-            def k_for(lg):
+    
+            def k_for(lg: str) -> int:
                 return int(k_map.get(str(lg), DEFAULT_K_FACTOR))
-
-            # initialize overall from starting_rating (fallback to rating)
+    
+            # -------------------------
+            # Initialize OVERALL rating map from starting_rating (fallback to rating)
+            # -------------------------
             p_map = {}
             for p in all_players:
                 base = p.get("starting_rating", None)
                 if base is None:
                     base = p.get("rating", 1200.0)
                 p_map[int(p["id"])] = {"r": float(base), "w": 0, "l": 0, "mp": 0}
-
-            island_map = {}  # (pid,lg)-> stats
-            matches_to_update = []
-
+    
+            # League map (island ratings)
+            island_map = {}          # (pid, league_name) -> {"r","w","l","mp"}
+            matches_to_update = []   # snapshot rewrite payloads
+    
+            # Diagnostics (rating mass)
+            mass_by_league = {}
+            neg_mass_rows = 0
+            skipped_incomplete = 0
+    
+            def gr(pid):
+                """Get overall rating during replay."""
+                if pid is None:
+                    return 1200.0
+                return float(p_map[int(pid)]["r"])
+    
+            def gir(pid, lg_name: str):
+                """Get league rating during replay; lazily initialize if missing."""
+                if pid is None:
+                    return 1200.0
+                key = (int(pid), lg_name)
+                if key not in island_map:
+                    # Initialize league rating at current overall at the moment of first appearance
+                    island_map[key] = {"r": float(p_map[int(pid)]["r"]), "w": 0, "l": 0, "mp": 0}
+                return float(island_map[key]["r"])
+    
+            # -------------------------
+            # Replay loop
+            # -------------------------
             for m in all_matches:
-                if target_reset != "ALL (Full System Reset)" and str(m.get("league", "")).strip() != str(target_reset).strip():
+                league_name_raw = str(m.get("league", "") or "").strip()
+    
+                # Scope replay
+                if target_reset != "ALL (Full System Reset)" and league_name_raw != str(target_reset).strip():
                     continue
-
-                p1, p2, p3, p4 = m.get("t1_p1"), m.get("t1_p2"), m.get("t2_p1"), m.get("t2_p2")
-                s1, s2 = int(m.get("score_t1", 0) or 0), int(m.get("score_t2", 0) or 0)
-
-                def gr(pid):
-                    if pid is None:
-                        return 1200.0
-                    return float(p_map[int(pid)]["r"])
-
+    
+                p1, p2 = m.get("t1_p1"), m.get("t1_p2")
+                p3, p4 = m.get("t2_p1"), m.get("t2_p2")
+                s1 = int(m.get("score_t1", 0) or 0)
+                s2 = int(m.get("score_t2", 0) or 0)
+    
+                # -------------------------
+                # Integrity gate: skip incomplete doubles rows
+                # (Prevents phantom-1200 averages and 3-player deltas)
+                # -------------------------
+                if p1 is None or p2 is None or p3 is None or p4 is None:
+                    skipped_incomplete += 1
+                    continue
+    
+                # ---------- OVERALL snapshots (start) ----------
                 sr1, sr2, sr3, sr4 = gr(p1), gr(p2), gr(p3), gr(p4)
-                do1, do2 = calculate_hybrid_elo((sr1 + sr2) / 2, (sr3 + sr4) / 2, s1, s2, k_factor=DEFAULT_K_FACTOR)
-
+    
+                do1, do2 = calculate_hybrid_elo(
+                    (sr1 + sr2) / 2,
+                    (sr3 + sr4) / 2,
+                    s1,
+                    s2,
+                    k_factor=DEFAULT_K_FACTOR,
+                )
+    
+                # ---------- Rating mass diagnostic (overall deltas applied) ----------
+                match_mass = do1 + do1 + do2 + do2
+                mass_by_league[league_name_raw] = mass_by_league.get(league_name_raw, 0.0) + float(match_mass)
+    
+                if match_mass < -1e-6:
+                    neg_mass_rows += 1
+                    st.error(
+                        f"NEGATIVE MASS match_id={m.get('id')} league={league_name_raw} "
+                        f"pids={[p1,p2,p3,p4]} scores={s1}-{s2} do1={do1:.3f} do2={do2:.3f} mass={match_mass:.6f}"
+                    )
+    
                 win = s1 > s2
-
-                for pid, d, won_flag in [(p1, do1, win), (p2, do1, win), (p3, do2, not win), (p4, do2, not win)]:
-                    if pid is None:
-                        continue
+    
+                # ---------- Apply OVERALL deltas ----------
+                for pid, d, won_flag in [
+                    (p1, do1, win),
+                    (p2, do1, win),
+                    (p3, do2, not win),
+                    (p4, do2, not win),
+                ]:
                     pid = int(pid)
                     p_map[pid]["r"] += float(d)
                     p_map[pid]["mp"] += 1
@@ -2405,27 +2466,30 @@ elif sel == "⚙️ Admin Tools":
                         p_map[pid]["w"] += 1
                     else:
                         p_map[pid]["l"] += 1
-
+    
+                # ---------- OVERALL snapshots (end) ----------
                 er1, er2, er3, er4 = gr(p1), gr(p2), gr(p3), gr(p4)
-
-                # League replay (skip PopUp)
+    
+                # ---------- LEAGUE replay (skip PopUp) ----------
                 if str(m.get("match_type", "")) != "PopUp":
-                    lg = str(m.get("league", "")).strip()
-
-                    def gir(pid, lg_name):
-                        if pid is None:
-                            return 1200.0
-                        key = (int(pid), lg_name)
-                        if key not in island_map:
-                            island_map[key] = {"r": float(p_map[int(pid)]["r"]), "w": 0, "l": 0, "mp": 0}
-                        return float(island_map[key]["r"])
-
+                    lg = league_name_raw
+    
                     ir1, ir2, ir3, ir4 = gir(p1, lg), gir(p2, lg), gir(p3, lg), gir(p4, lg)
-                    di1, di2 = calculate_hybrid_elo((ir1 + ir2) / 2, (ir3 + ir4) / 2, s1, s2, k_factor=k_for(lg))
-
-                    for pid, d, won_flag in [(p1, di1, win), (p2, di1, win), (p3, di2, not win), (p4, di2, not win)]:
-                        if pid is None:
-                            continue
+    
+                    di1, di2 = calculate_hybrid_elo(
+                        (ir1 + ir2) / 2,
+                        (ir3 + ir4) / 2,
+                        s1,
+                        s2,
+                        k_factor=k_for(lg),
+                    )
+    
+                    for pid, d, won_flag in [
+                        (p1, di1, win),
+                        (p2, di1, win),
+                        (p3, di2, not win),
+                        (p4, di2, not win),
+                    ]:
                         key = (int(pid), lg)
                         island_map[key]["r"] += float(d)
                         island_map[key]["mp"] += 1
@@ -2433,8 +2497,10 @@ elif sel == "⚙️ Admin Tools":
                             island_map[key]["w"] += 1
                         else:
                             island_map[key]["l"] += 1
-
+    
+                # ---------- Store match snapshot rewrite payload ----------
                 stored_elo_delta = abs(do1) if win else abs(do2)
+    
                 matches_to_update.append(
                     {
                         "id": int(m["id"]),
@@ -2449,25 +2515,39 @@ elif sel == "⚙️ Admin Tools":
                         "t2_p2_r_end": float(er4),
                     }
                 )
-
-            # update players (only on full reset)
+    
+            # -------------------------
+            # Diagnostics summary
+            # -------------------------
+            st.write(f"Skipped incomplete doubles rows: {skipped_incomplete}")
+            st.write(f"Negative-mass matches found: {neg_mass_rows}")
+    
+            if mass_by_league:
+                summary = pd.DataFrame(
+                    [{"league": k, "mass_elo": v, "mass_jupr": v / 400.0} for k, v in mass_by_league.items()]
+                ).sort_values("mass_elo")
+                st.dataframe(summary, use_container_width=True, hide_index=True)
+    
+            # -------------------------
+            # Update players (only on full reset)
+            # -------------------------
             if target_reset == "ALL (Full System Reset)":
                 for pid, s in p_map.items():
                     supabase.table("players").update(
                         {"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]}
                     ).eq("club_id", CLUB_ID).eq("id", int(pid)).execute()
-
-            # rebuild league_ratings
+    
+            # -------------------------
+            # Rebuild league_ratings
+            # -------------------------
             if target_reset != "ALL (Full System Reset)":
                 supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).eq("league_name", str(target_reset)).execute()
             else:
                 supabase.table("league_ratings").delete().eq("club_id", CLUB_ID).execute()
-
+    
             new_is = []
             for (pid, lg), s in island_map.items():
                 if target_reset == "ALL (Full System Reset)" or str(lg).strip() == str(target_reset).strip():
-                    # starting_rating: current overall base at time of league start is not reconstructible perfectly here,
-                    # so set to player's starting_rating if present; otherwise overall starting point.
                     start_base = None
                     for p in all_players:
                         if int(p["id"]) == int(pid):
@@ -2475,7 +2555,7 @@ elif sel == "⚙️ Admin Tools":
                             break
                     if start_base is None:
                         start_base = 1200.0
-
+    
                     new_is.append(
                         {
                             "club_id": CLUB_ID,
@@ -2488,23 +2568,26 @@ elif sel == "⚙️ Admin Tools":
                             "starting_rating": float(start_base),
                         }
                     )
-
+    
             if new_is:
                 for i in range(0, len(new_is), 1000):
                     supabase.table("league_ratings").insert(new_is[i : i + 1000]).execute()
-
-            # update match snapshots (chunked)
+    
+            # -------------------------
+            # Update match snapshots (chunked)
+            # -------------------------
             bar = st.progress(0.0)
             total = max(1, len(matches_to_update))
             for i, u in enumerate(matches_to_update):
                 supabase.table("matches").update(u).eq("club_id", CLUB_ID).eq("id", int(u["id"])).execute()
                 bar.progress((i + 1) / total)
-
+    
             st.success("Done!")
             time.sleep(1)
             st.rerun()
-
+    
     st.divider()
+
 
     # ---------- Backfill starting_rating on league_ratings ----------
     st.subheader("🛠️ Database Migration: Backfill League Start Ratings")
