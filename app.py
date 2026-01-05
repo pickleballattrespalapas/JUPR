@@ -1262,9 +1262,8 @@ If you **perform better than expected** (for example: a very close loss against 
 ---
 
 ## Can my rating go down after a win?
-In general, winning is rewarded.
-However, because scores matter, a win that is **far below expected performance** can result in minimal movement and, in rare cases, a small drop.
-(Example: winning by a margin that is much tighter than expected against a much lower-rated team.)
+No, winning is rewarded.
+However, because scores matter, a win that is **far below expected performance** can result in minimal movement but will never result in a loss of rating. 
 
 ---
 
