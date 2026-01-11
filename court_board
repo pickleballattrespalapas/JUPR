@@ -1,0 +1,11 @@
+court_board/
+  __init__.py
+  frontend/
+    package.json
+    tsconfig.json
+    public/
+      index.html
+    src/
+      index.tsx
+      CourtBoard.tsx
+      styles.css
