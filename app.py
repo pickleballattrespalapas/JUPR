@@ -12,6 +12,18 @@ import re
 import altair as alt
 import urllib.parse
 from postgrest.exceptions import APIError
+import hashlib
+
+def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side: str) -> str:
+    a = sorted([int(t1[0]), int(t1[1])])
+    b = sorted([int(t2[0]), int(t2[1])])
+    raw = f"r{round_num}|c{court_num}|{a[0]}-{a[1]}|vs|{b[0]}-{b[1]}|{side}"
+    return "sc_" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+    
+    k1 = match_key(current_r, c_data["c"], mm["t1"], mm["t2"], "s1")
+    k2 = match_key(current_r, c_data["c"], mm["t1"], mm["t2"], "s2")
+    s1 = c2.number_input("S1", 0, key=k1)
+    s2 = c3.number_input("S2", 0, key=k2)
 
 
 def sb_retry(fn, retries: int = 4, base_sleep: float = 0.6):
@@ -550,11 +562,28 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
 
 
     for m in match_list:
-        # map names -> ids
-        p1 = name_to_id.get(m.get("t1_p1"))
-        p2 = name_to_id.get(m.get("t1_p2"))
-        p3 = name_to_id.get(m.get("t2_p1"))
-        p4 = name_to_id.get(m.get("t2_p2"))
+       def as_pid(x):
+            """Accept int IDs OR names. Returns int player_id or None."""
+            if x is None:
+                return None
+            # already an int id
+            if isinstance(x, int):
+                return x
+            # numeric strings
+            try:
+                s = str(x).strip()
+                if s.isdigit():
+                    return int(s)
+            except Exception:
+                pass
+            # name lookup
+            return name_to_id.get(str(x).strip())
+        
+        p1 = as_pid(m.get("t1_p1"))
+        p2 = as_pid(m.get("t1_p2"))
+        p3 = as_pid(m.get("t2_p1"))
+        p4 = as_pid(m.get("t2_p2"))
+
 
         if not p1 or not p3:
             continue
@@ -1584,8 +1613,13 @@ if sel == "🏟️ League Manager":
                     for c_idx, size in enumerate(court_sizes):
                         group = st.session_state.ladder_roster[current_idx : current_idx + size]
                         for pl in group:
-                            final_assignments.append({"name": pl["name"], "rating": pl["rating"], "court": c_idx + 1})
-                        current_idx += size
+                            final_assignments.append({
+                                "player_id": int(pl["id"]),
+                                "name": pl["name"],
+                                "rating": float(pl["rating"]),
+                                "court": c_idx + 1
+                            })
+
 
                     final_roster = pd.DataFrame(final_assignments)
 
@@ -1593,7 +1627,7 @@ if sel == "🏟️ League Manager":
 
                     final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
 
-                    st.session_state.ladder_live_roster = final_roster[["name", "rating", "court", "slot"]].copy()
+                    st.session_state.ladder_live_roster = final_roster[["player_id","name","rating","court","slot"]].copy()
                     st.session_state.ladder_court_sizes = court_sizes
                     st.session_state.ladder_state = "CONFIRM_START"
                     st.rerun()
@@ -1751,7 +1785,8 @@ if sel == "🏟️ League Manager":
                     court_df = st.session_state.ladder_live_roster[st.session_state.ladder_live_roster["court"] == c_num].copy()
                     if "slot" in court_df.columns:
                         court_df = court_df.sort_values("slot")
-                    players = court_df["name"].tolist()
+                    players = court_df["player_id"].astype(int).tolist()
+
 
                     fmt = f"{len(players)}-Player"
                     matches = get_match_schedule(fmt, players)
@@ -1765,21 +1800,22 @@ if sel == "🏟️ League Manager":
                     for m_idx, mm in enumerate(c_data["matches"]):
                         c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
                         label = mm.get("desc", f"Game {m_idx+1}")
-                        c1.text(f"{label}: {mm['t1'][0]} & {mm['t1'][1]}")
-                        s1 = c2.number_input("S1", 0, key=f"r{current_r}_c{c_data['c']}_m{m_idx}_1")
-                        s2 = c3.number_input("S2", 0, key=f"r{current_r}_c{c_data['c']}_m{m_idx}_2")
-                        c4.text(f"{mm['t2'][0]} & {mm['t2'][1]}")
-                        all_results.append(
-                            {
-                                "court": c_data["c"],
-                                "t1_p1": mm["t1"][0],
-                                "t1_p2": mm["t1"][1],
-                                "t2_p1": mm["t2"][0],
-                                "t2_p2": mm["t2"][1],
-                                "s1": int(s1),
-                                "s2": int(s2),
-                            }
-                        )
+                        def nm(pid: int) -> str:
+                            return str(id_to_name.get(int(pid), f"#{pid}"))
+                        
+                        c1.text(f"{label}: {nm(mm['t1'][0])} & {nm(mm['t1'][1])}")
+                        c4.text(f"{nm(mm['t2'][0])} & {nm(mm['t2'][1])}")
+
+                        all_results.append({
+                            "court": c_data["c"],
+                            "t1_p1": int(mm["t1"][0]),
+                            "t1_p2": int(mm["t1"][1]),
+                            "t2_p1": int(mm["t2"][0]),
+                            "t2_p2": int(mm["t2"][1]),
+                            "s1": int(s1),
+                            "s2": int(s2),
+                        })
+
 
                 if st.form_submit_button("Submit Round & Calculate Movement"):
                     valid_matches = []
