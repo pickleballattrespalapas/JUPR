@@ -13,6 +13,8 @@ import altair as alt
 import urllib.parse
 from postgrest.exceptions import APIError
 import hashlib
+from jupr_court_board import court_board
+
 
 def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side: str) -> str:
     a = sorted([int(t1[0]), int(t1[1])])
@@ -1442,6 +1444,77 @@ def sync_ladder_court_sizes_from_roster(roster_df: pd.DataFrame):
         sizes.append(int((roster_df["court"].astype(int) == c).sum()))
     st.session_state.ladder_court_sizes = sizes
 
+def roster_df_to_courts(roster_df: pd.DataFrame) -> list[dict]:
+    df = roster_df.copy()
+
+    # Normalize types
+    df["court"] = df["court"].astype(int)
+    df["player_id"] = df["player_id"].astype(int)
+
+    # Ensure stable ordering within court
+    if "slot" in df.columns:
+        df["slot"] = df["slot"].astype(int)
+        df = df.sort_values(["court", "slot"], ascending=[True, True])
+    else:
+        df = df.sort_values(["court", "rating"], ascending=[True, False])
+
+    courts: list[dict] = []
+    for c in sorted(df["court"].unique().tolist()):
+        cdf = df[df["court"] == c]
+        players = [
+            {
+                "player_id": str(int(r["player_id"])),  # draggableId must be string
+                "name": str(r["name"]),
+                "rating": float(r.get("rating", 1200.0)) / 400.0,  # display JUPR
+            }
+            for _, r in cdf.iterrows()
+        ]
+        courts.append({"court_id": f"Court {c}", "players": players})
+
+    # Always include Bench
+    courts.append({"court_id": "Bench", "players": []})
+    return courts
+
+
+
+def courts_to_roster_df(courts: list[dict], prev_roster_df: pd.DataFrame) -> pd.DataFrame:
+    df_prev = prev_roster_df.copy()
+    df_prev["player_id"] = df_prev["player_id"].astype(int)
+
+    elo_map = dict(zip(df_prev["player_id"], df_prev["rating"]))
+    name_map = dict(zip(df_prev["player_id"], df_prev["name"]))
+
+    rows = []
+    for c in courts:
+        cid = str(c.get("court_id", ""))
+        if cid == "Bench":
+            continue
+
+        m = re.findall(r"\d+", cid)
+        if not m:
+            continue
+        cnum = int(m[0])
+
+        players = c.get("players", []) or []
+        for i, p in enumerate(players, start=1):
+            pid = int(p["player_id"])
+            rows.append(
+                {
+                    "player_id": pid,
+                    "name": name_map.get(pid, str(p.get("name", pid))),
+                    "rating": float(elo_map.get(pid, 1200.0)),
+                    "court": int(cnum),
+                    "slot": int(i),
+                }
+            )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return prev_roster_df
+
+    out = out.sort_values(["court", "slot"], ascending=[True, True]).reset_index(drop=True)
+    out = compress_courts(normalize_slots(out))
+    return out
 
 # -------------------------
 # PAGE: LEAGUE MANAGER
@@ -1614,6 +1687,7 @@ if sel == "🏟️ League Manager":
                 if st.button("Preview Assignments"):
                     current_idx = 0
                     final_assignments = []
+
                     for c_idx, size in enumerate(court_sizes):
                         group = st.session_state.ladder_roster[current_idx : current_idx + size]
                         for pl in group:
@@ -1623,6 +1697,9 @@ if sel == "🏟️ League Manager":
                                 "rating": float(pl["rating"]),
                                 "court": c_idx + 1
                             })
+
+                        current_idx += size  # <-- THIS FIXES IT
+
 
 
                     final_roster = pd.DataFrame(final_assignments)
@@ -1641,57 +1718,63 @@ if sel == "🏟️ League Manager":
         if st.session_state.ladder_state == "CONFIRM_START":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit courts)"):
-        # optional: clear preview so it forces a fresh preview next time
+                # optional: clear preview so it forces a fresh preview next time
                 if "ladder_live_roster" in st.session_state:
                     del st.session_state.ladder_live_roster
                 st.session_state.ladder_state = "CONFIG_COURTS"
                 st.rerun()
 
-            st.markdown("#### Step 4: Confirm Starting Positions")
-            st.markdown("Verify the court assignments. Ratings shown in **JUPR**.")
+            st.markdown("#### Step 4: Court Board Preview (Drag & Drop)")
+            st.caption("Use the Court Board to make final adjustments. Bench players will not be scheduled.")
 
-            display_roster = st.session_state.ladder_live_roster.copy()
-            display_roster["JUPR Rating"] = display_roster["rating"].astype(float) / 400.0
+            roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
+            roster_df = compress_courts(roster_df)
 
-            edited_roster = st.data_editor(
-                display_roster[["name", "JUPR Rating", "court"]],
-                column_config={
-                    "court": st.column_config.NumberColumn("Court", min_value=1, max_value=10, step=1),
-                    "JUPR Rating": st.column_config.NumberColumn("JUPR Rating", format="%.3f", disabled=True),
-                },
-                hide_index=True,
-                use_container_width=True,
-            )
+            courts_payload = roster_df_to_courts(roster_df)
 
-            if st.button("✅ Start Event (Round 1)"):
-                final_roster = edited_roster.copy()
-                final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
+            result = court_board(courts_payload, key="court_board_confirm_start")
+
+
+
+    
             
-                # Keep player_id from the preview roster
-                pid_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["player_id"]))
-                final_roster["player_id"] = final_roster["name"].map(pid_map).astype(int)
-            
-                # Preserve within-court slot order if present
-                if "slot" in st.session_state.ladder_live_roster.columns:
-                    slot_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["slot"]))
-                    final_roster["slot"] = final_roster["name"].map(lambda x: int(slot_map.get(x, 999)))
-                    final_roster = final_roster.sort_values(["court", "slot"], ascending=[True, True]).copy()
-                else:
-                    final_roster = final_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
-            
-                final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
-            
-                new_sizes = final_roster["court"].value_counts().sort_index().tolist()
-                st.session_state.ladder_court_sizes = new_sizes
-            
-                # ✅ keep player_id in the live roster
-                st.session_state.ladder_live_roster = final_roster[["player_id", "name", "rating", "court", "slot"]].copy()
-            
+
+            # Apply board changes back into ladder_live_roster
+            if result and isinstance(result, dict) and "courts" in result:
+                updated_courts = result["courts"]
+                new_df = courts_to_roster_df(updated_courts, roster_df)
+
+                if not new_df.equals(st.session_state.ladder_live_roster):
+                    st.session_state.ladder_live_roster = new_df
+                    sync_ladder_court_sizes_from_roster(st.session_state.ladder_live_roster)
+
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
+
+                    st.rerun()
+
+            # --- Validation gate (must always define can_start) ---
+            can_start = True
+            df_check = st.session_state.ladder_live_roster.copy()
+            court_counts = df_check.groupby("court").size().to_dict()
+
+            problems = []
+            for c, n in sorted(court_counts.items()):
+                if int(n) < 4:
+                    problems.append(f"Court {c} has {n} players (min 4).")
+
+            if problems:
+                st.warning("Fix these before starting Round 1:\n\n- " + "\n- ".join(problems))
+                can_start = False
+
+            if st.button("✅ Start Event (Round 1)", disabled=not can_start):
                 st.session_state.ladder_round_num = 1
                 st.session_state.ladder_state = "PLAY_ROUND"
                 if "current_schedule" in st.session_state:
                     del st.session_state.current_schedule
                 st.rerun()
+
+
 
 
 
