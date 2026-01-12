@@ -19,11 +19,6 @@ def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side
     b = sorted([int(t2[0]), int(t2[1])])
     raw = f"r{round_num}|c{court_num}|{a[0]}-{a[1]}|vs|{b[0]}-{b[1]}|{side}"
     return "sc_" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
-    
-    k1 = match_key(current_r, c_data["c"], mm["t1"], mm["t2"], "s1")
-    k2 = match_key(current_r, c_data["c"], mm["t1"], mm["t2"], "s2")
-    s1 = c2.number_input("S1", 0, key=k1)
-    s2 = c3.number_input("S2", 0, key=k2)
 
 
 def sb_retry(fn, retries: int = 4, base_sleep: float = 0.6):
@@ -595,25 +590,25 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             match_type = str(m.get("match_type", "") or "")
             is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
 
-        # --- snapshots start (overall only; league snapshots are computed same way for storage consistency) ---
-        ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
-
-        # overall deltas
-        do1, do2 = calculate_hybrid_elo((ro1 + ro2) / 2, (ro3 + ro4) / 2, s1, s2, k_factor=DEFAULT_K_FACTOR)
-
-        # league deltas (if official league)
-        di1, di2 = 0.0, 0.0
-        if not is_popup:
-            k_val = get_k(league_name)
-            ri1, ri2, ri3, ri4 = (
-                get_island_r(p1, league_name),
-                get_island_r(p2, league_name),
-                get_island_r(p3, league_name),
-                get_island_r(p4, league_name),
-            )
-            di1, di2 = calculate_hybrid_elo((ri1 + ri2) / 2, (ri3 + ri4) / 2, s1, s2, k_factor=k_val)
-
-        win_team1 = s1 > s2
+            # --- snapshots start (overall only; league snapshots are computed same way for storage consistency) ---
+            ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
+    
+            # overall deltas
+            do1, do2 = calculate_hybrid_elo((ro1 + ro2) / 2, (ro3 + ro4) / 2, s1, s2, k_factor=DEFAULT_K_FACTOR)
+    
+            # league deltas (if official league)
+            di1, di2 = 0.0, 0.0
+            if not is_popup:
+                k_val = get_k(league_name)
+                ri1, ri2, ri3, ri4 = (
+                    get_island_r(p1, league_name),
+                    get_island_r(p2, league_name),
+                    get_island_r(p3, league_name),
+                    get_island_r(p4, league_name),
+                )
+                di1, di2 = calculate_hybrid_elo((ri1 + ri2) / 2, (ri3 + ri4) / 2, s1, s2, k_factor=k_val)
+    
+            win_team1 = s1 > s2
 
         def apply_updates(pid, d_ov, d_isl, won):
             if pid is None:
@@ -638,40 +633,40 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
 
             return float(overall_updates[pid]["r"])
 
-        # end snapshots
-        end_r1 = apply_updates(p1, do1, di1, win_team1)
-        end_r2 = apply_updates(p2, do1, di1, win_team1)
-        end_r3 = apply_updates(p3, do2, di2, not win_team1)
-        end_r4 = apply_updates(p4, do2, di2, not win_team1)
-
-        # store elo_delta as magnitude for reference; snapshots are the source of truth for player audit
-        stored_elo_delta = abs(do1) if win_team1 else abs(do2)
-
-        db_matches.append(
-            {
-                "club_id": CLUB_ID,
-                "date": m.get("date"),
-                "league": league_name,
-                "t1_p1": p1,
-                "t1_p2": p2,
-                "t2_p1": p3,
-                "t2_p2": p4,
-                "score_t1": s1,
-                "score_t2": s2,
-                "elo_delta": stored_elo_delta,
-                "match_type": match_type,
-                "week_tag": week_tag,
-                # snapshots (overall)
-                "t1_p1_r": ro1,
-                "t1_p2_r": ro2,
-                "t2_p1_r": ro3,
-                "t2_p2_r": ro4,
-                "t1_p1_r_end": end_r1,
-                "t1_p2_r_end": end_r2,
-                "t2_p1_r_end": end_r3,
-                "t2_p2_r_end": end_r4,
-            }
-        )
+            # end snapshots
+            end_r1 = apply_updates(p1, do1, di1, win_team1)
+            end_r2 = apply_updates(p2, do1, di1, win_team1)
+            end_r3 = apply_updates(p3, do2, di2, not win_team1)
+            end_r4 = apply_updates(p4, do2, di2, not win_team1)
+    
+            # store elo_delta as magnitude for reference; snapshots are the source of truth for player audit
+            stored_elo_delta = abs(do1) if win_team1 else abs(do2)
+    
+            db_matches.append(
+                {
+                    "club_id": CLUB_ID,
+                    "date": m.get("date"),
+                    "league": league_name,
+                    "t1_p1": p1,
+                    "t1_p2": p2,
+                    "t2_p1": p3,
+                    "t2_p2": p4,
+                    "score_t1": s1,
+                    "score_t2": s2,
+                    "elo_delta": stored_elo_delta,
+                    "match_type": match_type,
+                    "week_tag": week_tag,
+                    # snapshots (overall)
+                    "t1_p1_r": ro1,
+                    "t1_p2_r": ro2,
+                    "t2_p1_r": ro3,
+                    "t2_p2_r": ro4,
+                    "t1_p1_r_end": end_r1,
+                    "t1_p2_r_end": end_r2,
+                    "t2_p1_r_end": end_r3,
+                    "t2_p2_r_end": end_r4,
+                }
+            )
 
     # Write matches
     if db_matches:
