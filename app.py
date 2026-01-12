@@ -585,15 +585,15 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             p4 = as_pid(m.get("t2_p2"))
 
 
-        if not p1 or not p3:
-            continue
+            if not p1 or not p3:
+                continue
 
-        s1 = int(m.get("s1", 0) or 0)
-        s2 = int(m.get("s2", 0) or 0)
-        league_name = str(m.get("league", "") or "").strip()
-        week_tag = str(m.get("week_tag", "") or "")
-        match_type = str(m.get("match_type", "") or "")
-        is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
+            s1 = int(m.get("s1", 0) or 0)
+            s2 = int(m.get("s2", 0) or 0)
+            league_name = str(m.get("league", "") or "").strip()
+            week_tag = str(m.get("week_tag", "") or "")
+            match_type = str(m.get("match_type", "") or "")
+            is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
 
         # --- snapshots start (overall only; league snapshots are computed same way for storage consistency) ---
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
