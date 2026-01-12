@@ -1855,32 +1855,34 @@ if sel == "🏟️ League Manager":
                         process_matches(valid_matches, name_to_id, df_players_all, df_leagues, df_meta)
                         st.success("Matches Saved to Database!")
 
-                        # movement calculations
-                        round_stats = {}
-                        all_names = st.session_state.ladder_live_roster["name"].unique()
-                        for n in all_names:
-                            round_stats[n] = {"w": 0, "diff": 0, "pts": 0}
+                    # movement calculations
+                    round_stats = {}
+                    for pid in st.session_state.ladder_live_roster["player_id"].astype(int).unique():
+                        round_stats[int(pid)] = {"w": 0, "diff": 0, "pts": 0}
+                    
+                    for r in valid_matches:
+                        win_team1 = r["s1"] > r["s2"]
+                        diff = abs(r["s1"] - r["s2"])
+                    
+                        for pid in [r["t1_p1"], r["t1_p2"]]:
+                            pid = int(pid)
+                            round_stats[pid]["pts"] += int(r["s1"])
+                            round_stats[pid]["diff"] += diff if win_team1 else -diff
+                            if win_team1:
+                                round_stats[pid]["w"] += 1
+                    
+                        for pid in [r["t2_p1"], r["t2_p2"]]:
+                            pid = int(pid)
+                            round_stats[pid]["pts"] += int(r["s2"])
+                            round_stats[pid]["diff"] += -diff if win_team1 else diff
+                            if not win_team1:
+                                round_stats[pid]["w"] += 1
+                    
+                    df_roster = st.session_state.ladder_live_roster.copy()
+                    df_roster["Round Wins"] = df_roster["player_id"].astype(int).map(lambda pid: round_stats.get(int(pid), {}).get("w", 0))
+                    df_roster["Round Diff"] = df_roster["player_id"].astype(int).map(lambda pid: round_stats.get(int(pid), {}).get("diff", 0))
+                    df_roster["Round Pts"]  = df_roster["player_id"].astype(int).map(lambda pid: round_stats.get(int(pid), {}).get("pts", 0))
 
-                        for r in valid_matches:
-                            win = r["s1"] > r["s2"]
-                            diff = abs(r["s1"] - r["s2"])
-
-                            for p in [r["t1_p1"], r["t1_p2"]]:
-                                round_stats[p]["pts"] += r["s1"]
-                                round_stats[p]["diff"] += diff if win else -diff
-                                if win:
-                                    round_stats[p]["w"] += 1
-
-                            for p in [r["t2_p1"], r["t2_p2"]]:
-                                round_stats[p]["pts"] += r["s2"]
-                                round_stats[p]["diff"] += -diff if win else diff
-                                if not win:
-                                    round_stats[p]["w"] += 1
-
-                        df_roster = st.session_state.ladder_live_roster.copy()
-                        df_roster["Round Wins"] = df_roster["name"].map(lambda x: round_stats.get(x, {}).get("w", 0))
-                        df_roster["Round Diff"] = df_roster["name"].map(lambda x: round_stats.get(x, {}).get("diff", 0))
-                        df_roster["Round Pts"] = df_roster["name"].map(lambda x: round_stats.get(x, {}).get("pts", 0))
 
                         df_roster = df_roster.sort_values(by=["court", "Round Wins", "Round Diff", "Round Pts"], ascending=[True, False, False, False])
                         df_roster["Proposed Court"] = df_roster["court"]
@@ -2878,7 +2880,7 @@ elif sel == "⚙️ Admin Tools":
                     ).eq("club_id", CLUB_ID).eq("id", int(item["id"])).execute()
 
             status.update(label="Migration Complete!", state="complete")
-            st.success("✅ Database updated. Leaderboards can now compute Gain accurately.")
+        st.success("✅ Database updated. Leaderboards can now compute Gain accurately.")
 
 
     # ---------- Reports ----------
