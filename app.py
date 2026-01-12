@@ -579,10 +579,10 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
             # name lookup
             return name_to_id.get(str(x).strip())
         
-        p1 = as_pid(m.get("t1_p1"))
-        p2 = as_pid(m.get("t1_p2"))
-        p3 = as_pid(m.get("t2_p1"))
-        p4 = as_pid(m.get("t2_p2"))
+            p1 = as_pid(m.get("t1_p1"))
+            p2 = as_pid(m.get("t1_p2"))
+            p3 = as_pid(m.get("t2_p1"))
+            p4 = as_pid(m.get("t2_p2"))
 
 
         if not p1 or not p3:
