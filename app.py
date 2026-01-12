@@ -1884,26 +1884,26 @@ if sel == "🏟️ League Manager":
                     df_roster["Round Pts"]  = df_roster["player_id"].astype(int).map(lambda pid: round_stats.get(int(pid), {}).get("pts", 0))
 
 
-                        df_roster = df_roster.sort_values(by=["court", "Round Wins", "Round Diff", "Round Pts"], ascending=[True, False, False, False])
-                        df_roster["Proposed Court"] = df_roster["court"]
+                    df_roster = df_roster.sort_values(by=["court", "Round Wins", "Round Diff", "Round Pts"], ascending=[True, False, False, False])
+                    df_roster["Proposed Court"] = df_roster["court"]
 
-                        max_court = len(st.session_state.ladder_court_sizes)
-                        for c_num in sorted(df_roster["court"].unique()):
-                            court_group = df_roster[df_roster["court"] == c_num]
-                            if len(court_group) == 0:
-                                continue
-                            top_player = court_group.iloc[0]["name"]
-                            btm_player = court_group.iloc[-1]["name"]
-                            if c_num > 1:
-                                df_roster.loc[df_roster["name"] == top_player, "Proposed Court"] = c_num - 1
-                            if c_num < max_court:
-                                df_roster.loc[df_roster["name"] == btm_player, "Proposed Court"] = c_num + 1
+                    max_court = len(st.session_state.ladder_court_sizes)
+                    for c_num in sorted(df_roster["court"].unique()):
+                        court_group = df_roster[df_roster["court"] == c_num]
+                        if len(court_group) == 0:
+                            continue
+                        top_player = court_group.iloc[0]["name"]
+                        btm_player = court_group.iloc[-1]["name"]
+                        if c_num > 1:
+                            df_roster.loc[df_roster["name"] == top_player, "Proposed Court"] = c_num - 1
+                        if c_num < max_court:
+                            df_roster.loc[df_roster["name"] == btm_player, "Proposed Court"] = c_num + 1
 
-                        st.session_state.ladder_movement_preview = df_roster
-                        st.session_state.ladder_state = "CONFIRM_MOVEMENT"
-                        if "current_schedule" in st.session_state:
-                            del st.session_state.current_schedule
-                        st.rerun()
+                    st.session_state.ladder_movement_preview = df_roster
+                    st.session_state.ladder_state = "CONFIRM_MOVEMENT"
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
+                    st.rerun()
 
         # ---- 5) CONFIRM MOVEMENT ----
         if st.session_state.ladder_state == "CONFIRM_MOVEMENT":
