@@ -557,44 +557,44 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
 
 
         def as_pid(x):
-        """Accept int IDs OR names. Returns int player_id or None."""
-        if x is None:
-            return None
-        # already numeric?
-        try:
-            # handles numpy ints too
-            if isinstance(x, int):
-                return int(x)
-        except Exception:
-            pass
-
-        s = str(x).strip()
-        if not s:
-            return None
-        if s.isdigit():
-            return int(s)
-
-        # name lookup
-        return name_to_id.get(s)
-
-    for m in match_list:
-        p1 = as_pid(m.get("t1_p1"))
-        p2 = as_pid(m.get("t1_p2"))
-        p3 = as_pid(m.get("t2_p1"))
-        p4 = as_pid(m.get("t2_p2"))
-
-        # Require full doubles row (prevents null snapshots / phantom 1200 averaging)
-        if any(pid is None for pid in (p1, p2, p3, p4)):
-            continue
-
-        p1, p2, p3, p4 = int(p1), int(p2), int(p3), int(p4)
-
-        s1 = int(m.get("s1", 0) or 0)
-        s2 = int(m.get("s2", 0) or 0)
-        league_name = str(m.get("league", "") or "").strip()
-        week_tag = str(m.get("week_tag", "") or "")
-        match_type = str(m.get("match_type", "") or "")
-        is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
+            """Accept int IDs OR names. Returns int player_id or None."""
+            if x is None:
+                return None
+            # already numeric?
+            try:
+                # handles numpy ints too
+                if isinstance(x, int):
+                    return int(x)
+            except Exception:
+                pass
+    
+            s = str(x).strip()
+            if not s:
+                return None
+            if s.isdigit():
+                return int(s)
+    
+            # name lookup
+            return name_to_id.get(s)
+    
+        for m in match_list:
+            p1 = as_pid(m.get("t1_p1"))
+            p2 = as_pid(m.get("t1_p2"))
+            p3 = as_pid(m.get("t2_p1"))
+            p4 = as_pid(m.get("t2_p2"))
+    
+            # Require full doubles row (prevents null snapshots / phantom 1200 averaging)
+            if any(pid is None for pid in (p1, p2, p3, p4)):
+                continue
+    
+            p1, p2, p3, p4 = int(p1), int(p2), int(p3), int(p4)
+    
+            s1 = int(m.get("s1", 0) or 0)
+            s2 = int(m.get("s2", 0) or 0)
+            league_name = str(m.get("league", "") or "").strip()
+            week_tag = str(m.get("week_tag", "") or "")
+            match_type = str(m.get("match_type", "") or "")
+            is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
 
 
         # --- snapshots start (overall only; league snapshots are computed same way for storage consistency) ---
