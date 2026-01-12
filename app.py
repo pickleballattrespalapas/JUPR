@@ -1415,14 +1415,16 @@ def move_player_to_court(roster_df: pd.DataFrame, player: str, target_court: int
     for i, nm in enumerate(target_names, start=1):
         df.loc[(df["court"] == target_court) & (df["name"] == nm), "slot"] = i
 
-    # Add player back on target court (if it wasn’t already in df)
+       # Add player back on target court (if it wasn’t already in df)
     if player not in df["name"].tolist():
         df = pd.concat([df, pd.DataFrame([{
+            "player_id": int(row.get("player_id")) if "player_id" in row else None,
             "name": player,
             "rating": float(row.get("rating", 1200.0)),
             "court": target_court,
             "slot": target_slot
         }])], ignore_index=True)
+
 
     # Normalize + compress (handles empty courts)
     df = normalize_slots(df)
@@ -1664,29 +1666,33 @@ if sel == "🏟️ League Manager":
             if st.button("✅ Start Event (Round 1)"):
                 final_roster = edited_roster.copy()
                 final_roster["rating"] = final_roster["JUPR Rating"].astype(float) * 400.0
-
-                # ✅ Keep existing within-court order (slot) so RR schedule stays consistent
-                # If slot exists (it should), use it. Otherwise fall back to rating desc.
+            
+                # Keep player_id from the preview roster
+                pid_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["player_id"]))
+                final_roster["player_id"] = final_roster["name"].map(pid_map).astype(int)
+            
+                # Preserve within-court slot order if present
                 if "slot" in st.session_state.ladder_live_roster.columns:
                     slot_map = dict(zip(st.session_state.ladder_live_roster["name"], st.session_state.ladder_live_roster["slot"]))
                     final_roster["slot"] = final_roster["name"].map(lambda x: int(slot_map.get(x, 999)))
                     final_roster = final_roster.sort_values(["court", "slot"], ascending=[True, True]).copy()
                 else:
                     final_roster = final_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
-
-                # re-number slots cleanly within each court
+            
                 final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
-
-
+            
                 new_sizes = final_roster["court"].value_counts().sort_index().tolist()
                 st.session_state.ladder_court_sizes = new_sizes
-                st.session_state.ladder_live_roster = final_roster[["name", "rating", "court", "slot"]].copy()
-
+            
+                # ✅ keep player_id in the live roster
+                st.session_state.ladder_live_roster = final_roster[["player_id", "name", "rating", "court", "slot"]].copy()
+            
                 st.session_state.ladder_round_num = 1
                 st.session_state.ladder_state = "PLAY_ROUND"
                 if "current_schedule" in st.session_state:
                     del st.session_state.current_schedule
                 st.rerun()
+
 
 
         # ---- 4) PLAY ROUND ----
@@ -1804,6 +1810,12 @@ if sel == "🏟️ League Manager":
                         label = mm.get("desc", f"Game {m_idx+1}")
                         def nm(pid: int) -> str:
                             return str(id_to_name.get(int(pid), f"#{pid}"))
+
+                        k1 = match_key(current_r, c_data["c"], mm["t1"], mm["t2"], "s1")
+                        k2 = match_key(current_r, c_data["c"], mm["t1"], mm["t2"], "s2")
+                        s1 = c2.number_input("S1", min_value=0, max_value=99, value=0, step=1, key=k1)
+                        s2 = c3.number_input("S2", min_value=0, max_value=99, value=0, step=1, key=k2)
+
                         
                         c1.text(f"{label}: {nm(mm['t1'][0])} & {nm(mm['t1'][1])}")
                         c4.text(f"{nm(mm['t2'][0])} & {nm(mm['t2'][1])}")
