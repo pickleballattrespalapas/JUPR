@@ -1300,10 +1300,6 @@ elif sel == "🎯 Match Explorer":
 
     # -------- Score input (default to 11, but unconstrained) --------
     st.subheader("Hypothetical score (unconstrained)")
-    st.caption("Any score is allowed (to 11, to 15, win-by-1, etc.). Ties produce no movement.")
-
-    st.subheader("Hypothetical score (unconstrained)")
-    st.caption("Default is 11–9, but any score is allowed (to 11, to 15, win-by-1, etc.). Ties produce no movement.")
     
     # Ensure sane defaults exist once per session (deep-links will override via query params)
     if "mx_sy" not in st.session_state:
