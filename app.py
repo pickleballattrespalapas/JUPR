@@ -1302,29 +1302,34 @@ elif sel == "🎯 Match Explorer":
     st.subheader("Hypothetical score (unconstrained)")
     st.caption("Any score is allowed (to 11, to 15, win-by-1, etc.). Ties produce no movement.")
 
-    presets = [
-        ("Default: 11–9", 11, 9),
-        ("11–6", 11, 6),
-        ("11–3", 11, 3),
-        ("9–11", 9, 11),
-        ("6–11", 6, 11),
-        ("3–11", 3, 11),
-        ("Custom…", None, None),
-    ]
-
-    pcol, scol1, scol2 = st.columns([2, 1, 1])
-    with pcol:
-        preset_choice = st.selectbox("Preset", [p[0] for p in presets], index=0, key="mx_preset")
-    chosen = [p for p in presets if p[0] == preset_choice][0]
-    preset_s_you, preset_s_opp = chosen[1], chosen[2]
-
-    default_you = int(preset_s_you) if preset_s_you is not None else 11
-    default_opp = int(preset_s_opp) if preset_s_opp is not None else 9
-
+    st.subheader("Hypothetical score (unconstrained)")
+    st.caption("Default is 11–9, but any score is allowed (to 11, to 15, win-by-1, etc.). Ties produce no movement.")
+    
+    # Ensure sane defaults exist once per session (deep-links will override via query params)
+    if "mx_sy" not in st.session_state:
+        st.session_state["mx_sy"] = 11
+    if "mx_so" not in st.session_state:
+        st.session_state["mx_so"] = 9
+    
+    scol1, scol2 = st.columns(2)
     with scol1:
-        s_you = st.number_input("Your points", min_value=0, max_value=99, value=int(default_you), step=1, key="mx_sy")
+        s_you = st.number_input(
+            "Your points",
+            min_value=0,
+            max_value=99,
+            step=1,
+            key="mx_sy",
+            value=int(st.session_state.get("mx_sy", 11)),
+        )
     with scol2:
-        s_opp = st.number_input("Opp points", min_value=0, max_value=99, value=int(default_opp), step=1, key="mx_so")
+        s_opp = st.number_input(
+            "Opp points",
+            min_value=0,
+            max_value=99,
+            step=1,
+            key="mx_so",
+            value=int(st.session_state.get("mx_so", 9)),
+        )
 
     # Exact engine preview (team1 = your team)
     d_you_elo, d_opp_elo = calculate_hybrid_elo(
@@ -1619,7 +1624,6 @@ elif sel == "🔍 Player Search":
                         "Partner": partner_name,
                         "Opponents": opp_names,
                         "League": str(match.get("league", "") or "").strip(),
-                        "Type": str(match.get("match_type", "") or "").strip(),
                         "JUPR Change": float(jupr_change),
                         "Rating After Match": rating_after,
                         "Explain": explain_url,
@@ -1689,7 +1693,7 @@ elif sel == "🔍 Player Search":
                 table_df["JUPR Change"] = table_df["JUPR Change"].map(lambda x: f"{float(x):+.4f}")
                 table_df["Rating After Match"] = table_df["Rating After Match"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
                 
-                cols = ["Date", "Result", "Score", "Partner", "Opponents", "League", "Type", "JUPR Change", "Rating After Match", "Explain"]
+                cols = ["Date", "Result", "Score", "Partner", "Opponents", "League", "JUPR Change", "Rating After Match", "Explain"]
                 
                 st.dataframe(
                     table_df[cols],
