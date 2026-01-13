@@ -1784,6 +1784,26 @@ if sel == "🏟️ League Manager":
                 st.rerun()
 
 
+def get_court_player_ids(court_df: pd.DataFrame) -> list[int]:
+    """
+    Safely return a list of player_ids for a court, regardless of small schema drift.
+    Priority:
+      1) court_df['player_id'] if present
+      2) court_df['id'] if present (some parts of your code used 'id' earlier)
+    Raises a clear error if neither exists.
+    """
+    if court_df is None or court_df.empty:
+        return []
+
+    if "player_id" in court_df.columns:
+        return court_df["player_id"].apply(lambda x: int(float(x))).tolist()
+
+    if "id" in court_df.columns:
+        return court_df["id"].apply(lambda x: int(float(x))).tolist()
+
+    raise KeyError(
+        f"Roster court_df is missing player id column. Columns present: {list(court_df.columns)}"
+    )
 
 
 
@@ -1885,7 +1905,8 @@ if sel == "🏟️ League Manager":
                     court_df = st.session_state.ladder_live_roster[st.session_state.ladder_live_roster["court"] == c_num].copy()
                     if "slot" in court_df.columns:
                         court_df = court_df.sort_values("slot")
-                    players = court_df["player_id"].astype(int).tolist()
+                    players = get_court_player_ids(court_df)
+
 
 
                     fmt = f"{len(players)}-Player"
@@ -2069,10 +2090,20 @@ if sel == "🏟️ League Manager":
 
                     new_sizes = new_roster["court"].value_counts().sort_index().tolist()
                     st.session_state.ladder_court_sizes = new_sizes
-                    st.session_state.ladder_live_roster = new_roster[["name", "rating", "court", "slot"]].copy()
+                    # Preserve player_id into next round
+                    pid_map = dict(zip(
+                        st.session_state.ladder_live_roster["name"],
+                        st.session_state.ladder_live_roster["player_id"]
+                    ))
+                    
+                    new_roster["player_id"] = new_roster["name"].map(lambda x: int(pid_map.get(x)))
+                    
+                    # Keep the canonical column set
+                    st.session_state.ladder_live_roster = new_roster[["player_id", "name", "rating", "court", "slot"]].copy()
+
 
                     st.session_state.ladder_round_num = int(st.session_state.ladder_round_num) + 1
-                    st.session_state.ladder_state = "PLAY_ROUND"
+                    st.session_state.ladder_state = "CONFIRM_START"
                     if "current_schedule" in st.session_state:
                         del st.session_state.current_schedule
                     st.rerun()
