@@ -1763,6 +1763,15 @@ if sel == "🏟️ League Manager":
                 if int(n) < 4:
                     problems.append(f"Court {c} has {n} players (min 4).")
 
+            warnings = []
+            for c, n in sorted(court_counts.items()):
+                if int(n) != 4:
+                    warnings.append(f"Court {c} has {n} players (target 4).")
+
+            if warnings:
+                st.info("Court sizes don't need to be perfect to edit, but double-check before you start:\n\n- " + "\n- ".join(warnings))
+
+
             if problems:
                 st.warning("Fix these before starting Round 1:\n\n- " + "\n- ".join(problems))
                 can_start = False
