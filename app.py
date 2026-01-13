@@ -108,9 +108,11 @@ DEEP_LEAGUE = qp_get("league", "").strip()
 
 PAGE_MAP = {
     "leaderboards": "🏆 Leaderboards",
+    "match_explorer": "🎯 Match Explorer",
     "players": "🔍 Player Search",
     "faqs": "❓ FAQs",
 }
+
 
 # Apply deep-links ONLY once per session, otherwise it overrides sidebar clicks on every rerun
 # Apply deep-links ONLY once per session
@@ -119,9 +121,27 @@ if "deep_link_applied" not in st.session_state:
 
 if PUBLIC_MODE:
     st.session_state.admin_logged_in = False
-    st.session_state["main_nav"] = "🏆 Leaderboards"
-    st.markdown("<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>", unsafe_allow_html=True)
-    st.session_state.deep_link_applied = True
+
+    # Hide sidebar + header (keep your public kiosk feel)
+    st.markdown(
+        "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
+        unsafe_allow_html=True
+    )
+
+    # Apply deep-link page once, but ONLY to public-safe pages
+    if not st.session_state.deep_link_applied:
+        allowed_public = {"leaderboards", "match_explorer"}
+        if DEEP_PAGE in allowed_public and DEEP_PAGE in PAGE_MAP:
+            st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
+        else:
+            st.session_state["main_nav"] = "🏆 Leaderboards"
+
+        # optional: allow league preselect for leaderboards and match explorer
+        if DEEP_LEAGUE:
+            st.session_state["preselect_league"] = DEEP_LEAGUE
+
+        st.session_state.deep_link_applied = True
+
 else:
     if not st.session_state.deep_link_applied:
         if DEEP_PAGE in PAGE_MAP:
@@ -129,6 +149,7 @@ else:
         if DEEP_LEAGUE:
             st.session_state["preselect_league"] = DEEP_LEAGUE
         st.session_state.deep_link_applied = True
+
 
 def build_standings_link(league_name: str, public: bool = True) -> str:
     """
@@ -158,6 +179,7 @@ def build_standings_link(league_name: str, public: bool = True) -> str:
 # --- NAV <-> URL SYNC HELPERS ---
 NAV_TO_PAGE = {
     "🏆 Leaderboards": "leaderboards",
+    "🎯 Match Explorer": "match_explorer",
     "🔍 Player Search": "players",
     "❓ FAQs": "faqs",
     "🏟️ League Manager": "league_manager",
@@ -878,22 +900,38 @@ else:
 # -------------------------
 # NAVIGATION
 # -------------------------
-nav = ["🏆 Leaderboards", "🔍 Player Search", "❓ FAQs"]
-if st.session_state.admin_logged_in:
-    nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
+if PUBLIC_MODE:
+    # Public-only navigation (no admin pages; sidebar hidden)
+    nav_public = ["🏆 Leaderboards", "🎯 Match Explorer"]
 
-sel = st.sidebar.radio("Go to:", nav, key="main_nav")
-# Reset Player Search selection when user navigates to that page
-if "last_nav" not in st.session_state:
-    st.session_state.last_nav = None
+    # Use the SAME session key "main_nav" so deep-links set it cleanly
+    sel = st.radio("Go to:", nav_public, horizontal=True, key="main_nav")
 
-if st.session_state.last_nav != sel:
-    if sel == "🔍 Player Search":
-        st.session_state["player_search_name"] = ""  # start blank on entry
-    st.session_state.last_nav = sel
+    # Keep URL synced for shareability
+    try:
+        st.query_params["public"] = "1"
+        st.query_params["page"] = NAV_TO_PAGE.get(sel, "leaderboards")
+    except Exception:
+        pass
 
-if not PUBLIC_MODE:
+else:
+    nav = ["🏆 Leaderboards", "🎯 Match Explorer", "🔍 Player Search", "❓ FAQs"]
+    if st.session_state.admin_logged_in:
+        nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
+
+    sel = st.sidebar.radio("Go to:", nav, key="main_nav")
+
+    # Reset Player Search selection when user navigates to that page
+    if "last_nav" not in st.session_state:
+        st.session_state.last_nav = None
+
+    if st.session_state.last_nav != sel:
+        if sel == "🔍 Player Search":
+            st.session_state["player_search_name"] = ""
+        st.session_state.last_nav = sel
+
     sync_url_from_nav(sel)
+
 
 # =========================
 # UI PAGES (PART 1)
@@ -1025,6 +1063,299 @@ if sel == "🏆 Leaderboards":
         cols_to_show = [c for c in cols_to_show if c in final_view.columns]
 
         st.dataframe(final_view[cols_to_show], use_container_width=True, hide_index=True)
+
+elif sel == "🎯 Match Explorer":
+    st.header("🎯 Match Explorer")
+    st.caption("Preview win odds, expectation, and projected JUPR movement — from your perspective. Preview only; ratings do not change.")
+
+    # -------- Helpers --------
+    def win_label(p: float) -> str:
+        # from YOUR team perspective
+        if p >= 0.70:
+            return "Heavy Favorite"
+        if p >= 0.55:
+            return "Favored"
+        if p >= 0.45:
+            return "Toss-up"
+        if p >= 0.30:
+            return "Underdog"
+        return "Heavy Underdog"
+
+    def normal_cdf(z: float) -> float:
+        return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+    # League options (default OVERALL; user may select league)
+    if df_meta is not None and not df_meta.empty and "is_active" in df_meta.columns:
+        active_meta = df_meta[df_meta["is_active"] == True].copy()
+        league_opts = ["OVERALL"] + sorted(active_meta["league_name"].dropna().unique().tolist())
+    else:
+        league_opts = ["OVERALL"]
+
+    # Preselect league from URL if provided (works for public deep-links)
+    pre = st.session_state.get("preselect_league", "")
+    default_idx = 0
+    if pre and pre in league_opts:
+        default_idx = league_opts.index(pre)
+
+    ctx = st.selectbox("Rating context", league_opts, index=default_idx, key="mx_ctx")
+    st.caption("Defaults to OVERALL. If you select a league, calculations and the graph use league ratings only (overall ratings shown for reference).")
+
+    # Active players
+    if df_players is None or df_players.empty:
+        st.info("No active players found.")
+        st.stop()
+
+    player_names = sorted(df_players["name"].astype(str).tolist())
+
+    def get_k_for_context(context_name: str) -> int:
+        if context_name == "OVERALL":
+            return int(DEFAULT_K_FACTOR)
+        if df_meta is None or df_meta.empty:
+            return int(DEFAULT_K_FACTOR)
+        row = df_meta[df_meta["league_name"] == context_name]
+        if not row.empty:
+            try:
+                return int(row.iloc[0].get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
+            except Exception:
+                return int(DEFAULT_K_FACTOR)
+        return int(DEFAULT_K_FACTOR)
+
+    def get_overall_elo(pid: int) -> float:
+        row = df_players_all[df_players_all["id"] == pid]
+        if not row.empty:
+            return float(row.iloc[0].get("rating", 1200.0) or 1200.0)
+        return 1200.0
+
+    def get_league_elo(pid: int, league_name: str) -> float:
+        if df_leagues is not None and not df_leagues.empty:
+            r = df_leagues[(df_leagues["player_id"] == pid) & (df_leagues["league_name"] == league_name)]
+            if not r.empty:
+                return float(r.iloc[0].get("rating", 1200.0) or 1200.0)
+        return get_overall_elo(pid)
+
+    # -------- Player selection (doubles only; user-centered) --------
+    st.subheader("Your matchup (doubles)")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        me_name = st.selectbox("I am", [""] + player_names, index=0, key="mx_me")
+    with c2:
+        partner_pool = [n for n in player_names if n and n != me_name]
+        partner_name = st.selectbox("My partner", [""] + partner_pool, index=0, key="mx_partner")
+    with c3:
+        opp_pool_1 = [n for n in player_names if n and n not in (me_name, partner_name)]
+        opp1_name = st.selectbox("Opponent 1", [""] + opp_pool_1, index=0, key="mx_opp1")
+    with c4:
+        opp_pool_2 = [n for n in player_names if n and n not in (me_name, partner_name, opp1_name)]
+        opp2_name = st.selectbox("Opponent 2", [""] + opp_pool_2, index=0, key="mx_opp2")
+
+    if not (me_name and partner_name and opp1_name and opp2_name):
+        st.info("Select yourself, your partner, and both opponents.")
+        st.stop()
+
+    me_id = int(name_to_id.get(me_name))
+    partner_id = int(name_to_id.get(partner_name))
+    opp1_id = int(name_to_id.get(opp1_name))
+    opp2_id = int(name_to_id.get(opp2_name))
+
+    # Ratings for display (always show overall; show league too if selected)
+    r_me_overall = get_overall_elo(me_id)
+    r_partner_overall = get_overall_elo(partner_id)
+    r_opp1_overall = get_overall_elo(opp1_id)
+    r_opp2_overall = get_overall_elo(opp2_id)
+
+    if ctx != "OVERALL":
+        r_me_ctx = get_league_elo(me_id, ctx)
+        r_partner_ctx = get_league_elo(partner_id, ctx)
+        r_opp1_ctx = get_league_elo(opp1_id, ctx)
+        r_opp2_ctx = get_league_elo(opp2_id, ctx)
+    else:
+        r_me_ctx, r_partner_ctx, r_opp1_ctx, r_opp2_ctx = r_me_overall, r_partner_overall, r_opp1_overall, r_opp2_overall
+
+    # Team averages (context drives the engine)
+    team_you_avg = (r_me_ctx + r_partner_ctx) / 2.0
+    team_opp_avg = (r_opp1_ctx + r_opp2_ctx) / 2.0
+
+    # Expectation in the SAME way your engine computes it
+    expected_you = 1.0 / (1.0 + 10 ** ((team_opp_avg - team_you_avg) / 400.0))
+    label = win_label(float(expected_you))
+    k_val = get_k_for_context(ctx)
+
+    # -------- Ratings table (professional transparency) --------
+    rows = [
+        {"Role": "You", "Player": me_name, "Overall JUPR": r_me_overall / 400.0, "League JUPR": (r_me_ctx / 400.0) if ctx != "OVERALL" else None},
+        {"Role": "Partner", "Player": partner_name, "Overall JUPR": r_partner_overall / 400.0, "League JUPR": (r_partner_ctx / 400.0) if ctx != "OVERALL" else None},
+        {"Role": "Opponent 1", "Player": opp1_name, "Overall JUPR": r_opp1_overall / 400.0, "League JUPR": (r_opp1_ctx / 400.0) if ctx != "OVERALL" else None},
+        {"Role": "Opponent 2", "Player": opp2_name, "Overall JUPR": r_opp2_overall / 400.0, "League JUPR": (r_opp2_ctx / 400.0) if ctx != "OVERALL" else None},
+    ]
+    df_view = pd.DataFrame(rows)
+
+    show_cols = ["Role", "Player", "Overall JUPR"]
+    if ctx != "OVERALL":
+        show_cols.append("League JUPR")
+
+    st.dataframe(
+        df_view[show_cols],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Overall JUPR": st.column_config.NumberColumn(format="%.3f"),
+            "League JUPR": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+
+    st.divider()
+
+    # -------- Expectation header (centerpiece) --------
+    h1, h2 = st.columns([2, 1])
+    with h1:
+        st.markdown(f"## You win **{expected_you*100:.0f}%**")
+        st.caption(f"{label} • Context: {ctx} • K={k_val}")
+        if ctx != "OVERALL":
+            st.info("Graph + projected movement below are computed using LEAGUE ratings only. Overall ratings above are for reference.")
+    with h2:
+        st.metric("Opponents win %", f"{(1.0-expected_you)*100:.0f}%")
+
+    st.divider()
+
+    # -------- Score input (default to 11, but unconstrained) --------
+    st.subheader("Hypothetical score (unconstrained)")
+    st.caption("Any score is allowed (to 11, to 15, win-by-1, etc.). Ties produce no movement.")
+
+    presets = [
+        ("Default: 11–9", 11, 9),
+        ("11–6", 11, 6),
+        ("11–3", 11, 3),
+        ("9–11", 9, 11),
+        ("6–11", 6, 11),
+        ("3–11", 3, 11),
+        ("Custom…", None, None),
+    ]
+
+    pcol, scol1, scol2 = st.columns([2, 1, 1])
+    with pcol:
+        preset_choice = st.selectbox("Preset", [p[0] for p in presets], index=0, key="mx_preset")
+    chosen = [p for p in presets if p[0] == preset_choice][0]
+    preset_s_you, preset_s_opp = chosen[1], chosen[2]
+
+    default_you = int(preset_s_you) if preset_s_you is not None else 11
+    default_opp = int(preset_s_opp) if preset_s_opp is not None else 9
+
+    with scol1:
+        s_you = st.number_input("Your points", min_value=0, max_value=99, value=int(default_you), step=1, key="mx_sy")
+    with scol2:
+        s_opp = st.number_input("Opp points", min_value=0, max_value=99, value=int(default_opp), step=1, key="mx_so")
+
+    # Exact engine preview (team1 = your team)
+    d_you_elo, d_opp_elo = calculate_hybrid_elo(
+        team_you_avg,
+        team_opp_avg,
+        int(s_you),
+        int(s_opp),
+        k_factor=int(k_val),
+        min_win_delta=float(MIN_WIN_DELTA_ELO),
+        cap_loser_gain=float(CAP_LOSER_GAIN_ELO),
+    )
+
+    d_you_jupr = float(d_you_elo) / 400.0
+    d_opp_jupr = float(d_opp_elo) / 400.0
+
+    total_pts = int(s_you) + int(s_opp)
+    share_you = None
+    if total_pts > 0 and int(s_you) != int(s_opp):
+        share_you = float(s_you) / float(total_pts)
+
+    beat_pp = None
+    if share_you is not None:
+        beat_pp = (share_you - expected_you) * 100.0
+
+    # -------- Summary tiles --------
+    t1, t2, t3, t4 = st.columns(4)
+
+    if beat_pp is not None:
+        t1.metric("Beat expectation", f"{beat_pp:+.0f} pp")
+        t1.caption(f"Your share {share_you*100:.1f}% vs expected {expected_you*100:.1f}%")
+    else:
+        t1.metric("Beat expectation", "—")
+        t1.caption("No movement on ties / empty scores.")
+
+    t2.metric("Your projected JUPR change", f"{d_you_jupr:+.4f}")
+    t2.caption(f"Context: {ctx}")
+
+    t3.metric("Partner projected JUPR change", f"{d_you_jupr:+.4f}")
+    t3.caption("Same delta as you (team-based update).")
+
+    t4.metric("Opponents projected JUPR change", f"{d_opp_jupr:+.4f}")
+    t4.caption("Preview only — nothing is saved.")
+
+    st.divider()
+
+    # -------- Predictor curve (your perspective; selected context only) --------
+    st.subheader("Rating impact predictor (your perspective)")
+    if ctx != "OVERALL":
+        st.caption(f"Curve is computed using **{ctx}** league ratings and that league’s K-factor.")
+    else:
+        st.caption("Curve is computed using OVERALL ratings and the default K-factor.")
+
+    def delta_you_from_share(share: float, expected: float, k: float) -> float:
+        # Mirrors your engine behavior using points-share as the performance signal.
+        d = float(k) * 2.0 * (float(share) - float(expected))
+        if share > 0.5:
+            if d <= 0:
+                d = float(MIN_WIN_DELTA_ELO)
+        else:
+            if d > 0:
+                d = min(d, float(CAP_LOSER_GAIN_ELO))
+        return d
+
+    xs, ys = [], []
+    for i in range(5, 96):  # 0.05..0.95
+        sh = i / 100.0
+        if abs(sh - 0.50) < 1e-9:
+            continue
+        xs.append(sh)
+        ys.append(delta_you_from_share(sh, expected_you, k_val) / 400.0)
+
+    curve_df = pd.DataFrame({"share": xs, "delta": ys})
+
+    layers = []
+    base = (
+        alt.Chart(curve_df)
+        .mark_line()
+        .encode(
+            x=alt.X("share:Q", title="Your points share", axis=alt.Axis(format="%")),
+            y=alt.Y("delta:Q", title=f"Projected JUPR change (you) — {ctx}", axis=alt.Axis(format="+.4f")),
+            tooltip=[
+                alt.Tooltip("share:Q", title="Points share", format=".2%"),
+                alt.Tooltip("delta:Q", title="Δ JUPR", format="+.4f"),
+            ],
+        )
+    )
+    layers.append(base)
+
+    # Expectation marker
+    exp_df = pd.DataFrame({"share": [expected_you]})
+    layers.append(alt.Chart(exp_df).mark_rule(strokeDash=[6, 4]).encode(x="share:Q"))
+
+    # Selected marker
+    if share_you is not None:
+        sel_df = pd.DataFrame({"share": [share_you], "delta": [d_you_jupr], "score": [f"{int(s_you)}–{int(s_opp)}"]})
+        layers.append(
+            alt.Chart(sel_df)
+            .mark_point(size=120, filled=True)
+            .encode(
+                x="share:Q",
+                y="delta:Q",
+                tooltip=[
+                    alt.Tooltip("score:N", title="Score"),
+                    alt.Tooltip("share:Q", title="Points share", format=".2%"),
+                    alt.Tooltip("delta:Q", title="Δ JUPR", format="+.4f"),
+                ],
+            )
+        )
+
+    st.altair_chart(alt.layer(*layers).properties(height=360).interactive(), use_container_width=True)
+
 
 elif sel == "🔍 Player Search":
     st.header("🕵️ Player Search & Audit")
