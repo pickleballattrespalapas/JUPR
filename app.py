@@ -1784,26 +1784,26 @@ if sel == "🏟️ League Manager":
                 st.rerun()
 
 
-def get_court_player_ids(court_df: pd.DataFrame) -> list[int]:
-    """
-    Safely return a list of player_ids for a court, regardless of small schema drift.
-    Priority:
-      1) court_df['player_id'] if present
-      2) court_df['id'] if present (some parts of your code used 'id' earlier)
-    Raises a clear error if neither exists.
-    """
-    if court_df is None or court_df.empty:
-        return []
-
-    if "player_id" in court_df.columns:
-        return court_df["player_id"].apply(lambda x: int(float(x))).tolist()
-
-    if "id" in court_df.columns:
-        return court_df["id"].apply(lambda x: int(float(x))).tolist()
-
-    raise KeyError(
-        f"Roster court_df is missing player id column. Columns present: {list(court_df.columns)}"
-    )
+        def get_court_player_ids(court_df: pd.DataFrame) -> list[int]:
+            """
+            Safely return a list of player_ids for a court, regardless of small schema drift.
+            Priority:
+              1) court_df['player_id'] if present
+              2) court_df['id'] if present (some parts of your code used 'id' earlier)
+            Raises a clear error if neither exists.
+            """
+            if court_df is None or court_df.empty:
+                return []
+        
+            if "player_id" in court_df.columns:
+                return court_df["player_id"].apply(lambda x: int(float(x))).tolist()
+        
+            if "id" in court_df.columns:
+                return court_df["id"].apply(lambda x: int(float(x))).tolist()
+        
+            raise KeyError(
+                f"Roster court_df is missing player id column. Columns present: {list(court_df.columns)}"
+            )
 
 
 
