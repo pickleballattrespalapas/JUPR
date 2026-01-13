@@ -2049,18 +2049,20 @@ if sel == "🏟️ League Manager":
 
             preview_df = st.session_state.ladder_movement_preview.copy()
 
-            # Only show what we need to edit
-            edit_view = preview_df[["name", "rating", "court", "Proposed Court"]].copy()
-
+            # ✅ Include player_id so we never lose it between rounds
+            edit_view = preview_df[["player_id", "name", "rating", "court", "Proposed Court"]].copy()
+            
             editor_df = st.data_editor(
                 edit_view,
                 column_config={
+                    "player_id": st.column_config.NumberColumn("ID", disabled=True),
                     "court": st.column_config.NumberColumn("Old Ct", disabled=True),
                     "Proposed Court": st.column_config.NumberColumn("New Ct", min_value=1, max_value=10, step=1),
                 },
                 hide_index=True,
                 use_container_width=True,
             )
+
 
             btn_label = "Start Next Round"
             if int(st.session_state.ladder_round_num) >= int(st.session_state.ladder_total_rounds):
