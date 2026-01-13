@@ -1385,8 +1385,7 @@ elif sel == "🎯 Match Explorer":
         return f"11–{opp_pts}"
 
     # -------- Predictor curve (your perspective; selected context only) --------
-    st.subheader("Rating impact predictor (your perspective)")
-    st.caption("X-axis is shown as a game-to-11 score scale (0–11 loss → 11–11 tie → 11–0 win). Actual score is shown in the tooltip.")
+    st.subheader("Rating Impact Predictor")
     
     # --- share for chart positioning (ties sit at the center) ---
     total_pts = int(s_you) + int(s_opp)
