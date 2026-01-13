@@ -174,6 +174,42 @@ def build_standings_link(league_name: str, public: bool = True) -> str:
     q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
     return f"{base}/?{q}" if base else f"?{q}"
 
+def build_match_explorer_link(
+    ctx: str,
+    me: int,
+    partner: int,
+    opp1: int,
+    opp2: int,
+    sy: int,
+    so: int,
+    public: bool = False,
+) -> str:
+    """
+    Builds a deep link to the Match Explorer prefilled for a specific perspective.
+    Uses numeric IDs to avoid name encoding issues.
+
+    If PUBLIC_BASE_URL is set, returns an absolute URL; otherwise returns a relative querystring.
+    """
+    try:
+        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
+    except Exception:
+        base = ""
+
+    params = {
+        "page": "match_explorer",
+        "ctx": str(ctx),
+        "me": str(int(me)),
+        "partner": str(int(partner)),
+        "opp1": str(int(opp1)),
+        "opp2": str(int(opp2)),
+        "sy": str(int(sy)),
+        "so": str(int(so)),
+    }
+    if public:
+        params["public"] = "1"
+
+    q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
+    return f"{base}/?{q}" if base else f"?{q}"
 
 
 # --- NAV <-> URL SYNC HELPERS ---
@@ -1083,6 +1119,50 @@ elif sel == "🎯 Match Explorer":
 
     def normal_cdf(z: float) -> float:
         return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+        
+    def qp_int(key: str, default: int | None = None) -> int | None:
+        v = qp_get(key, "")
+        if not v:
+            return default
+        try:
+            return int(v)
+        except Exception:
+            return default
+    
+    # Apply params whenever they change (so different Explain links work)
+    sig = "|".join([
+        qp_get("ctx",""),
+        qp_get("me",""),
+        qp_get("partner",""),
+        qp_get("opp1",""),
+        qp_get("opp2",""),
+        qp_get("sy",""),
+        qp_get("so",""),
+    ])
+    
+    if st.session_state.get("mx_qp_sig", "") != sig:
+        ctx_q = qp_get("ctx", "")
+        if ctx_q:
+            st.session_state["mx_ctx"] = ctx_q
+    
+        me_q = qp_int("me")
+        partner_q = qp_int("partner")
+        opp1_q = qp_int("opp1")
+        opp2_q = qp_int("opp2")
+    
+        if me_q and int(me_q) in id_to_name:
+            st.session_state["mx_me"] = id_to_name[int(me_q)]
+        if partner_q and int(partner_q) in id_to_name:
+            st.session_state["mx_partner"] = id_to_name[int(partner_q)]
+        if opp1_q and int(opp1_q) in id_to_name:
+            st.session_state["mx_opp1"] = id_to_name[int(opp1_q)]
+        if opp2_q and int(opp2_q) in id_to_name:
+            st.session_state["mx_opp2"] = id_to_name[int(opp2_q)]
+    
+        st.session_state["mx_sy"] = int(qp_int("sy", 11) or 11)
+        st.session_state["mx_so"] = int(qp_int("so", 9) or 9)
+    
+        st.session_state["mx_qp_sig"] = sig
 
     # League options (default OVERALL; user may select league)
     if df_meta is not None and not df_meta.empty and "is_active" in df_meta.columns:
@@ -1372,6 +1452,49 @@ elif sel == "🔍 Player Search":
             return match_row.get("t2_p2_r"), match_row.get("t2_p2_r_end")
         return None, None
 
+    def nm(pid: int) -> str:
+    try:
+        return str(id_to_name.get(int(pid), f"#{int(pid)}"))
+    except Exception:
+        return "—"
+
+    def explain_link_for_player_match(match: dict, pid: int) -> str:
+        """
+        Option A: explain from the selected player's perspective.
+        Uses OVERALL context so the explanation aligns with the JUPR Change shown in Player Search
+        (which is based on overall snapshots).
+        """
+        try:
+            pid = int(pid)
+            t1 = [int(match.get("t1_p1")), int(match.get("t1_p2"))]
+            t2 = [int(match.get("t2_p1")), int(match.get("t2_p2"))]
+            s1 = int(match.get("score_t1", 0) or 0)
+            s2 = int(match.get("score_t2", 0) or 0)
+        except Exception:
+            return ""
+    
+        if pid in t1:
+            partner = t1[0] if t1[1] == pid else t1[1]
+            opp1, opp2 = t2[0], t2[1]
+            sy, so = s1, s2
+        elif pid in t2:
+            partner = t2[0] if t2[1] == pid else t2[1]
+            opp1, opp2 = t1[0], t1[1]
+            sy, so = s2, s1
+        else:
+            return ""
+    
+        return build_match_explorer_link(
+            ctx="OVERALL",      # matches Player Search’s displayed JUPR Change (overall snapshots)
+            me=pid,
+            partner=partner,
+            opp1=opp1,
+            opp2=opp2,
+            sy=sy,
+            so=so,
+            public=PUBLIC_MODE, # if you ever expose this page publicly, the explainer link still works cleanly
+        )
+
     # Active players (club-scoped)
     players_resp = (
         supabase.table("players")
@@ -1427,40 +1550,16 @@ elif sel == "🔍 Player Search":
             for match in matches_data:
                 s1 = int(match.get("score_t1", 0) or 0)
                 s2 = int(match.get("score_t2", 0) or 0)
-                display_score = f"{s1}-{s2}"
-
-                start_elo, end_elo = get_player_snap(match, p_id)
-
-                if start_elo is not None and end_elo is not None:
-                    start_elo = float(start_elo)
-                    end_elo = float(end_elo)
-                    jupr_change = (end_elo - start_elo) / 400.0
-                    rating_after = end_elo / 400.0
-                else:
-                    # fallback for any legacy rows without snapshots
-                    raw_delta = float(match.get("elo_delta", 0) or 0)
-                    my_team = 1 if (match.get("t1_p1") == p_id or match.get("t1_p2") == p_id) else 2
-                    winner_team = 1 if s1 > s2 else 2 if s2 > s1 else 0
-                    if winner_team == 0:
-                        signed_elo = 0.0
-                    elif winner_team == my_team:
-                        signed_elo = abs(raw_delta)
-                    else:
-                        signed_elo = -abs(raw_delta)
-
-                    jupr_change = signed_elo / 400.0
-                    rating_after = None
-
-            processed = []
-            for match in matches_data:
-                s1 = int(match.get("score_t1", 0) or 0)
-                s2 = int(match.get("score_t2", 0) or 0)
-                display_score = f"{s1}-{s2}"
-
-                # ✅/❌ based on score + which team the player was on
+            
                 on_team1 = (match.get("t1_p1") == p_id) or (match.get("t1_p2") == p_id)
                 on_team2 = (match.get("t2_p1") == p_id) or (match.get("t2_p2") == p_id)
-
+            
+                # Score from the selected player's perspective (fixes “I won but score looks reversed”)
+                my_pts = s1 if on_team1 else (s2 if on_team2 else 0)
+                opp_pts = s2 if on_team1 else (s1 if on_team2 else 0)
+                display_score = f"{int(my_pts)}-{int(opp_pts)}"
+            
+                # Result icon based on my perspective
                 if s1 == s2:
                     result_icon = "➖"
                 elif (on_team1 and s1 > s2) or (on_team2 and s2 > s1):
@@ -1468,18 +1567,35 @@ elif sel == "🔍 Player Search":
                 elif (on_team1 and s1 < s2) or (on_team2 and s2 < s1):
                     result_icon = "❌"
                 else:
-                    # should not happen unless row is malformed
                     result_icon = "➖"
-
+            
+                # Partner / opponents (names)
+                partner_name = "—"
+                opp_names = "—"
+                try:
+                    t1p1, t1p2 = int(match.get("t1_p1")), int(match.get("t1_p2"))
+                    t2p1, t2p2 = int(match.get("t2_p1")), int(match.get("t2_p2"))
+            
+                    if on_team1:
+                        partner_id = t1p1 if t1p2 == p_id else t1p2
+                        partner_name = nm(partner_id)
+                        opp_names = f"{nm(t2p1)} / {nm(t2p2)}"
+                    elif on_team2:
+                        partner_id = t2p1 if t2p2 == p_id else t2p2
+                        partner_name = nm(partner_id)
+                        opp_names = f"{nm(t1p1)} / {nm(t1p2)}"
+                except Exception:
+                    pass
+            
+                # Snapshot-based JUPR change (your existing logic)
                 start_elo, end_elo = get_player_snap(match, p_id)
-
                 if start_elo is not None and end_elo is not None:
                     start_elo = float(start_elo)
                     end_elo = float(end_elo)
                     jupr_change = (end_elo - start_elo) / 400.0
                     rating_after = end_elo / 400.0
                 else:
-                    # fallback for any legacy rows without snapshots
+                    # fallback for legacy rows without snapshots
                     raw_delta = float(match.get("elo_delta", 0) or 0)
                     my_team = 1 if on_team1 else 2
                     winner_team = 1 if s1 > s2 else 2 if s2 > s1 else 0
@@ -1489,19 +1605,27 @@ elif sel == "🔍 Player Search":
                         signed_elo = abs(raw_delta)
                     else:
                         signed_elo = -abs(raw_delta)
-
+            
                     jupr_change = signed_elo / 400.0
                     rating_after = None
-
+            
+                explain_url = explain_link_for_player_match(match, p_id)
+            
                 processed.append(
                     {
                         "Date": match.get("date"),
-                        "Result": result_icon,          # ✅/❌
+                        "Result": result_icon,
                         "Score": display_score,
-                        "JUPR Change": jupr_change,
+                        "Partner": partner_name,
+                        "Opponents": opp_names,
+                        "League": str(match.get("league", "") or "").strip(),
+                        "Type": str(match.get("match_type", "") or "").strip(),
+                        "JUPR Change": float(jupr_change),
                         "Rating After Match": rating_after,
+                        "Explain": explain_url,
                     }
                 )
+
 
 
             display_df = pd.DataFrame(processed)
@@ -1556,11 +1680,26 @@ elif sel == "🔍 Player Search":
                 table_df["JUPR Change"] = table_df["JUPR Change"].map(lambda x: f"{float(x):+.4f}")
                 table_df["Rating After Match"] = table_df["Rating After Match"].map(lambda x: f"{float(x):.3f}")
 
+                st.subheader("Match Log")
+
+                table_df = display_df.copy()
+                table_df["Date"] = table_df["Date"].dt.strftime("%Y-%m-%d")
+                
+                # Format numeric columns for display
+                table_df["JUPR Change"] = table_df["JUPR Change"].map(lambda x: f"{float(x):+.4f}")
+                table_df["Rating After Match"] = table_df["Rating After Match"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
+                
+                cols = ["Date", "Result", "Score", "Partner", "Opponents", "League", "Type", "JUPR Change", "Rating After Match", "Explain"]
+                
                 st.dataframe(
-                    table_df[["Date", "Result", "Score", "JUPR Change", "Rating After Match"]],
+                    table_df[cols],
                     use_container_width=True,
                     hide_index=True,
+                    column_config={
+                        "Explain": st.column_config.LinkColumn("Explain", display_text="Explain"),
+                    },
                 )
+
 
 
 elif sel == "❓ FAQs":
