@@ -1453,10 +1453,10 @@ elif sel == "🔍 Player Search":
         return None, None
 
     def nm(pid: int) -> str:
-    try:
-        return str(id_to_name.get(int(pid), f"#{int(pid)}"))
-    except Exception:
-        return "—"
+        try:
+            return str(id_to_name.get(int(pid), f"#{int(pid)}"))
+        except Exception:
+            return "—"
 
     def explain_link_for_player_match(match: dict, pid: int) -> str:
         """
