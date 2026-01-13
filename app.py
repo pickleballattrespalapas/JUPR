@@ -1178,7 +1178,7 @@ elif sel == "🎯 Match Explorer":
         default_idx = league_opts.index(pre)
 
     ctx = st.selectbox("Rating context", league_opts, index=default_idx, key="mx_ctx")
-    st.caption("Defaults to OVERALL. If you select a league, calculations and the graph use league ratings only (overall ratings shown for reference).")
+    st.caption("If you select a league, calculations and the graph use league ratings only (overall ratings shown for reference).")
 
     # Active players
     if df_players is None or df_players.empty:
@@ -1290,7 +1290,7 @@ elif sel == "🎯 Match Explorer":
     h1, h2 = st.columns([2, 1])
     with h1:
         st.markdown(f"## You win **{expected_you*100:.0f}%**")
-        st.caption(f"{label} • Context: {ctx} • K={k_val}")
+        st.caption(f"{label} • Context: {ctx}")
         if ctx != "OVERALL":
             st.info("Graph + projected movement below are computed using LEAGUE ratings only. Overall ratings above are for reference.")
     with h2:
