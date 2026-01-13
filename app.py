@@ -1289,7 +1289,7 @@ elif sel == "🎯 Match Explorer":
     # -------- Expectation header (centerpiece) --------
     h1, h2 = st.columns([2, 1])
     with h1:
-        st.markdown(f"## You win **{expected_you*100:.0f}%**")
+        st.markdown(f"## Your Expected Win % **{expected_you*100:.0f}%**")
         st.caption(f"{label} • Context: {ctx}")
         if ctx != "OVERALL":
             st.info("Graph + projected movement below are computed using LEAGUE ratings only. Overall ratings above are for reference.")
