@@ -1371,71 +1371,151 @@ elif sel == "🎯 Match Explorer":
 
     st.divider()
 
+    def share_to_score11_label(share: float) -> str:
+        # Convert a points-share value into an "equivalent scoreline" on a game-to-11 scale.
+        # Left side: x–11 (loss path), middle: 11–11 (tie), right side: 11–y (win path)
+        if share is None:
+            return "—"
+        if abs(share - 0.5) < 1e-12:
+            return "11–11"
+        if share < 0.5:
+            my_pts = int(round(11.0 * share / (1.0 - share)))
+            return f"{my_pts}–11"
+        opp_pts = int(round(11.0 * (1.0 - share) / share))
+        return f"11–{opp_pts}"
+
     # -------- Predictor curve (your perspective; selected context only) --------
     st.subheader("Rating impact predictor (your perspective)")
-    if ctx != "OVERALL":
-        st.caption(f"Curve is computed using **{ctx}** league ratings and that league’s K-factor.")
-    else:
-        st.caption("Curve is computed using OVERALL ratings and the default K-factor.")
-
+    st.caption("X-axis is shown as a game-to-11 score scale (0–11 loss → 11–11 tie → 11–0 win). Actual score is shown in the tooltip.")
+    
+    # --- share for chart positioning (ties sit at the center) ---
+    total_pts = int(s_you) + int(s_opp)
+    share_chart = None
+    if total_pts > 0:
+        share_chart = float(s_you) / float(total_pts)
+    
+    # --- Curve function (mirrors your engine behavior but expressed in share space) ---
     def delta_you_from_share(share: float, expected: float, k: float) -> float:
-        # Mirrors your engine behavior using points-share as the performance signal.
+        # Tie is explicitly zero in your engine
+        if abs(share - 0.5) < 1e-12:
+            return 0.0
+    
         d = float(k) * 2.0 * (float(share) - float(expected))
-        if share > 0.5:
+    
+        # winner floor + loser-positive cap, consistent with calculate_hybrid_elo policy
+        if share > 0.5:  # win
             if d <= 0:
                 d = float(MIN_WIN_DELTA_ELO)
-        else:
+        else:  # loss
             if d > 0:
                 d = min(d, float(CAP_LOSER_GAIN_ELO))
+    
         return d
-
-    xs, ys = [], []
-    for i in range(5, 96):  # 0.05..0.95
+    
+    # --- Build curve points across share 0..1 ---
+    xs, ys, score11s = [], [], []
+    for i in range(0, 101):
         sh = i / 100.0
-        if abs(sh - 0.50) < 1e-9:
-            continue
         xs.append(sh)
         ys.append(delta_you_from_share(sh, expected_you, k_val) / 400.0)
-
-    curve_df = pd.DataFrame({"share": xs, "delta": ys})
-
-    layers = []
+        score11s.append(share_to_score11_label(sh))
+    
+    curve_df = pd.DataFrame({"share": xs, "delta": ys, "score11": score11s})
+    
+    # --- Axis labeling: show scorelines, not percent ---
+    # We keep a numeric axis (share) so ANY entered score can be plotted accurately,
+    # but we relabel ticks to look like scorelines on a to-11 scale.
+    tick_vals = [
+        0.0,                 # 0–11
+        3.0 / 14.0,          # 3–11
+        6.0 / 17.0,          # 6–11
+        9.0 / 20.0,          # 9–11
+        0.5,                 # 11–11
+        11.0 / 20.0,         # 11–9
+        11.0 / 17.0,         # 11–6
+        11.0 / 14.0,         # 11–3
+        1.0,                 # 11–0
+    ]
+    
+    label_expr = (
+        "datum.value==0.5 ? '11–11' : "
+        "(datum.value<0.5 ? "
+        "(round(11*datum.value/(1-datum.value)) + '–11') : "
+        "('11–' + round(11*(1-datum.value)/datum.value)))"
+    )
+    
+    # --- Base curve ---
     base = (
         alt.Chart(curve_df)
         .mark_line()
         .encode(
-            x=alt.X("share:Q", title="Your points share", axis=alt.Axis(format="%")),
-            y=alt.Y("delta:Q", title=f"Projected JUPR change (you) — {ctx}", axis=alt.Axis(format="+.4f")),
+            x=alt.X(
+                "share:Q",
+                title="Score (to 11 scale)",
+                axis=alt.Axis(values=tick_vals, labelExpr=label_expr),
+            ),
+            y=alt.Y(
+                "delta:Q",
+                title=f"Projected JUPR change (you) — {ctx}",
+                axis=alt.Axis(format="+.4f"),
+            ),
             tooltip=[
-                alt.Tooltip("share:Q", title="Points share", format=".2%"),
+                alt.Tooltip("score11:N", title="Score (to 11)"),
                 alt.Tooltip("delta:Q", title="Δ JUPR", format="+.4f"),
             ],
         )
     )
-    layers.append(base)
-
-    # Expectation marker
-    exp_df = pd.DataFrame({"share": [expected_you]})
-    layers.append(alt.Chart(exp_df).mark_rule(strokeDash=[6, 4]).encode(x="share:Q"))
-
-    # Selected marker
-    if share_you is not None:
-        sel_df = pd.DataFrame({"share": [share_you], "delta": [d_you_jupr], "score": [f"{int(s_you)}–{int(s_opp)}"]})
-        layers.append(
+    
+    layers = [base]
+    
+    # --- Expectation marker (rule + tooltip) ---
+    exp_df = pd.DataFrame(
+        {
+            "share": [float(expected_you)],
+            "score11": [share_to_score11_label(float(expected_you))],
+        }
+    )
+    exp_rule = (
+        alt.Chart(exp_df)
+        .mark_rule(strokeDash=[6, 4])
+        .encode(
+            x="share:Q",
+            tooltip=[
+                alt.Tooltip("score11:N", title="Expected (to 11)"),
+                alt.Tooltip("share:Q", title="Expected share", format=".3f"),
+            ],
+        )
+    )
+    layers.append(exp_rule)
+    
+    # --- Selected result marker (dot) ---
+    if share_chart is not None:
+        sel_df = pd.DataFrame(
+            {
+                "share": [float(share_chart)],
+                "delta": [float(d_you_jupr)],  # from calculate_hybrid_elo / 400
+                "score_actual": [f"{int(s_you)}–{int(s_opp)}"],
+                "score11": [share_to_score11_label(float(share_chart))],
+            }
+        )
+    
+        sel_pt = (
             alt.Chart(sel_df)
-            .mark_point(size=120, filled=True)
+            .mark_point(size=140, filled=True)
             .encode(
                 x="share:Q",
                 y="delta:Q",
                 tooltip=[
-                    alt.Tooltip("score:N", title="Score"),
-                    alt.Tooltip("share:Q", title="Points share", format=".2%"),
+                    alt.Tooltip("score_actual:N", title="Actual score"),
+                    alt.Tooltip("score11:N", title="Equivalent (to 11)"),
                     alt.Tooltip("delta:Q", title="Δ JUPR", format="+.4f"),
                 ],
             )
         )
-
+        layers.append(sel_pt)
+    
     st.altair_chart(alt.layer(*layers).properties(height=360).interactive(), use_container_width=True)
+
 
 
 elif sel == "🔍 Player Search":
