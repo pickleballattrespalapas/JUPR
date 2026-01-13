@@ -144,3 +144,17 @@ html, body {
   color: var(--muted);
   font-size: 12px;
 }
+
+.cb-court-count-warn {
+  font-weight: 700;
+}
+
+.cb-warn-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  line-height: 1.2;
+  border: 1px solid currentColor;
+}

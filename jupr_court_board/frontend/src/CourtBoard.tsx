@@ -27,7 +27,7 @@ export type CourtsPayload = {
 };
 
 const BENCH_ID = "Bench";
-const MAX_ON_COURT = 4;
+const TARGET_ON_COURT = 4;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -70,6 +70,7 @@ export default function CourtBoard({ courts, onChange }: Props) {
       const arr = Array.from(court.players);
       const [moved] = arr.splice(from, 1);
       if (!moved) return;
+
       arr.splice(to, 0, moved);
       court.players = arr;
 
@@ -83,7 +84,6 @@ export default function CourtBoard({ courts, onChange }: Props) {
     if (!dragged) return;
 
     const dstCourt = nextCourts[dstIdx];
-    const benchCourt = nextCourts[benchIdx];
 
     // Dropping into Bench: simple insert at index
     if (dstCourtId === BENCH_ID) {
@@ -93,30 +93,9 @@ export default function CourtBoard({ courts, onChange }: Props) {
       return;
     }
 
-    // Dropping into a normal court
-    const insertAtRaw = destination.index;
-
-    // If destination court has room (<4): normal insert
-    if (dstCourt.players.length < MAX_ON_COURT) {
-      const insertAt = clamp(insertAtRaw, 0, dstCourt.players.length);
-      dstCourt.players.splice(insertAt, 0, dragged);
-      onChange(nextCourts);
-      return;
-    }
-
-    // Destination court is full (=4): REPLACE-TO-BENCH behavior.
-    // Drop "onto" a card => that card gets benched, dragged player takes its slot.
-    // If dropped past the end (index >= 4), replace last slot (index 3).
-    const replaceIndex = clamp(insertAtRaw, 0, MAX_ON_COURT - 1);
-
-    const [benched] = dstCourt.players.splice(replaceIndex, 1);
-    dstCourt.players.splice(replaceIndex, 0, dragged);
-
-    if (benched) {
-      // Append to bench (change to unshift if you want newest on top)
-      benchCourt.players.push(benched);
-    }
-
+    // Dropping into a normal court (NO auto-bench, allow any size)
+    const insertAt = clamp(destination.index, 0, dstCourt.players.length);
+    dstCourt.players.splice(insertAt, 0, dragged);
     onChange(nextCourts);
   };
 
@@ -125,17 +104,29 @@ export default function CourtBoard({ courts, onChange }: Props) {
       <DragDropContext onDragEnd={onDragEnd}>
         {normalizedCourts.map((court) => {
           const isBench = court.court_id === BENCH_ID;
+          const isWarn = !isBench && court.players.length !== TARGET_ON_COURT;
 
           return (
             <div className={`cb-court ${isBench ? "cb-court-bench" : ""}`} key={court.court_id}>
               <div className="cb-court-header">
                 <div className="cb-court-title">{court.court_id}</div>
+
                 {!isBench ? (
-                  <div className="cb-court-count">
-                    {court.players.length}/{MAX_ON_COURT}
+                  <div
+                    className={`cb-court-count ${isWarn ? "cb-court-count-warn" : ""}`}
+                    title={
+                      isWarn
+                        ? `Court has ${court.players.length} players (target ${TARGET_ON_COURT}).`
+                        : `Court has ${TARGET_ON_COURT} players.`
+                    }
+                  >
+                    {court.players.length}/{TARGET_ON_COURT}
+                    {isWarn ? <span className="cb-warn-pill">!</span> : null}
                   </div>
                 ) : (
-                  <div className="cb-court-count">{court.players.length} waiting</div>
+                  <div className="cb-court-count" title="Bench players will not be scheduled.">
+                    {court.players.length} waiting
+                  </div>
                 )}
               </div>
 
