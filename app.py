@@ -1299,7 +1299,7 @@ elif sel == "🎯 Match Explorer":
     st.divider()
 
     # -------- Score input (default to 11, but unconstrained) --------
-    st.subheader("Hypothetical score (unconstrained)")
+    st.subheader("Hypothetical Score")
     
     # Ensure sane defaults exist once per session (deep-links will override via query params)
     if "mx_sy" not in st.session_state:
