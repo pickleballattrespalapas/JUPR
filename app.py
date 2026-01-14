@@ -1010,7 +1010,6 @@ if sel == "🏆 Leaderboards":
         except Exception:
             pass
 
-
     # min games
     min_games_req = 0
     if target_league != "OVERALL" and df_meta is not None and not df_meta.empty:
@@ -1022,6 +1021,8 @@ if sel == "🏆 Leaderboards":
                 min_games_req = 0
 
     # build display df
+    inactive_hidden = 0
+
     if target_league == "OVERALL":
         display_df = df_players.copy() if df_players is not None else pd.DataFrame()
         if not display_df.empty and "name" in display_df.columns:
@@ -1033,14 +1034,62 @@ if sel == "🏆 Leaderboards":
                 if c not in display_df.columns:
                     display_df[c] = 0
     else:
-        if df_leagues is None or df_leagues.empty:
-            display_df = pd.DataFrame()
-        else:
+        # Default from preloaded df_leagues
+        display_df = pd.DataFrame()
+        if df_leagues is not None and not df_leagues.empty:
             display_df = df_leagues[df_leagues["league_name"] == target_league].copy()
+
+        # ---------------------------------------------------------
+        # NEW: Filter out per-league inactive players for:
+        #      - Top Performers
+        #      - Standings
+        #
+        # This expects `league_ratings.is_active` to exist and be loaded into df_leagues.
+        # If df_leagues wasn't loaded with is_active yet, we fall back to a direct fetch.
+        # ---------------------------------------------------------
+        if display_df is not None and not display_df.empty:
+            if "is_active" in display_df.columns:
+                inactive_hidden = int((display_df["is_active"] == False).sum())
+                display_df = display_df[display_df["is_active"] == True].copy()
+            else:
+                # fallback fetch so feature still works even if df_leagues select didn't include is_active
+                try:
+                    lr_resp = (
+                        supabase.table("league_ratings")
+                        .select("player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active")
+                        .eq("club_id", CLUB_ID)
+                        .eq("league_name", target_league)
+                        .execute()
+                    )
+                    tmp = pd.DataFrame(lr_resp.data) if lr_resp and lr_resp.data is not None else pd.DataFrame()
+
+                    if not tmp.empty and "is_active" in tmp.columns:
+                        inactive_hidden = int((tmp["is_active"] == False).sum())
+                        display_df = tmp[tmp["is_active"] == True].copy()
+                    else:
+                        display_df = tmp
+
+                except Exception:
+                    # If the DB column doesn't exist yet, or select fails, do not break leaderboards.
+                    if (not PUBLIC_MODE) and st.session_state.admin_logged_in:
+                        st.warning(
+                            "Per-league inactive filtering is not enabled yet. "
+                            "Add `is_active` (boolean) to `public.league_ratings` and ensure your df_leagues load includes it."
+                        )
+
+        if display_df is not None and not display_df.empty:
             display_df["name"] = display_df["player_id"].map(id_to_name)
             if "starting_rating" not in display_df.columns:
                 # fallback if not loaded yet
                 display_df["starting_rating"] = display_df["rating"]
+
+            # normalize required columns (prevents crashes if a column is missing)
+            for c in ["wins", "losses", "matches_played", "rating"]:
+                if c not in display_df.columns:
+                    display_df[c] = 0
+
+            if inactive_hidden > 0:
+                st.caption(f"{inactive_hidden} inactive player(s) hidden from Standings/Top Performers for this league.")
 
     if display_df is None or display_df.empty or "rating" not in display_df.columns:
         st.info("No data.")
@@ -1102,6 +1151,7 @@ if sel == "🏆 Leaderboards":
         cols_to_show = [c for c in cols_to_show if c in final_view.columns]
 
         st.dataframe(final_view[cols_to_show], use_container_width=True, hide_index=True)
+
 
 elif sel == "🎯 Match Explorer":
     st.header("🎯 Match Explorer")
@@ -2932,6 +2982,8 @@ elif sel == "👥 Player Editor":
         p_edit = st.selectbox("Select Player to Edit/Deactivate", [""] + all_names)
 
         if p_edit:
+            from datetime import datetime, timezone
+
             curr = df_players_all[df_players_all["name"] == p_edit].iloc[0]
             pid = int(curr["id"])
 
@@ -2939,7 +2991,7 @@ elif sel == "👥 Player Editor":
                 st.caption(f"Editing: {p_edit}")
                 new_n = st.text_input("Name", value=str(curr["name"]))
                 new_r = st.number_input("Rating", 1.0, 7.0, float(curr.get("rating", 1200.0)) / 400.0, step=0.01)
-                active_flag = st.checkbox("Active", value=bool(curr.get("active", True)))
+                active_flag = st.checkbox("Active (global player flag)", value=bool(curr.get("active", True)))
 
                 if st.form_submit_button("Update Player"):
                     supabase.table("players").update(
@@ -2951,24 +3003,46 @@ elif sel == "👥 Player Editor":
 
             st.write("---")
             st.write("**Danger Zone**")
-            if st.button("🗑️ Deactivate Player", type="primary"):
+            if st.button("🗑️ Deactivate Player (global)", type="primary"):
                 supabase.table("players").update({"active": False}).eq("id", pid).eq("club_id", CLUB_ID).execute()
                 st.success(f"Player {curr['name']} has been deactivated.")
                 time.sleep(1)
                 st.rerun()
-            st.divider()
-            
-            st.subheader("🏟️ League Ratings (Edit per League)")
 
-            # Pull this player’s league rows
-            lr_resp = (
-                supabase.table("league_ratings")
-                .select("id,league_name,rating,starting_rating,wins,losses,matches_played")
-                .eq("club_id", CLUB_ID)
-                .eq("player_id", int(pid))
-                .execute()
+            st.divider()
+
+            st.subheader("🏟️ League Ratings (Edit per League)")
+            st.caption(
+                "Per-league **Active** controls whether the player appears in **Standings** and **Top Performers** for that league. "
+                "Other leaderboard pages can still include them if you do not filter by `is_active` there."
             )
-            lr_df = pd.DataFrame(lr_resp.data)
+
+            # --- Pull this player’s league rows (try to include per-league active fields if they exist) ---
+            lr_has_active_cols = True
+            try:
+                lr_resp = (
+                    supabase.table("league_ratings")
+                    .select("id,league_name,rating,starting_rating,wins,losses,matches_played,is_active,inactive_at")
+                    .eq("club_id", CLUB_ID)
+                    .eq("player_id", int(pid))
+                    .execute()
+                )
+                lr_df = pd.DataFrame(lr_resp.data)
+            except Exception:
+                lr_has_active_cols = False
+                lr_resp = (
+                    supabase.table("league_ratings")
+                    .select("id,league_name,rating,starting_rating,wins,losses,matches_played")
+                    .eq("club_id", CLUB_ID)
+                    .eq("player_id", int(pid))
+                    .execute()
+                )
+                lr_df = pd.DataFrame(lr_resp.data)
+
+                st.warning(
+                    "League-specific inactive controls are not enabled yet. "
+                    "Add `is_active` (boolean) and `inactive_at` (timestamptz) columns to `public.league_ratings` in Supabase."
+                )
 
             # League options (from metadata if available)
             if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
@@ -2981,7 +3055,11 @@ elif sel == "👥 Player Editor":
             with cA:
                 add_league = st.selectbox("Add / ensure league row", [""] + league_opts, key=f"add_lg_{pid}")
             with cB:
-                set_mode = st.selectbox("Quick set", ["(none)", "Set league rating = overall rating", "Apply + / - adjustment"], key=f"lg_set_mode_{pid}")
+                set_mode = st.selectbox(
+                    "Quick set",
+                    ["(none)", "Set league rating = overall rating", "Apply + / - adjustment"],
+                    key=f"lg_set_mode_{pid}",
+                )
             with cC:
                 adj_val = st.number_input("Adj (JUPR)", value=0.00, step=0.01, key=f"lg_adj_{pid}")
 
@@ -2989,6 +3067,18 @@ elif sel == "👥 Player Editor":
                 if add_league:
                     base_elo = float(curr.get("rating", 1200.0) or 1200.0)
                     ensure_league_row(pid, add_league, base_rating_elo=base_elo)
+
+                    # If per-league active columns exist, force this row to active (safe no-op if already active)
+                    if lr_has_active_cols:
+                        sb_retry(lambda lg=add_league: (
+                            supabase.table("league_ratings")
+                            .update({"is_active": True, "inactive_at": None})
+                            .eq("club_id", CLUB_ID)
+                            .eq("player_id", int(pid))
+                            .eq("league_name", lg)
+                            .execute()
+                        ))
+
                     st.success("League row ready.")
                     time.sleep(0.5)
                     st.rerun()
@@ -2996,6 +3086,15 @@ elif sel == "👥 Player Editor":
             if lr_df.empty:
                 st.info("No league ratings found for this player yet. Use 'Ensure League Row' to create one.")
             else:
+                # Keep originals so we can preserve inactive_at when already inactive
+                orig_is_active = {}
+                orig_inactive_at = {}
+                if lr_has_active_cols:
+                    for _, rr in lr_df.iterrows():
+                        rid0 = int(rr["id"])
+                        orig_is_active[rid0] = bool(rr.get("is_active", True))
+                        orig_inactive_at[rid0] = rr.get("inactive_at", None)
+
                 # Convert to display
                 lr_df = lr_df.copy()
                 lr_df["JUPR"] = lr_df["rating"].astype(float) / 400.0
@@ -3008,27 +3107,49 @@ elif sel == "👥 Player Editor":
                 elif set_mode == "Apply + / - adjustment":
                     lr_df["JUPR"] = lr_df["JUPR"].astype(float) + float(adj_val)
 
-                edit_cols = ["league_name", "JUPR", "Start JUPR", "wins", "losses", "matches_played"]
+                # Columns shown in editor
+                edit_cols = ["league_name"]
+                if lr_has_active_cols:
+                    # Ensure the columns exist in dataframe (defensive)
+                    if "is_active" not in lr_df.columns:
+                        lr_df["is_active"] = True
+                    if "inactive_at" not in lr_df.columns:
+                        lr_df["inactive_at"] = None
+                    edit_cols += ["is_active", "inactive_at"]
+
+                edit_cols += ["JUPR", "Start JUPR", "wins", "losses", "matches_played"]
                 editable = lr_df[["id"] + edit_cols].copy()
+
+                disabled_cols = ["id", "league_name"]
+                if lr_has_active_cols:
+                    disabled_cols.append("inactive_at")  # timestamp is managed automatically on save
 
                 edited = st.data_editor(
                     editable,
                     hide_index=True,
                     use_container_width=True,
+                    key=f"lr_editor_{pid}",
                     column_config={
                         "league_name": st.column_config.TextColumn("League", disabled=True),
+                        "is_active": st.column_config.CheckboxColumn("Active"),
+                        "inactive_at": st.column_config.TextColumn("Inactive At (auto)", disabled=True),
                         "JUPR": st.column_config.NumberColumn("League JUPR", min_value=1.0, max_value=7.0, step=0.01),
                         "Start JUPR": st.column_config.NumberColumn("Start JUPR", min_value=1.0, max_value=7.0, step=0.01),
                         "wins": st.column_config.NumberColumn("W", min_value=0, step=1),
                         "losses": st.column_config.NumberColumn("L", min_value=0, step=1),
                         "matches_played": st.column_config.NumberColumn("MP", min_value=0, step=1),
                     },
-                    disabled=["id"],
+                    disabled=disabled_cols,
                 )
 
                 c1, c2 = st.columns([1, 3])
+
                 if c1.button("💾 Save League Edits"):
+                    now_iso = datetime.now(timezone.utc).isoformat()
+
                     for _, r in edited.iterrows():
+                        rid = int(r["id"])
+
                         payload = {
                             "rating": float(r["JUPR"]) * 400.0,
                             "starting_rating": float(r["Start JUPR"]) * 400.0,
@@ -3036,19 +3157,38 @@ elif sel == "👥 Player Editor":
                             "losses": int(r["losses"]),
                             "matches_played": int(r["matches_played"]),
                         }
-                        sb_retry(lambda rid=int(r["id"]), payload=payload: (
+
+                        # Per-league active/inactive support
+                        if lr_has_active_cols:
+                            next_active = bool(r.get("is_active", True))
+                            payload["is_active"] = next_active
+
+                            # Manage inactive_at without triggers:
+                            # - When activating: clear inactive_at
+                            # - When deactivating: set inactive_at if it was previously empty; otherwise preserve existing
+                            if next_active:
+                                payload["inactive_at"] = None
+                            else:
+                                existing_ts = orig_inactive_at.get(rid, None)
+                                payload["inactive_at"] = existing_ts if existing_ts else now_iso
+
+                        sb_retry(lambda rid=rid, payload=payload: (
                             supabase.table("league_ratings")
                             .update(payload)
                             .eq("club_id", CLUB_ID)
                             .eq("id", rid)
                             .execute()
                         ))
+
                     st.success("Saved league ratings.")
                     time.sleep(0.5)
                     st.rerun()
 
                 with c2:
-                    st.caption("Heads up: manual edits change leaderboard/seeding going forward. Past match snapshots won’t be rewritten unless you run a Replay.")
+                    st.caption(
+                        "Heads up: manual edits change leaderboard/seeding going forward. "
+                        "Past match snapshots won’t be rewritten unless you run a Replay."
+                    )
 
 
 # -------------------------
