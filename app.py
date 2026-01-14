@@ -112,7 +112,11 @@ PAGE_MAP = {
     "players": "🔍 Player Search",
     "faqs": "❓ FAQs",
 }
-
+# Public-safe pages (both for deep-links and for the public nav)
+PUBLIC_NAV_KEYS = ("leaderboards", "match_explorer", "players", "faqs")
+PUBLIC_NAV_LABELS = [PAGE_MAP[k] for k in PUBLIC_NAV_KEYS]
+PUBLIC_ALLOWED = set(PUBLIC_NAV_KEYS)
+NAV_TO_PAGE_PUBLIC = {PAGE_MAP[k]: k for k in PUBLIC_NAV_KEYS}
 
 # Apply deep-links ONLY once per session, otherwise it overrides sidebar clicks on every rerun
 # Apply deep-links ONLY once per session
@@ -120,27 +124,20 @@ if "deep_link_applied" not in st.session_state:
     st.session_state.deep_link_applied = False
 
 if PUBLIC_MODE:
-    st.session_state.admin_logged_in = False
+    # Public-only navigation (no admin pages; sidebar hidden)
+    nav_public = PUBLIC_NAV_LABELS
 
-    # Hide sidebar + header (keep your public kiosk feel)
-    st.markdown(
-        "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
-        unsafe_allow_html=True
-    )
+    # Use the SAME session key "main_nav" so deep-links set it cleanly
+    sel = st.radio("Go to:", nav_public, horizontal=True, key="main_nav")
 
-    # Apply deep-link page once, but ONLY to public-safe pages
-    if not st.session_state.deep_link_applied:
-        allowed_public = {"leaderboards", "match_explorer"}
-        if DEEP_PAGE in allowed_public and DEEP_PAGE in PAGE_MAP:
-            st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
-        else:
-            st.session_state["main_nav"] = "🏆 Leaderboards"
+    # Keep URL synced for shareability
+    try:
+        st.query_params["public"] = "1"
+        st.query_params["page"] = NAV_TO_PAGE_PUBLIC.get(sel, "leaderboards")
+    except Exception:
+        pass
 
-        # optional: allow league preselect for leaderboards and match explorer
-        if DEEP_LEAGUE:
-            st.session_state["preselect_league"] = DEEP_LEAGUE
 
-        st.session_state.deep_link_applied = True
 
 else:
     if not st.session_state.deep_link_applied:
