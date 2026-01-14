@@ -2263,28 +2263,28 @@ if sel == "🏟️ League Manager":
                     st.rerun()
 
 
-        # ---- 3.5) CONFIRM START ----
-        # --- in CONFIRM_START ---
+                # ---- 3.5) CONFIRM START ----
+        if st.session_state.ladder_state == "CONFIRM_START":
+            c_back, _ = st.columns([1, 5])
+            if c_back.button("⬅️ Back (edit courts)"):
+                # optional: clear preview so it forces a fresh preview next time
+                st.session_state.pop("ladder_live_roster", None)
+                st.session_state.ladder_state = "CONFIG_COURTS"
+                st.rerun()
 
-        # Use current round if it exists; otherwise default to 1 (first start)
-        round_num = int(st.session_state.get("ladder_round_num", 1))
-        total_r   = int(st.session_state.get("ladder_total_rounds", 1))
-        
-        start_label = "✅ Start Event (Round 1)" if round_num == 1 else f"✅ Start Round {round_num} / {total_r}"
-        
-        if st.button(start_label, disabled=not can_start, key=f"start_round_btn_{round_num}"):
-            # Only set to 1 if it's not already defined (new event)
-            st.session_state.setdefault("ladder_round_num", 1)
-        
-            st.session_state.ladder_state = "PLAY_ROUND"
-            st.session_state.pop("current_schedule", None)
-            st.rerun()
+            st.markdown("#### Step 4: Court Board Preview (Drag & Drop)")
+            st.caption("Use the Court Board to make final adjustments. Bench players will not be scheduled.")
 
+            # Build roster/courts payload for the board
+            roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
+            roster_df = compress_courts(roster_df)
+            courts_payload = roster_df_to_courts(roster_df)
 
+            # Round-aware key (prevents board state carryover between rounds)
+            round_num = int(st.session_state.get("ladder_round_num", 1))
+            total_r = int(st.session_state.get("ladder_total_rounds", 1))
 
-
-    
-            
+            result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}")
 
             # Apply board changes back into ladder_live_roster
             if result and isinstance(result, dict) and "courts" in result:
@@ -2295,12 +2295,11 @@ if sel == "🏟️ League Manager":
                     st.session_state.ladder_live_roster = new_df
                     sync_ladder_court_sizes_from_roster(st.session_state.ladder_live_roster)
 
-                    if "current_schedule" in st.session_state:
-                        del st.session_state.current_schedule
-
+                    st.session_state.pop("current_schedule", None)
+                    st.session_state.pop("current_schedule_round", None)
                     st.rerun()
 
-            # --- Validation gate (must always define can_start) ---
+            # --- Validation gate (must always define can_start BEFORE using it) ---
             can_start = True
             df_check = st.session_state.ladder_live_roster.copy()
             court_counts = df_check.groupby("court").size().to_dict()
@@ -2316,19 +2315,25 @@ if sel == "🏟️ League Manager":
                     warnings.append(f"Court {c} has {n} players (target 4).")
 
             if warnings:
-                st.info("Court sizes don't need to be perfect to edit, but double-check before you start:\n\n- " + "\n- ".join(warnings))
-
+                st.info(
+                    "Court sizes don't need to be perfect to edit, but double-check before you start:\n\n- "
+                    + "\n- ".join(warnings)
+                )
 
             if problems:
-                st.warning("Fix these before starting Round 1:\n\n- " + "\n- ".join(problems))
+                st.warning("Fix these before starting:\n\n- " + "\n- ".join(problems))
                 can_start = False
 
-            if st.button("✅ Start Event (Round 1)", disabled=not can_start):
-                st.session_state.ladder_round_num = 1
+            # Start button (DO NOT reset round_num here)
+            start_label = "✅ Start Event (Round 1)" if round_num == 1 else f"✅ Start Round {round_num} / {total_r}"
+
+            if st.button(start_label, disabled=not can_start, key=f"start_round_btn_{round_num}"):
+                st.session_state.setdefault("ladder_round_num", 1)
                 st.session_state.ladder_state = "PLAY_ROUND"
-                if "current_schedule" in st.session_state:
-                    del st.session_state.current_schedule
+                st.session_state.pop("current_schedule", None)
+                st.session_state.pop("current_schedule_round", None)
                 st.rerun()
+
 
 
         def get_court_player_ids(court_df: pd.DataFrame) -> list[int]:
