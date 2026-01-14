@@ -1001,14 +1001,14 @@ if sel == "🏆 Leaderboards":
         pass
 
     # Shareable link (hide on kiosk/public screens)
-if (not PUBLIC_MODE) and st.session_state.admin_logged_in:
-    st.caption("Share standings:")
-    share_link = build_standings_link(target_league, public=True)
-    st.text_input("Public standings link", value=share_link)
-    try:
-        st.link_button("Open Public Standings", share_link)
-    except Exception:
-        pass
+    if (not PUBLIC_MODE) and st.session_state.admin_logged_in:
+        st.caption("Share standings:")
+        share_link = build_standings_link(target_league, public=True)
+        st.text_input("Public standings link", value=share_link)
+        try:
+            st.link_button("Open Public Standings", share_link)
+        except Exception:
+            pass
 
 
     # min games
