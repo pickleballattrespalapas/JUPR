@@ -152,14 +152,6 @@ else:
         st.session_state.deep_link_applied = True
 
 
-else:
-    if not st.session_state.deep_link_applied:
-        if DEEP_PAGE in PAGE_MAP:
-            st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
-        if DEEP_LEAGUE:
-            st.session_state["preselect_league"] = DEEP_LEAGUE
-        st.session_state.deep_link_applied = True
-
 
 def build_standings_link(league_name: str, public: bool = True) -> str:
     """
