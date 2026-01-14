@@ -124,19 +124,32 @@ if "deep_link_applied" not in st.session_state:
     st.session_state.deep_link_applied = False
 
 if PUBLIC_MODE:
-    # Public-only navigation (no admin pages; sidebar hidden)
-    nav_public = PUBLIC_NAV_LABELS
+    st.session_state.admin_logged_in = False
 
-    # Use the SAME session key "main_nav" so deep-links set it cleanly
-    sel = st.radio("Go to:", nav_public, horizontal=True, key="main_nav")
+    # Hide sidebar + header (kiosk feel)
+    st.markdown(
+        "<style>[data-testid='stSidebar']{display:none;} header{visibility:hidden;}</style>",
+        unsafe_allow_html=True
+    )
 
-    # Keep URL synced for shareability
-    try:
-        st.query_params["public"] = "1"
-        st.query_params["page"] = NAV_TO_PAGE_PUBLIC.get(sel, "leaderboards")
-    except Exception:
-        pass
+    # Apply deep-link page once (public-safe pages)
+    if not st.session_state.deep_link_applied:
+        if DEEP_PAGE in PUBLIC_ALLOWED and DEEP_PAGE in PAGE_MAP:
+            st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
+        else:
+            st.session_state["main_nav"] = PAGE_MAP["leaderboards"]
 
+        if DEEP_LEAGUE:
+            st.session_state["preselect_league"] = DEEP_LEAGUE
+
+        st.session_state.deep_link_applied = True
+else:
+    if not st.session_state.deep_link_applied:
+        if DEEP_PAGE in PAGE_MAP:
+            st.session_state["main_nav"] = PAGE_MAP[DEEP_PAGE]
+        if DEEP_LEAGUE:
+            st.session_state["preselect_league"] = DEEP_LEAGUE
+        st.session_state.deep_link_applied = True
 
 
 else:
@@ -934,18 +947,17 @@ else:
 # NAVIGATION
 # -------------------------
 if PUBLIC_MODE:
-    # Public-only navigation (no admin pages; sidebar hidden)
-    nav_public = ["🏆 Leaderboards", "🎯 Match Explorer"]
+    # Public-only navigation (no admin pages; sidebar hidden via CSS above)
+    nav_public = PUBLIC_NAV_LABELS
 
-    # Use the SAME session key "main_nav" so deep-links set it cleanly
     sel = st.radio("Go to:", nav_public, horizontal=True, key="main_nav")
 
-    # Keep URL synced for shareability
     try:
         st.query_params["public"] = "1"
-        st.query_params["page"] = NAV_TO_PAGE.get(sel, "leaderboards")
+        st.query_params["page"] = NAV_TO_PAGE_PUBLIC.get(sel, "leaderboards")
     except Exception:
         pass
+
 
 else:
     nav = ["🏆 Leaderboards", "🎯 Match Explorer", "🔍 Player Search", "❓ FAQs"]
@@ -996,7 +1008,8 @@ if sel == "🏆 Leaderboards":
     except Exception:
         pass
 
-    # Shareable link
+    # Shareable link (hide on kiosk/public screens)
+if (not PUBLIC_MODE) and st.session_state.admin_logged_in:
     st.caption("Share standings:")
     share_link = build_standings_link(target_league, public=True)
     st.text_input("Public standings link", value=share_link)
@@ -1004,6 +1017,7 @@ if sel == "🏆 Leaderboards":
         st.link_button("Open Public Standings", share_link)
     except Exception:
         pass
+
 
     # min games
     min_games_req = 0
