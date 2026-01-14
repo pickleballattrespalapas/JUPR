@@ -2264,24 +2264,22 @@ if sel == "🏟️ League Manager":
 
 
         # ---- 3.5) CONFIRM START ----
-        if st.session_state.ladder_state == "CONFIRM_START":
-            c_back, _ = st.columns([1, 5])
-            if c_back.button("⬅️ Back (edit courts)"):
-                # optional: clear preview so it forces a fresh preview next time
-                if "ladder_live_roster" in st.session_state:
-                    del st.session_state.ladder_live_roster
-                st.session_state.ladder_state = "CONFIG_COURTS"
-                st.rerun()
+        # --- in CONFIRM_START ---
 
-            st.markdown("#### Step 4: Court Board Preview (Drag & Drop)")
-            st.caption("Use the Court Board to make final adjustments. Bench players will not be scheduled.")
+        # Use current round if it exists; otherwise default to 1 (first start)
+        round_num = int(st.session_state.get("ladder_round_num", 1))
+        total_r   = int(st.session_state.get("ladder_total_rounds", 1))
+        
+        start_label = "✅ Start Event (Round 1)" if round_num == 1 else f"✅ Start Round {round_num} / {total_r}"
+        
+        if st.button(start_label, disabled=not can_start, key=f"start_round_btn_{round_num}"):
+            # Only set to 1 if it's not already defined (new event)
+            st.session_state.setdefault("ladder_round_num", 1)
+        
+            st.session_state.ladder_state = "PLAY_ROUND"
+            st.session_state.pop("current_schedule", None)
+            st.rerun()
 
-            roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
-            roster_df = compress_courts(roster_df)
-
-            courts_payload = roster_df_to_courts(roster_df)
-
-            result = court_board(courts_payload, key="court_board_confirm_start")
 
 
 
@@ -2447,21 +2445,30 @@ if sel == "🏟️ League Manager":
                     st.rerun()
 
 
-            if "current_schedule" not in st.session_state:
+            current_r = int(st.session_state.ladder_round_num)
+
+            if (
+                "current_schedule" not in st.session_state
+                or st.session_state.get("current_schedule_round") != current_r
+            ):
                 schedule = []
                 for c_idx in range(len(st.session_state.ladder_court_sizes)):
                     c_num = c_idx + 1
-                    court_df = st.session_state.ladder_live_roster[st.session_state.ladder_live_roster["court"] == c_num].copy()
+                    court_df = st.session_state.ladder_live_roster[
+                        st.session_state.ladder_live_roster["court"] == c_num
+                    ].copy()
+            
                     if "slot" in court_df.columns:
                         court_df = court_df.sort_values("slot")
+            
                     players = get_court_player_ids(court_df)
-
-
-
                     fmt = f"{len(players)}-Player"
                     matches = get_match_schedule(fmt, players)
                     schedule.append({"c": c_num, "matches": matches})
+            
                 st.session_state.current_schedule = schedule
+                st.session_state.current_schedule_round = current_r
+
 
             all_results = []
             with st.form("round_score_form"):
@@ -2514,8 +2521,17 @@ if sel == "🏟️ League Manager":
                             )
 
                     if valid_matches:
-                        process_matches(valid_matches, name_to_id, df_players_all, df_leagues, df_meta)
-                        st.success("Matches Saved to Database!")
+                        try:
+                            res = process_matches(valid_matches, name_to_id, df_players_all, df_leagues, df_meta)
+                            # If process_matches returns something meaningful, display it:
+                            # st.write(res)
+                            st.success(f"Matches saved ({len(valid_matches)}).")
+                        except Exception as e:
+                            st.error("Failed to save matches. See details below.")
+                            st.exception(e)
+                    else:
+                        st.warning("No scores entered (all matches 0–0), so nothing was saved.")
+
 
                     # movement calculations
                     round_stats = {}
@@ -2621,9 +2637,21 @@ if sel == "🏟️ League Manager":
                 if int(st.session_state.ladder_round_num) >= int(st.session_state.ladder_total_rounds):
                     st.balloons()
                     st.success("League Night Complete! All matches saved.")
-                    time.sleep(1)
+                
+                    # Clear event state
+                    for k in [
+                        "ladder_round_num",
+                        "ladder_live_roster",
+                        "ladder_court_sizes",
+                        "ladder_movement_preview",
+                        "current_schedule",
+                        "current_schedule_round",
+                    ]:
+                        st.session_state.pop(k, None)
+                
                     st.session_state.ladder_state = "SETUP"
                     st.rerun()
+
                 else:
                     new_roster = editor_df.copy()
                     new_roster["court"] = new_roster["Proposed Court"].astype(int)
