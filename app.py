@@ -3803,9 +3803,14 @@ elif sel == "🛠️ Challenge Ladder Admin":
     with tabs[4]:
         st.subheader("🏖 Vacation / Reinstate Overrides")
 
-        roster_active = df_roster[df_roster["is_active"] == True].copy() if df_roster is not None and not df_roster.empty else pd.DataFrame()
+        roster_active = ladder_roster_active_df(df_roster, id_to_name)
         if roster_active.empty:
             st.info("Roster required. Add players in the Roster tab.")
+        else:
+            # safe to use roster_active["player_id"] and roster_active["name"]
+            pick = st.selectbox("Player", roster_active["name"].tolist())
+            ...
+
 
         roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
         pick = st.selectbox("Player", roster_active["name"].tolist())
