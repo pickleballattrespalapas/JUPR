@@ -3443,71 +3443,71 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 ledger_ref = st.text_input("Ledger reference / notes (optional)", value="")
                 override = st.checkbox("Admin override (bypass eligibility rules)", value=False)
                 submitted = st.form_submit_button("Create Challenge")
-                
+            
             if submitted:
                 if not challenger_name or not defender_name:
                     st.error("Select both Challenger and Defender.")
                     st.stop()
-    
+            
                 chal_id = int(name_to_pid[challenger_name])
                 def_id = int(name_to_pid[defender_name])
-    
+            
                 if chal_id == def_id:
                     st.error("Challenger and Defender must be different.")
                     st.stop()
-    
+            
                 chal_rank = int(pid_to_rank.get(chal_id, 999999))
                 def_rank = int(pid_to_rank.get(def_id, 999999))
                 challenge_range = int(settings.get("challenge_range", 3) or 3)
-    
+            
                 errors = []
+            
+                # Must be upward challenge (defender above challenger)
+                if def_rank >= chal_rank:
+                    errors.append("Defender must be ranked ABOVE Challenger.")
+            
+                # Range
+                if (chal_rank - def_rank) > challenge_range:
+                    errors.append(f"Rank gap too large. Allowed: {challenge_range}. Gap: {chal_rank - def_rank}.")
+            
+                # Status eligibility
+                chal_status = status_map.get(chal_id, {}).get("status", "Ready to Defend")
+                def_status = status_map.get(def_id, {}).get("status", "Ready to Defend")
+            
+                if chal_status not in ("Ready to Defend",) and not override:
+                    errors.append(f"Challenger is not eligible to initiate (status: {chal_status}).")
+                if def_status not in ("Ready to Defend", "Cooldown") and not override:
+                    errors.append(f"Defender is not eligible to be challenged (status: {def_status}).")
+            
+                if errors and not override:
+                    st.error("Cannot create challenge:\n\n- " + "\n- ".join(errors))
+                    st.stop()
+            
+                now = dt_utc_now()
+                accept_by = now + timedelta(hours=int(settings.get("accept_window_hours", 48) or 48))
+            
+                payload = {
+                    "club_id": CLUB_ID,
+                    "challenger_id": chal_id,
+                    "defender_id": def_id,
+                    "challenger_rank_at_create": chal_rank,
+                    "defender_rank_at_create": def_rank,
+                    "status": "PENDING_ACCEPTANCE",
+                    "created_by": "admin",
+                    "ledger_ref": ledger_ref.strip() or None,
+                    "accept_by": accept_by.isoformat(),
+                }
+            
+                try:
+                    res = sb_retry(lambda: supabase.table("ladder_challenges").insert(payload).execute())
+                    new_id = res.data[0]["id"] if res.data else None
+                    ladder_audit("challenge_create", "ladder_challenges", str(new_id or ""), None, payload)
+                    st.success(f"Challenge created. ID = {new_id}")
+                    st.rerun()
+                except Exception as e:
+                    st.error("Failed to create challenge.")
+                    st.exception(e)
 
-            # Must be upward challenge (defender above challenger)
-            if def_rank >= chal_rank:
-                errors.append("Defender must be ranked ABOVE Challenger.")
-
-            # Range
-            if (chal_rank - def_rank) > challenge_range:
-                errors.append(f"Rank gap too large. Allowed: {challenge_range}. Gap: {chal_rank - def_rank}.")
-
-            # Status eligibility
-            chal_status = status_map.get(chal_id, {}).get("status", "Ready to Defend")
-            def_status = status_map.get(def_id, {}).get("status", "Ready to Defend")
-
-            if chal_status not in ("Ready to Defend",) and not override:
-                errors.append(f"Challenger is not eligible to initiate (status: {chal_status}).")
-            if def_status not in ("Ready to Defend","Cooldown") and not override:
-                # defender CAN be challenged during Cooldown per your rules
-                errors.append(f"Defender is not eligible to be challenged (status: {def_status}).")
-
-            if errors and not override:
-                st.error("Cannot create challenge:\n\n- " + "\n- ".join(errors))
-                st.stop()
-
-            now = dt_utc_now()
-            accept_by = now + timedelta(hours=int(settings.get("accept_window_hours", 48) or 48))
-
-            payload = {
-                "club_id": CLUB_ID,
-                "challenger_id": chal_id,
-                "defender_id": def_id,
-                "challenger_rank_at_create": chal_rank,
-                "defender_rank_at_create": def_rank,
-                "status": "PENDING_ACCEPTANCE",
-                "created_by": "admin",
-                "ledger_ref": ledger_ref.strip() or None,
-                "accept_by": accept_by.isoformat(),
-            }
-
-            try:
-                res = sb_retry(lambda: supabase.table("ladder_challenges").insert(payload).execute())
-                new_id = res.data[0]["id"] if res.data else None
-                ladder_audit("challenge_create", "ladder_challenges", str(new_id or ""), None, payload)
-                st.success(f"Challenge created. ID = {new_id}")
-                st.rerun()
-            except Exception as e:
-                st.error("Failed to create challenge.")
-                st.exception(e)
 
     # -------------------------
     # TAB 3: CHALLENGE DETAIL
