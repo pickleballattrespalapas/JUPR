@@ -3401,17 +3401,17 @@ elif sel == "🛠️ Challenge Ladder Admin":
         
             name_to_pid = dict(zip(roster_active["name"], roster_active["player_id"]))
             pid_to_rank = dict(zip(roster_active["player_id"].astype(int), roster_active["rank"].astype(int)))
-        
+
             # Compute current statuses for validation
             status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
 
-        with st.form("ladder_intake_form"):
-            challenger_name = st.selectbox("Challenger", [""] + roster_active["name"].tolist())
-            defender_name = st.selectbox("Defender", [""] + roster_active["name"].tolist())
-            ledger_ref = st.text_input("Ledger reference / notes (optional)", value="")
-            override = st.checkbox("Admin override (bypass eligibility rules)", value=False)
-            submitted = st.form_submit_button("Create Challenge")
-
+            with st.form("ladder_intake_form"):
+                challenger_name = st.selectbox("Challenger", [""] + roster_active["name"].tolist())
+                defender_name = st.selectbox("Defender", [""] + roster_active["name"].tolist())
+                ledger_ref = st.text_input("Ledger reference / notes (optional)", value="")
+                override = st.checkbox("Admin override (bypass eligibility rules)", value=False)
+                submitted = st.form_submit_button("Create Challenge")
+                
         if submitted:
             if not challenger_name or not defender_name:
                 st.error("Select both Challenger and Defender.")
