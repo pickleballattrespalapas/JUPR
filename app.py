@@ -3413,22 +3413,22 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 submitted = st.form_submit_button("Create Challenge")
                 
             if submitted:
-            if not challenger_name or not defender_name:
-                st.error("Select both Challenger and Defender.")
-                st.stop()
-
-            chal_id = int(name_to_pid[challenger_name])
-            def_id = int(name_to_pid[defender_name])
-
-            if chal_id == def_id:
-                st.error("Challenger and Defender must be different.")
-                st.stop()
-
-            chal_rank = int(pid_to_rank.get(chal_id, 999999))
-            def_rank = int(pid_to_rank.get(def_id, 999999))
-            challenge_range = int(settings.get("challenge_range", 3) or 3)
-
-            errors = []
+                if not challenger_name or not defender_name:
+                    st.error("Select both Challenger and Defender.")
+                    st.stop()
+    
+                chal_id = int(name_to_pid[challenger_name])
+                def_id = int(name_to_pid[defender_name])
+    
+                if chal_id == def_id:
+                    st.error("Challenger and Defender must be different.")
+                    st.stop()
+    
+                chal_rank = int(pid_to_rank.get(chal_id, 999999))
+                def_rank = int(pid_to_rank.get(def_id, 999999))
+                challenge_range = int(settings.get("challenge_range", 3) or 3)
+    
+                errors = []
 
             # Must be upward challenge (defender above challenger)
             if def_rank >= chal_rank:
