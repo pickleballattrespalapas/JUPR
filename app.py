@@ -3800,38 +3800,52 @@ elif sel == "🛠️ Challenge Ladder Admin":
     # -------------------------
     # TAB 5: OVERRIDES
     # -------------------------
+    # -------------------------
+    # TAB 5: OVERRIDES
+    # -------------------------
     with tabs[4]:
         st.subheader("🏖 Vacation / Reinstate Overrides")
-
+    
         roster_active = ladder_roster_active_df(df_roster, id_to_name)
-        if roster_active.empty:
+    
+        if roster_active is None or roster_active.empty:
             st.info("Roster required. Add players in the Roster tab.")
-        else:
-            # safe to use roster_active["player_id"] and roster_active["name"]
-            pick = st.selectbox("Player", roster_active["name"].tolist())
-            ...
-
-
-        roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-        pick = st.selectbox("Player", roster_active["name"].tolist())
-        pid = int(roster_active[roster_active["name"] == pick].iloc[0]["player_id"])
-
-        # Load current flags if exist
+            st.stop()
+    
+        # Ensure int ids
+        roster_active = roster_active.copy()
+        roster_active["player_id"] = roster_active["player_id"].apply(lambda x: int(float(x)) if x is not None else -1)
+        roster_active = roster_active[roster_active["player_id"] > 0].copy()
+    
+        if roster_active.empty:
+            st.info("No active players found in ladder roster.")
+            st.stop()
+    
+        # Select by ID (canonical), display name (friendly)
+        pid = st.selectbox(
+            "Player",
+            options=roster_active["player_id"].tolist(),
+            format_func=lambda x: ladder_nm(int(x), id_to_name),
+            key="ladder_override_pid",
+        )
+        pid = int(pid)
+    
+        # Load current flags (if any)
         cur = None
-        if df_flags is not None and not df_flags.empty:
-            hit = df_flags[df_flags["player_id"] == pid]
+        if df_flags is not None and not df_flags.empty and "player_id" in df_flags.columns:
+            hit = df_flags[df_flags["player_id"].astype(int) == pid]
             if not hit.empty:
                 cur = hit.iloc[0].to_dict()
-
+    
         vac_default = cur.get("vacation_until") if cur else None
         rein_default = bool(cur.get("reinstate_required", False)) if cur else False
         notes_default = str(cur.get("reinstate_notes", "") or "") if cur else ""
-
+    
         vac = st.text_input("Vacation until (ISO, UTC) — leave blank to clear", value=str(vac_default or ""))
         rein = st.checkbox("Reinstate Required", value=rein_default)
         notes = st.text_area("Reinstate notes", value=notes_default, height=80)
-
-        if st.button("💾 Save Overrides"):
+    
+        if st.button("💾 Save Overrides", key="save_overrides_btn"):
             before = cur
             payload = {
                 "club_id": CLUB_ID,
@@ -3844,6 +3858,7 @@ elif sel == "🛠️ Challenge Ladder Admin":
             ladder_audit("flags_save", "ladder_player_flags", f"{CLUB_ID}:{pid}", before, payload)
             st.success("Saved.")
             st.rerun()
+
 
     # -------------------------
     # TAB 6: AUDIT
