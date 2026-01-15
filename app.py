@@ -1094,6 +1094,100 @@ def ladder_load_core():
 
     return df_roster, df_flags, df_ch, df_pass
 
+def ladder_next_rank(club_id: str) -> int:
+    max_rank_resp = sb_retry(lambda: (
+        supabase.table("ladder_roster")
+        .select("rank")
+        .eq("club_id", club_id)
+        .order("rank", desc=True)
+        .limit(1)
+        .execute()
+    ))
+    return (int(max_rank_resp.data[0]["rank"]) + 1) if max_rank_resp.data else 1
+
+
+def ladder_set_roster_active(club_id: str, pid: int, make_active: bool, mode: str = "append", notes: str | None = None):
+    """
+    mode:
+      - "append": when reactivating, place at bottom (rank = max+1)
+      - "restore": when reactivating, keep existing rank (if it exists)
+    """
+    pid = int(pid)
+    now_iso = dt_utc_now().isoformat()
+
+    # Fetch existing row (if any)
+    existing = sb_retry(lambda: (
+        supabase.table("ladder_roster")
+        .select("id,rank,is_active,joined_at,left_at,notes")
+        .eq("club_id", club_id)
+        .eq("player_id", pid)
+        .limit(1)
+        .execute()
+    ))
+
+    if not existing.data:
+        # If no roster row exists, create one only when activating
+        if not make_active:
+            return False, "Player is not in ladder roster."
+        ins = {
+            "club_id": club_id,
+            "player_id": pid,
+            "rank": ladder_next_rank(club_id),
+            "is_active": True,
+            "joined_at": now_iso,
+            "left_at": None,
+            "notes": (notes.strip() if notes else None),
+        }
+        sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
+        ladder_audit("roster_activate_insert", "ladder_roster", f"{club_id}:{pid}", None, ins)
+        return True, "Activated (inserted) at bottom."
+
+    row = existing.data[0]
+    before = dict(row)
+
+    if make_active:
+        upd = {
+            "is_active": True,
+            "left_at": None,
+            "joined_at": now_iso,
+        }
+        if notes is not None:
+            upd["notes"] = notes.strip() or None
+
+        if mode == "append":
+            upd["rank"] = ladder_next_rank(club_id)
+        # mode == "restore": keep existing rank as-is
+
+        sb_retry(lambda: (
+            supabase.table("ladder_roster")
+            .update(upd)
+            .eq("club_id", club_id)
+            .eq("player_id", pid)
+            .execute()
+        ))
+        ladder_audit("roster_reactivate" if before.get("is_active") == False else "roster_activate", "ladder_roster", f"{club_id}:{pid}", before, {**before, **upd})
+        return True, "Activated."
+
+    else:
+        # Deactivate
+        upd = {
+            "is_active": False,
+            "left_at": now_iso,
+        }
+        if notes is not None:
+            upd["notes"] = notes.strip() or None
+
+        sb_retry(lambda: (
+            supabase.table("ladder_roster")
+            .update(upd)
+            .eq("club_id", club_id)
+            .eq("player_id", pid)
+            .execute()
+        ))
+        ladder_audit("roster_deactivate", "ladder_roster", f"{club_id}:{pid}", before, {**before, **upd})
+        return True, "Deactivated."
+
+
 def ladder_parse_dt(x):
     if x is None or str(x).strip() == "":
         return None
@@ -3789,17 +3883,76 @@ elif sel == "🛠️ Challenge Ladder Admin":
 
         # Display roster
         df_roster, df_flags, df_ch, df_pass = ladder_load_core()
+
         if df_roster is None or df_roster.empty:
             st.info("No roster yet.")
+            st.stop()
+    
+        df_roster = df_roster.copy()
+        df_roster["player_id"] = df_roster["player_id"].astype(int)
+        df_roster["name"] = df_roster["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+    
+        # --- Management panel ---
+        st.markdown("### Manage Ladder Player (activate/deactivate)")
+    
+        # Select by player_id (canonical)
+        pid = st.selectbox(
+            "Select player",
+            options=df_roster.sort_values(["is_active", "rank"], ascending=[False, True])["player_id"].tolist(),
+            format_func=lambda x: f"{ladder_nm(int(x), id_to_name)} (ID {int(x)})",
+            key="ladder_roster_manage_pid",
+        )
+        pid = int(pid)
+    
+        row = df_roster[df_roster["player_id"] == pid].iloc[0].to_dict()
+        is_active_now = bool(row.get("is_active", True))
+        rank_now = row.get("rank", None)
+    
+        c1, c2, c3 = st.columns([2, 2, 3])
+        c1.metric("Status", "Active" if is_active_now else "Inactive")
+        c2.metric("Current rank", str(rank_now) if rank_now is not None else "—")
+    
+        notes_val = c3.text_input("Notes (optional)", value=str(row.get("notes", "") or ""), key="ladder_roster_notes")
+    
+        if is_active_now:
+            st.warning("Deactivating removes the player from the ladder (no longer challengeable). History remains.")
+            if st.button("Deactivate from Ladder", type="primary", key="btn_deactivate_ladder"):
+                ok, msg = ladder_set_roster_active(CLUB_ID, pid, make_active=False, notes=notes_val)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
         else:
-            r = df_roster[df_roster["is_active"] == True].copy()
-            r["name"] = r["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-            r = r.sort_values("rank")
-            st.dataframe(r[["rank","name","player_id","notes"]], use_container_width=True, hide_index=True)
-
-    # -------------------------
-    # TAB 5: OVERRIDES
-    # -------------------------
+            st.info("Reactivating puts the player back on the ladder.")
+            mode = st.radio(
+                "Reactivation placement",
+                ["Append to bottom", "Restore previous rank"],
+                horizontal=True,
+                key="ladder_reactivate_mode",
+            )
+            mode_key = "append" if mode == "Append to bottom" else "restore"
+    
+            if st.button("Reactivate on Ladder", type="primary", key="btn_reactivate_ladder"):
+                ok, msg = ladder_set_roster_active(CLUB_ID, pid, make_active=True, mode=mode_key, notes=notes_val)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+    
+        st.divider()
+    
+        # --- Display tables ---
+        st.markdown("### Active ladder roster")
+        active_df = df_roster[df_roster["is_active"] == True].copy().sort_values("rank")
+        st.dataframe(active_df[["rank", "name", "player_id", "notes"]], use_container_width=True, hide_index=True)
+    
+        st.markdown("### Inactive ladder roster")
+        inactive_df = df_roster[df_roster["is_active"] == False].copy().sort_values("rank")
+        show_cols = [c for c in ["rank", "name", "player_id", "left_at", "notes"] if c in inactive_df.columns]
+        st.dataframe(inactive_df[show_cols], use_container_width=True, hide_index=True)
+        
     # -------------------------
     # TAB 5: OVERRIDES
     # -------------------------
