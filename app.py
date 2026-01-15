@@ -3537,6 +3537,8 @@ Within 48 hours, the defender must:
 Each player receives **one Monthly Pass per calendar month**.  
 Passes do not roll over.
 
+Failure to Accept or use a Monthly Pass withing the 48 hour window will result in loss of rank.
+
 ---
 
 ## Step 5: Schedule the Match
