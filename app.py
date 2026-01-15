@@ -3385,7 +3385,7 @@ if sel == "🪜 Challenge Ladder":
     settings = ladder_fetch_settings()
     df_roster, df_flags, df_ch, df_pass = ladder_load_core()
 
-    tab_ladder, tab_active = st.tabs(["🪜 Ladder", "⚔️ Active Challenges", "Info"])
+    tab_ladder, tab_active, tab_info = st.tabs(["🪜 Ladder", "⚔️ Active Challenges", "📘 Info"])
 
     # -------------------------
     # TAB 1: LADDER
