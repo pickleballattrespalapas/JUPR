@@ -3259,70 +3259,93 @@ if sel == "🪜 Challenge Ladder":
     settings = ladder_fetch_settings()
     df_roster, df_flags, df_ch, df_pass = ladder_load_core()
 
-    if df_roster is None or df_roster.empty:
-        st.info("Ladder roster not initialized yet.")
-        st.stop()
+    tab_ladder, tab_active = st.tabs(["🪜 Ladder", "⚔️ Active Challenges"])
 
-    # Map player_id -> name (use your global id_to_name map)
-    df = df_roster[df_roster["is_active"] == True].copy()
-    df["name"] = df["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+    # -------------------------
+    # TAB 1: LADDER
+    # -------------------------
+    with tab_ladder:
+        if df_roster is None or df_roster.empty:
+            st.info("Ladder roster not initialized yet.")
+        else:
+            df = df_roster[df_roster["is_active"] == True].copy()
+            df["name"] = df["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
 
-    status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
-    df["status"] = df["player_id"].apply(lambda pid: status_map.get(int(pid), {}).get("status", "Ready to Defend"))
-    df["detail"] = df["player_id"].apply(lambda pid: status_map.get(int(pid), {}).get("detail", ""))
+            status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
+            df["status"] = df["player_id"].apply(
+                lambda pid: status_map.get(int(pid), {}).get("status", "Ready to Defend")
+            )
+            df["detail"] = df["player_id"].apply(
+                lambda pid: status_map.get(int(pid), {}).get("detail", "")
+            )
 
-    # Search
-    q = st.text_input("Search player", value="")
-    if q.strip():
-        df = df[df["name"].str.contains(q.strip(), case=False, na=False)].copy()
+            # Search (only affects Ladder tab)
+            q = st.text_input("Search player", value="", key="challenge_ladder_search")
+            if q.strip():
+                df = df[df["name"].str.contains(q.strip(), case=False, na=False)].copy()
 
-    df = df.sort_values("rank", ascending=True).copy()
-    df["Rank"] = df["rank"].astype(int)
+            df = df.sort_values("rank", ascending=True).copy()
 
-    # Highlight Top 20
-    def rank_badge(r):
-        r = int(r)
-        if r == 1: return "🥇 1"
-        if r == 2: return "🥈 2"
-        if r == 3: return "🥉 3"
-        return str(r)
+            # Pretty rank badges (Top 3)
+            def rank_badge(r):
+                r = int(r)
+                if r == 1: return "🥇 1"
+                if r == 2: return "🥈 2"
+                if r == 3: return "🥉 3"
+                return str(r)
 
-    df["Rank"] = df["Rank"].apply(rank_badge)
+            df["Rank"] = df["rank"].astype(int).apply(rank_badge)
 
-    cols = ["Rank", "name", "status", "detail"]
-    st.dataframe(df[cols], use_container_width=True, hide_index=True)
+            st.dataframe(df[["Rank", "name", "status", "detail"]], use_container_width=True, hide_index=True)
 
-elif sel == "⚔️ Active Challenges":
-    st.header("⚔️ Active Challenges")
+    # -------------------------
+    # TAB 2: ACTIVE CHALLENGES
+    # -------------------------
+    with tab_active:
+        if df_ch is None or df_ch.empty:
+            st.info("No challenges yet.")
+        else:
+            df = df_ch.copy()
+            df["challenger_name"] = df["challenger_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+            df["defender_name"] = df["defender_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+            df["bucket"] = df.apply(lambda r: ladder_bucket_challenge(r.to_dict()), axis=1)
 
-    settings = ladder_fetch_settings()
-    _, _, df_ch, _ = ladder_load_core()
+            tab_names = [
+                "Pending Acceptance",
+                "Accepted / In Window",
+                "Acceptance Overdue",
+                "Play Overdue",
+                "Recently Completed",
+            ]
+            tabs = st.tabs(tab_names)
 
-    if df_ch is None or df_ch.empty:
-        st.info("No challenges yet.")
-        st.stop()
+            for i, tname in enumerate(tab_names):
+                with tabs[i]:
+                    view = df[df["bucket"] == tname].copy()
+                    if view.empty:
+                        st.info("No items.")
+                        continue
 
-    # Add names + bucket
-    df = df_ch.copy()
-    df["challenger_name"] = df["challenger_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-    df["defender_name"] = df["defender_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-    df["bucket"] = df.apply(lambda r: ladder_bucket_challenge(r.to_dict()), axis=1)
+                    view["created_at"] = pd.to_datetime(view["created_at"], utc=True, errors="coerce")
+                    view = view.sort_values("created_at", ascending=False)
 
-    tab_names = ["Pending Acceptance", "Accepted / In Window", "Acceptance Overdue", "Play Overdue", "Recently Completed"]
-    tabs = st.tabs(tab_names)
+                    show = view[
+                        ["id", "status", "challenger_name", "defender_name", "created_at", "accept_by", "play_by", "winner_id"]
+                    ].copy()
 
-    for i, tname in enumerate(tab_names):
-        with tabs[i]:
-            view = df[df["bucket"] == tname].copy()
-            if view.empty:
-                st.info("No items.")
-                continue
+                    # Optional: show winner name instead of raw ID
+                    def winner_name(x):
+                        if x is None or (isinstance(x, float) and pd.isna(x)):
+                            return ""
+                        try:
+                            return ladder_nm(int(x), id_to_name)
+                        except Exception:
+                            return ""
 
-            view["created_at"] = pd.to_datetime(view["created_at"], utc=True, errors="coerce")
-            view = view.sort_values("created_at", ascending=False)
+                    show["winner"] = show["winner_id"].apply(winner_name)
+                    show = show.drop(columns=["winner_id"])
 
-            show = view[["id", "status", "challenger_name", "defender_name", "created_at", "accept_by", "play_by", "winner_id"]].copy()
-            st.dataframe(show, use_container_width=True, hide_index=True)
+                    st.dataframe(show, use_container_width=True, hide_index=True)
 
 elif sel == "🛠️ Challenge Ladder Admin":
     st.header("🛠️ Challenge Ladder Admin (Challenge Ladder)")
