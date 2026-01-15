@@ -3385,7 +3385,7 @@ if sel == "🪜 Challenge Ladder":
     settings = ladder_fetch_settings()
     df_roster, df_flags, df_ch, df_pass = ladder_load_core()
 
-    tab_ladder, tab_active = st.tabs(["🪜 Ladder", "⚔️ Active Challenges"])
+    tab_ladder, tab_active = st.tabs(["🪜 Ladder", "⚔️ Active Challenges", "Info"])
 
     # -------------------------
     # TAB 1: LADDER
@@ -3472,6 +3472,99 @@ if sel == "🪜 Challenge Ladder":
                     show = show.drop(columns=["winner_id"])
 
                     st.dataframe(show, use_container_width=True, hide_index=True)
+
+    # -------------------------
+    # TAB 3: INFO (NEW)
+    # -------------------------
+    with tab_info:
+        st.subheader("📘 Challenge Ladder — Quick Rules")
+
+        st.markdown(
+            """
+**The Challenge Ladder is an ongoing, challenge-anytime ranking system.**  
+Players move up by challenging and defeating players ranked above them.
+
+---
+
+### 🎯 The Basics
+- Rankings are **individual**, but matches are played as **doubles**
+- You may challenge **up to 7 ranks above you**
+- You may only have **one active challenge at a time**
+- All challenges are **official only when recorded at the Pro Shop**
+
+---
+
+### 🔄 Player Status (What the labels mean)
+
+| Status | Can Challenge? | Can Be Challenged? | Meaning |
+|------|---------------|-------------------|--------|
+| **Ready to Defend** | Yes | Yes | Normal |
+| **Locked** | No | No | Already in a challenge |
+| **Cooldown (72h)** | No | Yes | Rest after challenging |
+| **Protected (72h)** | Yes | No | Rest after defending |
+| **Vacation / Reinstate** | No | No | Admin controlled |
+
+*Swing partners are not ranked and do not move on the ladder.*
+
+---
+
+### 📝 Starting a Challenge
+Challenges must be recorded by **Pro Shop staff**.
+
+Two ways to start:
+- **Top-20 Players**: place your token on the physical board, then report to the Pro Shop
+- **All Players**: go directly to the Pro Shop to create the challenge
+
+Once recorded:
+- Defender has **48 hours to accept**
+- Deadlines are based on **Pro Shop timestamps**
+
+---
+
+### 🎟 Monthly Pass (1 per month)
+- Lets a defender **decline a challenge without losing rank**
+- Must be used within the 48-hour acceptance window
+- No ladder movement occurs
+- Does not roll over month to month
+
+---
+
+### ⏱ Scheduling
+- Once accepted, the match must be played within **7 days**
+- Failure to accept or play by deadline may result in a **forfeit**
+- Disputes are resolved by the **Ladder Admin**
+
+---
+
+### 🎾 Match Format (Swing Partner Swap)
+- Two matches, best 2-of-3 games to 11 (win by 2)
+- Ranked players stay opponents
+- Swing partners swap between matches
+
+**Winner is determined by:**
+1. Matches won  
+2. Games won  
+3. Point differential  
+4. Tie → Defender holds  
+
+---
+
+### 🔁 Rank Movement
+- **Challenger wins** → swap ranks  
+- **Defender wins** → no change  
+
+After the match:
+- Challenger → **Cooldown (72h)**
+- Defender → **Protected (72h)**
+
+---
+
+### 📌 Important
+- The **Pro Shop Challenge Ledger** is the official record
+- This page is a **live, read-only view**
+- Ladder Admin decisions are final
+"""
+        )
 
 elif sel == "🛠️ Challenge Ladder Admin":
     st.header("🛠️ Challenge Ladder Admin (Challenge Ladder)")
