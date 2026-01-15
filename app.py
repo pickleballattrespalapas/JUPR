@@ -3393,18 +3393,17 @@ elif sel == "🛠️ Challenge Ladder Admin":
         st.subheader("🧾 Enter Challenge (from Pro Shop Ledger)")
 
         if df_roster is None or df_roster.empty:
-            st.error("Roster not initialized yet. Go to the Roster tab first.")
-            st.stop()
-
-        roster_active = df_roster[df_roster["is_active"] == True].copy()
-        roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-        roster_active = roster_active.sort_values("rank")
-
-        name_to_pid = dict(zip(roster_active["name"], roster_active["player_id"]))
-        pid_to_rank = dict(zip(roster_active["player_id"].astype(int), roster_active["rank"].astype(int)))
-
-        # Compute current statuses for validation
-        status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
+            st.error("Roster not initialized yet. Go to the Roster tab to add players.")
+        else:
+            roster_active = df_roster[df_roster["is_active"] == True].copy()
+            roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+            roster_active = roster_active.sort_values("rank")
+        
+            name_to_pid = dict(zip(roster_active["name"], roster_active["player_id"]))
+            pid_to_rank = dict(zip(roster_active["player_id"].astype(int), roster_active["rank"].astype(int)))
+        
+            # Compute current statuses for validation
+            status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
 
         with st.form("ladder_intake_form"):
             challenger_name = st.selectbox("Challenger", [""] + roster_active["name"].tolist())
@@ -3485,10 +3484,9 @@ elif sel == "🛠️ Challenge Ladder Admin":
         st.subheader("🗂 Challenge Detail")
 
         if df_ch is None or df_ch.empty:
-            st.info("No challenges yet.")
-            st.stop()
-
-        df = df_ch.copy()
+            st.info("No challenges yet. Create one in the Intake tab.")
+        else:
+            df = df_ch.copy()
         df["label"] = df.apply(
             lambda r: f"#{int(r['id'])} • {ladder_nm(int(r['challenger_id']), id_to_name)} vs {ladder_nm(int(r['defender_id']), id_to_name)} • {r.get('status','')}",
             axis=1,
@@ -3745,6 +3743,102 @@ elif sel == "🛠️ Challenge Ladder Admin":
     with tabs[3]:
         st.subheader("👥 Ladder Roster")
 
+        # -------------------------
+        # Add ONE player to bottom
+        # -------------------------
+        st.markdown("#### ➕ Add one player (appends to bottom)")
+        st.caption("Existing players are appended to the bottom. New names will be created in Players (default rating) and appended to the bottom.")
+        
+        # Build selectable list from existing Players table
+        all_player_names = []
+        if df_players_all is not None and not df_players_all.empty and "name" in df_players_all.columns:
+            all_player_names = sorted(df_players_all["name"].astype(str).tolist())
+        
+        with st.form("ladder_add_one_form"):
+            existing_pick = st.selectbox("Pick an existing player", [""] + all_player_names, index=0)
+            new_name = st.text_input("Or type a new player name", value="")
+            new_rating = st.number_input("New player starting JUPR (only used if creating)", min_value=1.0, max_value=7.0, value=3.5, step=0.1)
+            add_one = st.form_submit_button("Add to bottom")
+        
+        if add_one:
+            nm = (new_name.strip() or existing_pick.strip())
+            if not nm:
+                st.error("Pick an existing player OR type a new name.")
+                st.stop()
+        
+            # Ensure the player exists in Players table
+            if nm not in name_to_id:
+                ok, err = safe_add_player(nm, float(new_rating))
+                if not ok:
+                    st.error(f"Could not add player '{nm}': {err}")
+                    st.stop()
+        
+                # Refresh mappings so name_to_id includes new player
+                (
+                    df_players_all,
+                    df_players,
+                    df_leagues,
+                    df_matches,
+                    df_meta,
+                    name_to_id,
+                    id_to_name,
+                ) = load_data()
+        
+            pid = int(name_to_id.get(nm))
+        
+            # Determine next rank (bottom)
+            max_rank_resp = sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .select("rank")
+                .eq("club_id", CLUB_ID)
+                .order("rank", desc=True)
+                .limit(1)
+                .execute()
+            ))
+            next_rank = (int(max_rank_resp.data[0]["rank"]) + 1) if max_rank_resp.data else 1
+        
+            # If player already exists in ladder_roster, update/reactivate instead of inserting
+            existing_row = sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .select("id,is_active,rank")
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", pid)
+                .limit(1)
+                .execute()
+            ))
+        
+            now_iso = dt_utc_now().isoformat()
+        
+            if existing_row.data:
+                row = existing_row.data[0]
+                if bool(row.get("is_active", True)):
+                    st.info(f"'{nm}' is already on the ladder roster (rank {row.get('rank')}).")
+                else:
+                    upd = {
+                        "is_active": True,
+                        "rank": int(next_rank),
+                        "left_at": None,
+                        "joined_at": now_iso,
+                    }
+                    sb_retry(lambda: (
+                        supabase.table("ladder_roster")
+                        .update(upd)
+                        .eq("club_id", CLUB_ID)
+                        .eq("player_id", pid)
+                        .execute()
+                    ))
+                    ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", row, upd)
+                    st.success(f"Reactivated '{nm}' and appended to bottom at rank {next_rank}.")
+                    st.rerun()
+            else:
+                ins = {"club_id": CLUB_ID, "player_id": pid, "rank": int(next_rank), "is_active": True}
+                sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
+                ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
+                st.success(f"Added '{nm}' to bottom at rank {next_rank}.")
+                st.rerun()
+        
+        st.divider()
+
         # Initialize roster from ranked list
         st.markdown("#### Initialize / Replace Ladder (paste ranked list)")
         st.caption("Paste names top-to-bottom. This will REPLACE ladder_roster for this club.")
@@ -3808,8 +3902,7 @@ elif sel == "🛠️ Challenge Ladder Admin":
 
         roster_active = df_roster[df_roster["is_active"] == True].copy() if df_roster is not None and not df_roster.empty else pd.DataFrame()
         if roster_active.empty:
-            st.info("Roster required.")
-            st.stop()
+            st.info("Roster required. Add players in the Roster tab.")
 
         roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
         pick = st.selectbox("Player", roster_active["name"].tolist())
