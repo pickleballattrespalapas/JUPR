@@ -963,6 +963,38 @@ def ensure_league_row(player_id: int, league_name: str, base_rating_elo: float =
         .execute()
     )
     return existing2.data[0]["id"] if existing2.data else None
+
+def ladder_roster_active_df(df_roster: pd.DataFrame, id_to_name: dict) -> pd.DataFrame:
+    """
+    Returns a safe active roster DF with required columns:
+      player_id, rank, is_active, name
+    If roster is empty, returns an empty DF WITH columns (so downstream code won't KeyError).
+    """
+    cols = ["player_id", "rank", "is_active", "notes"]
+    out = pd.DataFrame(columns=cols + ["name"])
+
+    if df_roster is None or not isinstance(df_roster, pd.DataFrame) or df_roster.empty:
+        return out
+
+    if "player_id" not in df_roster.columns:
+        return out
+
+    tmp = df_roster.copy()
+
+    if "is_active" in tmp.columns:
+        tmp = tmp[tmp["is_active"] == True].copy()
+
+    # Ensure rank exists (for sorting)
+    if "rank" not in tmp.columns:
+        tmp["rank"] = 999999
+
+    tmp["name"] = tmp["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+    tmp = tmp.sort_values("rank", ascending=True)
+
+    # Keep consistent columns
+    keep = [c for c in cols if c in tmp.columns] + ["name"]
+    return tmp[keep].copy()
+
 # =========================
 # CHALLENGE LADDER MODULE
 # =========================
