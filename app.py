@@ -228,7 +228,7 @@ NAV_TO_PAGE = {
     "📝 Match Log": "match_log",
     "⚙️ Admin Tools": "admin_tools",
     "📘 Admin Guide": "admin_guide",    
-    "🛠️ CHallenge Ladder Admin": "challenge ladder_admin",
+    "🛠️ Challenge Ladder Admin": "challenge ladder admin",
 }
 
 PAGE_TO_NAV = {v: k for k, v in NAV_TO_PAGE.items()}
