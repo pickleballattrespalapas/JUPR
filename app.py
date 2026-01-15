@@ -3412,7 +3412,7 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 override = st.checkbox("Admin override (bypass eligibility rules)", value=False)
                 submitted = st.form_submit_button("Create Challenge")
                 
-        if submitted:
+            if submitted:
             if not challenger_name or not defender_name:
                 st.error("Select both Challenger and Defender.")
                 st.stop()
