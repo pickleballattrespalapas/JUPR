@@ -3482,260 +3482,131 @@ elif sel == "🛠️ Challenge Ladder Admin":
     # -------------------------
     with tabs[2]:
         st.subheader("🗂 Challenge Detail")
-
+    
+        # If no challenges yet, show message and DO NOT run the rest of this tab
         if df_ch is None or df_ch.empty:
             st.info("No challenges yet. Create one in the Intake tab.")
         else:
             df = df_ch.copy()
+    
+            # Build labels safely
             df["label"] = df.apply(
                 lambda r: f"#{int(r['id'])} • {ladder_nm(int(r['challenger_id']), id_to_name)} vs {ladder_nm(int(r['defender_id']), id_to_name)} • {r.get('status','')}",
                 axis=1,
             )
-            pick = st.selectbox("Select challenge", df["label"].tolist(), index=0)
     
-            ch_row = df[df["label"] == pick].iloc[0].to_dict()
-            ch_id = int(ch_row["id"])
-            chal_id = int(ch_row["challenger_id"])
-            def_id = int(ch_row["defender_id"])
+            pick = st.selectbox("Select challenge", df["label"].tolist(), index=0, key="ladder_admin_pick_challenge")
     
-            st.write(f"**Challenge #{ch_id}**")
-            st.write(f"- Challenger: **{ladder_nm(chal_id, id_to_name)}** (rank at create: {ch_row.get('challenger_rank_at_create')})")
-            st.write(f"- Defender: **{ladder_nm(def_id, id_to_name)}** (rank at create: {ch_row.get('defender_rank_at_create')})")
-            st.write(f"- Status: **{ch_row.get('status')}**")
-            st.write(f"- Accept by: {ch_row.get('accept_by')}")
-            st.write(f"- Play by: {ch_row.get('play_by')}")
+            # Guard: if something goes sideways, don't crash
+            hit = df[df["label"] == pick]
+            if hit.empty:
+                st.warning("Selected challenge not found (refresh and try again).")
+            else:
+                ch_row = hit.iloc[0].to_dict()
     
-            st.divider()
-
-        # ---- Actions: Accept / Cancel / Forfeit / Pass ----
-        c1, c2, c3, c4 = st.columns(4)
-
-        if c1.button("✅ Mark Accepted", disabled=(str(ch_row.get("status")) != "PENDING_ACCEPTANCE")):
-            before = ch_row.copy()
-            now = dt_utc_now()
-            play_by = now + timedelta(days=int(settings.get("play_window_days", 7) or 7))
-            upd = {
-                "accepted_at": now.isoformat(),
-                "play_by": play_by.isoformat(),
-                "status": "ACCEPTED_SCHEDULING",
-            }
-            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
-            ladder_audit("challenge_accept", "ladder_challenges", str(ch_id), before, {**before, **upd})
-            st.success("Accepted.")
-            st.rerun()
-
-        if c2.button("🗑 Cancel (Admin)", type="secondary"):
-            before = ch_row.copy()
-            upd = {"status": "CANCELED", "resolution_notes": "Admin canceled", "completed_at": dt_utc_now().isoformat()}
-            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
-            ladder_audit("challenge_cancel", "ladder_challenges", str(ch_id), before, {**before, **upd})
-            st.success("Canceled.")
-            st.rerun()
-
-        with c3:
-            forfeit_by = st.selectbox("Forfeit by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"ff_by_{ch_id}")
-        if c3.button("🏳️ Record Forfeit", disabled=(forfeit_by == "")):
-            before = ch_row.copy()
-            fb = chal_id if forfeit_by == ladder_nm(chal_id, id_to_name) else def_id
-            winner = def_id if fb == chal_id else chal_id
-            upd = {
-                "status": "FORFEITED",
-                "forfeit_by": int(fb),
-                "forfeit_reason": "Forfeit (admin entry)",
-                "winner_id": int(winner),
-                "completed_at": dt_utc_now().isoformat(),
-            }
-            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
-
-            # If challenger wins, swap ranks
-            if int(winner) == chal_id:
-                try:
-                    sb_retry(lambda: supabase.rpc("ladder_swap_ranks", {"p_club_id": CLUB_ID, "p_player_a": chal_id, "p_player_b": def_id}).execute())
-                except Exception as e:
-                    st.error("Forfeit recorded, but rank swap failed.")
-                    st.exception(e)
-
-            ladder_audit("challenge_forfeit", "ladder_challenges", str(ch_id), before, {**before, **upd})
-            st.success("Forfeit recorded.")
-            st.rerun()
-
-        with c4:
-            pass_user = st.selectbox("Pass used by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"pass_by_{ch_id}")
-        if c4.button("🎟 Record Pass Used", disabled=(pass_user == "")):
-            before = ch_row.copy()
-            pu_pid = chal_id if pass_user == ladder_nm(chal_id, id_to_name) else def_id
-            now = dt_utc_now()
-            mk = month_key_utc(now)
-
-            # Insert pass usage (unique constraint enforces 1/month)
-            sb_retry(lambda: supabase.table("ladder_pass_usage").insert({
-                "club_id": CLUB_ID,
-                "player_id": int(pu_pid),
-                "month_key": mk,
-                "used_at": now.isoformat(),
-                "challenge_id": ch_id,
-            }).execute())
-
-            upd = {
-                "status": "CANCELED",
-                "pass_used_by": int(pu_pid),
-                "pass_used_at": now.isoformat(),
-                "resolution_notes": "Pass used",
-                "completed_at": now.isoformat(),
-            }
-            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
-            ladder_audit("challenge_pass_used", "ladder_challenges", str(ch_id), before, {**before, **upd})
-            st.success("Pass recorded (challenge closed).")
-            st.rerun()
-
-        st.divider()
-
-        # ---- Match entry + Finalize ----
-        st.subheader("📝 Enter Results (2 matches, partner swap)")
-
-        # Load existing match rows
-        mr = sb_retry(lambda: (
-            supabase.table("ladder_challenge_matches")
-            .select("*")
-            .eq("club_id", CLUB_ID)
-            .eq("challenge_id", ch_id)
-            .order("match_no", desc=False)
-            .execute()
-        ))
-        df_mr = pd.DataFrame(mr.data)
-
-        player_names_all = sorted(df_players_all["name"].astype(str).tolist()) if df_players_all is not None and not df_players_all.empty else []
-        name_to_pid_all = dict(zip(df_players_all["name"].astype(str), df_players_all["id"].astype(int))) if df_players_all is not None and not df_players_all.empty else {}
-
-        def get_row_for_matchno(n):
-            if df_mr.empty:
-                return {}
-            r = df_mr[df_mr["match_no"] == n]
-            return r.iloc[0].to_dict() if not r.empty else {}
-
-        m1 = get_row_for_matchno(1)
-        m2 = get_row_for_matchno(2)
-
-        def pid_to_name(pid):
-            if pid is None:
-                return ""
-            return ladder_nm(int(pid), id_to_name)
-
-        def name_to_pid(nm):
-            if not nm:
-                return None
-            return int(name_to_pid_all.get(nm))
-
-        with st.form(f"ladder_match_entry_{ch_id}"):
-            st.markdown("#### Match 1")
-            p1, p2 = st.columns(2)
-            m1_def_p = p1.selectbox("Defender partner (M1)", [""] + player_names_all, index=0)
-            m1_chal_p = p2.selectbox("Challenger partner (M1)", [""] + player_names_all, index=0)
-
-            gcols = st.columns(3)
-            g1d = gcols[0].number_input("M1 G1 (Def)", 0, 99, value=int(m1.get("g1_def") or 0))
-            g1c = gcols[0].number_input("M1 G1 (Chal)", 0, 99, value=int(m1.get("g1_chal") or 0))
-            g2d = gcols[1].number_input("M1 G2 (Def)", 0, 99, value=int(m1.get("g2_def") or 0))
-            g2c = gcols[1].number_input("M1 G2 (Chal)", 0, 99, value=int(m1.get("g2_chal") or 0))
-            g3d = gcols[2].number_input("M1 G3 (Def)", 0, 99, value=int(m1.get("g3_def") or 0))
-            g3c = gcols[2].number_input("M1 G3 (Chal)", 0, 99, value=int(m1.get("g3_chal") or 0))
-
-            v1 = st.checkbox("Match 1 verified", value=bool(m1.get("verified", False)))
-
-            st.markdown("#### Match 2")
-            p1b, p2b = st.columns(2)
-            m2_def_p = p1b.selectbox("Defender partner (M2)", [""] + player_names_all, index=0)
-            m2_chal_p = p2b.selectbox("Challenger partner (M2)", [""] + player_names_all, index=0)
-
-            gcols2 = st.columns(3)
-            h1d = gcols2[0].number_input("M2 G1 (Def)", 0, 99, value=int(m2.get("g1_def") or 0))
-            h1c = gcols2[0].number_input("M2 G1 (Chal)", 0, 99, value=int(m2.get("g1_chal") or 0))
-            h2d = gcols2[1].number_input("M2 G2 (Def)", 0, 99, value=int(m2.get("g2_def") or 0))
-            h2c = gcols2[1].number_input("M2 G2 (Chal)", 0, 99, value=int(m2.get("g2_chal") or 0))
-            h3d = gcols2[2].number_input("M2 G3 (Def)", 0, 99, value=int(m2.get("g3_def") or 0))
-            h3c = gcols2[2].number_input("M2 G3 (Chal)", 0, 99, value=int(m2.get("g3_chal") or 0))
-
-            v2 = st.checkbox("Match 2 verified", value=bool(m2.get("verified", False)))
-
-            save = st.form_submit_button("💾 Save Match Results")
-
-        if save:
-            now = dt_utc_now().isoformat()
-            # Insert/Update Match 1
-            payload1 = {
-                "club_id": CLUB_ID,
-                "challenge_id": ch_id,
-                "match_no": 1,
-                "def_partner_id": name_to_pid(m1_def_p),
-                "chal_partner_id": name_to_pid(m1_chal_p),
-                "g1_def": int(g1d), "g1_chal": int(g1c),
-                "g2_def": int(g2d), "g2_chal": int(g2c),
-                "g3_def": int(g3d) if int(g3d) > 0 or int(g3c) > 0 else None,
-                "g3_chal": int(g3c) if int(g3d) > 0 or int(g3c) > 0 else None,
-                "verified": bool(v1),
-                "verified_at": now if v1 else None,
-            }
-            payload2 = {
-                "club_id": CLUB_ID,
-                "challenge_id": ch_id,
-                "match_no": 2,
-                "def_partner_id": name_to_pid(m2_def_p),
-                "chal_partner_id": name_to_pid(m2_chal_p),
-                "g1_def": int(h1d), "g1_chal": int(h1c),
-                "g2_def": int(h2d), "g2_chal": int(h2c),
-                "g3_def": int(h3d) if int(h3d) > 0 or int(h3c) > 0 else None,
-                "g3_chal": int(h3c) if int(h3d) > 0 or int(h3c) > 0 else None,
-                "verified": bool(v2),
-                "verified_at": now if v2 else None,
-            }
-
-            sb_retry(lambda: supabase.table("ladder_challenge_matches").upsert(payload1, on_conflict="challenge_id,match_no").execute())
-            sb_retry(lambda: supabase.table("ladder_challenge_matches").upsert(payload2, on_conflict="challenge_id,match_no").execute())
-
-            ladder_audit("challenge_match_save", "ladder_challenge_matches", str(ch_id), None, {"m1": payload1, "m2": payload2})
-            st.success("Saved match results.")
-            st.rerun()
-
-        # Outcome preview
-        if df_mr is not None and not df_mr.empty and len(df_mr) >= 2:
-            out = ladder_compute_challenge_outcome(df_mr)
-            if out:
-                st.info(
-                    f"Outcome (preview): Winner side = {out['winner_side']} • "
-                    f"Match wins DEF/CHAL = {out['match_wins_def']}/{out['match_wins_chal']} • "
-                    f"Games DEF/CHAL = {out['games_def']}/{out['games_chal']} • "
-                    f"Point diff (DEF) = {out['point_diff_def']}"
-                )
-
-            can_finalize = bool(out) and bool(df_mr["verified"].all())
-
-            cfin1, cfin2 = st.columns([1, 3])
-            if cfin1.button("🏁 Finalize Challenge", disabled=not can_finalize):
-                before = ch_row.copy()
-                out = ladder_compute_challenge_outcome(df_mr)
-                if not out:
-                    st.error("Need both matches saved to finalize.")
-                    st.stop()
-
-                winner = def_id if out["winner_side"] == "DEF" else chal_id
-                now = dt_utc_now().isoformat()
-
-                upd = {
-                    "status": "COMPLETED",
-                    "winner_id": int(winner),
-                    "completed_at": now,
-                }
-                sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
-
-                # Rank swap only if Challenger wins
-                if int(winner) == chal_id:
-                    sb_retry(lambda: supabase.rpc("ladder_swap_ranks", {"p_club_id": CLUB_ID, "p_player_a": chal_id, "p_player_b": def_id}).execute())
-
-                ladder_audit("challenge_finalize", "ladder_challenges", str(ch_id), before, {**before, **upd})
-                st.success("Finalized.")
-                st.rerun()
-
-            cfin2.caption("Finalize requires: both matches present AND both verified.")
+                ch_id = int(ch_row["id"])
+                chal_id = int(ch_row["challenger_id"])
+                def_id = int(ch_row["defender_id"])
+    
+                st.write(f"**Challenge #{ch_id}**")
+                st.write(f"- Challenger: **{ladder_nm(chal_id, id_to_name)}** (rank at create: {ch_row.get('challenger_rank_at_create')})")
+                st.write(f"- Defender: **{ladder_nm(def_id, id_to_name)}** (rank at create: {ch_row.get('defender_rank_at_create')})")
+                st.write(f"- Status: **{ch_row.get('status')}**")
+                st.write(f"- Accept by: {ch_row.get('accept_by')}")
+                st.write(f"- Play by: {ch_row.get('play_by')}")
+    
+                st.divider()
+    
+                # ---- Actions: Accept / Cancel / Forfeit / Pass ----
+                c1, c2, c3, c4 = st.columns(4)
+    
+                if c1.button(
+                    "✅ Mark Accepted",
+                    disabled=(str(ch_row.get("status")) != "PENDING_ACCEPTANCE"),
+                    key=f"accept_{ch_id}",
+                ):
+                    before = ch_row.copy()
+                    now = dt_utc_now()
+                    play_by = now + timedelta(days=int(settings.get("play_window_days", 7) or 7))
+                    upd = {
+                        "accepted_at": now.isoformat(),
+                        "play_by": play_by.isoformat(),
+                        "status": "ACCEPTED_SCHEDULING",
+                    }
+                    sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+                    ladder_audit("challenge_accept", "ladder_challenges", str(ch_id), before, {**before, **upd})
+                    st.success("Accepted.")
+                    st.rerun()
+    
+                if c2.button("🗑 Cancel (Admin)", type="secondary", key=f"cancel_{ch_id}"):
+                    before = ch_row.copy()
+                    upd = {"status": "CANCELED", "resolution_notes": "Admin canceled", "completed_at": dt_utc_now().isoformat()}
+                    sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+                    ladder_audit("challenge_cancel", "ladder_challenges", str(ch_id), before, {**before, **upd})
+                    st.success("Canceled.")
+                    st.rerun()
+    
+                with c3:
+                    forfeit_by = st.selectbox(
+                        "Forfeit by",
+                        ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)],
+                        key=f"ff_by_{ch_id}",
+                    )
+                if c3.button("🏳️ Record Forfeit", disabled=(forfeit_by == ""), key=f"ff_btn_{ch_id}"):
+                    before = ch_row.copy()
+                    fb = chal_id if forfeit_by == ladder_nm(chal_id, id_to_name) else def_id
+                    winner = def_id if fb == chal_id else chal_id
+                    upd = {
+                        "status": "FORFEITED",
+                        "forfeit_by": int(fb),
+                        "forfeit_reason": "Forfeit (admin entry)",
+                        "winner_id": int(winner),
+                        "completed_at": dt_utc_now().isoformat(),
+                    }
+                    sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+    
+                    # If challenger wins, swap ranks
+                    if int(winner) == chal_id:
+                        sb_retry(lambda: supabase.rpc("ladder_swap_ranks", {"p_club_id": CLUB_ID, "p_player_a": chal_id, "p_player_b": def_id}).execute())
+    
+                    ladder_audit("challenge_forfeit", "ladder_challenges", str(ch_id), before, {**before, **upd})
+                    st.success("Forfeit recorded.")
+                    st.rerun()
+    
+                with c4:
+                    pass_user = st.selectbox(
+                        "Pass used by",
+                        ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)],
+                        key=f"pass_by_{ch_id}",
+                    )
+                if c4.button("🎟 Record Pass Used", disabled=(pass_user == ""), key=f"pass_btn_{ch_id}"):
+                    before = ch_row.copy()
+                    pu_pid = chal_id if pass_user == ladder_nm(chal_id, id_to_name) else def_id
+                    now = dt_utc_now()
+                    mk = month_key_utc(now)
+    
+                    sb_retry(lambda: supabase.table("ladder_pass_usage").insert({
+                        "club_id": CLUB_ID,
+                        "player_id": int(pu_pid),
+                        "month_key": mk,
+                        "used_at": now.isoformat(),
+                        "challenge_id": ch_id,
+                    }).execute())
+    
+                    upd = {
+                        "status": "CANCELED",
+                        "pass_used_by": int(pu_pid),
+                        "pass_used_at": now.isoformat(),
+                        "resolution_notes": "Pass used",
+                        "completed_at": now.isoformat(),
+                    }
+                    sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+                    ladder_audit("challenge_pass_used", "ladder_challenges", str(ch_id), before, {**before, **upd})
+                    st.success("Pass recorded (challenge closed).")
+                    st.rerun()
+    
+                # The rest of your match-entry / finalize code can remain below this point,
+                # but make sure it is also inside this same `else:` block so it only runs when ch_row exists.
 
     # -------------------------
     # TAB 4: ROSTER
