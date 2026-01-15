@@ -110,10 +110,11 @@ PAGE_MAP = {
     "leaderboards": "🏆 Leaderboards",
     "match_explorer": "🎯 Match Explorer",
     "players": "🔍 Player Search",
+    "challenge_ladder": "🪜 Challenge Ladder",
     "faqs": "❓ FAQs",
 }
 # Public-safe pages (both for deep-links and for the public nav)
-PUBLIC_NAV_KEYS = ("leaderboards", "match_explorer", "players", "faqs")
+PUBLIC_NAV_KEYS = ("leaderboards", "match_explorer", "players", "challenge_ladder", "faqs")
 PUBLIC_NAV_LABELS = [PAGE_MAP[k] for k in PUBLIC_NAV_KEYS]
 PUBLIC_ALLOWED = set(PUBLIC_NAV_KEYS)
 NAV_TO_PAGE_PUBLIC = {PAGE_MAP[k]: k for k in PUBLIC_NAV_KEYS}
@@ -219,13 +220,15 @@ NAV_TO_PAGE = {
     "🏆 Leaderboards": "leaderboards",
     "🎯 Match Explorer": "match_explorer",
     "🔍 Player Search": "players",
+    "🪜 Challenge Ladder": "challenge_ladder",
     "❓ FAQs": "faqs",
     "🏟️ League Manager": "league_manager",
     "📝 Match Uploader": "match_uploader",
     "👥 Player Editor": "player_editor",
     "📝 Match Log": "match_log",
     "⚙️ Admin Tools": "admin_tools",
-    "📘 Admin Guide": "admin_guide",
+    "📘 Admin Guide": "admin_guide",    
+    "🛠️ CHallenge Ladder Admin": "challenge ladder_admin",
 }
 
 PAGE_TO_NAV = {v: k for k, v in NAV_TO_PAGE.items()}
@@ -960,6 +963,409 @@ def ensure_league_row(player_id: int, league_name: str, base_rating_elo: float =
         .execute()
     )
     return existing2.data[0]["id"] if existing2.data else None
+# =========================
+# CHALLENGE LADDER MODULE
+# =========================
+from datetime import timedelta, timezone
+
+LADDER_OPEN_STATUSES = {
+    "PENDING_ACCEPTANCE",
+    "ACCEPTED_SCHEDULING",
+    "IN_PROGRESS",
+    "AWAITING_VERIFICATION",
+    "OVERDUE_PLAY",
+}
+LADDER_FINAL_STATUSES = {"COMPLETED", "FORFEITED"}
+
+def dt_utc_now():
+    return datetime.now(timezone.utc)
+
+def month_key_utc(dt: datetime) -> str:
+    d = dt.astimezone(timezone.utc)
+    return f"{d.year:04d}-{d.month:02d}"
+
+def ladder_nm(pid: int, id_to_name: dict[int, str]) -> str:
+    try:
+        return str(id_to_name.get(int(pid), f"#{int(pid)}"))
+    except Exception:
+        return "—"
+
+def ladder_fetch_settings():
+    resp = sb_retry(lambda: (
+        supabase.table("ladder_settings")
+        .select("*")
+        .eq("club_id", CLUB_ID)
+        .limit(1)
+        .execute()
+    ))
+    if resp.data:
+        return resp.data[0]
+    # Ensure exists
+    sb_retry(lambda: supabase.table("ladder_settings").insert({"club_id": CLUB_ID}).execute())
+    resp2 = sb_retry(lambda: (
+        supabase.table("ladder_settings")
+        .select("*")
+        .eq("club_id", CLUB_ID)
+        .limit(1)
+        .execute()
+    ))
+    return resp2.data[0] if resp2.data else {
+        "challenge_range": 3,
+        "accept_window_hours": 48,
+        "play_window_days": 7,
+        "cooldown_hours": 72,
+        "protected_hours": 72,
+        "pass_hold_hours": 72,
+    }
+
+def ladder_load_core():
+    # Roster
+    roster = sb_retry(lambda: (
+        supabase.table("ladder_roster")
+        .select("id,club_id,player_id,rank,is_active,joined_at,left_at,notes,updated_at")
+        .eq("club_id", CLUB_ID)
+        .order("rank", desc=False)
+        .execute()
+    ))
+    df_roster = pd.DataFrame(roster.data)
+
+    # Flags
+    flags = sb_retry(lambda: (
+        supabase.table("ladder_player_flags")
+        .select("club_id,player_id,vacation_until,reinstate_required,reinstate_notes,updated_at")
+        .eq("club_id", CLUB_ID)
+        .execute()
+    ))
+    df_flags = pd.DataFrame(flags.data)
+
+    # Challenges (load enough history for status + “active challenges” view)
+    ch = sb_retry(lambda: (
+        supabase.table("ladder_challenges")
+        .select("*")
+        .eq("club_id", CLUB_ID)
+        .order("created_at", desc=True)
+        .limit(5000)
+        .execute()
+    ))
+    df_ch = pd.DataFrame(ch.data)
+
+    # Pass usage (for pass hold window + monthly check)
+    pu = sb_retry(lambda: (
+        supabase.table("ladder_pass_usage")
+        .select("*")
+        .eq("club_id", CLUB_ID)
+        .order("used_at", desc=True)
+        .limit(2000)
+        .execute()
+    ))
+    df_pass = pd.DataFrame(pu.data)
+
+    return df_roster, df_flags, df_ch, df_pass
+
+def ladder_parse_dt(x):
+    if x is None or str(x).strip() == "":
+        return None
+    try:
+        return pd.to_datetime(x, utc=True)
+    except Exception:
+        return None
+
+def ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name):
+    now = dt_utc_now()
+
+    accept_h = int(settings.get("accept_window_hours", 48) or 48)
+    play_d = int(settings.get("play_window_days", 7) or 7)
+    cooldown_h = int(settings.get("cooldown_hours", 72) or 72)
+    protected_h = int(settings.get("protected_hours", 72) or 72)
+    passhold_h = int(settings.get("pass_hold_hours", 72) or 72)
+
+    # Normalize datetime columns
+    if df_flags is not None and not df_flags.empty:
+        df_flags = df_flags.copy()
+        df_flags["vacation_until_dt"] = df_flags["vacation_until"].apply(ladder_parse_dt)
+    else:
+        df_flags = pd.DataFrame(columns=["player_id", "vacation_until_dt", "reinstate_required", "reinstate_notes"])
+
+    if df_ch is not None and not df_ch.empty:
+        df_ch = df_ch.copy()
+        df_ch["created_at_dt"] = df_ch["created_at"].apply(ladder_parse_dt)
+        df_ch["accept_by_dt"] = df_ch["accept_by"].apply(ladder_parse_dt)
+        df_ch["accepted_at_dt"] = df_ch["accepted_at"].apply(ladder_parse_dt)
+        df_ch["play_by_dt"] = df_ch["play_by"].apply(ladder_parse_dt)
+        df_ch["completed_at_dt"] = df_ch["completed_at"].apply(ladder_parse_dt)
+    else:
+        df_ch = pd.DataFrame()
+
+    if df_pass is not None and not df_pass.empty:
+        df_pass = df_pass.copy()
+        df_pass["used_at_dt"] = df_pass["used_at"].apply(ladder_parse_dt)
+    else:
+        df_pass = pd.DataFrame()
+
+    # Map: player -> flags
+    flags_map = {}
+    for _, r in df_flags.iterrows():
+        pid = int(r.get("player_id"))
+        flags_map[pid] = {
+            "vacation_until": r.get("vacation_until_dt"),
+            "reinstate_required": bool(r.get("reinstate_required", False)),
+            "reinstate_notes": str(r.get("reinstate_notes", "") or ""),
+        }
+
+    # Map: player -> open challenge row (for Locked context)
+    open_map = {}
+    if not df_ch.empty:
+        open_df = df_ch[df_ch["status"].isin(list(LADDER_OPEN_STATUSES))].copy()
+        # For context, keep the most recent open challenge per player
+        for _, r in open_df.iterrows():
+            for pid in (r.get("challenger_id"), r.get("defender_id")):
+                if pid is None:
+                    continue
+                pid = int(pid)
+                if pid not in open_map:
+                    open_map[pid] = r.to_dict()
+
+    # Map: player -> last finalized challenge row (for Protected/Cooldown)
+    final_map = {}
+    if not df_ch.empty:
+        fin_df = df_ch[df_ch["status"].isin(list(LADDER_FINAL_STATUSES))].copy()
+        fin_df = fin_df.sort_values("completed_at_dt", ascending=False, na_position="last")
+        for _, r in fin_df.iterrows():
+            for pid in (r.get("challenger_id"), r.get("defender_id")):
+                if pid is None:
+                    continue
+                pid = int(pid)
+                if pid not in final_map:
+                    final_map[pid] = r.to_dict()
+
+    # Map: player -> last pass used
+    pass_map = {}
+    if not df_pass.empty:
+        for _, r in df_pass.sort_values("used_at_dt", ascending=False).iterrows():
+            pid = r.get("player_id")
+            if pid is None:
+                continue
+            pid = int(pid)
+            if pid not in pass_map:
+                pass_map[pid] = r.to_dict()
+
+    # Compute status for each roster player
+    status_map = {}
+    if df_roster is None or df_roster.empty:
+        return status_map
+
+    for _, rr in df_roster.iterrows():
+        if not bool(rr.get("is_active", True)):
+            continue
+
+        pid = int(rr["player_id"])
+        f = flags_map.get(pid, {})
+        vacation_until = f.get("vacation_until")
+        reinstate_required = bool(f.get("reinstate_required", False))
+
+        # 1) Reinstate Required
+        if reinstate_required:
+            status_map[pid] = {"status": "Reinstate Required", "until": None, "detail": f.get("reinstate_notes", "")}
+            continue
+
+        # 2) Vacation
+        if vacation_until is not None and vacation_until.to_pydatetime() >= now:
+            status_map[pid] = {"status": "Vacation", "until": vacation_until, "detail": "Admin-only hold"}
+            continue
+
+        # 3) Pass Hold
+        p_last = pass_map.get(pid)
+        if p_last:
+            used_at = p_last.get("used_at_dt")
+            if used_at is not None:
+                until = used_at.to_pydatetime() + timedelta(hours=passhold_h)
+                if until >= now:
+                    status_map[pid] = {"status": "Pass Hold", "until": pd.to_datetime(until, utc=True), "detail": "72h after Pass Used"}
+                    continue
+
+        # 4) Locked (any open challenge)
+        oc = open_map.get(pid)
+        if oc:
+            opp = None
+            ch_id = oc.get("id")
+            ch_status = str(oc.get("status", "") or "")
+            if int(oc.get("challenger_id")) == pid:
+                opp = int(oc.get("defender_id"))
+                role = "Challenger"
+            else:
+                opp = int(oc.get("challenger_id"))
+                role = "Defender"
+
+            # Deadline detail
+            accept_by = oc.get("accept_by_dt")
+            play_by = oc.get("play_by_dt")
+
+            if ch_status == "PENDING_ACCEPTANCE" and accept_by is not None:
+                detail = f"{role} vs {ladder_nm(opp, id_to_name)} • Accept by {accept_by.strftime('%Y-%m-%d %H:%M UTC')}"
+            elif play_by is not None:
+                detail = f"{role} vs {ladder_nm(opp, id_to_name)} • Play by {play_by.strftime('%Y-%m-%d %H:%M UTC')}"
+            else:
+                detail = f"{role} vs {ladder_nm(opp, id_to_name)}"
+
+            status_map[pid] = {"status": "Locked", "until": None, "detail": detail, "challenge_id": ch_id}
+            continue
+
+        # 5/6) Protected or Cooldown based on last finalized
+        last_fin = final_map.get(pid)
+        if last_fin:
+            completed_at = last_fin.get("completed_at_dt")
+            winner_id = last_fin.get("winner_id")
+            if completed_at is not None and winner_id is not None:
+                completed_dt = completed_at.to_pydatetime()
+                if int(winner_id) == pid:
+                    until = completed_dt + timedelta(hours=protected_h)
+                    if until >= now:
+                        status_map[pid] = {"status": "Protected", "until": pd.to_datetime(until, utc=True), "detail": "72h after win"}
+                        continue
+                else:
+                    until = completed_dt + timedelta(hours=cooldown_h)
+                    if until >= now:
+                        status_map[pid] = {"status": "Cooldown", "until": pd.to_datetime(until, utc=True), "detail": "72h after loss"}
+                        continue
+
+        # 7) Ready
+        status_map[pid] = {"status": "Ready to Defend", "until": None, "detail": ""}
+
+    return status_map
+
+def ladder_bucket_challenge(row: dict) -> str:
+    now = dt_utc_now()
+    status = str(row.get("status", "") or "")
+    accept_by = ladder_parse_dt(row.get("accept_by"))
+    play_by = ladder_parse_dt(row.get("play_by"))
+    accepted_at = ladder_parse_dt(row.get("accepted_at"))
+
+    if status == "PENDING_ACCEPTANCE":
+        if accept_by is not None and accept_by.to_pydatetime() < now:
+            return "Acceptance Overdue"
+        return "Pending Acceptance"
+
+    if status in ("ACCEPTED_SCHEDULING", "IN_PROGRESS", "AWAITING_VERIFICATION", "OVERDUE_PLAY"):
+        if play_by is not None and play_by.to_pydatetime() < now:
+            return "Play Overdue"
+        return "Accepted / In Window"
+
+    if status in ("COMPLETED", "FORFEITED"):
+        return "Recently Completed"
+
+    if status in ("CANCELED", "EXPIRED_ACCEPTANCE"):
+        return "Closed (No Result)"
+
+    return "Other"
+
+def ladder_audit(action_type: str, entity_type: str, entity_id: str, before: dict | None, after: dict | None):
+    actor = "admin" if st.session_state.get("admin_logged_in", False) else "system"
+    payload = {
+        "club_id": CLUB_ID,
+        "actor": actor,
+        "action_type": str(action_type),
+        "entity_type": str(entity_type),
+        "entity_id": str(entity_id),
+        "before": before,
+        "after": after,
+    }
+    try:
+        sb_retry(lambda: supabase.table("ladder_audit_log").insert(payload).execute())
+    except Exception:
+        # audit should never block core operations
+        pass
+
+def ladder_compute_challenge_outcome(df_match_rows: pd.DataFrame):
+    """
+    Returns dict:
+      winner_side: 'DEF' or 'CHAL'
+      match_wins_def/chal
+      games_def/chal
+      points_def/chal
+      point_diff_def (def - chal)
+    Enforces tie-break: match wins -> games -> point diff -> defender holds
+    """
+    def parse_int(x):
+        try:
+            if x is None: return None
+            return int(x)
+        except Exception:
+            return None
+
+    def match_summary(row):
+        games = []
+        for i in (1,2,3):
+            a = parse_int(row.get(f"g{i}_def"))
+            b = parse_int(row.get(f"g{i}_chal"))
+            if a is None or b is None:
+                continue
+            games.append((a,b))
+
+        def_g = sum(1 for a,b in games if a > b)
+        chal_g = sum(1 for a,b in games if b > a)
+
+        def_pts = sum(a for a,b in games)
+        chal_pts = sum(b for a,b in games)
+
+        # winner by best-of-3
+        if def_g > chal_g:
+            win = "DEF"
+        elif chal_g > def_g:
+            win = "CHAL"
+        else:
+            win = "TIE"
+
+        return {"win": win, "def_g": def_g, "chal_g": chal_g, "def_pts": def_pts, "chal_pts": chal_pts}
+
+    if df_match_rows is None or df_match_rows.empty:
+        return None
+
+    ms = []
+    for _, r in df_match_rows.sort_values("match_no").iterrows():
+        ms.append(match_summary(r.to_dict()))
+
+    # Require 2 matches present
+    if len(ms) < 2:
+        return None
+
+    match_wins_def = sum(1 for x in ms if x["win"] == "DEF")
+    match_wins_chal = sum(1 for x in ms if x["win"] == "CHAL")
+
+    games_def = sum(x["def_g"] for x in ms)
+    games_chal = sum(x["chal_g"] for x in ms)
+
+    pts_def = sum(x["def_pts"] for x in ms)
+    pts_chal = sum(x["chal_pts"] for x in ms)
+    pdiff = pts_def - pts_chal
+
+    # Tie-break
+    if match_wins_def > match_wins_chal:
+        winner_side = "DEF"
+    elif match_wins_chal > match_wins_def:
+        winner_side = "CHAL"
+    else:
+        if games_def > games_chal:
+            winner_side = "DEF"
+        elif games_chal > games_def:
+            winner_side = "CHAL"
+        else:
+            if pdiff > 0:
+                winner_side = "DEF"
+            elif pdiff < 0:
+                winner_side = "CHAL"
+            else:
+                winner_side = "DEF"  # defender holds
+
+    return {
+        "winner_side": winner_side,
+        "match_wins_def": match_wins_def,
+        "match_wins_chal": match_wins_chal,
+        "games_def": games_def,
+        "games_chal": games_chal,
+        "points_def": pts_def,
+        "points_chal": pts_chal,
+        "point_diff_def": pdiff,
+    }
 
 # -------------------------
 # MAIN APP LOAD
@@ -1001,9 +1407,9 @@ if PUBLIC_MODE:
 
 
 else:
-    nav = ["🏆 Leaderboards", "🎯 Match Explorer", "🔍 Player Search", "❓ FAQs"]
+    nav = ["🏆 Leaderboards", "🎯 Match Explorer", "🔍 Player Search", "🪜 Challenge Ladder", "❓ FAQs"]
     if st.session_state.admin_logged_in:
-        nav += ["──────────", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
+        nav += ["──────────", "🛠️ Challenge Ladder Admin", "🏟️ League Manager", "📝 Match Uploader", "👥 Player Editor", "📝 Match Log", "⚙️ Admin Tools", "📘 Admin Guide"]
 
     sel = st.sidebar.radio("Go to:", nav, key="main_nav")
 
@@ -2843,6 +3249,597 @@ if sel == "🏟️ League Manager":
                     {"club_id": CLUB_ID, "league_name": n, "is_active": True, "min_games": int(mg), "k_factor": int(k)}
                 ).execute()
                 st.rerun()
+
+# =========================
+# PUBLIC: CHALLENGE LADDER
+# =========================
+if sel == "🪜 Challenge Ladder":
+    st.header("🪜 Challenge Ladder")
+
+    settings = ladder_fetch_settings()
+    df_roster, df_flags, df_ch, df_pass = ladder_load_core()
+
+    if df_roster is None or df_roster.empty:
+        st.info("Ladder roster not initialized yet.")
+        st.stop()
+
+    # Map player_id -> name (use your global id_to_name map)
+    df = df_roster[df_roster["is_active"] == True].copy()
+    df["name"] = df["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+
+    status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
+    df["status"] = df["player_id"].apply(lambda pid: status_map.get(int(pid), {}).get("status", "Ready to Defend"))
+    df["detail"] = df["player_id"].apply(lambda pid: status_map.get(int(pid), {}).get("detail", ""))
+
+    # Search
+    q = st.text_input("Search player", value="")
+    if q.strip():
+        df = df[df["name"].str.contains(q.strip(), case=False, na=False)].copy()
+
+    df = df.sort_values("rank", ascending=True).copy()
+    df["Rank"] = df["rank"].astype(int)
+
+    # Highlight Top 20
+    def rank_badge(r):
+        r = int(r)
+        if r == 1: return "🥇 1"
+        if r == 2: return "🥈 2"
+        if r == 3: return "🥉 3"
+        return str(r)
+
+    df["Rank"] = df["Rank"].apply(rank_badge)
+
+    cols = ["Rank", "name", "status", "detail"]
+    st.dataframe(df[cols], use_container_width=True, hide_index=True)
+
+elif sel == "⚔️ Active Challenges":
+    st.header("⚔️ Active Challenges")
+
+    settings = ladder_fetch_settings()
+    _, _, df_ch, _ = ladder_load_core()
+
+    if df_ch is None or df_ch.empty:
+        st.info("No challenges yet.")
+        st.stop()
+
+    # Add names + bucket
+    df = df_ch.copy()
+    df["challenger_name"] = df["challenger_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+    df["defender_name"] = df["defender_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+    df["bucket"] = df.apply(lambda r: ladder_bucket_challenge(r.to_dict()), axis=1)
+
+    tab_names = ["Pending Acceptance", "Accepted / In Window", "Acceptance Overdue", "Play Overdue", "Recently Completed"]
+    tabs = st.tabs(tab_names)
+
+    for i, tname in enumerate(tab_names):
+        with tabs[i]:
+            view = df[df["bucket"] == tname].copy()
+            if view.empty:
+                st.info("No items.")
+                continue
+
+            view["created_at"] = pd.to_datetime(view["created_at"], utc=True, errors="coerce")
+            view = view.sort_values("created_at", ascending=False)
+
+            show = view[["id", "status", "challenger_name", "defender_name", "created_at", "accept_by", "play_by", "winner_id"]].copy()
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+elif sel == "🛠️ Challenge Ladder Admin":
+    st.header("🛠️ Challenge Ladder Admin (Challenge Ladder)")
+
+    if not st.session_state.admin_logged_in:
+        st.error("Admin login required.")
+        st.stop()
+
+    settings = ladder_fetch_settings()
+    df_roster, df_flags, df_ch, df_pass = ladder_load_core()
+
+    tabs = st.tabs(["📊 Dashboard", "🧾 Intake", "🗂 Challenge Detail", "👥 Roster", "🏖 Overrides", "📜 Audit"])
+
+    # -------------------------
+    # TAB 1: DASHBOARD
+    # -------------------------
+    with tabs[0]:
+        st.subheader("📊 Ops Dashboard")
+
+        if df_ch is None or df_ch.empty:
+            st.info("No challenges yet.")
+        else:
+            df = df_ch.copy()
+            df["bucket"] = df.apply(lambda r: ladder_bucket_challenge(r.to_dict()), axis=1)
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Pending Acceptance", int((df["bucket"] == "Pending Acceptance").sum()))
+            c2.metric("Acceptance Overdue", int((df["bucket"] == "Acceptance Overdue").sum()))
+            c3.metric("Play Overdue", int((df["bucket"] == "Play Overdue").sum()))
+            c4.metric("Accepted / In Window", int((df["bucket"] == "Accepted / In Window").sum()))
+
+            st.divider()
+            needs = df[df["bucket"].isin(["Acceptance Overdue", "Play Overdue"])].copy()
+            if needs.empty:
+                st.success("No overdue items.")
+            else:
+                needs["challenger"] = needs["challenger_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+                needs["defender"] = needs["defender_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+                st.dataframe(needs[["id","bucket","status","challenger","defender","accept_by","play_by","created_at"]], use_container_width=True, hide_index=True)
+
+    # -------------------------
+    # TAB 2: INTAKE
+    # -------------------------
+    with tabs[1]:
+        st.subheader("🧾 Enter Challenge (from Pro Shop Ledger)")
+
+        if df_roster is None or df_roster.empty:
+            st.error("Roster not initialized yet. Go to the Roster tab first.")
+            st.stop()
+
+        roster_active = df_roster[df_roster["is_active"] == True].copy()
+        roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+        roster_active = roster_active.sort_values("rank")
+
+        name_to_pid = dict(zip(roster_active["name"], roster_active["player_id"]))
+        pid_to_rank = dict(zip(roster_active["player_id"].astype(int), roster_active["rank"].astype(int)))
+
+        # Compute current statuses for validation
+        status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
+
+        with st.form("ladder_intake_form"):
+            challenger_name = st.selectbox("Challenger", [""] + roster_active["name"].tolist())
+            defender_name = st.selectbox("Defender", [""] + roster_active["name"].tolist())
+            ledger_ref = st.text_input("Ledger reference / notes (optional)", value="")
+            override = st.checkbox("Admin override (bypass eligibility rules)", value=False)
+            submitted = st.form_submit_button("Create Challenge")
+
+        if submitted:
+            if not challenger_name or not defender_name:
+                st.error("Select both Challenger and Defender.")
+                st.stop()
+
+            chal_id = int(name_to_pid[challenger_name])
+            def_id = int(name_to_pid[defender_name])
+
+            if chal_id == def_id:
+                st.error("Challenger and Defender must be different.")
+                st.stop()
+
+            chal_rank = int(pid_to_rank.get(chal_id, 999999))
+            def_rank = int(pid_to_rank.get(def_id, 999999))
+            challenge_range = int(settings.get("challenge_range", 3) or 3)
+
+            errors = []
+
+            # Must be upward challenge (defender above challenger)
+            if def_rank >= chal_rank:
+                errors.append("Defender must be ranked ABOVE Challenger.")
+
+            # Range
+            if (chal_rank - def_rank) > challenge_range:
+                errors.append(f"Rank gap too large. Allowed: {challenge_range}. Gap: {chal_rank - def_rank}.")
+
+            # Status eligibility
+            chal_status = status_map.get(chal_id, {}).get("status", "Ready to Defend")
+            def_status = status_map.get(def_id, {}).get("status", "Ready to Defend")
+
+            if chal_status not in ("Ready to Defend",) and not override:
+                errors.append(f"Challenger is not eligible to initiate (status: {chal_status}).")
+            if def_status not in ("Ready to Defend","Cooldown") and not override:
+                # defender CAN be challenged during Cooldown per your rules
+                errors.append(f"Defender is not eligible to be challenged (status: {def_status}).")
+
+            if errors and not override:
+                st.error("Cannot create challenge:\n\n- " + "\n- ".join(errors))
+                st.stop()
+
+            now = dt_utc_now()
+            accept_by = now + timedelta(hours=int(settings.get("accept_window_hours", 48) or 48))
+
+            payload = {
+                "club_id": CLUB_ID,
+                "challenger_id": chal_id,
+                "defender_id": def_id,
+                "challenger_rank_at_create": chal_rank,
+                "defender_rank_at_create": def_rank,
+                "status": "PENDING_ACCEPTANCE",
+                "created_by": "admin",
+                "ledger_ref": ledger_ref.strip() or None,
+                "accept_by": accept_by.isoformat(),
+            }
+
+            try:
+                res = sb_retry(lambda: supabase.table("ladder_challenges").insert(payload).execute())
+                new_id = res.data[0]["id"] if res.data else None
+                ladder_audit("challenge_create", "ladder_challenges", str(new_id or ""), None, payload)
+                st.success(f"Challenge created. ID = {new_id}")
+                st.rerun()
+            except Exception as e:
+                st.error("Failed to create challenge.")
+                st.exception(e)
+
+    # -------------------------
+    # TAB 3: CHALLENGE DETAIL
+    # -------------------------
+    with tabs[2]:
+        st.subheader("🗂 Challenge Detail")
+
+        if df_ch is None or df_ch.empty:
+            st.info("No challenges yet.")
+            st.stop()
+
+        df = df_ch.copy()
+        df["label"] = df.apply(
+            lambda r: f"#{int(r['id'])} • {ladder_nm(int(r['challenger_id']), id_to_name)} vs {ladder_nm(int(r['defender_id']), id_to_name)} • {r.get('status','')}",
+            axis=1,
+        )
+        pick = st.selectbox("Select challenge", df["label"].tolist(), index=0)
+
+        ch_row = df[df["label"] == pick].iloc[0].to_dict()
+        ch_id = int(ch_row["id"])
+        chal_id = int(ch_row["challenger_id"])
+        def_id = int(ch_row["defender_id"])
+
+        st.write(f"**Challenge #{ch_id}**")
+        st.write(f"- Challenger: **{ladder_nm(chal_id, id_to_name)}** (rank at create: {ch_row.get('challenger_rank_at_create')})")
+        st.write(f"- Defender: **{ladder_nm(def_id, id_to_name)}** (rank at create: {ch_row.get('defender_rank_at_create')})")
+        st.write(f"- Status: **{ch_row.get('status')}**")
+        st.write(f"- Accept by: {ch_row.get('accept_by')}")
+        st.write(f"- Play by: {ch_row.get('play_by')}")
+
+        st.divider()
+
+        # ---- Actions: Accept / Cancel / Forfeit / Pass ----
+        c1, c2, c3, c4 = st.columns(4)
+
+        if c1.button("✅ Mark Accepted", disabled=(str(ch_row.get("status")) != "PENDING_ACCEPTANCE")):
+            before = ch_row.copy()
+            now = dt_utc_now()
+            play_by = now + timedelta(days=int(settings.get("play_window_days", 7) or 7))
+            upd = {
+                "accepted_at": now.isoformat(),
+                "play_by": play_by.isoformat(),
+                "status": "ACCEPTED_SCHEDULING",
+            }
+            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+            ladder_audit("challenge_accept", "ladder_challenges", str(ch_id), before, {**before, **upd})
+            st.success("Accepted.")
+            st.rerun()
+
+        if c2.button("🗑 Cancel (Admin)", type="secondary"):
+            before = ch_row.copy()
+            upd = {"status": "CANCELED", "resolution_notes": "Admin canceled", "completed_at": dt_utc_now().isoformat()}
+            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+            ladder_audit("challenge_cancel", "ladder_challenges", str(ch_id), before, {**before, **upd})
+            st.success("Canceled.")
+            st.rerun()
+
+        with c3:
+            forfeit_by = st.selectbox("Forfeit by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"ff_by_{ch_id}")
+        if c3.button("🏳️ Record Forfeit", disabled=(forfeit_by == "")):
+            before = ch_row.copy()
+            fb = chal_id if forfeit_by == ladder_nm(chal_id, id_to_name) else def_id
+            winner = def_id if fb == chal_id else chal_id
+            upd = {
+                "status": "FORFEITED",
+                "forfeit_by": int(fb),
+                "forfeit_reason": "Forfeit (admin entry)",
+                "winner_id": int(winner),
+                "completed_at": dt_utc_now().isoformat(),
+            }
+            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+
+            # If challenger wins, swap ranks
+            if int(winner) == chal_id:
+                try:
+                    sb_retry(lambda: supabase.rpc("ladder_swap_ranks", {"p_club_id": CLUB_ID, "p_player_a": chal_id, "p_player_b": def_id}).execute())
+                except Exception as e:
+                    st.error("Forfeit recorded, but rank swap failed.")
+                    st.exception(e)
+
+            ladder_audit("challenge_forfeit", "ladder_challenges", str(ch_id), before, {**before, **upd})
+            st.success("Forfeit recorded.")
+            st.rerun()
+
+        with c4:
+            pass_user = st.selectbox("Pass used by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"pass_by_{ch_id}")
+        if c4.button("🎟 Record Pass Used", disabled=(pass_user == "")):
+            before = ch_row.copy()
+            pu_pid = chal_id if pass_user == ladder_nm(chal_id, id_to_name) else def_id
+            now = dt_utc_now()
+            mk = month_key_utc(now)
+
+            # Insert pass usage (unique constraint enforces 1/month)
+            sb_retry(lambda: supabase.table("ladder_pass_usage").insert({
+                "club_id": CLUB_ID,
+                "player_id": int(pu_pid),
+                "month_key": mk,
+                "used_at": now.isoformat(),
+                "challenge_id": ch_id,
+            }).execute())
+
+            upd = {
+                "status": "CANCELED",
+                "pass_used_by": int(pu_pid),
+                "pass_used_at": now.isoformat(),
+                "resolution_notes": "Pass used",
+                "completed_at": now.isoformat(),
+            }
+            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+            ladder_audit("challenge_pass_used", "ladder_challenges", str(ch_id), before, {**before, **upd})
+            st.success("Pass recorded (challenge closed).")
+            st.rerun()
+
+        st.divider()
+
+        # ---- Match entry + Finalize ----
+        st.subheader("📝 Enter Results (2 matches, partner swap)")
+
+        # Load existing match rows
+        mr = sb_retry(lambda: (
+            supabase.table("ladder_challenge_matches")
+            .select("*")
+            .eq("club_id", CLUB_ID)
+            .eq("challenge_id", ch_id)
+            .order("match_no", desc=False)
+            .execute()
+        ))
+        df_mr = pd.DataFrame(mr.data)
+
+        player_names_all = sorted(df_players_all["name"].astype(str).tolist()) if df_players_all is not None and not df_players_all.empty else []
+        name_to_pid_all = dict(zip(df_players_all["name"].astype(str), df_players_all["id"].astype(int))) if df_players_all is not None and not df_players_all.empty else {}
+
+        def get_row_for_matchno(n):
+            if df_mr.empty:
+                return {}
+            r = df_mr[df_mr["match_no"] == n]
+            return r.iloc[0].to_dict() if not r.empty else {}
+
+        m1 = get_row_for_matchno(1)
+        m2 = get_row_for_matchno(2)
+
+        def pid_to_name(pid):
+            if pid is None:
+                return ""
+            return ladder_nm(int(pid), id_to_name)
+
+        def name_to_pid(nm):
+            if not nm:
+                return None
+            return int(name_to_pid_all.get(nm))
+
+        with st.form(f"ladder_match_entry_{ch_id}"):
+            st.markdown("#### Match 1")
+            p1, p2 = st.columns(2)
+            m1_def_p = p1.selectbox("Defender partner (M1)", [""] + player_names_all, index=0)
+            m1_chal_p = p2.selectbox("Challenger partner (M1)", [""] + player_names_all, index=0)
+
+            gcols = st.columns(3)
+            g1d = gcols[0].number_input("M1 G1 (Def)", 0, 99, value=int(m1.get("g1_def") or 0))
+            g1c = gcols[0].number_input("M1 G1 (Chal)", 0, 99, value=int(m1.get("g1_chal") or 0))
+            g2d = gcols[1].number_input("M1 G2 (Def)", 0, 99, value=int(m1.get("g2_def") or 0))
+            g2c = gcols[1].number_input("M1 G2 (Chal)", 0, 99, value=int(m1.get("g2_chal") or 0))
+            g3d = gcols[2].number_input("M1 G3 (Def)", 0, 99, value=int(m1.get("g3_def") or 0))
+            g3c = gcols[2].number_input("M1 G3 (Chal)", 0, 99, value=int(m1.get("g3_chal") or 0))
+
+            v1 = st.checkbox("Match 1 verified", value=bool(m1.get("verified", False)))
+
+            st.markdown("#### Match 2")
+            p1b, p2b = st.columns(2)
+            m2_def_p = p1b.selectbox("Defender partner (M2)", [""] + player_names_all, index=0)
+            m2_chal_p = p2b.selectbox("Challenger partner (M2)", [""] + player_names_all, index=0)
+
+            gcols2 = st.columns(3)
+            h1d = gcols2[0].number_input("M2 G1 (Def)", 0, 99, value=int(m2.get("g1_def") or 0))
+            h1c = gcols2[0].number_input("M2 G1 (Chal)", 0, 99, value=int(m2.get("g1_chal") or 0))
+            h2d = gcols2[1].number_input("M2 G2 (Def)", 0, 99, value=int(m2.get("g2_def") or 0))
+            h2c = gcols2[1].number_input("M2 G2 (Chal)", 0, 99, value=int(m2.get("g2_chal") or 0))
+            h3d = gcols2[2].number_input("M2 G3 (Def)", 0, 99, value=int(m2.get("g3_def") or 0))
+            h3c = gcols2[2].number_input("M2 G3 (Chal)", 0, 99, value=int(m2.get("g3_chal") or 0))
+
+            v2 = st.checkbox("Match 2 verified", value=bool(m2.get("verified", False)))
+
+            save = st.form_submit_button("💾 Save Match Results")
+
+        if save:
+            now = dt_utc_now().isoformat()
+            # Insert/Update Match 1
+            payload1 = {
+                "club_id": CLUB_ID,
+                "challenge_id": ch_id,
+                "match_no": 1,
+                "def_partner_id": name_to_pid(m1_def_p),
+                "chal_partner_id": name_to_pid(m1_chal_p),
+                "g1_def": int(g1d), "g1_chal": int(g1c),
+                "g2_def": int(g2d), "g2_chal": int(g2c),
+                "g3_def": int(g3d) if int(g3d) > 0 or int(g3c) > 0 else None,
+                "g3_chal": int(g3c) if int(g3d) > 0 or int(g3c) > 0 else None,
+                "verified": bool(v1),
+                "verified_at": now if v1 else None,
+            }
+            payload2 = {
+                "club_id": CLUB_ID,
+                "challenge_id": ch_id,
+                "match_no": 2,
+                "def_partner_id": name_to_pid(m2_def_p),
+                "chal_partner_id": name_to_pid(m2_chal_p),
+                "g1_def": int(h1d), "g1_chal": int(h1c),
+                "g2_def": int(h2d), "g2_chal": int(h2c),
+                "g3_def": int(h3d) if int(h3d) > 0 or int(h3c) > 0 else None,
+                "g3_chal": int(h3c) if int(h3d) > 0 or int(h3c) > 0 else None,
+                "verified": bool(v2),
+                "verified_at": now if v2 else None,
+            }
+
+            sb_retry(lambda: supabase.table("ladder_challenge_matches").upsert(payload1, on_conflict="challenge_id,match_no").execute())
+            sb_retry(lambda: supabase.table("ladder_challenge_matches").upsert(payload2, on_conflict="challenge_id,match_no").execute())
+
+            ladder_audit("challenge_match_save", "ladder_challenge_matches", str(ch_id), None, {"m1": payload1, "m2": payload2})
+            st.success("Saved match results.")
+            st.rerun()
+
+        # Outcome preview
+        if df_mr is not None and not df_mr.empty and len(df_mr) >= 2:
+            out = ladder_compute_challenge_outcome(df_mr)
+            if out:
+                st.info(
+                    f"Outcome (preview): Winner side = {out['winner_side']} • "
+                    f"Match wins DEF/CHAL = {out['match_wins_def']}/{out['match_wins_chal']} • "
+                    f"Games DEF/CHAL = {out['games_def']}/{out['games_chal']} • "
+                    f"Point diff (DEF) = {out['point_diff_def']}"
+                )
+
+            can_finalize = bool(out) and bool(df_mr["verified"].all())
+
+            cfin1, cfin2 = st.columns([1, 3])
+            if cfin1.button("🏁 Finalize Challenge", disabled=not can_finalize):
+                before = ch_row.copy()
+                out = ladder_compute_challenge_outcome(df_mr)
+                if not out:
+                    st.error("Need both matches saved to finalize.")
+                    st.stop()
+
+                winner = def_id if out["winner_side"] == "DEF" else chal_id
+                now = dt_utc_now().isoformat()
+
+                upd = {
+                    "status": "COMPLETED",
+                    "winner_id": int(winner),
+                    "completed_at": now,
+                }
+                sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", CLUB_ID).eq("id", ch_id).execute())
+
+                # Rank swap only if Challenger wins
+                if int(winner) == chal_id:
+                    sb_retry(lambda: supabase.rpc("ladder_swap_ranks", {"p_club_id": CLUB_ID, "p_player_a": chal_id, "p_player_b": def_id}).execute())
+
+                ladder_audit("challenge_finalize", "ladder_challenges", str(ch_id), before, {**before, **upd})
+                st.success("Finalized.")
+                st.rerun()
+
+            cfin2.caption("Finalize requires: both matches present AND both verified.")
+
+    # -------------------------
+    # TAB 4: ROSTER
+    # -------------------------
+    with tabs[3]:
+        st.subheader("👥 Ladder Roster")
+
+        # Initialize roster from ranked list
+        st.markdown("#### Initialize / Replace Ladder (paste ranked list)")
+        st.caption("Paste names top-to-bottom. This will REPLACE ladder_roster for this club.")
+
+        raw = st.text_area("Ranked roster (top to bottom)", height=160, key="ladder_init_raw")
+        if st.button("🚀 Replace Ladder Roster", type="primary"):
+            names = [x.strip() for x in (raw or "").split("\n") if x.strip()]
+            if not names:
+                st.error("Paste at least one name.")
+                st.stop()
+
+            # Ensure players exist (add missing as active with 3.5 default)
+            for nm in names:
+                if nm not in name_to_id:
+                    ok, err = safe_add_player(nm, 3.5)
+                    if not ok:
+                        st.error(f"Could not add {nm}: {err}")
+                        st.stop()
+
+            # Reload mappings
+            (
+                df_players_all,
+                df_players,
+                df_leagues,
+                df_matches,
+                df_meta,
+                name_to_id,
+                id_to_name,
+            ) = load_data()
+
+            # Replace roster
+            sb_retry(lambda: supabase.table("ladder_roster").delete().eq("club_id", CLUB_ID).execute())
+
+            rows = []
+            for i, nm in enumerate(names, start=1):
+                pid = int(name_to_id[nm])
+                rows.append({"club_id": CLUB_ID, "player_id": pid, "rank": i, "is_active": True})
+
+            sb_retry(lambda: supabase.table("ladder_roster").insert(rows).execute())
+            ladder_audit("roster_replace", "ladder_roster", CLUB_ID, None, {"count": len(rows)})
+            st.success("Roster replaced.")
+            st.rerun()
+
+        st.divider()
+
+        # Display roster
+        df_roster, df_flags, df_ch, df_pass = ladder_load_core()
+        if df_roster is None or df_roster.empty:
+            st.info("No roster yet.")
+        else:
+            r = df_roster[df_roster["is_active"] == True].copy()
+            r["name"] = r["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+            r = r.sort_values("rank")
+            st.dataframe(r[["rank","name","player_id","notes"]], use_container_width=True, hide_index=True)
+
+    # -------------------------
+    # TAB 5: OVERRIDES
+    # -------------------------
+    with tabs[4]:
+        st.subheader("🏖 Vacation / Reinstate Overrides")
+
+        roster_active = df_roster[df_roster["is_active"] == True].copy() if df_roster is not None and not df_roster.empty else pd.DataFrame()
+        if roster_active.empty:
+            st.info("Roster required.")
+            st.stop()
+
+        roster_active["name"] = roster_active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+        pick = st.selectbox("Player", roster_active["name"].tolist())
+        pid = int(roster_active[roster_active["name"] == pick].iloc[0]["player_id"])
+
+        # Load current flags if exist
+        cur = None
+        if df_flags is not None and not df_flags.empty:
+            hit = df_flags[df_flags["player_id"] == pid]
+            if not hit.empty:
+                cur = hit.iloc[0].to_dict()
+
+        vac_default = cur.get("vacation_until") if cur else None
+        rein_default = bool(cur.get("reinstate_required", False)) if cur else False
+        notes_default = str(cur.get("reinstate_notes", "") or "") if cur else ""
+
+        vac = st.text_input("Vacation until (ISO, UTC) — leave blank to clear", value=str(vac_default or ""))
+        rein = st.checkbox("Reinstate Required", value=rein_default)
+        notes = st.text_area("Reinstate notes", value=notes_default, height=80)
+
+        if st.button("💾 Save Overrides"):
+            before = cur
+            payload = {
+                "club_id": CLUB_ID,
+                "player_id": pid,
+                "vacation_until": (vac.strip() or None),
+                "reinstate_required": bool(rein),
+                "reinstate_notes": notes.strip() or None,
+            }
+            sb_retry(lambda: supabase.table("ladder_player_flags").upsert(payload, on_conflict="club_id,player_id").execute())
+            ladder_audit("flags_save", "ladder_player_flags", f"{CLUB_ID}:{pid}", before, payload)
+            st.success("Saved.")
+            st.rerun()
+
+    # -------------------------
+    # TAB 6: AUDIT
+    # -------------------------
+    with tabs[5]:
+        st.subheader("📜 Ladder Audit Log")
+        resp = sb_retry(lambda: (
+            supabase.table("ladder_audit_log")
+            .select("*")
+            .eq("club_id", CLUB_ID)
+            .order("created_at", desc=True)
+            .limit(500)
+            .execute()
+        ))
+        df_a = pd.DataFrame(resp.data)
+        if df_a.empty:
+            st.info("No audit entries yet.")
+        else:
+            st.dataframe(df_a[["created_at","actor","action_type","entity_type","entity_id"]], use_container_width=True, hide_index=True)
+
 
 # -------------------------
 # PAGE: MATCH UPLOADER
