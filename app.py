@@ -3487,25 +3487,25 @@ elif sel == "🛠️ Challenge Ladder Admin":
             st.info("No challenges yet. Create one in the Intake tab.")
         else:
             df = df_ch.copy()
-        df["label"] = df.apply(
-            lambda r: f"#{int(r['id'])} • {ladder_nm(int(r['challenger_id']), id_to_name)} vs {ladder_nm(int(r['defender_id']), id_to_name)} • {r.get('status','')}",
-            axis=1,
-        )
-        pick = st.selectbox("Select challenge", df["label"].tolist(), index=0)
-
-        ch_row = df[df["label"] == pick].iloc[0].to_dict()
-        ch_id = int(ch_row["id"])
-        chal_id = int(ch_row["challenger_id"])
-        def_id = int(ch_row["defender_id"])
-
-        st.write(f"**Challenge #{ch_id}**")
-        st.write(f"- Challenger: **{ladder_nm(chal_id, id_to_name)}** (rank at create: {ch_row.get('challenger_rank_at_create')})")
-        st.write(f"- Defender: **{ladder_nm(def_id, id_to_name)}** (rank at create: {ch_row.get('defender_rank_at_create')})")
-        st.write(f"- Status: **{ch_row.get('status')}**")
-        st.write(f"- Accept by: {ch_row.get('accept_by')}")
-        st.write(f"- Play by: {ch_row.get('play_by')}")
-
-        st.divider()
+            df["label"] = df.apply(
+                lambda r: f"#{int(r['id'])} • {ladder_nm(int(r['challenger_id']), id_to_name)} vs {ladder_nm(int(r['defender_id']), id_to_name)} • {r.get('status','')}",
+                axis=1,
+            )
+            pick = st.selectbox("Select challenge", df["label"].tolist(), index=0)
+    
+            ch_row = df[df["label"] == pick].iloc[0].to_dict()
+            ch_id = int(ch_row["id"])
+            chal_id = int(ch_row["challenger_id"])
+            def_id = int(ch_row["defender_id"])
+    
+            st.write(f"**Challenge #{ch_id}**")
+            st.write(f"- Challenger: **{ladder_nm(chal_id, id_to_name)}** (rank at create: {ch_row.get('challenger_rank_at_create')})")
+            st.write(f"- Defender: **{ladder_nm(def_id, id_to_name)}** (rank at create: {ch_row.get('defender_rank_at_create')})")
+            st.write(f"- Status: **{ch_row.get('status')}**")
+            st.write(f"- Accept by: {ch_row.get('accept_by')}")
+            st.write(f"- Play by: {ch_row.get('play_by')}")
+    
+            st.divider()
 
         # ---- Actions: Accept / Cancel / Forfeit / Pass ----
         c1, c2, c3, c4 = st.columns(4)
