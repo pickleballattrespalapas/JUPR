@@ -4169,14 +4169,14 @@ elif sel == "🛠️ Challenge Ladder Admin":
             ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", row, upd)
             st.success(f"Reactivated '{nm}' and appended to bottom at rank {next_rank}.")
             st.rerun()
-        else:
-            ins = {"club_id": CLUB_ID, "player_id": pid, "rank": int(next_rank), "is_active": True}
-            sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
-            ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
-            st.success(f"Added '{nm}' to bottom at rank {next_rank}.")
-            st.rerun()
-        
-        st.divider()
+            else:
+                ins = {"club_id": CLUB_ID, "player_id": pid, "rank": int(next_rank), "is_active": True}
+                sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
+                ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
+                st.success(f"Added '{nm}' to bottom at rank {next_rank}.")
+                st.rerun()
+            
+            st.divider()
 
         # Initialize roster from ranked list
         st.markdown("#### Initialize / Replace Ladder (paste ranked list)")
