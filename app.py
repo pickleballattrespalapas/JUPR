@@ -4036,11 +4036,11 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 ) = load_data()
         
             pid = int(name_to_id.get(nm))
-            if add_one:
-            nm = (new_name.strip() or existing_pick.strip())
-            if not nm:
-                st.error("Pick an existing player OR type a new name.")
-                st.stop()
+    if add_one:
+        nm = (new_name.strip() or existing_pick.strip())
+    if not nm:
+        st.error("Pick an existing player OR type a new name.")
+        st.stop()
 
     # Ensure the player exists in Players table
     if nm not in name_to_id:
