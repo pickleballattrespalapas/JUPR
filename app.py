@@ -2625,20 +2625,6 @@ elif sel == "🔍 Player Search":
                     }
                 )
 
-            
-                processed.append(
-                    {
-                        "Date": match.get("date"),
-                        "Result": result_icon,
-                        "Score": display_score,
-                        "Partner": partner_name,
-                        "Opponents": opp_names,
-                        "League": str(match.get("league", "") or "").strip(),
-                        "JUPR Change": float(jupr_change),
-                        "Rating After Match": rating_after,
-                        "Explain": explain_url,
-                    }
-                )
 
 
 
