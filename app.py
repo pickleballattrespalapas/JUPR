@@ -2322,6 +2322,126 @@ elif sel == "🔍 Player Search":
         except Exception:
             return "—"
 
+    # ---------- LEAGUE (ISLAND) SNAPSHOT REPLAY FOR DISPLAY ----------
+    @st.cache_data(ttl=300)
+    def build_league_snapshot_map(league_name: str) -> dict:
+        """
+        Replays a single league in chronological order and returns:
+          snap_map[match_id][player_id] = (start_elo, end_elo)
+        This is for DISPLAY ONLY so Player Search can show league-after ratings
+        without confusing jumps across leagues.
+        """
+        lg = str(league_name or "").strip()
+        if not lg:
+            return {}
+    
+        # Pull all matches for this league (non-PopUp) in chronological order
+        resp = (
+            supabase.table("matches")
+            .select("id,date,league,match_type,score_t1,score_t2,t1_p1,t1_p2,t2_p1,t2_p2")
+            .eq("club_id", CLUB_ID)
+            .eq("league", lg)
+            .neq("match_type", "PopUp")
+            .order("date", desc=False)
+            .order("id", desc=False)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return {}
+    
+        df = pd.DataFrame(rows)
+        df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
+        df = df.dropna(subset=["date"])
+        if df.empty:
+            return {}
+    
+        # League K factor
+        k_val = int(DEFAULT_K_FACTOR)
+        if df_meta is not None and not df_meta.empty:
+            hit = df_meta[df_meta["league_name"] == lg]
+            if not hit.empty:
+                try:
+                    k_val = int(hit.iloc[0].get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
+                except Exception:
+                    k_val = int(DEFAULT_K_FACTOR)
+    
+        # Seed island ratings at CURRENT overall rating (same policy as your replay tool)
+        # This is display-time replay; good enough to eliminate jumps and be internally consistent.
+        # (If you later change seeding policy, update here too.)
+        overall_seed = {}
+        if df_players_all is not None and not df_players_all.empty:
+            overall_seed = dict(zip(df_players_all["id"].astype(int), df_players_all["rating"].astype(float)))
+    
+        island = {}   # pid -> elo
+        snap_map = {} # match_id -> {pid: (start,end)}
+    
+        def get_r(pid: int) -> float:
+            pid = int(pid)
+            if pid not in island:
+                island[pid] = float(overall_seed.get(pid, 1200.0))
+            return float(island[pid])
+    
+        for _, m in df.iterrows():
+            try:
+                mid = int(m["id"])
+                p1, p2, p3, p4 = int(m["t1_p1"]), int(m["t1_p2"]), int(m["t2_p1"]), int(m["t2_p2"])
+                s1, s2 = int(m.get("score_t1", 0) or 0), int(m.get("score_t2", 0) or 0)
+            except Exception:
+                continue
+    
+            if (s1 + s2) <= 0:
+                continue
+    
+            # start snaps
+            r1, r2, r3, r4 = get_r(p1), get_r(p2), get_r(p3), get_r(p4)
+    
+            d1, d2 = calculate_hybrid_elo(
+                (r1 + r2) / 2.0,
+                (r3 + r4) / 2.0,
+                s1,
+                s2,
+                k_factor=int(k_val),
+                min_win_delta=float(MIN_WIN_DELTA_ELO),
+                cap_loser_gain=float(CAP_LOSER_GAIN_ELO),
+            )
+    
+            # apply
+            island[p1] = r1 + float(d1)
+            island[p2] = r2 + float(d1)
+            island[p3] = r3 + float(d2)
+            island[p4] = r4 + float(d2)
+    
+            # end snaps
+            e1, e2, e3, e4 = island[p1], island[p2], island[p3], island[p4]
+    
+            snap_map[mid] = {
+                p1: (r1, e1),
+                p2: (r2, e2),
+                p3: (r3, e3),
+                p4: (r4, e4),
+            }
+    
+        return snap_map
+    
+    
+    def league_snap_for_player(match_id: int, pid: int, league_name: str):
+        """
+        Returns (start_elo, end_elo) for pid in that league match_id, or (None, None).
+        """
+        try:
+            mid = int(match_id)
+            pid = int(pid)
+        except Exception:
+            return None, None
+        snap_map = build_league_snapshot_map(str(league_name or "").strip())
+        if not snap_map:
+            return None, None
+        hit = snap_map.get(mid, {})
+        if not hit:
+            return None, None
+        return hit.get(pid, (None, None))
+
     def explain_link_for_player_match(match: dict, pid: int) -> str:
         """
         Option A: explain from the selected player's perspective.
@@ -2451,15 +2571,31 @@ elif sel == "🔍 Player Search":
                 except Exception:
                     pass
             
-                # Snapshot-based JUPR change (your existing logic)
+                match_id = match.get("id", None)
+                lg = str(match.get("league", "") or "").strip()
+                mtype = str(match.get("match_type", "") or "").strip()
+                
+                # OVERALL snapshots (existing)
                 start_elo, end_elo = get_player_snap(match, p_id)
+                overall_after = None
+                overall_change = None
                 if start_elo is not None and end_elo is not None:
                     start_elo = float(start_elo)
                     end_elo = float(end_elo)
-                    jupr_change = (end_elo - start_elo) / 400.0
-                    rating_after = end_elo / 400.0
-                else:
-                    # fallback for legacy rows without snapshots
+                    overall_change = (end_elo - start_elo) / 400.0
+                    overall_after = end_elo / 400.0
+                
+                # LEAGUE (island) snapshots (display-only; only if non-PopUp and league exists)
+                league_after = None
+                league_change = None
+                if lg and mtype != "PopUp" and match_id is not None:
+                    ls, le = league_snap_for_player(int(match_id), int(p_id), lg)
+                    if ls is not None and le is not None:
+                        league_change = (float(le) - float(ls)) / 400.0
+                        league_after = float(le) / 400.0
+                
+                # Fallback for legacy rows missing overall snapshots (keep your legacy logic)
+                if overall_change is None:
                     raw_delta = float(match.get("elo_delta", 0) or 0)
                     my_team = 1 if on_team1 else 2
                     winner_team = 1 if s1 > s2 else 2 if s2 > s1 else 0
@@ -2469,11 +2605,26 @@ elif sel == "🔍 Player Search":
                         signed_elo = abs(raw_delta)
                     else:
                         signed_elo = -abs(raw_delta)
-            
-                    jupr_change = signed_elo / 400.0
-                    rating_after = None
-            
-                explain_url = explain_link_for_player_match(match, p_id)
+                
+                    overall_change = signed_elo / 400.0
+                    overall_after = None
+                
+                processed.append(
+                    {
+                        "Date": match.get("date"),
+                        "Result": result_icon,
+                        "Score": display_score,
+                        "Partner": partner_name,
+                        "Opponents": opp_names,
+                        "League": lg,
+                        "Overall Δ": float(overall_change),
+                        "Overall After": overall_after,
+                        "League Δ": (float(league_change) if league_change is not None else None),
+                        "League After": league_after,
+                        "Explain": explain_url,
+                    }
+                )
+
             
                 processed.append(
                     {
@@ -2545,15 +2696,30 @@ elif sel == "🔍 Player Search":
 
                 st.subheader("Match Log")
 
+                # Table formatting
                 table_df = display_df.copy()
                 table_df["Date"] = table_df["Date"].dt.strftime("%Y-%m-%d")
+                table_df["Overall Δ"] = table_df["Overall Δ"].map(lambda x: f"{float(x):+.4f}")
+                table_df["Overall After"] = table_df["Overall After"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
+                table_df["League Δ"] = table_df["League Δ"].map(lambda x: "" if pd.isna(x) else f"{float(x):+.4f}")
+                table_df["League After"] = table_df["League After"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
                 
-                # Format numeric columns for display
-                table_df["JUPR Change"] = table_df["JUPR Change"].map(lambda x: f"{float(x):+.4f}")
-                table_df["Rating After Match"] = table_df["Rating After Match"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
+                cols = ["Date","Result","Score","Partner","Opponents","League","Overall Δ","Overall After","League Δ","League After","Explain"]
+
+                trend_mode = st.radio("Trend view", ["Overall", "League (per match league)"], horizontal=True)
+
+                if trend_mode == "Overall":
+                    graph_base = display_df[["Date","Overall After","Overall Δ","Score"]].copy()
+                    graph_base = graph_base.rename(columns={"Overall After": "After", "Overall Δ":"Delta"})
+                else:
+                    # Only plot points where League After exists; continuous within league, no cross-league continuity implied
+                    graph_base = display_df.dropna(subset=["League After"]).copy()
+                    graph_base["After"] = graph_base["League After"]
+                    graph_base["Delta"] = graph_base["League Δ"]
                 
-                cols = ["Date", "Result", "Score", "Partner", "Opponents", "League", "JUPR Change", "Rating After Match", "Explain"]
-                
+                graph_df = graph_base.iloc[::-1].reset_index(drop=True)
+                graph_df["Match Sequence"] = graph_df.index + 1
+
                 st.dataframe(
                     table_df[cols],
                     use_container_width=True,
