@@ -3970,36 +3970,47 @@ elif sel == "🛠️ Challenge Ladder Admin":
     # -------------------------
     with tabs[3]:
         st.subheader("👥 Ladder Roster")
-
+    
         # -------------------------
-        # Add ONE player to bottom
+        # Tier context for roster tools
         # -------------------------
-            # Tier context for roster tools (everything below applies to this tier)
         tier_ctx = st.selectbox(
             "Tier to manage",
             TIER_ORDER,
             format_func=tier_title,
             key="ladder_roster_tier_ctx",
         )
-
+    
+        # -------------------------
+        # Add ONE player to bottom (tier-aware)
+        # -------------------------
         st.markdown("#### ➕ Add one player (appends to bottom)")
-        st.caption("Existing players are appended to the bottom. New names will be created in Players (default rating) and appended to the bottom.")
-        
-        # Build selectable list from existing Players table
+        st.caption(
+            "Existing players are appended to the bottom of the selected tier. "
+            "New names will be created in Players and appended."
+        )
+    
         all_player_names = []
         if df_players_all is not None and not df_players_all.empty and "name" in df_players_all.columns:
             all_player_names = sorted(df_players_all["name"].astype(str).tolist())
-        
+    
         with st.form("ladder_add_one_form"):
             existing_pick = st.selectbox("Pick an existing player", [""] + all_player_names, index=0)
             new_name = st.text_input("Or type a new player name", value="")
-            new_rating = st.number_input("New player starting JUPR (only used if creating)", min_value=1.0, max_value=7.0, value=3.5, step=0.1)
+            new_rating = st.number_input(
+                "New player starting JUPR (only used if creating)",
+                min_value=1.0,
+                max_value=7.0,
+                value=3.5,
+                step=0.1,
+            )
+    
             auto_assign = st.checkbox(
                 "Auto-assign tier from current OVERALL JUPR",
                 value=True,
                 key="ladder_add_one_auto_tier",
             )
-            
+    
             manual_tier = st.selectbox(
                 "Manual tier (used only if auto-assign is OFF)",
                 TIER_ORDER,
@@ -4008,22 +4019,22 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 disabled=auto_assign,
                 key="ladder_add_one_manual_tier",
             )
-
+    
             add_one = st.form_submit_button("Add to bottom")
-        
+    
         if add_one:
             nm = (new_name.strip() or existing_pick.strip())
             if not nm:
                 st.error("Pick an existing player OR type a new name.")
                 st.stop()
-        
+    
             # Ensure the player exists in Players table
             if nm not in name_to_id:
                 ok, err = safe_add_player(nm, float(new_rating))
                 if not ok:
                     st.error(f"Could not add player '{nm}': {err}")
                     st.stop()
-        
+    
                 # Refresh mappings so name_to_id includes new player
                 (
                     df_players_all,
@@ -4034,115 +4045,95 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     name_to_id,
                     id_to_name,
                 ) = load_data()
-        
+    
             pid = int(name_to_id.get(nm))
-    if add_one:
-        nm = (new_name.strip() or existing_pick.strip())
-        if not nm:
-            st.error("Pick an existing player OR type a new name.")
-            st.stop()
-
-        # Ensure the player exists in Players table
-        if nm not in name_to_id:
-            ok, err = safe_add_player(nm, float(new_rating))
-            if not ok:
-                st.error(f"Could not add player '{nm}': {err}")
-                st.stop()
-
-        # Refresh mappings so name_to_id includes new player
-        (
-            df_players_all,
-            df_players,
-            df_leagues,
-            df_matches,
-            df_meta,
-            name_to_id,
-            id_to_name,
-        ) = load_data()
-
-    pid = int(name_to_id.get(nm))
-
-    # -------------------------
-    # Tier assignment (THIS is where your snippet goes)
-    # -------------------------
-    auto_assign_val = bool(st.session_state.get("ladder_add_one_auto_tier", True))
-    manual_tier_val = str(st.session_state.get("ladder_add_one_manual_tier", tier_ctx))
-
-    if auto_assign_val:
-        # compute from OVERALL rating in players table (ELO x400)
-        p_row = df_players_all[df_players_all["id"] == pid]
-        elo = float(p_row.iloc[0].get("rating", 1200.0) or 1200.0) if not p_row.empty else 1200.0
-        jupr = elo / 400.0
-        tier_for_player = tier_for_jupr(jupr)
-    else:
-        tier_for_player = manual_tier_val
-
-    # -------------------------
-    # Next rank within THAT tier (THIS is where your snippet goes)
-    # -------------------------
-    max_rank_resp = sb_retry(lambda: (
-        supabase.table("ladder_roster")
-        .select("rank")
-        .eq("club_id", CLUB_ID)
-        .eq("tier_id", tier_for_player)
-        .eq("is_active", True)
-        .order("rank", desc=True)
-        .limit(1)
-        .execute()
-    ))
-    next_rank = (int(max_rank_resp.data[0]["rank"]) + 1) if max_rank_resp.data else 1
-
-    # If player already exists in ladder_roster, update/reactivate instead of inserting
-    existing_row = sb_retry(lambda: (
-        supabase.table("ladder_roster")
-        .select("id,is_active,rank,tier_id")
-        .eq("club_id", CLUB_ID)
-        .eq("player_id", pid)
-        .limit(1)
-        .execute()
-    ))
-
-    now_iso = dt_utc_now().isoformat()
-
-    if existing_row.data:
-        row = existing_row.data[0]
-        if bool(row.get("is_active", True)):
-            st.info(
-                f"'{nm}' is already ACTIVE on the ladder "
-                f"({tier_title(row.get('tier_id'))}, rank {row.get('rank')})."
-            )
-        else:
-            upd = {
-                "is_active": True,
-                "tier_id": tier_for_player,
-                "rank": int(next_rank),
-                "left_at": None,
-                "joined_at": now_iso,
-            }
-            sb_retry(lambda: (
+    
+            # -------------------------
+            # Tier assignment
+            # -------------------------
+            auto_assign_val = bool(st.session_state.get("ladder_add_one_auto_tier", True))
+            manual_tier_val = str(st.session_state.get("ladder_add_one_manual_tier", tier_ctx))
+    
+            if auto_assign_val:
+                p_row = df_players_all[df_players_all["id"] == pid]
+                elo = float(p_row.iloc[0].get("rating", 1200.0) or 1200.0) if not p_row.empty else 1200.0
+                jupr = elo / 400.0
+                tier_for_player = tier_for_jupr(jupr)
+            else:
+                tier_for_player = manual_tier_val
+    
+            # -------------------------
+            # Next rank within THAT tier
+            # -------------------------
+            max_rank_resp = sb_retry(lambda: (
                 supabase.table("ladder_roster")
-                .update(upd)
+                .select("rank")
                 .eq("club_id", CLUB_ID)
-                .eq("player_id", pid)
+                .eq("tier_id", tier_for_player)
+                .eq("is_active", True)
+                .order("rank", desc=True)
+                .limit(1)
                 .execute()
             ))
-            ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", row, upd)
-            st.success(f"Reactivated '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
-            st.rerun()
-    else:
-        ins = {
-            "club_id": CLUB_ID,
-            "player_id": pid,
-            "tier_id": tier_for_player,
-            "rank": int(next_rank),
-            "is_active": True,
-            "joined_at": now_iso,
-            "left_at": None,
-        }
-        sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
-        ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
-        st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
-        st.rerun()
+            next_rank = (int(max_rank_resp.data[0]["rank"]) + 1) if max_rank_resp.data else 1
+    
+            # If player already exists in ladder_roster, update/reactivate instead of inserting
+            existing_row = sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .select("id,is_active,rank,tier_id,notes")
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", pid)
+                .limit(1)
+                .execute()
+            ))
+    
+            now_iso = dt_utc_now().isoformat()
+    
+            if existing_row.data:
+                row = existing_row.data[0]
+                before = dict(row)
+    
+                if bool(row.get("is_active", True)):
+                    st.info(
+                        f"'{nm}' is already ACTIVE on the ladder "
+                        f"({tier_title(row.get('tier_id'))}, rank {row.get('rank')})."
+                    )
+                    st.stop()
+    
+                upd = {
+                    "is_active": True,
+                    "tier_id": tier_for_player,
+                    "rank": int(next_rank),
+                    "left_at": None,
+                    "joined_at": now_iso,
+                }
+    
+                sb_retry(lambda: (
+                    supabase.table("ladder_roster")
+                    .update(upd)
+                    .eq("club_id", CLUB_ID)
+                    .eq("player_id", pid)
+                    .execute()
+                ))
+                ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", before, {**before, **upd})
+                st.success(f"Reactivated '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
+                st.rerun()
+    
+            else:
+                ins = {
+                    "club_id": CLUB_ID,
+                    "player_id": pid,
+                    "tier_id": tier_for_player,
+                    "rank": int(next_rank),
+                    "is_active": True,
+                    "joined_at": now_iso,
+                    "left_at": None,
+                }
+                sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
+                ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
+                st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
+                st.rerun()
+
 
         
             # If player already exists in ladder_roster, update/reactivate instead of inserting
