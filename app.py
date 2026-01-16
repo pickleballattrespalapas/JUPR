@@ -3486,134 +3486,62 @@ Players move up by challenging and defeating players ranked above them.
 
 ---
 
-### 🎯 The Basics
-- Rankings are **individual**, but matches are played as **doubles**
-- You may challenge **up to 7 ranks above you**
-- You may only have **one active challenge at a time**
-- All challenges are **official only when recorded at the Pro Shop**
+1. **One active challenge at a time**  
+   You may only be involved in one challenge at a time—either as the challenger or defender.
 
----
+2. **Who you can challenge**  
+   You may challenge a player ranked **above you**, up to **7 spots higher**, provided both players are eligible.
 
-## Step 1: Check Your Status
-Before doing anything, look at the **status next to your name**.
+3. **Eligibility & status rules**  
+   You cannot initiate or receive challenges if you are **Locked**, on **Vacation**, or **Reinstate Required**.  
+   - **Cooldown**: you may be challenged, but cannot initiate.  
+   - **Protected**: you may initiate, but cannot be challenged.
 
-- **Ready to Defend** → you can challenge and be challenged
-- **Locked** → you are already involved in a challenge
-- **Cooldown (72h)** → you must wait before initiating a challenge
-- **Protected (72h)** → you may challenge, but cannot be challenged
-- **Vacation / Reinstate** → admin-controlled time away
+4. **Challenges must be officially recorded**  
+   A challenge is only official once recorded by staff in the **Pro Shop Challenge Ledger**.  
+   (For Top-20, token placement must also be logged by staff.)
 
-If you are **Ready to Defend**, continue.
+5. **48-hour acceptance window**  
+   The defending player has **48 hours** to accept a challenge once it is recorded.
 
----
+6. **Monthly Pass (1 per month)**  
+   You may decline one challenge per calendar month without losing your rank, as long as the pass is used within the 48-hour acceptance window.
 
-## Step 2: Choose Who to Challenge
-- You may challenge **up to 7 ranks above you**
-- You may only have **one active challenge at a time**
-- The player you challenge must also be eligible
+7. **No response = forfeit**  
+   If a challenge is not accepted within 48 hours and no Monthly Pass is used, the defender forfeits and positions are awarded accordingly.
 
-If a player is Locked, Protected, or on Vacation, you must wait.
+8. **7-day play window**  
+   Once accepted, the match must be completed within **7 days**. Failure to do so may result in an admin-determined forfeit.
 
----
+9. **Match format: Swing Partner Swap**  
+   - Two doubles matches are played.  
+   - Each ranked player keeps the same opponent but swaps partners between matches.  
+   - Swing partners never move on the ladder.
 
-## Step 3: Record the Challenge (Pro Shop Required)
-All challenges are **official only when recorded at the Pro Shop**.
+10. **How the winner is decided**  
+   - Win both matches = win the challenge.  
+   - Split matches = total games won.  
+   - Still tied = total point differential.  
+   - Exact tie favors the **defender**.
 
-Two ways to start:
-- **Top-20 players**: place your token on the physical board, then report to the Pro Shop
-- **All other players**: go directly to the Pro Shop to create the challenge
+11. **Ladder movement**  
+   - If the challenger wins, the two ranked players **swap ranks**.  
+   - If the defender wins, **no ranks change**.
 
-Once recorded:
-- The defender has **48 hours to accept**
-- All deadlines are based on **Pro Shop timestamps**
+12. **Post-match timers**  
+   - Challenger enters **Cooldown (72 hours)**.  
+   - Defender enters **Protected (72 hours)**.
 
----
+13. **Vacation is admin-controlled**  
+   Vacation status is set by the Ladder Admin and typically requires **48 hours’ notice** when possible.
 
-## Step 4: Acceptance or Monthly Pass
-Within 48 hours, the defender must:
-- **Accept** the challenge, or
-- **Use their Monthly Pass** to decline without losing rank
+14. **Reinstatement required after vacation**  
+   Returning players must complete a reinstatement match before resuming normal ladder activity.
 
-Each player receives **one Monthly Pass per calendar month**.  
-Passes do not roll over.
+15. **Disputes & enforcement**  
+   The Ladder Admin resolves disputes and enforces rules using the **Pro Shop Challenge Ledger** as the source of truth.
+""")
 
-Failure to Accept or use a Monthly Pass withing the 48 hour window will result in loss of rank.
-
----
-
-## Step 5: Schedule the Match
-- Once accepted, the match must be played within **7 days**
-- Both players are expected to make good-faith scheduling efforts
-- Missed deadlines may result in a **forfeit**
-
----
-
-## Step 6: Choose Swing Partners
-Each challenge is played as **doubles**, even though the ladder is **individual**.
-
-### What is a swing partner?
-- A swing partner is a **helper player**
-- They play **one match with each ranked player**
-- They **do not move** on the ladder
-- Ladder status does not apply to swing partners
-
-### How to find swing partners
-- Each ranked player is responsible for finding **one swing partner**
-- Swing partners may be **any available player**
-- Partners must be available for the **entire match**
-- The match cannot be played until **both partners are confirmed**
-
-If needed, ask at the courts or contact the Ladder Admin for help.
-
----
-
-## Step 7: Play the Match (Standard Format)
-All challenges use the same format:
-
-- Two matches, best 2-of-3 games to 11 (win by 2)
-- The two ranked players remain opponents
-- Swing partners **swap** between matches
-
-**Match 1**
-- Challenger + Challenger’s partner  
-vs  
-- Defender + Defender’s partner  
-
-**Match 2 (swap)**
-- Challenger + Defender’s partner  
-vs  
-- Defender + Challenger’s partner  
-
----
-
-## Step 8: Determine the Winner
-The winner is decided by:
-1. Matches won  
-2. Games won  
-3. Total point difference  
-4. Tie → defender holds  
-
-Only the **two ranked players** are considered.
-
----
-
-## Step 9: Ladder Movement
-- **Challenger wins** → the two players **swap ranks**
-- **Defender wins** → no rank change
-
-After the challenge:
-- Challenger → **Cooldown (72h)**
-- Defender → **Protected (72h)**
-
----
-
-## Important Notes
-- Swing partners never move on the ladder
-- The **Pro Shop Challenge Ledger** is the official record
-- This page is a **live, read-only view**
-- Ladder Admin decisions are final
-"""
-    )
 
 
 elif sel == "🛠️ Challenge Ladder Admin":
