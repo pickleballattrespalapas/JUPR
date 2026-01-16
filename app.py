@@ -4552,7 +4552,7 @@ with tabs[4]:
             st.info("No audit entries yet.")
         else:
             st.dataframe(df_a[["created_at","actor","action_type","entity_type","entity_id"]], use_container_width=True, hide_index=True)
-
+            )
 
 # -------------------------
 # PAGE: MATCH UPLOADER
