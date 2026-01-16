@@ -4137,14 +4137,14 @@ elif sel == "🛠️ Challenge Ladder Admin":
 
         
             # If player already exists in ladder_roster, update/reactivate instead of inserting
-        existing_row = sb_retry(lambda: (
-            supabase.table("ladder_roster")
-            .select("id,is_active,rank")
-            .eq("club_id", CLUB_ID)
-            .eq("player_id", pid)
-            .limit(1)
-            .execute()
-        ))
+            existing_row = sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .select("id,is_active,rank")
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", pid)
+                .limit(1)
+                .execute()
+            ))
         
         now_iso = dt_utc_now().isoformat()
     
