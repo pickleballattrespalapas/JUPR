@@ -4319,159 +4319,159 @@ elif sel == "🛠️ Challenge Ladder Admin":
         st.dataframe(inactive_df[show_cols], use_container_width=True, hide_index=True)
 
 
-with tabs[4]:
-    st.subheader("⬆️⬇️ Tier Movement (Admin Review Queue)")
-    st.caption("Triggers when a player has 10 consecutive rated games where their post-match rating is in a different tier than their current assigned tier.")
-
-    # Safety: need roster + matches
-    if df_roster is None or df_roster.empty:
-        st.info("Roster required.")
-        st.stop()
-
-    # Compute status map so we can disable approvals if Locked
-    status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
-
-    active = df_roster[df_roster["is_active"] == True].copy()
-    if active.empty:
-        st.info("No active roster players.")
-        st.stop()
-
-    # joined_at parse
-    active["joined_at_dt"] = pd.to_datetime(active.get("joined_at"), utc=True, errors="coerce")
-    active["name"] = active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-
-    rows = []
-    for _, rr in active.iterrows():
-        pid = int(rr["player_id"])
-        cur_tier = str(rr.get("tier_id") or "INT")
-        joined_at = rr["joined_at_dt"].to_pydatetime() if pd.notna(rr["joined_at_dt"]) else None
-
-        streak = compute_out_of_tier_streak(pid, joined_at, cur_tier, df_matches)  # uses global df_matches loaded at top
-        dest = streak["dest_tier"]
-        cnt = int(streak["count"] or 0)
-
-        if dest and cnt >= 10 and dest != cur_tier:
-            rows.append({
-                "player_id": pid,
-                "name": rr["name"],
-                "current_tier": cur_tier,
-                "dest_tier": dest,
-                "count": cnt,
-                "status": status_map.get(pid, {}).get("status", ""),
-            })
-
-    if not rows:
-        st.success("No tier-move triggers at this time.")
-        st.stop()
-
-    qdf = pd.DataFrame(rows)
-    qdf["Current Tier"] = qdf["current_tier"].apply(tier_title)
-    qdf["Proposed Tier"] = qdf["dest_tier"].apply(tier_title)
-    qdf = qdf.sort_values(["current_tier", "name"])
-
-    st.dataframe(
-        qdf[["name", "Current Tier", "Proposed Tier", "count", "status"]],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.divider()
-    st.markdown("### Approve a Tier Move")
-
-    pick_pid = st.selectbox(
-        "Select flagged player",
-        options=qdf["player_id"].tolist(),
-        format_func=lambda x: f"{ladder_nm(int(x), id_to_name)} (ID {int(x)})",
-        key="tier_move_pick_pid",
-    )
-    pick_pid = int(pick_pid)
-
-    row = qdf[qdf["player_id"] == pick_pid].iloc[0].to_dict()
-    cur_tier = str(row["current_tier"])
-    dest_tier = str(row["dest_tier"])
-    locked = (str(row.get("status","")) == "Locked")
-
-    st.write(f"- Current: **{tier_title(cur_tier)}**")
-    st.write(f"- Proposed: **{tier_title(dest_tier)}**")
-    st.write(f"- Status: **{row.get('status','')}**")
-
-    if locked:
-        st.warning("Player is Locked (active challenge). Tier move should be approved only after the active challenge is finalized.")
-
-    approve = st.button("✅ Approve Tier Move", disabled=locked, key="approve_tier_move_btn")
-
-    if approve:
-        # Determine placement rule
-        promo = is_promotion(cur_tier, dest_tier)
-        demo = is_demotion(cur_tier, dest_tier)
-
-        placement = "bottom" if promo else "top" if demo else "bottom"
-
-        # Load active rosters by tier
-        all_roster = df_roster[df_roster["is_active"] == True].copy()
-        old_df = all_roster[all_roster["tier_id"] == cur_tier].sort_values("rank")
-        new_df = all_roster[all_roster["tier_id"] == dest_tier].sort_values("rank")
-
-        old_pids = [int(x) for x in old_df["player_id"].tolist() if int(x) != pick_pid]
-        new_pids = [int(x) for x in new_df["player_id"].tolist() if int(x) != pick_pid]
-
-        if placement == "top":
-            new_order = [pick_pid] + new_pids
-        else:
-            new_order = new_pids + [pick_pid]
-
-        now_iso = dt_utc_now().isoformat()
-
-        # 1) Update player's tier_id immediately
-        sb_retry(lambda: (
-            supabase.table("ladder_roster")
-            .update({"tier_id": dest_tier})
-            .eq("club_id", CLUB_ID)
-            .eq("player_id", pick_pid)
-            .execute()
-        ))
-
-        # 2) Resequence old tier ranks
-        for i, pid in enumerate(old_pids, start=1):
-            sb_retry(lambda pid=pid, i=i: (
-                supabase.table("ladder_roster")
-                .update({"rank": int(i)})
-                .eq("club_id", CLUB_ID)
-                .eq("player_id", int(pid))
-                .execute()
-            ))
-
-        # 3) Resequence destination tier ranks
-        for i, pid in enumerate(new_order, start=1):
-            sb_retry(lambda pid=pid, i=i: (
-                supabase.table("ladder_roster")
-                .update({"rank": int(i)})
-                .eq("club_id", CLUB_ID)
-                .eq("player_id", int(pid))
-                .execute()
-            ))
-
-        # 4) Clear tier-move flag fields
-        sb_retry(lambda: supabase.table("ladder_player_flags").upsert({
-            "club_id": CLUB_ID,
-            "player_id": int(pick_pid),
-            "tier_move_flag": False,
-            "tier_move_dest_tier": None,
-            "tier_move_count": 0,
-            "tier_move_triggered_at": None,
-            "tier_move_last_eval_at": now_iso,
-        }, on_conflict="club_id,player_id").execute())
-
-        ladder_audit(
-            "tier_move_approved",
-            "ladder_roster",
-            f"{CLUB_ID}:{pick_pid}",
-            {"tier_id": cur_tier},
-            {"tier_id": dest_tier, "placement": placement},
+    with tabs[4]:
+        st.subheader("⬆️⬇️ Tier Movement (Admin Review Queue)")
+        st.caption("Triggers when a player has 10 consecutive rated games where their post-match rating is in a different tier than their current assigned tier.")
+    
+        # Safety: need roster + matches
+        if df_roster is None or df_roster.empty:
+            st.info("Roster required.")
+            st.stop()
+    
+        # Compute status map so we can disable approvals if Locked
+        status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
+    
+        active = df_roster[df_roster["is_active"] == True].copy()
+        if active.empty:
+            st.info("No active roster players.")
+            st.stop()
+    
+        # joined_at parse
+        active["joined_at_dt"] = pd.to_datetime(active.get("joined_at"), utc=True, errors="coerce")
+        active["name"] = active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
+    
+        rows = []
+        for _, rr in active.iterrows():
+            pid = int(rr["player_id"])
+            cur_tier = str(rr.get("tier_id") or "INT")
+            joined_at = rr["joined_at_dt"].to_pydatetime() if pd.notna(rr["joined_at_dt"]) else None
+    
+            streak = compute_out_of_tier_streak(pid, joined_at, cur_tier, df_matches)  # uses global df_matches loaded at top
+            dest = streak["dest_tier"]
+            cnt = int(streak["count"] or 0)
+    
+            if dest and cnt >= 10 and dest != cur_tier:
+                rows.append({
+                    "player_id": pid,
+                    "name": rr["name"],
+                    "current_tier": cur_tier,
+                    "dest_tier": dest,
+                    "count": cnt,
+                    "status": status_map.get(pid, {}).get("status", ""),
+                })
+    
+        if not rows:
+            st.success("No tier-move triggers at this time.")
+            st.stop()
+    
+        qdf = pd.DataFrame(rows)
+        qdf["Current Tier"] = qdf["current_tier"].apply(tier_title)
+        qdf["Proposed Tier"] = qdf["dest_tier"].apply(tier_title)
+        qdf = qdf.sort_values(["current_tier", "name"])
+    
+        st.dataframe(
+            qdf[["name", "Current Tier", "Proposed Tier", "count", "status"]],
+            use_container_width=True,
+            hide_index=True,
         )
-
-        st.success(f"Tier move approved. Placed at the {placement.upper()} of {tier_title(dest_tier)}.")
-        st.rerun()
+    
+        st.divider()
+        st.markdown("### Approve a Tier Move")
+    
+        pick_pid = st.selectbox(
+            "Select flagged player",
+            options=qdf["player_id"].tolist(),
+            format_func=lambda x: f"{ladder_nm(int(x), id_to_name)} (ID {int(x)})",
+            key="tier_move_pick_pid",
+        )
+        pick_pid = int(pick_pid)
+    
+        row = qdf[qdf["player_id"] == pick_pid].iloc[0].to_dict()
+        cur_tier = str(row["current_tier"])
+        dest_tier = str(row["dest_tier"])
+        locked = (str(row.get("status","")) == "Locked")
+    
+        st.write(f"- Current: **{tier_title(cur_tier)}**")
+        st.write(f"- Proposed: **{tier_title(dest_tier)}**")
+        st.write(f"- Status: **{row.get('status','')}**")
+    
+        if locked:
+            st.warning("Player is Locked (active challenge). Tier move should be approved only after the active challenge is finalized.")
+    
+        approve = st.button("✅ Approve Tier Move", disabled=locked, key="approve_tier_move_btn")
+    
+        if approve:
+            # Determine placement rule
+            promo = is_promotion(cur_tier, dest_tier)
+            demo = is_demotion(cur_tier, dest_tier)
+    
+            placement = "bottom" if promo else "top" if demo else "bottom"
+    
+            # Load active rosters by tier
+            all_roster = df_roster[df_roster["is_active"] == True].copy()
+            old_df = all_roster[all_roster["tier_id"] == cur_tier].sort_values("rank")
+            new_df = all_roster[all_roster["tier_id"] == dest_tier].sort_values("rank")
+    
+            old_pids = [int(x) for x in old_df["player_id"].tolist() if int(x) != pick_pid]
+            new_pids = [int(x) for x in new_df["player_id"].tolist() if int(x) != pick_pid]
+    
+            if placement == "top":
+                new_order = [pick_pid] + new_pids
+            else:
+                new_order = new_pids + [pick_pid]
+    
+            now_iso = dt_utc_now().isoformat()
+    
+            # 1) Update player's tier_id immediately
+            sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .update({"tier_id": dest_tier})
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", pick_pid)
+                .execute()
+            ))
+    
+            # 2) Resequence old tier ranks
+            for i, pid in enumerate(old_pids, start=1):
+                sb_retry(lambda pid=pid, i=i: (
+                    supabase.table("ladder_roster")
+                    .update({"rank": int(i)})
+                    .eq("club_id", CLUB_ID)
+                    .eq("player_id", int(pid))
+                    .execute()
+                ))
+    
+            # 3) Resequence destination tier ranks
+            for i, pid in enumerate(new_order, start=1):
+                sb_retry(lambda pid=pid, i=i: (
+                    supabase.table("ladder_roster")
+                    .update({"rank": int(i)})
+                    .eq("club_id", CLUB_ID)
+                    .eq("player_id", int(pid))
+                    .execute()
+                ))
+    
+            # 4) Clear tier-move flag fields
+            sb_retry(lambda: supabase.table("ladder_player_flags").upsert({
+                "club_id": CLUB_ID,
+                "player_id": int(pick_pid),
+                "tier_move_flag": False,
+                "tier_move_dest_tier": None,
+                "tier_move_count": 0,
+                "tier_move_triggered_at": None,
+                "tier_move_last_eval_at": now_iso,
+            }, on_conflict="club_id,player_id").execute())
+    
+            ladder_audit(
+                "tier_move_approved",
+                "ladder_roster",
+                f"{CLUB_ID}:{pick_pid}",
+                {"tier_id": cur_tier},
+                {"tier_id": dest_tier, "placement": placement},
+            )
+    
+            st.success(f"Tier move approved. Placed at the {placement.upper()} of {tier_title(dest_tier)}.")
+            st.rerun()
 
     
     # -------------------------
