@@ -3541,14 +3541,14 @@ if sel == "🪜 Challenge Ladder":
     # TAB 1: LADDER
     # -------------------------
     with tab_ladder:
-    if df_roster is None or df_roster.empty:
-        st.info("Ladder roster not initialized yet.")
-    else:
-        # Compute status map once (works across tiers)
-        status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
-
-        # Tier sub-tabs
-        t_tabs = st.tabs([tier_title(tid) for tid in TIER_ORDER])
+        if df_roster is None or df_roster.empty:
+            st.info("Ladder roster not initialized yet.")
+        else:
+            # Compute status map once (works across tiers)
+            status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
+    
+            # Tier sub-tabs
+            t_tabs = st.tabs([tier_title(tid) for tid in TIER_ORDER])
 
         for i, tid in enumerate(TIER_ORDER):
             with t_tabs[i]:
