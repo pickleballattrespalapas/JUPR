@@ -4146,29 +4146,29 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 .execute()
             ))
         
-        now_iso = dt_utc_now().isoformat()
+            now_iso = dt_utc_now().isoformat()
     
-    if existing_row.data:
-        row = existing_row.data[0]
-        if bool(row.get("is_active", True)):
-            st.info(f"'{nm}' is already on the ladder roster (rank {row.get('rank')}).")
-        else:
-            upd = {
-                "is_active": True,
-                "rank": int(next_rank),
-                "left_at": None,
-                "joined_at": now_iso,
-            }
-            sb_retry(lambda: (
-                supabase.table("ladder_roster")
-                .update(upd)
-                .eq("club_id", CLUB_ID)
-                .eq("player_id", pid)
-                .execute()
-            ))
-            ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", row, upd)
-            st.success(f"Reactivated '{nm}' and appended to bottom at rank {next_rank}.")
-            st.rerun()
+        if existing_row.data:
+            row = existing_row.data[0]
+            if bool(row.get("is_active", True)):
+                st.info(f"'{nm}' is already on the ladder roster (rank {row.get('rank')}).")
+            else:
+                upd = {
+                    "is_active": True,
+                    "rank": int(next_rank),
+                    "left_at": None,
+                    "joined_at": now_iso,
+                }
+                sb_retry(lambda: (
+                    supabase.table("ladder_roster")
+                    .update(upd)
+                    .eq("club_id", CLUB_ID)
+                    .eq("player_id", pid)
+                    .execute()
+                ))
+                ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", row, upd)
+                st.success(f"Reactivated '{nm}' and appended to bottom at rank {next_rank}.")
+                st.rerun()
             else:
                 ins = {"club_id": CLUB_ID, "player_id": pid, "rank": int(next_rank), "is_active": True}
                 sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
