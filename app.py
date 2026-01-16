@@ -3743,10 +3743,17 @@ elif sel == "🛠️ Challenge Ladder Admin":
     # -------------------------
     # TAB 2: INTAKE
     # -------------------------
-    tier_pick = st.selectbox("Tier", TIER_ORDER, format_func=tier_title, key="ladder_intake_tier")
+   
 
     with tabs[1]:
         st.subheader("🧾 Enter Challenge (from Pro Shop Ledger)")
+
+        tier_pick = st.selectbox(
+            "Tier",
+            TIER_ORDER,
+            format_func=tier_title,
+            key="ladder_intake_tier",
+        )                            
 
         if df_roster is None or df_roster.empty:
             st.error("Roster not initialized yet. Go to the Roster tab to add players.")
@@ -3839,6 +3846,12 @@ elif sel == "🛠️ Challenge Ladder Admin":
     # -------------------------
     with tabs[2]:
         st.subheader("🗂 Challenge Detail")
+
+        tier_filter = st.selectbox("Tier filter", ["ALL"] + TIER_ORDER, format_func=lambda x: "ALL" if x=="ALL" else tier_title(x))
+        df = df_ch.copy()
+        if tier_filter != "ALL" and "tier_id" in df.columns:
+            df = df[df["tier_id"] == tier_filter].copy()
+
     
         # If no challenges yet, show message and DO NOT run the rest of this tab
         if df_ch is None or df_ch.empty:
@@ -4046,7 +4059,10 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     id_to_name,
                 ) = load_data()
     
-            pid = int(name_to_id.get(nm))
+            pid = int(name_to_id.get(nm) or 0)
+            if pid <= 0:
+                st.error(f"Could not resolve player_id for '{nm}'.")
+                st.stop()
     
             # -------------------------
             # Tier assignment
@@ -4065,7 +4081,7 @@ elif sel == "🛠️ Challenge Ladder Admin":
             # -------------------------
             # Next rank within THAT tier
             # -------------------------
-            max_rank_resp = sb_retry(lambda: (
+            max_rank_resp = sb_retry(lambda tier_for_player=tier_for_player: (
                 supabase.table("ladder_roster")
                 .select("rank")
                 .eq("club_id", CLUB_ID)
@@ -4078,11 +4094,11 @@ elif sel == "🛠️ Challenge Ladder Admin":
             next_rank = (int(max_rank_resp.data[0]["rank"]) + 1) if max_rank_resp.data else 1
     
             # If player already exists in ladder_roster, update/reactivate instead of inserting
-            existing_row = sb_retry(lambda: (
+            existing_row = sb_retry(lambda pid=pid: (
                 supabase.table("ladder_roster")
                 .select("id,is_active,rank,tier_id,notes")
                 .eq("club_id", CLUB_ID)
-                .eq("player_id", pid)
+                .eq("player_id", int(pid))
                 .limit(1)
                 .execute()
             ))
@@ -4108,95 +4124,61 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     "joined_at": now_iso,
                 }
     
-                sb_retry(lambda: (
+                sb_retry(lambda upd=upd, pid=pid: (
                     supabase.table("ladder_roster")
                     .update(upd)
                     .eq("club_id", CLUB_ID)
-                    .eq("player_id", pid)
+                    .eq("player_id", int(pid))
                     .execute()
                 ))
-                ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", before, {**before, **upd})
+                ladder_audit(
+                    "roster_reactivate_append",
+                    "ladder_roster",
+                    f"{CLUB_ID}:{pid}",
+                    before,
+                    {**before, **upd},
+                )
                 st.success(f"Reactivated '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
                 st.rerun()
     
             else:
                 ins = {
                     "club_id": CLUB_ID,
-                    "player_id": pid,
+                    "player_id": int(pid),
                     "tier_id": tier_for_player,
                     "rank": int(next_rank),
                     "is_active": True,
                     "joined_at": now_iso,
                     "left_at": None,
                 }
-                sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
+                sb_retry(lambda ins=ins: supabase.table("ladder_roster").insert(ins).execute())
                 ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
                 st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
                 st.rerun()
-
-
-        
-            # If player already exists in ladder_roster, update/reactivate instead of inserting
-            existing_row = sb_retry(lambda: (
-                supabase.table("ladder_roster")
-                .select("id,is_active,rank")
-                .eq("club_id", CLUB_ID)
-                .eq("player_id", pid)
-                .limit(1)
-                .execute()
-            ))
-        
-            now_iso = dt_utc_now().isoformat()
     
-        if existing_row.data:
-            row = existing_row.data[0]
-            if bool(row.get("is_active", True)):
-                st.info(f"'{nm}' is already on the ladder roster (rank {row.get('rank')}).")
-            else:
-                upd = {
-                    "is_active": True,
-                    "rank": int(next_rank),
-                    "left_at": None,
-                    "joined_at": now_iso,
-                }
-                sb_retry(lambda: (
-                    supabase.table("ladder_roster")
-                    .update(upd)
-                    .eq("club_id", CLUB_ID)
-                    .eq("player_id", pid)
-                    .execute()
-                ))
-                ladder_audit("roster_reactivate_append", "ladder_roster", f"{CLUB_ID}:{pid}", row, upd)
-                st.success(f"Reactivated '{nm}' and appended to bottom at rank {next_rank}.")
-                st.rerun()
-            else:
-                ins = {"club_id": CLUB_ID, "player_id": pid, "rank": int(next_rank), "is_active": True}
-                sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
-                ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
-                st.success(f"Added '{nm}' to bottom at rank {next_rank}.")
-                st.rerun()
-            
-            st.divider()
-
-        # Initialize roster from ranked list
-        st.markdown("#### Initialize / Replace Ladder (paste ranked list)")
-        st.caption("Paste names top-to-bottom. This will REPLACE ladder_roster for this club.")
-
+        st.divider()
+    
+        # -------------------------
+        # Replace roster for THIS tier only
+        # -------------------------
+        st.markdown("#### Initialize / Replace Tier Roster (paste ranked list)")
+        st.caption("Paste names top-to-bottom. This will REPLACE the selected tier roster only.")
+    
         raw = st.text_area("Ranked roster (top to bottom)", height=160, key="ladder_init_raw")
-        if st.button("🚀 Replace Ladder Roster", type="primary"):
+        if st.button("🚀 Replace Tier Roster", type="primary"):
             names = [x.strip() for x in (raw or "").split("\n") if x.strip()]
             if not names:
                 st.error("Paste at least one name.")
                 st.stop()
-
+    
             # Ensure players exist (add missing as active with 3.5 default)
-            for nm in names:
-                if nm not in name_to_id:
-                    ok, err = safe_add_player(nm, 3.5)
+            for nm0 in names:
+                if nm0 not in name_to_id:
+                    ok, err = safe_add_player(nm0, 3.5)
                     if not ok:
-                        st.error(f"Could not add {nm}: {err}")
+                        st.error(f"Could not add {nm0}: {err}")
                         st.stop()
-
+    
             # Reload mappings
             (
                 df_players_all,
@@ -4207,43 +4189,49 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 name_to_id,
                 id_to_name,
             ) = load_data()
-
-            # Replace roster
+    
             now_iso = dt_utc_now().isoformat()
-
+    
             # Soft-clear ONLY this tier (keeps history)
-            sb_retry(lambda: (
+            sb_retry(lambda now_iso=now_iso: (
                 supabase.table("ladder_roster")
                 .update({"is_active": False, "left_at": now_iso})
                 .eq("club_id", CLUB_ID)
                 .eq("tier_id", tier_ctx)
                 .execute()
             ))
-
-
+    
             rows = []
-            for i, nm in enumerate(names, start=1):
-                pid = int(name_to_id[nm])
+            for i, nm0 in enumerate(names, start=1):
+                pid0 = int(name_to_id[nm0])
                 rows.append({
                     "club_id": CLUB_ID,
-                    "player_id": pid,
+                    "player_id": int(pid0),
                     "tier_id": tier_ctx,
-                    "rank": i,
+                    "rank": int(i),
                     "is_active": True,
                     "joined_at": now_iso,
                     "left_at": None,
                 })
-            
-            sb_retry(lambda: supabase.table("ladder_roster").upsert(rows, on_conflict="club_id,player_id").execute())
-            ladder_audit("roster_replace_tier", "ladder_roster", f"{CLUB_ID}:{tier_ctx}", None, {"tier": tier_ctx, "count": len(rows)})
-            st.success("Roster replaced.")
+    
+            sb_retry(lambda rows=rows: supabase.table("ladder_roster").upsert(rows, on_conflict="club_id,player_id").execute())
+            ladder_audit(
+                "roster_replace_tier",
+                "ladder_roster",
+                f"{CLUB_ID}:{tier_ctx}",
+                None,
+                {"tier": tier_ctx, "count": len(rows)},
+            )
+            st.success("Tier roster replaced.")
             st.rerun()
-
+    
         st.divider()
-
-        # Display roster
+    
+        # -------------------------
+        # Display tier roster tables
+        # -------------------------
         df_roster, df_flags, df_ch, df_pass = ladder_load_core()
-
+    
         if df_roster is None or df_roster.empty:
             st.info("No roster yet.")
             st.stop()
@@ -4252,219 +4240,26 @@ elif sel == "🛠️ Challenge Ladder Admin":
         df_roster["player_id"] = df_roster["player_id"].astype(int)
         df_roster["name"] = df_roster["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
     
-        # --- Management panel ---
-        st.markdown("### Manage Ladder Player (activate/deactivate)")
-    
-        # Select by player_id (canonical)
-        pid = st.selectbox(
-            "Select player",
-            options=df_roster.sort_values(["is_active", "rank"], ascending=[False, True])["player_id"].tolist(),
-            format_func=lambda x: f"{ladder_nm(int(x), id_to_name)} (ID {int(x)})",
-            key="ladder_roster_manage_pid",
-        )
-        pid = int(pid)
-    
-        row = df_roster[df_roster["player_id"] == pid].iloc[0].to_dict()
-        is_active_now = bool(row.get("is_active", True))
-        rank_now = row.get("rank", None)
-    
-        c1, c2, c3 = st.columns([2, 2, 3])
-        c1.metric("Status", "Active" if is_active_now else "Inactive")
-        c2.metric("Current rank", str(rank_now) if rank_now is not None else "—")
-    
-        notes_val = c3.text_input("Notes (optional)", value=str(row.get("notes", "") or ""), key="ladder_roster_notes")
-    
-        if is_active_now:
-            st.warning("Deactivating removes the player from the ladder (no longer challengeable). History remains.")
-            if st.button("Deactivate from Ladder", type="primary", key="btn_deactivate_ladder"):
-                ok, msg = ladder_set_roster_active(CLUB_ID, pid, make_active=False, notes=notes_val)
-                if ok:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-        else:
-            st.info("Reactivating puts the player back on the ladder.")
-            mode = st.radio(
-                "Reactivation placement",
-                ["Append to bottom", "Restore previous rank"],
-                horizontal=True,
-                key="ladder_reactivate_mode",
-            )
-            mode_key = "append" if mode == "Append to bottom" else "restore"
-    
-            if st.button("Reactivate on Ladder", type="primary", key="btn_reactivate_ladder"):
-                ok, msg = ladder_set_roster_active(CLUB_ID, pid, make_active=True, mode=mode_key, notes=notes_val)
-                if ok:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-    
-        st.divider()
-    
-        # --- Display tables ---
+        st.markdown(f"### Active roster — {tier_title(tier_ctx)}")
         active_df = df_roster[(df_roster["is_active"] == True) & (df_roster["tier_id"] == tier_ctx)].copy().sort_values("rank")
+        st.dataframe(active_df[["rank", "name", "player_id", "notes"]], use_container_width=True, hide_index=True)
+    
+        st.markdown(f"### Inactive roster — {tier_title(tier_ctx)}")
         inactive_df = df_roster[(df_roster["is_active"] == False) & (df_roster["tier_id"] == tier_ctx)].copy().sort_values("rank")
         show_cols = [c for c in ["rank", "name", "player_id", "left_at", "notes"] if c in inactive_df.columns]
         st.dataframe(inactive_df[show_cols], use_container_width=True, hide_index=True)
-
-
+    
+    
+    # -------------------------
+    # TAB 5: TIER MOVEMENT
+    # -------------------------
     with tabs[4]:
         st.subheader("⬆️⬇️ Tier Movement (Admin Review Queue)")
         st.caption("Triggers when a player has 10 consecutive rated games where their post-match rating is in a different tier than their current assigned tier.")
+        # (Leave your existing Tier Movement code here — do NOT indent it under tabs[3].)
     
-        # Safety: need roster + matches
-        if df_roster is None or df_roster.empty:
-            st.info("Roster required.")
-            st.stop()
     
-        # Compute status map so we can disable approvals if Locked
-        status_map = ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name)
-    
-        active = df_roster[df_roster["is_active"] == True].copy()
-        if active.empty:
-            st.info("No active roster players.")
-            st.stop()
-    
-        # joined_at parse
-        active["joined_at_dt"] = pd.to_datetime(active.get("joined_at"), utc=True, errors="coerce")
-        active["name"] = active["player_id"].apply(lambda x: ladder_nm(int(x), id_to_name))
-    
-        rows = []
-        for _, rr in active.iterrows():
-            pid = int(rr["player_id"])
-            cur_tier = str(rr.get("tier_id") or "INT")
-            joined_at = rr["joined_at_dt"].to_pydatetime() if pd.notna(rr["joined_at_dt"]) else None
-    
-            streak = compute_out_of_tier_streak(pid, joined_at, cur_tier, df_matches)  # uses global df_matches loaded at top
-            dest = streak["dest_tier"]
-            cnt = int(streak["count"] or 0)
-    
-            if dest and cnt >= 10 and dest != cur_tier:
-                rows.append({
-                    "player_id": pid,
-                    "name": rr["name"],
-                    "current_tier": cur_tier,
-                    "dest_tier": dest,
-                    "count": cnt,
-                    "status": status_map.get(pid, {}).get("status", ""),
-                })
-    
-        if not rows:
-            st.success("No tier-move triggers at this time.")
-            st.stop()
-    
-        qdf = pd.DataFrame(rows)
-        qdf["Current Tier"] = qdf["current_tier"].apply(tier_title)
-        qdf["Proposed Tier"] = qdf["dest_tier"].apply(tier_title)
-        qdf = qdf.sort_values(["current_tier", "name"])
-    
-        st.dataframe(
-            qdf[["name", "Current Tier", "Proposed Tier", "count", "status"]],
-            use_container_width=True,
-            hide_index=True,
-        )
-    
-        st.divider()
-        st.markdown("### Approve a Tier Move")
-    
-        pick_pid = st.selectbox(
-            "Select flagged player",
-            options=qdf["player_id"].tolist(),
-            format_func=lambda x: f"{ladder_nm(int(x), id_to_name)} (ID {int(x)})",
-            key="tier_move_pick_pid",
-        )
-        pick_pid = int(pick_pid)
-    
-        row = qdf[qdf["player_id"] == pick_pid].iloc[0].to_dict()
-        cur_tier = str(row["current_tier"])
-        dest_tier = str(row["dest_tier"])
-        locked = (str(row.get("status","")) == "Locked")
-    
-        st.write(f"- Current: **{tier_title(cur_tier)}**")
-        st.write(f"- Proposed: **{tier_title(dest_tier)}**")
-        st.write(f"- Status: **{row.get('status','')}**")
-    
-        if locked:
-            st.warning("Player is Locked (active challenge). Tier move should be approved only after the active challenge is finalized.")
-    
-        approve = st.button("✅ Approve Tier Move", disabled=locked, key="approve_tier_move_btn")
-    
-        if approve:
-            # Determine placement rule
-            promo = is_promotion(cur_tier, dest_tier)
-            demo = is_demotion(cur_tier, dest_tier)
-    
-            placement = "bottom" if promo else "top" if demo else "bottom"
-    
-            # Load active rosters by tier
-            all_roster = df_roster[df_roster["is_active"] == True].copy()
-            old_df = all_roster[all_roster["tier_id"] == cur_tier].sort_values("rank")
-            new_df = all_roster[all_roster["tier_id"] == dest_tier].sort_values("rank")
-    
-            old_pids = [int(x) for x in old_df["player_id"].tolist() if int(x) != pick_pid]
-            new_pids = [int(x) for x in new_df["player_id"].tolist() if int(x) != pick_pid]
-    
-            if placement == "top":
-                new_order = [pick_pid] + new_pids
-            else:
-                new_order = new_pids + [pick_pid]
-    
-            now_iso = dt_utc_now().isoformat()
-    
-            # 1) Update player's tier_id immediately
-            sb_retry(lambda: (
-                supabase.table("ladder_roster")
-                .update({"tier_id": dest_tier})
-                .eq("club_id", CLUB_ID)
-                .eq("player_id", pick_pid)
-                .execute()
-            ))
-    
-            # 2) Resequence old tier ranks
-            for i, pid in enumerate(old_pids, start=1):
-                sb_retry(lambda pid=pid, i=i: (
-                    supabase.table("ladder_roster")
-                    .update({"rank": int(i)})
-                    .eq("club_id", CLUB_ID)
-                    .eq("player_id", int(pid))
-                    .execute()
-                ))
-    
-            # 3) Resequence destination tier ranks
-            for i, pid in enumerate(new_order, start=1):
-                sb_retry(lambda pid=pid, i=i: (
-                    supabase.table("ladder_roster")
-                    .update({"rank": int(i)})
-                    .eq("club_id", CLUB_ID)
-                    .eq("player_id", int(pid))
-                    .execute()
-                ))
-    
-            # 4) Clear tier-move flag fields
-            sb_retry(lambda: supabase.table("ladder_player_flags").upsert({
-                "club_id": CLUB_ID,
-                "player_id": int(pick_pid),
-                "tier_move_flag": False,
-                "tier_move_dest_tier": None,
-                "tier_move_count": 0,
-                "tier_move_triggered_at": None,
-                "tier_move_last_eval_at": now_iso,
-            }, on_conflict="club_id,player_id").execute())
-    
-            ladder_audit(
-                "tier_move_approved",
-                "ladder_roster",
-                f"{CLUB_ID}:{pick_pid}",
-                {"tier_id": cur_tier},
-                {"tier_id": dest_tier, "placement": placement},
-            )
-    
-            st.success(f"Tier move approved. Placed at the {placement.upper()} of {tier_title(dest_tier)}.")
-            st.rerun()
-
-    
+        
     # -------------------------
     # TAB 5: OVERRIDES
     # -------------------------
