@@ -548,6 +548,16 @@ def get_match_schedule(format_type, players, custom_text=None):
 
     return []
 
+def secret_val(key: str, default: str = "") -> str:
+    try:
+        v = st.secrets.get(key, None)
+        if v is None:
+            return default
+        return str(v)
+    except Exception:
+        return default
+
+
 # -------------------------
 # PROCESSOR (MATCH SAVE + SNAPSHOTS)
 # -------------------------
@@ -1641,6 +1651,68 @@ def is_promotion(from_tier: str, to_tier: str) -> bool:
 
 def is_demotion(from_tier: str, to_tier: str) -> bool:
     return tier_idx(to_tier) < tier_idx(from_tier)
+
+def build_challenge_notice_message(
+    *,
+    challenge_id: int | None,
+    tier_id: str,
+    challenger_name: str,
+    defender_name: str,
+    challenger_contact: str,
+    admin_name: str,
+    admin_contact: str,
+    ledger_ref: str | None = None,
+) -> dict:
+    """
+    Returns:
+      - email_full: Subject + body
+      - sms: short text version
+
+    IMPORTANT:
+      - No timestamps included.
+      - 48h is based on the sent/received timestamp of the message itself.
+    """
+    cid = f"#{int(challenge_id)}" if challenge_id else "(pending id)"
+
+    # Allow blanks / placeholders
+    chal_contact = challenger_contact.strip() or "[ADD CHALLENGER CONTACT]"
+    adm_name = (admin_name or "").strip() or "Ladder Admin"
+    adm_contact = (admin_contact or "").strip() or "[ADD ADMIN CONTACT]"
+
+    subject = f"Challenge Ladder Notice — Action Required (48 hours) — {challenger_name} vs {defender_name}"
+
+    body = f"""Hi {defender_name},
+
+This message is an official Challenge Ladder notice.
+
+Challenger: {challenger_name}
+Challenger contact: {chal_contact}
+
+Response required:
+You have 48 hours from the timestamp on THIS message (email/text receipt time) to respond to BOTH:
+1) {adm_name} (Ladder Admin): {adm_contact}
+2) {challenger_name} (Challenger): {chal_contact}
+
+Reply with one of:
+- ACCEPT (and propose times to play)
+- PASS (use Monthly Pass, if available)
+
+Challenge ID: {cid}
+Tier: {tier_id}{f"\nLedger ref: {ledger_ref.strip()}" if (ledger_ref and ledger_ref.strip()) else ""}
+
+Thank you,
+{adm_name}
+""".strip()
+
+    sms = (
+        f"Ladder Challenge Notice: {challenger_name} challenged you. "
+        f"Reply within 48h (based on this message timestamp) to BOTH "
+        f"Admin ({adm_contact}) and {challenger_name} ({chal_contact}). "
+        f"Challenge {cid}."
+    )
+
+    return {"email_full": f"Subject: {subject}\n\n{body}", "sms": sms}
+
 
 
 # -------------------------
@@ -4011,9 +4083,16 @@ elif sel == "🛠️ Challenge Ladder Admin":
             with st.form("ladder_intake_form"):
                 challenger_name = st.selectbox("Challenger", [""] + roster_active["name"].tolist())
                 defender_name = st.selectbox("Defender", [""] + roster_active["name"].tolist())
+            
+                challenger_contact = st.text_input(
+                    "Challenger contact (optional — email/text/WhatsApp). Leave blank to fill later.",
+                    value=""
+                )
+            
                 ledger_ref = st.text_input("Ledger reference / notes (optional)", value="")
                 override = st.checkbox("Admin override (bypass eligibility rules)", value=False)
                 submitted = st.form_submit_button("Create Challenge")
+
             
             if submitted:
                 if not challenger_name or not defender_name:
@@ -4054,9 +4133,6 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     st.error("Cannot create challenge:\n\n- " + "\n- ".join(errors))
                     st.stop()
             
-                now = dt_utc_now()
-                accept_by = now + timedelta(hours=int(settings.get("accept_window_hours", 48) or 48))
-            
                 payload = {
                     "club_id": CLUB_ID,
                     "challenger_id": chal_id,
@@ -4066,9 +4142,36 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     "status": "PENDING_ACCEPTANCE",
                     "created_by": "admin",
                     "ledger_ref": ledger_ref.strip() or None,
-                    "accept_by": accept_by.isoformat(),
+                
+                    # IMPORTANT: do NOT start clock here
+                    "accept_by": None,
+                
                     "tier_id": str(tier_pick),
                 }
+                res = sb_retry(lambda: supabase.table("ladder_challenges").insert(payload).execute())
+                new_id = int(res.data[0]["id"]) if res.data else None
+                
+                admin_name = secret_val("LADDER_ADMIN_NAME", "Ladder Admin")
+                admin_contact = secret_val("LADDER_ADMIN_CONTACT", "")
+                
+                notice = build_challenge_notice_message(
+                    challenge_id=new_id,
+                    tier_id=str(tier_pick),
+                    challenger_name=str(challenger_name),
+                    defender_name=str(defender_name),
+                    challenger_contact=str(challenger_contact),
+                    admin_name=admin_name,
+                    admin_contact=admin_contact,
+                    ledger_ref=ledger_ref.strip() if ledger_ref else None,
+                )
+                
+                st.session_state["last_notice_challenge_id"] = new_id
+                st.session_state["last_notice_email_full"] = notice["email_full"]
+                st.session_state["last_notice_sms"] = notice["sms"]
+                
+                st.success(f"Challenge created. ID = {new_id}")
+                st.rerun()
+
             
                 try:
                     res = sb_retry(lambda: supabase.table("ladder_challenges").insert(payload).execute())
@@ -4080,6 +4183,36 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     st.error("Failed to create challenge.")
                     st.exception(e)
 
+                if st.session_state.get("last_notice_challenge_id"):
+                    ch_id = int(st.session_state["last_notice_challenge_id"])
+                
+                    st.divider()
+                    st.subheader("📩 Copy/Paste Notice Message")
+                
+                    st.text_area("Email (copy/paste)", value=str(st.session_state.get("last_notice_email_full", "") or ""), height=260)
+                    st.text_area("Text/SMS (copy/paste)", value=str(st.session_state.get("last_notice_sms", "") or ""), height=120)
+                
+                    st.caption(
+                        "No timestamps are included above. The 48-hour response window is based on the timestamp on your sent message. "
+                        "After you SEND the notice, click below to start the 48-hour timer inside the app."
+                    )
+                
+                    if st.button("✅ Start 48-hour clock (set Accept By)", key=f"start_clock_{ch_id}"):
+                        now = dt_utc_now()
+                        accept_h = int(settings.get("accept_window_hours", 48) or 48)
+                        accept_by = now + timedelta(hours=accept_h)
+                
+                        sb_retry(lambda: (
+                            supabase.table("ladder_challenges")
+                            .update({"accept_by": accept_by.isoformat()})
+                            .eq("club_id", CLUB_ID)
+                            .eq("id", ch_id)
+                            .execute()
+                        ))
+                
+                        st.success("48-hour clock started in the app.")
+                        time.sleep(0.3)
+                        st.rerun()
 
     # -------------------------
     # TAB 3: CHALLENGE DETAIL
