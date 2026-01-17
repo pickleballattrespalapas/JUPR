@@ -2304,8 +2304,11 @@ elif sel == "🎯 Match Explorer":
 elif sel == "🔍 Player Search":
     st.header("🕵️ Player Search & Audit")
 
-    # helper to read OVERALL snapshots for a specific pid from a match row
+    # -------------------------
+    # Helpers
+    # -------------------------
     def get_player_snap(match_row, pid):
+        # OVERALL snapshots stored on match row
         if match_row.get("t1_p1") == pid:
             return match_row.get("t1_p1_r"), match_row.get("t1_p1_r_end")
         if match_row.get("t1_p2") == pid:
@@ -2322,224 +2325,9 @@ elif sel == "🔍 Player Search":
         except Exception:
             return "—"
 
-        # ---------- LEAGUE (ISLAND) SNAPSHOT REPLAY FOR DISPLAY ----------
-        @st.cache_data(ttl=300)
-        def build_league_snapshot_map(league_name: str) -> dict:
-            """
-            Exception-safe league replay. Returns:
-              snap_map[match_id][player_id] = (start_elo, end_elo)
-    
-            Key design choices (to prevent crashes and missing leagues):
-            - We DO NOT rely on `.neq` / `.ilike` / `.like` (version differences can break).
-            - We fetch club matches with a narrow select and filter by league in pandas.
-            - We exclude PopUp ONLY in pandas (NULL match_type remains eligible).
-            - We seed a player’s league rating on first appearance using that match row’s overall START snapshot if available,
-              otherwise current overall from players table, otherwise 1200.
-            """
-            lg = str(league_name or "").strip()
-            if not lg:
-                return {}
-    
-            # Minimal select that should exist in ALL versions.
-            # If your matches table has the snapshot columns, we will use them for better seeding.
-            base_select = (
-                "id,date,league,match_type,score_t1,score_t2,"
-                "t1_p1,t1_p2,t2_p1,t2_p2"
-            )
-    
-            # Optional snapshot columns (may not exist on older schemas).
-            # We'll attempt to request them, but fall back safely if the select fails.
-            select_with_snaps = base_select + ",t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
-    
-            rows = []
-            used_snap_select = True
-    
-            try:
-                resp = (
-                    supabase.table("matches")
-                    .select(select_with_snaps)
-                    .eq("club_id", CLUB_ID)
-                    .order("date", desc=False)
-                    .order("id", desc=False)
-                    .execute()
-                )
-                rows = resp.data or []
-            except Exception:
-                # Fallback: run without snapshot columns
-                used_snap_select = False
-                try:
-                    resp = (
-                        supabase.table("matches")
-                        .select(base_select)
-                        .eq("club_id", CLUB_ID)
-                        .order("date", desc=False)
-                        .order("id", desc=False)
-                        .execute()
-                    )
-                    rows = resp.data or []
-                except Exception as e2:
-                    # Hard fail safe: return empty map (league charts will show “no data” rather than crash)
-                    if (not PUBLIC_MODE) and st.session_state.get("admin_logged_in", False):
-                        st.warning(f"League replay fetch failed for '{lg}': {e2}")
-                    return {}
-    
-            if not rows:
-                return {}
-    
-            df = pd.DataFrame(rows)
-            if df.empty:
-                return {}
-    
-            # Normalize league strings and match types
-            df["league"] = df.get("league", "").fillna("").astype(str).str.strip()
-            df["match_type"] = df.get("match_type", "").fillna("").astype(str).str.strip()
-    
-            # Filter to THIS league (strip-based exact match)
-            df = df[df["league"] == lg].copy()
-            if df.empty:
-                return {}
-    
-            # Exclude PopUp (NULLs are fine)
-            df = df[df["match_type"] != "PopUp"].copy()
-            if df.empty:
-                return {}
-    
-            df["date"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
-            df = df.dropna(subset=["date"])
-            if df.empty:
-                return {}
-    
-            # K factor from metadata (optional)
-            k_val = int(DEFAULT_K_FACTOR)
-            try:
-                if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
-                    hit = df_meta[df_meta["league_name"].astype(str).str.strip() == lg]
-                    if not hit.empty:
-                        k_val = int(hit.iloc[0].get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
-            except Exception:
-                k_val = int(DEFAULT_K_FACTOR)
-    
-            # Overall seed map for fallback seeding
-            overall_seed = {}
-            try:
-                if df_players_all is not None and not df_players_all.empty:
-                    overall_seed = dict(zip(df_players_all["id"].astype(int), df_players_all["rating"].astype(float)))
-            except Exception:
-                overall_seed = {}
-    
-            island = {}   # pid -> league elo
-            snap_map = {} # match_id -> {pid: (start,end)}
-    
-            def seed_from_row(row, pid: int) -> float:
-                """
-                Prefer per-match OVERALL start snapshot if present (best seed).
-                Otherwise current overall from players table, otherwise 1200.
-                """
-                pid = int(pid)
-    
-                if used_snap_select:
-                    try:
-                        if pid == int(row.get("t1_p1")):
-                            v = row.get("t1_p1_r", None)
-                        elif pid == int(row.get("t1_p2")):
-                            v = row.get("t1_p2_r", None)
-                        elif pid == int(row.get("t2_p1")):
-                            v = row.get("t2_p1_r", None)
-                        elif pid == int(row.get("t2_p2")):
-                            v = row.get("t2_p2_r", None)
-                        else:
-                            v = None
-    
-                        if v is not None and str(v).strip() != "":
-                            return float(v)
-                    except Exception:
-                        pass
-    
-                return float(overall_seed.get(pid, 1200.0))
-    
-            def get_r(row, pid: int) -> float:
-                pid = int(pid)
-                if pid not in island:
-                    island[pid] = seed_from_row(row, pid)
-                return float(island[pid])
-    
-            # Replay chronologically
-            df = df.sort_values(["date", "id"], ascending=[True, True])
-    
-            for _, m in df.iterrows():
-                try:
-                    mid = int(m["id"])
-                    p1, p2, p3, p4 = int(m["t1_p1"]), int(m["t1_p2"]), int(m["t2_p1"]), int(m["t2_p2"])
-                    s1 = int(m.get("score_t1", 0) or 0)
-                    s2 = int(m.get("score_t2", 0) or 0)
-                except Exception:
-                    continue
-    
-                if (s1 + s2) <= 0:
-                    continue
-    
-                r1, r2, r3, r4 = get_r(m, p1), get_r(m, p2), get_r(m, p3), get_r(m, p4)
-    
-                d1, d2 = calculate_hybrid_elo(
-                    (r1 + r2) / 2.0,
-                    (r3 + r4) / 2.0,
-                    s1,
-                    s2,
-                    k_factor=int(k_val),
-                    min_win_delta=float(MIN_WIN_DELTA_ELO),
-                    cap_loser_gain=float(CAP_LOSER_GAIN_ELO),
-                )
-    
-                island[p1] = r1 + float(d1)
-                island[p2] = r2 + float(d1)
-                island[p3] = r3 + float(d2)
-                island[p4] = r4 + float(d2)
-    
-                e1, e2, e3, e4 = island[p1], island[p2], island[p3], island[p4]
-    
-                snap_map[mid] = {
-                    p1: (r1, e1),
-                    p2: (r2, e2),
-                    p3: (r3, e3),
-                    p4: (r4, e4),
-                }
-    
-            return snap_map
-    
-    
-        def league_snap_for_player(match_id: int, pid: int, league_name: str):
-            """
-            Safe accessor: NEVER throws.
-            Returns (start_elo, end_elo) or (None, None).
-            """
-            try:
-                mid = int(match_id)
-                pid = int(pid)
-                lg = str(league_name or "").strip()
-            except Exception:
-                return None, None
-    
-            try:
-                snap_map = build_league_snapshot_map(lg)
-            except Exception as e:
-                if (not PUBLIC_MODE) and st.session_state.get("admin_logged_in", False):
-                    st.warning(f"League snapshot map error for '{lg}': {e}")
-                return None, None
-    
-            if not snap_map:
-                return None, None
-    
-            hit = snap_map.get(mid, {})
-            if not hit:
-                return None, None
-    
-            return hit.get(pid, (None, None))
-
-
     def explain_link_for_player_match(match: dict, pid: int) -> str:
         """
-        Explains from the selected player's perspective.
-        Uses OVERALL context to match overall movement shown here.
+        Explain from the selected player's perspective using OVERALL context.
         """
         try:
             pid = int(pid)
@@ -2573,7 +2361,192 @@ elif sel == "🔍 Player Search":
         )
 
     # -------------------------
-    # Load active players
+    # LEAGUE (ISLAND) SNAPSHOT REPLAY (DISPLAY ONLY)
+    # -------------------------
+    @st.cache_data(ttl=300)
+    def build_league_snapshot_map(league_name: str) -> dict:
+        """
+        Exception-safe league replay. Returns:
+          snap_map[match_id][player_id] = (start_elo, end_elo)
+
+        - No `.neq` / `.ilike` dependency; filter league and PopUp in pandas.
+        - Keeps NULL match_type rows (only excludes 'PopUp').
+        - Seeds first-time league appearances using overall START snapshot (t*_r) if present.
+        """
+        lg = str(league_name or "").strip()
+        if not lg:
+            return {}
+
+        base_select = (
+            "id,date,league,match_type,score_t1,score_t2,"
+            "t1_p1,t1_p2,t2_p1,t2_p2"
+        )
+        select_with_snaps = base_select + ",t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
+
+        rows = []
+        used_snap_select = True
+
+        # Try to fetch with snapshot columns; fall back if those columns don't exist
+        try:
+            resp = (
+                supabase.table("matches")
+                .select(select_with_snaps)
+                .eq("club_id", CLUB_ID)
+                .order("date", desc=False)
+                .order("id", desc=False)
+                .execute()
+            )
+            rows = resp.data or []
+        except Exception:
+            used_snap_select = False
+            try:
+                resp = (
+                    supabase.table("matches")
+                    .select(base_select)
+                    .eq("club_id", CLUB_ID)
+                    .order("date", desc=False)
+                    .order("id", desc=False)
+                    .execute()
+                )
+                rows = resp.data or []
+            except Exception:
+                return {}
+
+        if not rows:
+            return {}
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return {}
+
+        df["league"] = df.get("league", "").fillna("").astype(str).str.strip()
+        df["match_type"] = df.get("match_type", "").fillna("").astype(str).str.strip()
+
+        # exact-match league after stripping
+        df = df[df["league"] == lg].copy()
+        if df.empty:
+            return {}
+
+        # exclude PopUp only; NULLs are allowed
+        df = df[df["match_type"] != "PopUp"].copy()
+        if df.empty:
+            return {}
+
+        df["date"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
+        df = df.dropna(subset=["date"])
+        if df.empty:
+            return {}
+
+        # K factor
+        k_val = int(DEFAULT_K_FACTOR)
+        try:
+            if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+                hit = df_meta[df_meta["league_name"].astype(str).str.strip() == lg]
+                if not hit.empty:
+                    k_val = int(hit.iloc[0].get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
+        except Exception:
+            k_val = int(DEFAULT_K_FACTOR)
+
+        # Seed map from current overall if needed
+        overall_seed = {}
+        try:
+            if df_players_all is not None and not df_players_all.empty:
+                overall_seed = dict(zip(df_players_all["id"].astype(int), df_players_all["rating"].astype(float)))
+        except Exception:
+            overall_seed = {}
+
+        island = {}   # pid -> league elo
+        snap_map = {} # match_id -> {pid: (start,end)}
+
+        def seed_from_row(row, pid: int) -> float:
+            pid = int(pid)
+            if used_snap_select:
+                try:
+                    if pid == int(row.get("t1_p1")):
+                        v = row.get("t1_p1_r", None)
+                    elif pid == int(row.get("t1_p2")):
+                        v = row.get("t1_p2_r", None)
+                    elif pid == int(row.get("t2_p1")):
+                        v = row.get("t2_p1_r", None)
+                    elif pid == int(row.get("t2_p2")):
+                        v = row.get("t2_p2_r", None)
+                    else:
+                        v = None
+                    if v is not None and str(v).strip() != "":
+                        return float(v)
+                except Exception:
+                    pass
+            return float(overall_seed.get(pid, 1200.0))
+
+        def get_r(row, pid: int) -> float:
+            pid = int(pid)
+            if pid not in island:
+                island[pid] = seed_from_row(row, pid)
+            return float(island[pid])
+
+        df = df.sort_values(["date", "id"], ascending=[True, True])
+
+        for _, m in df.iterrows():
+            try:
+                mid = int(m["id"])
+                p1, p2, p3, p4 = int(m["t1_p1"]), int(m["t1_p2"]), int(m["t2_p1"]), int(m["t2_p2"])
+                s1 = int(m.get("score_t1", 0) or 0)
+                s2 = int(m.get("score_t2", 0) or 0)
+            except Exception:
+                continue
+
+            if (s1 + s2) <= 0:
+                continue
+
+            r1, r2, r3, r4 = get_r(m, p1), get_r(m, p2), get_r(m, p3), get_r(m, p4)
+
+            d1, d2 = calculate_hybrid_elo(
+                (r1 + r2) / 2.0,
+                (r3 + r4) / 2.0,
+                s1,
+                s2,
+                k_factor=int(k_val),
+                min_win_delta=float(MIN_WIN_DELTA_ELO),
+                cap_loser_gain=float(CAP_LOSER_GAIN_ELO),
+            )
+
+            island[p1] = r1 + float(d1)
+            island[p2] = r2 + float(d1)
+            island[p3] = r3 + float(d2)
+            island[p4] = r4 + float(d2)
+
+            e1, e2, e3, e4 = island[p1], island[p2], island[p3], island[p4]
+
+            snap_map[mid] = {
+                p1: (r1, e1),
+                p2: (r2, e2),
+                p3: (r3, e3),
+                p4: (r4, e4),
+            }
+
+        return snap_map
+
+    def league_snap_for_player(match_id: int, pid: int, league_name: str):
+        """
+        Safe accessor. Returns (start_elo, end_elo) or (None, None).
+        """
+        try:
+            mid = int(match_id)
+            pid = int(pid)
+            lg = str(league_name or "").strip()
+        except Exception:
+            return None, None
+
+        try:
+            snap_map = build_league_snapshot_map(lg)
+        except Exception:
+            return None, None
+
+        hit = snap_map.get(mid, {}) if snap_map else {}
+        return hit.get(pid, (None, None)) if hit else (None, None)
+
+    # -------------------------
+    # Active players
     # -------------------------
     players_resp = (
         supabase.table("players")
@@ -2589,29 +2562,21 @@ elif sel == "🔍 Player Search":
         st.stop()
 
     player_names = sorted(players_df["name"].astype(str).tolist())
-    selected_name = st.selectbox(
-        "Select a Player:",
-        [""] + player_names,
-        index=0,
-        key="player_search_name",
-    )
-
+    selected_name = st.selectbox("Select a Player:", [""] + player_names, index=0, key="player_search_name")
     if not selected_name:
         st.info("Start typing a name to search.")
         st.stop()
 
     selected_player = players_df[players_df["name"] == selected_name].iloc[0]
     p_id = int(selected_player["id"])
-
-    raw_elo = float(selected_player["rating"])
-    current_jupr_rating = elo_to_jupr(raw_elo)
+    current_jupr_rating = elo_to_jupr(float(selected_player["rating"]))
 
     c1, c2 = st.columns(2)
     c1.metric("Player Name", selected_name)
     c2.metric("Current JUPR", f"{current_jupr_rating:.3f}")
 
     # -------------------------
-    # Pull matches for player
+    # Matches for player
     # -------------------------
     resp = (
         supabase.table("matches")
@@ -2623,46 +2588,37 @@ elif sel == "🔍 Player Search":
         .execute()
     )
     matches_data = resp.data or []
-
     if not matches_data:
         st.info("This player has no recorded matches yet.")
         st.stop()
 
     # -------------------------
-    # Build processed match log rows
+    # Build processed rows
     # -------------------------
     processed = []
     for match in matches_data:
-        explain_url = ""  # ALWAYS define, so Explain never crashes
-
         s1 = int(match.get("score_t1", 0) or 0)
         s2 = int(match.get("score_t2", 0) or 0)
 
         on_team1 = (match.get("t1_p1") == p_id) or (match.get("t1_p2") == p_id)
         on_team2 = (match.get("t2_p1") == p_id) or (match.get("t2_p2") == p_id)
 
-        # Perspective score
         my_pts = s1 if on_team1 else (s2 if on_team2 else 0)
         opp_pts = s2 if on_team1 else (s1 if on_team2 else 0)
         display_score = f"{int(my_pts)}-{int(opp_pts)}"
 
-        # Result icon
         if s1 == s2:
             result_icon = "➖"
         elif (on_team1 and s1 > s2) or (on_team2 and s2 > s1):
             result_icon = "✅"
-        elif (on_team1 and s1 < s2) or (on_team2 and s2 < s1):
-            result_icon = "❌"
         else:
-            result_icon = "➖"
+            result_icon = "❌"
 
-        # Partner / opponents
         partner_name = "—"
         opp_names = "—"
         try:
             t1p1, t1p2 = int(match.get("t1_p1")), int(match.get("t1_p2"))
             t2p1, t2p2 = int(match.get("t2_p1")), int(match.get("t2_p2"))
-
             if on_team1:
                 partner_id = t1p1 if t1p2 == p_id else t1p2
                 partner_name = nm(partner_id)
@@ -2678,7 +2634,7 @@ elif sel == "🔍 Player Search":
         lg = str(match.get("league", "") or "").strip()
         mtype = str(match.get("match_type", "") or "").strip()
 
-        # OVERALL snapshots (preferred)
+        # OVERALL
         start_elo, end_elo = get_player_snap(match, p_id)
         overall_after = None
         overall_change = None
@@ -2692,20 +2648,16 @@ elif sel == "🔍 Player Search":
                 overall_change = None
                 overall_after = None
 
-        # LEAGUE snapshots (display-only)
+        # LEAGUE
         league_after = None
         league_change = None
         if lg and mtype != "PopUp" and match_id is not None:
             ls, le = league_snap_for_player(int(match_id), int(p_id), lg)
             if ls is not None and le is not None:
-                try:
-                    league_change = (float(le) - float(ls)) / 400.0
-                    league_after = float(le) / 400.0
-                except Exception:
-                    league_change = None
-                    league_after = None
+                league_change = (float(le) - float(ls)) / 400.0
+                league_after = float(le) / 400.0
 
-        # Fallback for legacy rows missing overall snapshots
+        # Legacy fallback for OVERALL if snapshots missing
         if overall_change is None:
             raw_delta = float(match.get("elo_delta", 0) or 0)
             my_team = 1 if on_team1 else 2
@@ -2716,227 +2668,141 @@ elif sel == "🔍 Player Search":
                 signed_elo = abs(raw_delta)
             else:
                 signed_elo = -abs(raw_delta)
-
             overall_change = signed_elo / 400.0
             overall_after = None
 
-        # Explain link (safe)
+        # Explain (never crash)
         try:
             explain_url = explain_link_for_player_match(match, p_id) or ""
         except Exception:
             explain_url = ""
 
-        processed.append(
-            {
-                "Date": match.get("date"),
-                "Result": result_icon,
-                "Score": display_score,
-                "Partner": partner_name,
-                "Opponents": opp_names,
-                "League": lg,
-                "Overall Δ": float(overall_change),
-                "Overall After": overall_after,
-                "League Δ": (float(league_change) if league_change is not None else None),
-                "League After": league_after,
-                "Explain": explain_url,
-            }
-        )
+        processed.append({
+            "Date": match.get("date"),
+            "Result": result_icon,
+            "Score": display_score,
+            "Partner": partner_name,
+            "Opponents": opp_names,
+            "League": lg,
+            "Overall Δ": float(overall_change),
+            "Overall After": overall_after,
+            "League Δ": (float(league_change) if league_change is not None else None),
+            "League After": league_after,
+            "Explain": explain_url,
+        })
 
-    # -------------------------
-    # DataFrame + cleanup
-    # -------------------------
     display_df = pd.DataFrame(processed)
     display_df["Date"] = pd.to_datetime(display_df["Date"], errors="coerce")
     display_df = display_df.dropna(subset=["Date"])
-
     if display_df.empty:
-        st.warning("No valid dated matches found for this player.")
+        st.info("No valid dated matches found.")
         st.stop()
 
-    # -------------------------
-    # Backfill missing OVERALL After by backtracking from current rating
-    # (League After is computed by league replay; we do NOT backfill it)
-    # -------------------------
-    if "Overall After" in display_df.columns and display_df["Overall After"].isna().any():
+    # Backfill missing overall-after by backtracking from current overall
+    if display_df["Overall After"].isna().any():
         tmp = display_df.copy()
         tmp["Undo"] = tmp["Overall Δ"].shift(1).fillna(0)
         tmp["Backtrack"] = tmp["Undo"].cumsum()
         tmp.loc[tmp["Overall After"].isna(), "Overall After"] = current_jupr_rating - tmp["Backtrack"]
         display_df = tmp.drop(columns=["Undo", "Backtrack"])
 
-    # -------------------------
-    # Helpers for charts + tables
-    # -------------------------
-    def _prep_plot_df(df_in: pd.DataFrame, after_col: str, delta_col: str) -> pd.DataFrame:
-        """
-        Returns a plotting df with columns:
-          Date, Match Sequence, After, Delta, Score, Partner, Opponents, League
-        Sorted oldest -> newest, sequence reset for the context.
-        """
-        dfp = df_in.copy()
-        if dfp.empty:
-            return dfp
+    # League list should come from the MATCHES (not from League After), so every league appears
+    lg_all = (
+        display_df["League"].fillna("").astype(str).str.strip()
+    )
+    league_list = sorted([x for x in lg_all.unique().tolist() if x and x.upper() != "OVERALL"])
 
-        # Ensure numeric
+    tab_labels = ["Overall"] + [f"League: {lg}" for lg in league_list]
+    tabs = st.tabs(tab_labels)
+
+    def render_view(df_view: pd.DataFrame, after_col: str, delta_col: str, title_prefix: str):
+        # Trend line
+        dfp = df_view.copy()
         dfp[after_col] = pd.to_numeric(dfp.get(after_col), errors="coerce")
         dfp[delta_col] = pd.to_numeric(dfp.get(delta_col), errors="coerce")
-
-        # For a rating trend line, we need After. For delta bars, Delta can be NaN (we'll drop later).
-        dfp = dfp.dropna(subset=[after_col])
-
-        dfp = dfp.sort_values("Date", ascending=True).reset_index(drop=True)
+        dfp = dfp.dropna(subset=[after_col]).sort_values("Date", ascending=True).reset_index(drop=True)
         dfp["Match Sequence"] = dfp.index + 1
-
         dfp = dfp.rename(columns={after_col: "After", delta_col: "Delta"})
-        return dfp
 
-    def _render_trend_and_delta(dfp: pd.DataFrame, rating_title: str, delta_title: str):
-        if dfp is None or dfp.empty:
-            st.info("Not enough data in this view to plot yet.")
-            return
-
-        # Limit to a reasonable window
-        tail_n = 50
-        df_tail = dfp.tail(tail_n).copy()
-
-        st.subheader(rating_title)
-        st.caption("Line is continuous only within this single rating context (no cross-league connections).")
-
-        line = (
-            alt.Chart(df_tail)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                y=alt.Y(
-                    "After:Q",
-                    axis=alt.Axis(format=".3f"),
-                    title="JUPR After Match",
-                    scale=alt.Scale(zero=False),
-                ),
-                tooltip=[
-                    alt.Tooltip("Date:T", title="Date"),
-                    alt.Tooltip("League:N", title="League"),
-                    alt.Tooltip("Score:N", title="Score"),
-                    alt.Tooltip("Partner:N", title="Partner"),
-                    alt.Tooltip("Opponents:N", title="Opponents"),
-                    alt.Tooltip("After:Q", title="After", format=".3f"),
-                    alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
-                ],
+        if dfp.empty:
+            st.info("No chartable data in this view.")
+        else:
+            st.subheader(f"{title_prefix} Rating Trend")
+            line = (
+                alt.Chart(dfp.tail(50))
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                    y=alt.Y("After:Q", axis=alt.Axis(format=".3f"), title="JUPR After Match", scale=alt.Scale(zero=False)),
+                    tooltip=[
+                        alt.Tooltip("Date:T", title="Date"),
+                        alt.Tooltip("League:N", title="League"),
+                        alt.Tooltip("Score:N", title="Score"),
+                        alt.Tooltip("Partner:N", title="Partner"),
+                        alt.Tooltip("Opponents:N", title="Opponents"),
+                        alt.Tooltip("After:Q", title="After", format=".3f"),
+                        alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
+                    ],
+                )
+                .interactive()
             )
-            .interactive()
-        )
-        st.altair_chart(line, use_container_width=True)
+            st.altair_chart(line, use_container_width=True)
 
-        st.subheader(delta_title)
-        st.caption("Per-match change for the same context shown above.")
+            st.subheader(f"{title_prefix} Match Log (Δ per match)")
+            dfb = dfp.dropna(subset=["Delta"]).tail(50)
+            if dfb.empty:
+                st.info("No per-match deltas to chart in this view.")
+            else:
+                bars = (
+                    alt.Chart(dfb)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                        y=alt.Y("Delta:Q", axis=alt.Axis(format="+.4f"), title="Δ JUPR", scale=alt.Scale(zero=True)),
+                        tooltip=[
+                            alt.Tooltip("Date:T", title="Date"),
+                            alt.Tooltip("League:N", title="League"),
+                            alt.Tooltip("Score:N", title="Score"),
+                            alt.Tooltip("After:Q", title="After", format=".3f"),
+                            alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
+                        ],
+                    )
+                    .interactive()
+                )
+                st.altair_chart(bars, use_container_width=True)
 
-        df_bars = df_tail.dropna(subset=["Delta"]).copy()
-        if df_bars.empty:
-            st.info("No per-match deltas available to chart in this view.")
-            return
-
-        bars = (
-            alt.Chart(df_bars)
-            .mark_bar()
-            .encode(
-                x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                y=alt.Y(
-                    "Delta:Q",
-                    title="Δ JUPR",
-                    axis=alt.Axis(format="+.4f"),
-                    scale=alt.Scale(zero=True),
-                ),
-                tooltip=[
-                    alt.Tooltip("Date:T", title="Date"),
-                    alt.Tooltip("League:N", title="League"),
-                    alt.Tooltip("Score:N", title="Score"),
-                    alt.Tooltip("Partner:N", title="Partner"),
-                    alt.Tooltip("Opponents:N", title="Opponents"),
-                    alt.Tooltip("After:Q", title="After", format=".3f"),
-                    alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
-                ],
-            )
-            .interactive()
-        )
-        st.altair_chart(bars, use_container_width=True)
-
-    def _render_table(df_in: pd.DataFrame, title: str):
-        st.subheader(title)
-
-        if df_in is None or df_in.empty:
-            st.info("No matches to show in this view.")
-            return
-
-        t = df_in.copy()
-        t = t.sort_values(["Date"], ascending=False)
-
+        # Table
+        st.subheader(f"{title_prefix} Match Log Table")
+        t = df_view.sort_values("Date", ascending=False).copy()
         t["Date"] = pd.to_datetime(t["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
-        # Format numbers
         t["Overall Δ"] = t["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if not pd.isna(x) else "")
         t["Overall After"] = t["Overall After"].map(lambda x: f"{float(x):.3f}" if not pd.isna(x) else "")
         t["League Δ"] = t["League Δ"].map(lambda x: f"{float(x):+.4f}" if not pd.isna(x) else "")
         t["League After"] = t["League After"].map(lambda x: f"{float(x):.3f}" if not pd.isna(x) else "")
 
-        cols = [
-            "Date",
-            "Result",
-            "Score",
-            "Partner",
-            "Opponents",
-            "League",
-            "Overall Δ",
-            "Overall After",
-            "League Δ",
-            "League After",
-            "Explain",
-        ]
-
+        cols = ["Date","Result","Score","Partner","Opponents","League","Overall Δ","Overall After","League Δ","League After","Explain"]
         st.dataframe(
             t[cols],
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "Explain": st.column_config.LinkColumn("Explain", display_text="Explain"),
-            },
+            column_config={"Explain": st.column_config.LinkColumn("Explain", display_text="Explain")},
         )
 
-    # -------------------------
-    # Build tabs: Overall + one per league (NO cross-league line connections)
-    # -------------------------
-    tmp_leagues = display_df.dropna(subset=["League After"]).copy()
-    tmp_leagues["League"] = tmp_leagues["League"].astype(str).str.strip()
-    league_list = sorted([lg for lg in tmp_leagues["League"].unique().tolist() if lg])
-
-    tab_labels = ["Overall"] + [f"League: {lg}" for lg in league_list]
-    tabs = st.tabs(tab_labels)
-
-    # ---- Overall tab ----
     with tabs[0]:
-        overall_plot_df = _prep_plot_df(display_df, after_col="Overall After", delta_col="Overall Δ")
-        _render_trend_and_delta(
-            overall_plot_df,
-            rating_title="Overall Rating Trend",
-            delta_title="Overall Match Log (Δ per match)",
-        )
-        _render_table(display_df, title="Overall Match Log (all matches)")
+        render_view(display_df, after_col="Overall After", delta_col="Overall Δ", title_prefix="Overall")
 
-    # ---- League tabs ----
-    for idx, lg in enumerate(league_list, start=1):
-        with tabs[idx]:
-            df_lg = display_df[display_df["League"].astype(str).str.strip() == str(lg)].copy()
-
-            # Keep league tab strictly to matches that have league snapshots (avoids PopUp / missing-snapshot confusion)
-            df_lg = df_lg.dropna(subset=["League After"]).copy()
-
-            league_plot_df = _prep_plot_df(df_lg, after_col="League After", delta_col="League Δ")
-            _render_trend_and_delta(
-                league_plot_df,
-                rating_title=f"League Rating Trend — {lg}",
-                delta_title=f"League Match Log (Δ per match) — {lg}",
-            )
-            _render_table(df_lg, title=f"Match Log — {lg} (league-snapshot matches only)")
-
+    for i, lg in enumerate(league_list, start=1):
+        with tabs[i]:
+            df_lg = display_df[display_df["League"].fillna("").astype(str).str.strip() == lg].copy()
+            # Only chart league snapshots if available
+            if df_lg["League After"].isna().all():
+                st.warning(
+                    f"No league-snapshot data available for '{lg}'. "
+                    f"This usually means those matches are PopUp or missing enough data to replay."
+                )
+                render_view(df_lg, after_col="Overall After", delta_col="Overall Δ", title_prefix=f"{lg} (Overall context)")
+            else:
+                render_view(df_lg.dropna(subset=["League After"]).copy(), after_col="League After", delta_col="League Δ", title_prefix=f"League: {lg}")
 
 
 elif sel == "❓ FAQs":
