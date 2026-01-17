@@ -2659,113 +2659,197 @@ elif sel == "🔍 Player Search":
     # -------------------------
     # DataFrame + cleanup
     # -------------------------
-    display_df = pd.DataFrame(processed)
-    display_df["Date"] = pd.to_datetime(display_df["Date"], errors="coerce")
-    display_df = display_df.dropna(subset=["Date"])
+                display_df = pd.DataFrame(processed)
+            display_df["Date"] = pd.to_datetime(display_df["Date"], errors="coerce")
+            display_df = display_df.dropna(subset=["Date"])
 
-    if display_df.empty:
-        st.warning("No valid dated matches found for this player.")
-        st.stop()
+            if display_df.empty:
+                st.warning("No valid dated matches found for this player.")
+                st.stop()
 
-    # -------------------------
-    # Backfill missing OVERALL After by backtracking from current rating
-    # (League After is computed separately; we do NOT backfill it)
-    # -------------------------
-    if "Overall After" in display_df.columns and display_df["Overall After"].isna().any():
-        tmp = display_df.copy()
-        # newest-first order currently; shift(1) works as you had it
-        tmp["Undo"] = tmp["Overall Δ"].shift(1).fillna(0)
-        tmp["Backtrack"] = tmp["Undo"].cumsum()
-        tmp.loc[tmp["Overall After"].isna(), "Overall After"] = current_jupr_rating - tmp["Backtrack"]
-        display_df = tmp.drop(columns=["Undo", "Backtrack"])
+            # -------------------------
+            # Backfill missing OVERALL After by backtracking from current rating
+            # (League After is computed by league replay; we do NOT backfill it)
+            # -------------------------
+            if "Overall After" in display_df.columns and display_df["Overall After"].isna().any():
+                tmp = display_df.copy()
+                tmp["Undo"] = tmp["Overall Δ"].shift(1).fillna(0)
+                tmp["Backtrack"] = tmp["Undo"].cumsum()
+                tmp.loc[tmp["Overall After"].isna(), "Overall After"] = current_jupr_rating - tmp["Backtrack"]
+                display_df = tmp.drop(columns=["Undo", "Backtrack"])
 
-    # -------------------------
-    # Trend toggle + chart
-    # -------------------------
-    trend_mode = st.radio("Trend view", ["Overall", "League (only league matches)"], horizontal=True)
+            # -------------------------
+            # Helpers for charts + tables
+            # -------------------------
+            def _prep_plot_df(df_in: pd.DataFrame, after_col: str, delta_col: str) -> pd.DataFrame:
+                """
+                Returns a plotting df with columns:
+                  Date, Match Sequence, After, Delta, Score, Partner, Opponents, League
+                Sorted oldest -> newest, sequence reset for the context.
+                """
+                dfp = df_in.copy()
+                if dfp.empty:
+                    return dfp
 
-    if trend_mode == "Overall":
-        graph_base = display_df[["Date", "Overall After", "Overall Δ", "Score", "League"]].copy()
-        graph_base = graph_base.rename(columns={"Overall After": "After", "Overall Δ": "Delta"})
-        graph_base = graph_base.dropna(subset=["After"])
-        y_title = "Overall JUPR (After Match)"
-        tip_after = "After"
-        tip_delta = "Delta"
-    else:
-        graph_base = display_df.dropna(subset=["League After"]).copy()
-        graph_base["After"] = graph_base["League After"]
-        graph_base["Delta"] = graph_base["League Δ"]
-        y_title = "League JUPR (After Match) — only where league snapshots exist"
-        tip_after = "After"
-        tip_delta = "Delta"
+                # Ensure numeric
+                dfp[after_col] = pd.to_numeric(dfp.get(after_col), errors="coerce")
+                dfp[delta_col] = pd.to_numeric(dfp.get(delta_col), errors="coerce")
 
-    # oldest -> newest for chart sequencing
-    graph_df = graph_base.sort_values(["Date"], ascending=True).reset_index(drop=True)
-    graph_df["Match Sequence"] = graph_df.index + 1
+                # For a rating trend line, we need After. For delta bars, Delta can be NaN (we'll drop later).
+                dfp = dfp.dropna(subset=[after_col])
 
-    st.subheader("Rating Trend")
-    st.caption("A single line only makes sense inside one rating context. Use the toggle above.")
+                dfp = dfp.sort_values("Date", ascending=True).reset_index(drop=True)
+                dfp["Match Sequence"] = dfp.index + 1
 
-    if not graph_df.empty:
-        chart = (
-            alt.Chart(graph_df.tail(50))
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                y=alt.Y(
-                    "After:Q",
-                    axis=alt.Axis(format=".3f"),
-                    title=y_title,
-                    scale=alt.Scale(zero=False),
-                ),
-                tooltip=[
-                    alt.Tooltip("Date:T", title="Date"),
-                    alt.Tooltip("League:N", title="League"),
-                    alt.Tooltip("Score:N", title="Score"),
-                    alt.Tooltip("After:Q", title="After", format=".3f"),
-                    alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
-                ],
-            )
-            .interactive()
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Not enough data in this view to plot a trend yet.")
+                dfp = dfp.rename(columns={after_col: "After", delta_col: "Delta"})
+                return dfp
 
-    # -------------------------
-    # Table
-    # -------------------------
-    st.subheader("Match Log")
+            def _render_trend_and_delta(dfp: pd.DataFrame, rating_title: str, delta_title: str):
+                if dfp is None or dfp.empty:
+                    st.info("Not enough data in this view to plot yet.")
+                    return
 
-    table_df = display_df.copy()
-    table_df["Date"] = table_df["Date"].dt.strftime("%Y-%m-%d")
-    table_df["Overall Δ"] = table_df["Overall Δ"].map(lambda x: f"{float(x):+.4f}")
-    table_df["Overall After"] = table_df["Overall After"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
-    table_df["League Δ"] = table_df["League Δ"].map(lambda x: "" if pd.isna(x) else f"{float(x):+.4f}")
-    table_df["League After"] = table_df["League After"].map(lambda x: "" if pd.isna(x) else f"{float(x):.3f}")
+                # Limit to a reasonable window
+                tail_n = 50
+                df_tail = dfp.tail(tail_n).copy()
 
-    cols = [
-        "Date",
-        "Result",
-        "Score",
-        "Partner",
-        "Opponents",
-        "League",
-        "Overall Δ",
-        "Overall After",
-        "League Δ",
-        "League After",
-        "Explain",
-    ]
+                st.subheader(rating_title)
+                st.caption("Line is continuous only within this single rating context (no cross-league connections).")
 
-    st.dataframe(
-        table_df[cols],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Explain": st.column_config.LinkColumn("Explain", display_text="Explain"),
-        },
-    )
+                line = (
+                    alt.Chart(df_tail)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                        y=alt.Y(
+                            "After:Q",
+                            axis=alt.Axis(format=".3f"),
+                            title="JUPR After Match",
+                            scale=alt.Scale(zero=False),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Date:T", title="Date"),
+                            alt.Tooltip("League:N", title="League"),
+                            alt.Tooltip("Score:N", title="Score"),
+                            alt.Tooltip("Partner:N", title="Partner"),
+                            alt.Tooltip("Opponents:N", title="Opponents"),
+                            alt.Tooltip("After:Q", title="After", format=".3f"),
+                            alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
+                        ],
+                    )
+                    .interactive()
+                )
+                st.altair_chart(line, use_container_width=True)
+
+                st.subheader(delta_title)
+                st.caption("Per-match change for the same context shown above.")
+
+                df_bars = df_tail.dropna(subset=["Delta"]).copy()
+                if df_bars.empty:
+                    st.info("No per-match deltas available to chart in this view.")
+                    return
+
+                bars = (
+                    alt.Chart(df_bars)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                        y=alt.Y(
+                            "Delta:Q",
+                            title="Δ JUPR",
+                            axis=alt.Axis(format="+.4f"),
+                            scale=alt.Scale(zero=True),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Date:T", title="Date"),
+                            alt.Tooltip("League:N", title="League"),
+                            alt.Tooltip("Score:N", title="Score"),
+                            alt.Tooltip("Partner:N", title="Partner"),
+                            alt.Tooltip("Opponents:N", title="Opponents"),
+                            alt.Tooltip("After:Q", title="After", format=".3f"),
+                            alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
+                        ],
+                    )
+                    .interactive()
+                )
+                st.altair_chart(bars, use_container_width=True)
+
+            def _render_table(df_in: pd.DataFrame, title: str):
+                st.subheader(title)
+
+                if df_in is None or df_in.empty:
+                    st.info("No matches to show in this view.")
+                    return
+
+                t = df_in.copy()
+                t = t.sort_values(["Date"], ascending=False)
+
+                t["Date"] = pd.to_datetime(t["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+                # Format numbers
+                t["Overall Δ"] = t["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if not pd.isna(x) else "")
+                t["Overall After"] = t["Overall After"].map(lambda x: f"{float(x):.3f}" if not pd.isna(x) else "")
+                t["League Δ"] = t["League Δ"].map(lambda x: f"{float(x):+.4f}" if not pd.isna(x) else "")
+                t["League After"] = t["League After"].map(lambda x: f"{float(x):.3f}" if not pd.isna(x) else "")
+
+                cols = [
+                    "Date",
+                    "Result",
+                    "Score",
+                    "Partner",
+                    "Opponents",
+                    "League",
+                    "Overall Δ",
+                    "Overall After",
+                    "League Δ",
+                    "League After",
+                    "Explain",
+                ]
+
+                st.dataframe(
+                    t[cols],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Explain": st.column_config.LinkColumn("Explain", display_text="Explain"),
+                    },
+                )
+
+            # -------------------------
+            # Build tabs: Overall + one per league (NO cross-league line connections)
+            # -------------------------
+            tmp_leagues = display_df.dropna(subset=["League After"]).copy()
+            tmp_leagues["League"] = tmp_leagues["League"].astype(str).str.strip()
+            league_list = sorted([lg for lg in tmp_leagues["League"].unique().tolist() if lg])
+
+            tab_labels = ["Overall"] + [f"League: {lg}" for lg in league_list]
+            tabs = st.tabs(tab_labels)
+
+            # ---- Overall tab ----
+            with tabs[0]:
+                overall_plot_df = _prep_plot_df(display_df, after_col="Overall After", delta_col="Overall Δ")
+                _render_trend_and_delta(
+                    overall_plot_df,
+                    rating_title="Overall Rating Trend",
+                    delta_title="Overall Match Log (Δ per match)",
+                )
+                _render_table(display_df, title="Overall Match Log (all matches)")
+
+            # ---- League tabs ----
+            for idx, lg in enumerate(league_list, start=1):
+                with tabs[idx]:
+                    df_lg = display_df[display_df["League"].astype(str).str.strip() == str(lg)].copy()
+
+                    # Keep league tab strictly to matches that have league snapshots (avoids PopUp / missing-snapshot confusion)
+                    df_lg = df_lg.dropna(subset=["League After"]).copy()
+
+                    league_plot_df = _prep_plot_df(df_lg, after_col="League After", delta_col="League Δ")
+                    _render_trend_and_delta(
+                        league_plot_df,
+                        rating_title=f"League Rating Trend — {lg}",
+                        delta_title=f"League Match Log (Δ per match) — {lg}",
+                    )
+                    _render_table(df_lg, title=f"Match Log — {lg} (league-snapshot matches only)")
 
 
 
