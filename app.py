@@ -2322,52 +2322,66 @@ elif sel == "🔍 Player Search":
         except Exception:
             return "—"
 
-    # ---------- LEAGUE (ISLAND) SNAPSHOT REPLAY FOR DISPLAY ----------
+        # ---------- LEAGUE (ISLAND) SNAPSHOT REPLAY FOR DISPLAY ----------
         @st.cache_data(ttl=300)
         def build_league_snapshot_map(league_name: str) -> dict:
             """
-            Replays a single league in chronological order and returns:
+            Exception-safe league replay. Returns:
               snap_map[match_id][player_id] = (start_elo, end_elo)
     
-            Notes / fixes:
-            - We do NOT filter match_type at the Supabase level because `neq` drops NULL rows.
-            - We filter PopUp in pandas so NULL match_type rows are treated as eligible.
-            - Players are seeded on FIRST appearance using the match row’s overall START snapshot (t*_r) when present.
+            Key design choices (to prevent crashes and missing leagues):
+            - We DO NOT rely on `.neq` / `.ilike` / `.like` (version differences can break).
+            - We fetch club matches with a narrow select and filter by league in pandas.
+            - We exclude PopUp ONLY in pandas (NULL match_type remains eligible).
+            - We seed a player’s league rating on first appearance using that match row’s overall START snapshot if available,
+              otherwise current overall from players table, otherwise 1200.
             """
             lg = str(league_name or "").strip()
             if not lg:
                 return {}
     
-            sel = (
+            # Minimal select that should exist in ALL versions.
+            # If your matches table has the snapshot columns, we will use them for better seeding.
+            base_select = (
                 "id,date,league,match_type,score_t1,score_t2,"
-                "t1_p1,t1_p2,t2_p1,t2_p2,"
-                "t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
+                "t1_p1,t1_p2,t2_p1,t2_p2"
             )
     
-            # Try exact league match first
-            resp = (
-                supabase.table("matches")
-                .select(sel)
-                .eq("club_id", CLUB_ID)
-                .eq("league", lg)
-                .order("date", desc=False)
-                .order("id", desc=False)
-                .execute()
-            )
-            rows = resp.data or []
+            # Optional snapshot columns (may not exist on older schemas).
+            # We'll attempt to request them, but fall back safely if the select fails.
+            select_with_snaps = base_select + ",t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r"
     
-            # Fallback: tolerate trailing spaces / slight differences (prefix match)
-            if not rows:
+            rows = []
+            used_snap_select = True
+    
+            try:
                 resp = (
                     supabase.table("matches")
-                    .select(sel)
+                    .select(select_with_snaps)
                     .eq("club_id", CLUB_ID)
-                    .ilike("league", f"{lg}%")
                     .order("date", desc=False)
                     .order("id", desc=False)
                     .execute()
                 )
                 rows = resp.data or []
+            except Exception:
+                # Fallback: run without snapshot columns
+                used_snap_select = False
+                try:
+                    resp = (
+                        supabase.table("matches")
+                        .select(base_select)
+                        .eq("club_id", CLUB_ID)
+                        .order("date", desc=False)
+                        .order("id", desc=False)
+                        .execute()
+                    )
+                    rows = resp.data or []
+                except Exception as e2:
+                    # Hard fail safe: return empty map (league charts will show “no data” rather than crash)
+                    if (not PUBLIC_MODE) and st.session_state.get("admin_logged_in", False):
+                        st.warning(f"League replay fetch failed for '{lg}': {e2}")
+                    return {}
     
             if not rows:
                 return {}
@@ -2376,28 +2390,36 @@ elif sel == "🔍 Player Search":
             if df.empty:
                 return {}
     
-            # Normalize match_type and drop PopUps here (so NULLs are kept)
-            if "match_type" not in df.columns:
-                df["match_type"] = ""
-            df["match_type"] = df["match_type"].fillna("").astype(str).str.strip()
-            df = df[df["match_type"] != "PopUp"]
+            # Normalize league strings and match types
+            df["league"] = df.get("league", "").fillna("").astype(str).str.strip()
+            df["match_type"] = df.get("match_type", "").fillna("").astype(str).str.strip()
     
-            df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
+            # Filter to THIS league (strip-based exact match)
+            df = df[df["league"] == lg].copy()
+            if df.empty:
+                return {}
+    
+            # Exclude PopUp (NULLs are fine)
+            df = df[df["match_type"] != "PopUp"].copy()
+            if df.empty:
+                return {}
+    
+            df["date"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
             df = df.dropna(subset=["date"])
             if df.empty:
                 return {}
     
-            # League K factor
+            # K factor from metadata (optional)
             k_val = int(DEFAULT_K_FACTOR)
             try:
-                if df_meta is not None and not df_meta.empty:
+                if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
                     hit = df_meta[df_meta["league_name"].astype(str).str.strip() == lg]
                     if not hit.empty:
                         k_val = int(hit.iloc[0].get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
             except Exception:
                 k_val = int(DEFAULT_K_FACTOR)
     
-            # Fallback seed if snapshots missing
+            # Overall seed map for fallback seeding
             overall_seed = {}
             try:
                 if df_players_all is not None and not df_players_all.empty:
@@ -2409,27 +2431,29 @@ elif sel == "🔍 Player Search":
             snap_map = {} # match_id -> {pid: (start,end)}
     
             def seed_from_row(row, pid: int) -> float:
-                """Seed on first appearance using overall START snapshot if present; otherwise current overall or 1200."""
+                """
+                Prefer per-match OVERALL start snapshot if present (best seed).
+                Otherwise current overall from players table, otherwise 1200.
+                """
                 pid = int(pid)
     
-                v = None
-                try:
-                    if pid == int(row["t1_p1"]):
-                        v = row.get("t1_p1_r", None)
-                    elif pid == int(row["t1_p2"]):
-                        v = row.get("t1_p2_r", None)
-                    elif pid == int(row["t2_p1"]):
-                        v = row.get("t2_p1_r", None)
-                    elif pid == int(row["t2_p2"]):
-                        v = row.get("t2_p2_r", None)
-                except Exception:
-                    v = None
+                if used_snap_select:
+                    try:
+                        if pid == int(row.get("t1_p1")):
+                            v = row.get("t1_p1_r", None)
+                        elif pid == int(row.get("t1_p2")):
+                            v = row.get("t1_p2_r", None)
+                        elif pid == int(row.get("t2_p1")):
+                            v = row.get("t2_p1_r", None)
+                        elif pid == int(row.get("t2_p2")):
+                            v = row.get("t2_p2_r", None)
+                        else:
+                            v = None
     
-                try:
-                    if v is not None and str(v) != "":
-                        return float(v)
-                except Exception:
-                    pass
+                        if v is not None and str(v).strip() != "":
+                            return float(v)
+                    except Exception:
+                        pass
     
                 return float(overall_seed.get(pid, 1200.0))
     
@@ -2446,7 +2470,8 @@ elif sel == "🔍 Player Search":
                 try:
                     mid = int(m["id"])
                     p1, p2, p3, p4 = int(m["t1_p1"]), int(m["t1_p2"]), int(m["t2_p1"]), int(m["t2_p2"])
-                    s1, s2 = int(m.get("score_t1", 0) or 0), int(m.get("score_t2", 0) or 0)
+                    s1 = int(m.get("score_t1", 0) or 0)
+                    s2 = int(m.get("score_t2", 0) or 0)
                 except Exception:
                     continue
     
@@ -2480,27 +2505,36 @@ elif sel == "🔍 Player Search":
                 }
     
             return snap_map
+    
+    
+        def league_snap_for_player(match_id: int, pid: int, league_name: str):
+            """
+            Safe accessor: NEVER throws.
+            Returns (start_elo, end_elo) or (None, None).
+            """
+            try:
+                mid = int(match_id)
+                pid = int(pid)
+                lg = str(league_name or "").strip()
+            except Exception:
+                return None, None
+    
+            try:
+                snap_map = build_league_snapshot_map(lg)
+            except Exception as e:
+                if (not PUBLIC_MODE) and st.session_state.get("admin_logged_in", False):
+                    st.warning(f"League snapshot map error for '{lg}': {e}")
+                return None, None
+    
+            if not snap_map:
+                return None, None
+    
+            hit = snap_map.get(mid, {})
+            if not hit:
+                return None, None
+    
+            return hit.get(pid, (None, None))
 
-
-    def league_snap_for_player(match_id: int, pid: int, league_name: str):
-        """
-        Returns (start_elo, end_elo) for pid in that league match_id, or (None, None).
-        """
-        try:
-            mid = int(match_id)
-            pid = int(pid)
-        except Exception:
-            return None, None
-
-        snap_map = build_league_snapshot_map(str(league_name or "").strip())
-        if not snap_map:
-            return None, None
-
-        hit = snap_map.get(mid, {})
-        if not hit:
-            return None, None
-
-        return hit.get(pid, (None, None))
 
     def explain_link_for_player_match(match: dict, pid: int) -> str:
         """
