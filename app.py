@@ -5188,7 +5188,7 @@ elif sel == "👥 Player Editor":
             summary["matches_updated"][col] = cnt_before
 
         # 2) Ladder tables (best-effort; if missing in schema, skip)
-        ladder_updates = [
+        ladder_updates = []
             ("ladder_roster", "player_id"),
             ("ladder_player_flags", "player_id"),
             ("ladder_pass_usage", "player_id"),
