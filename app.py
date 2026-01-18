@@ -890,6 +890,76 @@ def process_matches(match_list, name_to_id, df_players_all, df_leagues, df_meta)
 
 import math
 
+
+def suggest_court_sizes(total_players: int) -> dict:
+    """
+    Returns a suggestion dict:
+      {
+        "ok": bool,
+        "sizes": list[int],     # e.g. [4,4,4,4,4,4,4,4]
+        "bench": int,           # players not assigned if exact-fit impossible
+        "note": str,            # short explanation
+      }
+
+    Policy:
+      - Courts may be size 4 or 5 only.
+      - Prefer exact-fit (bench = 0).
+      - Prefer fewer 5-player courts (i.e., more 4s).
+      - Special preference: if total is exactly 20 or 40, strongly prefer all-4s.
+      - If no exact-fit exists, choose minimal bench, then prefer more 4s.
+    """
+    n = int(total_players or 0)
+    if n <= 0:
+        return {"ok": False, "sizes": [], "bench": 0, "note": "No players."}
+
+    # Hard preference cases you explicitly requested
+    if n in (20, 40) and n % 4 == 0:
+        sizes = [4] * (n // 4)
+        return {"ok": True, "sizes": sizes, "bench": 0, "note": f"Preferred all-4s for total {n}."}
+
+    candidates = []
+
+    # Search reasonable range of court counts
+    # Minimum courts if all 5s; maximum courts if all 4s
+    min_courts = (n + 5 - 1) // 5
+    max_courts = n // 4  # if exact; otherwise still ok for near-fit search
+
+    # We'll allow a little extra range for near-fit cases
+    for courts in range(max(1, min_courts - 2), max_courts + 3):
+        for fives in range(0, courts + 1):
+            fours = courts - fives
+            capacity = 4 * fours + 5 * fives
+
+            # We do NOT allow "over capacity" assignments.
+            # bench = players left out (capacity == n means perfect; capacity < n means impossible with that courts/fives)
+            if capacity > n:
+                continue
+
+            bench = n - capacity
+
+            # scoring: prioritize minimal bench, then fewer fives (more 4s), then fewer courts (optional)
+            score = (bench, fives, courts)
+
+            candidates.append((score, courts, fours, fives, bench))
+
+    if not candidates:
+        return {"ok": False, "sizes": [], "bench": n, "note": "No feasible setup with 4/5 courts."}
+
+    # Best candidate by our scoring rules
+    candidates.sort(key=lambda x: x[0])
+    best = candidates[0]
+    _, courts, fours, fives, bench = best
+
+    sizes = ([4] * fours) + ([5] * fives)
+
+    # A small UX-friendly note
+    if bench == 0:
+        note = f"Exact fit: {fours} court(s) of 4 and {fives} court(s) of 5."
+    else:
+        note = f"Closest fit: {fours} court(s) of 4 and {fives} court(s) of 5, with {bench} bench."
+
+    return {"ok": True, "sizes": sizes, "bench": bench, "note": note}
+
 def to_int_or_neg1(x):
     """Convert to int if possible; return -1 for None/NaN/blank/bad values."""
     try:
@@ -3345,13 +3415,41 @@ if sel == "🏟️ League Manager":
             total_p = len(st.session_state.ladder_roster)
             st.info(f"Total Players: {total_p}")
 
-            num_courts = st.number_input("Number of Courts", 1, 10, key="ladder_num_courts", value=st.session_state.get("ladder_num_courts", 3))
-            court_sizes = []
-            cols = st.columns(int(num_courts))
-            for i in range(int(num_courts)):
-                with cols[i]:
-                    s = st.number_input(f"Ct {i+1} Size", 4, 12, 4, key=f"cs_{i}")
-                    court_sizes.append(int(s))
+            
+
+            st.markdown("#### Auto court setup (4s and 5s only)")
+
+            auto = suggest_court_sizes(total_p)
+            if auto["ok"]:
+                st.info(f"Suggested setup: {auto['note']}")
+            else:
+                st.warning("No auto setup available.")
+            
+            use_auto = st.checkbox("Use suggested setup", value=True, key="ladder_use_auto_courts")
+            
+            if use_auto and auto["ok"]:
+                court_sizes = auto["sizes"]
+                num_courts = len(court_sizes)
+            
+                if auto.get("bench", 0) > 0:
+                    st.warning(
+                        f"Auto setup requires {auto['bench']} bench player(s). "
+                        "If you must have no bench, you will need to adjust roster or allow other court sizes."
+                    )
+            else:
+                num_courts = st.number_input(
+                    "Number of Courts",
+                    1, 10,
+                    key="ladder_num_courts",
+                    value=st.session_state.get("ladder_num_courts", 3),
+                )
+                court_sizes = []
+                cols = st.columns(int(num_courts))
+                for i in range(int(num_courts)):
+                    with cols[i]:
+                        s = st.number_input(f"Ct {i+1} Size", 4, 12, 4, key=f"cs_{i}")
+                        court_sizes.append(int(s))
+
 
             if sum(court_sizes) != total_p:
                 st.error(f"Court sizes sum to {sum(court_sizes)}, but you have {total_p} players.")
