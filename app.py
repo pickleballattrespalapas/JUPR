@@ -3092,9 +3092,11 @@ def sync_ladder_court_sizes_from_roster(roster_df: pd.DataFrame):
 def roster_df_to_courts(roster_df: pd.DataFrame) -> list[dict]:
     df = roster_df.copy()
 
-    # Normalize types
-    df["court"] = df["court"].astype(int)
-    df["player_id"] = df["player_id"].astype(int)
+    # Normalize types (defensive)
+    if "court" in df.columns:
+        df["court"] = df["court"].astype(int)
+    if "player_id" in df.columns:
+        df["player_id"] = df["player_id"].astype(int)
 
     # Ensure stable ordering within court
     if "slot" in df.columns:
@@ -3103,22 +3105,47 @@ def roster_df_to_courts(roster_df: pd.DataFrame) -> list[dict]:
     else:
         df = df.sort_values(["court", "rating"], ascending=[True, False])
 
+    # Prefer the configured court structure from the prior screen
+    sizes = st.session_state.get("ladder_court_sizes", None)
+    if isinstance(sizes, list) and len(sizes) > 0:
+        court_nums = list(range(1, len(sizes) + 1))
+    else:
+        court_nums = sorted(df["court"].unique().tolist()) if (not df.empty and "court" in df.columns) else [1]
+
     courts: list[dict] = []
-    for c in sorted(df["court"].unique().tolist()):
-        cdf = df[df["court"] == c]
-        players = [
+    for c in court_nums:
+        cdf = df[df["court"] == int(c)].copy() if (not df.empty and "court" in df.columns) else pd.DataFrame()
+        players = []
+        if not cdf.empty:
+            for _, r in cdf.iterrows():
+                players.append(
+                    {
+                        "player_id": str(int(r["player_id"])),      # draggableId must be string
+                        "name": str(r["name"]),
+                        "rating": float(r.get("rating", 1200.0)) / 400.0,  # display JUPR
+                    }
+                )
+
+        # Optional metadata for the frontend (safe if ignored)
+        target_size = None
+        try:
+            if isinstance(sizes, list) and (0 <= (int(c) - 1) < len(sizes)):
+                target_size = int(sizes[int(c) - 1])
+        except Exception:
+            target_size = None
+
+        courts.append(
             {
-                "player_id": str(int(r["player_id"])),  # draggableId must be string
-                "name": str(r["name"]),
-                "rating": float(r.get("rating", 1200.0)) / 400.0,  # display JUPR
+                "court_id": f"Court {int(c)}",
+                "players": players,
+                "target_size": target_size,  # frontend may ignore; harmless
             }
-            for _, r in cdf.iterrows()
-        ]
-        courts.append({"court_id": f"Court {c}", "players": players})
+        )
 
     # Always include Bench
     courts.append({"court_id": "Bench", "players": []})
     return courts
+
 
 
 
@@ -3348,15 +3375,25 @@ if sel == "🏟️ League Manager":
 
 
                     final_roster = pd.DataFrame(final_assignments)
-
                     final_roster = final_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
-
                     final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
-
+                    
+                    # Store roster + configured sizes
                     st.session_state.ladder_live_roster = final_roster[["player_id","name","rating","court","slot"]].copy()
                     st.session_state.ladder_court_sizes = court_sizes
+                    
+                    # Build a printable/export-friendly sheet
+                    print_df = final_roster.copy()
+                    print_df["JUPR"] = (print_df["rating"].astype(float) / 400.0).round(3)
+                    print_df = print_df.sort_values(["court", "slot"], ascending=[True, True])
+                    print_df = print_df[["court", "slot", "name", "JUPR"]].rename(
+                        columns={"court": "Court", "slot": "Slot", "name": "Player", "JUPR": "JUPR"}
+                    )
+                    st.session_state.ladder_print_sheet = print_df
+                    
                     st.session_state.ladder_state = "CONFIRM_START"
                     st.rerun()
+
 
 
                 # ---- 3.5) CONFIRM START ----
@@ -3552,12 +3589,18 @@ if sel == "🏟️ League Manager":
                 "current_schedule" not in st.session_state
                 or st.session_state.get("current_schedule_round") != current_r
             ):
+                # Always derive active courts from the roster itself
+                roster_now = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+                st.session_state.ladder_live_roster = roster_now
+            
+                court_nums = sorted(roster_now["court"].astype(int).unique().tolist())
+            
+                # Keep ladder_court_sizes in sync from the roster (source of truth)
+                sync_ladder_court_sizes_from_roster(roster_now)
+            
                 schedule = []
-                for c_idx in range(len(st.session_state.ladder_court_sizes)):
-                    c_num = c_idx + 1
-                    court_df = st.session_state.ladder_live_roster[
-                        st.session_state.ladder_live_roster["court"] == c_num
-                    ].copy()
+                for c_num in court_nums:
+                    court_df = roster_now[roster_now["court"] == int(c_num)].copy()
             
                     if "slot" in court_df.columns:
                         court_df = court_df.sort_values("slot")
@@ -3565,10 +3608,12 @@ if sel == "🏟️ League Manager":
                     players = get_court_player_ids(court_df)
                     fmt = f"{len(players)}-Player"
                     matches = get_match_schedule(fmt, players)
-                    schedule.append({"c": c_num, "matches": matches})
+            
+                    schedule.append({"c": int(c_num), "matches": matches})
             
                 st.session_state.current_schedule = schedule
                 st.session_state.current_schedule_round = current_r
+
 
 
             all_results = []
