@@ -3408,6 +3408,24 @@ if sel == "🏟️ League Manager":
             st.markdown("#### Step 4: Court Board Preview (Drag & Drop)")
             st.caption("Use the Court Board to make final adjustments. Bench players will not be scheduled.")
 
+            # --- Printable court sheet (download + quick print view) ---
+            ps = st.session_state.get("ladder_print_sheet", None)
+            if isinstance(ps, pd.DataFrame) and not ps.empty:
+                st.markdown("#### 🖨️ Printable Court Setup Sheet")
+                st.caption("Download as CSV and print, or use the table below as your paper reference.")
+            
+                csv_bytes = ps.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download Court Sheet (CSV)",
+                    data=csv_bytes,
+                    file_name=f"court_sheet_{st.session_state.get('saved_ladder_lg','league')}_{st.session_state.get('saved_ladder_wk','week')}.csv",
+                    mime="text/csv",
+                )
+            
+                # Big readable table (easy to print from browser)
+                st.dataframe(ps, use_container_width=True, hide_index=True)
+
+
             # Build roster/courts payload for the board
             roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
             roster_df = compress_courts(roster_df)
