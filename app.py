@@ -176,6 +176,33 @@ def build_standings_link(league_name: str, public: bool = True) -> str:
 
     q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
     return f"{base}/?{q}" if base else f"?{q}"
+    
+def build_player_profile_link(
+    player_id: int,
+    public: bool = False,
+) -> str:
+    """
+    Builds a deep link to the Player Search page with a specific player preselected.
+
+    Params:
+      - page=players
+      - pid=<player_id>
+      - public=1 (optional)
+    """
+    try:
+        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
+    except Exception:
+        base = ""
+
+    params = {
+        "page": "players",
+        "pid": str(int(player_id)),
+    }
+    if public:
+        params["public"] = "1"
+
+    q = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
+    return f"{base}/?{q}" if base else f"?{q}"
 
 def build_match_explorer_link(
     ctx: str,
@@ -2013,17 +2040,79 @@ if sel == "🏆 Leaderboards":
                 st.divider()
 
         st.markdown("### 📊 Standings")
+
         final_view = display_df.sort_values("rating", ascending=False).copy()
-        final_view["Rank"] = range(1, len(final_view) + 1)
-        final_view["Rank"] = final_view["Rank"].apply(
-            lambda r: "🥇" if r == 1 else "🥈" if r == 2 else "🥉" if r == 3 else str(r)
-        )
+        
+        # Attach a canonical player id column so we can build profile links
+        if target_league == "OVERALL":
+            # df_players rows are players table, so the id column is "id"
+            if "id" in final_view.columns:
+                final_view["_pid"] = final_view["id"].astype(int)
+            else:
+                final_view["_pid"] = None
+        else:
+            # league_ratings rows use "player_id"
+            if "player_id" in final_view.columns:
+                final_view["_pid"] = final_view["player_id"].astype(int)
+            else:
+                final_view["_pid"] = None
+        
+        final_view["RankNum"] = range(1, len(final_view) + 1)
+        def _rank_badge(r):
+            r = int(r)
+            if r == 1: return "🥇"
+            if r == 2: return "🥈"
+            if r == 3: return "🥉"
+            return str(r)
+        
+        final_view["Rank"] = final_view["RankNum"].apply(_rank_badge)
         final_view["Gain"] = (final_view["rating_gain"].astype(float) / 400.0).map("{:+.3f}".format)
+        
+        # Build name links
+        def _name_link(row):
+            nm = str(row.get("name", "—") or "—")
+            pid = row.get("_pid", None)
+            if pid is None or (isinstance(pid, float) and pd.isna(pid)):
+                return nm
+            url = build_player_profile_link(int(pid), public=PUBLIC_MODE)
+            # HTML-escape name minimally (avoid breaking markup)
+            safe_nm = (
+                nm.replace("&", "&amp;")
+                  .replace("<", "&lt;")
+                  .replace(">", "&gt;")
+            )
+            return f"<a href='{url}' target='_self'>{safe_nm}</a>"
+        
+        final_view["Player"] = final_view.apply(_name_link, axis=1)
+        
+        # Format display columns
+        final_view["JUPR"] = final_view["rating"].astype(float) / 400.0
+        mp = final_view["matches_played"].replace(0, 1).astype(float)
+        final_view["Win %"] = (final_view["wins"].astype(float) / mp) * 100.0
+        
+        # Limit rows if you want a cleaner public page (optional)
+        # final_view = final_view.head(200)
+        
+        # Render an HTML table so the name link is clickable
+        tbl = final_view[["Rank", "Player", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]].copy()
+        tbl["JUPR"] = tbl["JUPR"].map(lambda x: f"{float(x):.3f}")
+        tbl["Win %"] = tbl["Win %"].map(lambda x: f"{float(x):.1f}%")
+        tbl = tbl.rename(columns={"matches_played": "MP", "wins": "W", "losses": "L"})
+        
+        html = tbl.to_html(index=False, escape=False)
+        st.markdown(
+            f"""
+            <style>
+              table {{ width: 100%; border-collapse: collapse; }}
+              th, td {{ padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.08); text-align: left; }}
+              th {{ font-weight: 700; }}
+              a {{ text-decoration: underline; }}
+            </style>
+            {html}
+            """,
+            unsafe_allow_html=True,
+        )
 
-        cols_to_show = ["Rank", "name", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]
-        cols_to_show = [c for c in cols_to_show if c in final_view.columns]
-
-        st.dataframe(final_view[cols_to_show], use_container_width=True, hide_index=True)
 
 
 elif sel == "🎯 Match Explorer":
@@ -2704,6 +2793,15 @@ elif sel == "🔍 Player Search":
         st.stop()
 
     player_names = sorted(players_df["name"].astype(str).tolist())
+    # --- Deep-link support: ?page=players&pid=<id> ---
+    pid_q = qp_get("pid", "").strip()
+    if pid_q.isdigit():
+        pid_int = int(pid_q)
+        # If that player exists, preselect them
+        hit = players_df[players_df["id"].astype(int) == pid_int]
+        if not hit.empty:
+            st.session_state["player_search_name"] = str(hit.iloc[0]["name"])
+
     selected_name = st.selectbox("Select a Player:", [""] + player_names, index=0, key="player_search_name")
     if not selected_name:
         st.info("Start typing a name to search.")
@@ -2715,7 +2813,56 @@ elif sel == "🔍 Player Search":
 
     c1, c2 = st.columns(2)
     c1.metric("Player Name", selected_name)
-    c2.metric("Current JUPR", f"{current_jupr_rating:.3f}")
+    c2.metric("Overall JUPR", f"{current_jupr_rating:.3f}")
+    
+    st.markdown("### Ratings by active league")
+    
+    # Active leagues from metadata
+    active_leagues = []
+    if df_meta is not None and not df_meta.empty and "is_active" in df_meta.columns and "league_name" in df_meta.columns:
+        active_leagues = (
+            df_meta[df_meta["is_active"] == True]["league_name"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+    
+    # League rows for this player (prefer league_ratings.is_active if present)
+    lr_rows = []
+    if df_leagues is not None and not df_leagues.empty and "player_id" in df_leagues.columns:
+        lr_rows = df_leagues[df_leagues["player_id"].astype(int) == int(p_id)].copy()
+    else:
+        lr_rows = pd.DataFrame()
+    
+    if isinstance(lr_rows, pd.DataFrame) and not lr_rows.empty:
+        lr_rows["league_name"] = lr_rows["league_name"].astype(str).str.strip()
+    
+        # Keep only leagues that are active in metadata
+        if active_leagues:
+            lr_rows = lr_rows[lr_rows["league_name"].isin(active_leagues)].copy()
+    
+        # If league_ratings has its own is_active flag, respect it
+        if "is_active" in lr_rows.columns:
+            lr_rows = lr_rows[lr_rows["is_active"] == True].copy()
+    
+        if lr_rows.empty:
+            st.caption("No active league ratings found for this player.")
+        else:
+            lr_rows["League JUPR"] = lr_rows["rating"].astype(float) / 400.0
+            cols = ["league_name", "League JUPR", "wins", "losses", "matches_played"]
+            cols = [c for c in cols if c in lr_rows.columns]
+            lr_rows = lr_rows.sort_values("League JUPR", ascending=False)
+    
+            st.dataframe(
+                lr_rows[cols].rename(columns={"league_name": "League", "wins": "W", "losses": "L", "matches_played": "MP"}),
+                use_container_width=True,
+                hide_index=True,
+                column_config={"League JUPR": st.column_config.NumberColumn(format="%.3f")},
+            )
+    else:
+        st.caption("No league ratings table entries found for this player yet.")
+
 
     # -------------------------
     # Matches for player
@@ -2865,7 +3012,7 @@ elif sel == "🔍 Player Search":
         dfp = dfp.dropna(subset=[after_col]).sort_values("Date", ascending=True).reset_index(drop=True)
         dfp["Match Sequence"] = dfp.index + 1
         dfp = dfp.rename(columns={after_col: "After", delta_col: "Delta"})
-
+    
         if dfp.empty:
             st.info("No chartable data in this view.")
         else:
@@ -2875,7 +3022,12 @@ elif sel == "🔍 Player Search":
                 .mark_line(point=True)
                 .encode(
                     x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                    y=alt.Y("After:Q", axis=alt.Axis(format=".3f"), title="JUPR After Match", scale=alt.Scale(zero=False)),
+                    y=alt.Y(
+                        "After:Q",
+                        axis=alt.Axis(format=".3f"),
+                        title="JUPR After Match",
+                        scale=alt.Scale(zero=False),
+                    ),
                     tooltip=[
                         alt.Tooltip("Date:T", title="Date"),
                         alt.Tooltip("League:N", title="League"),
@@ -2889,30 +3041,9 @@ elif sel == "🔍 Player Search":
                 .interactive()
             )
             st.altair_chart(line, use_container_width=True)
-
-            st.subheader(f"{title_prefix} Match Log (Δ per match)")
-            dfb = dfp.dropna(subset=["Delta"]).tail(50)
-            if dfb.empty:
-                st.info("No per-match deltas to chart in this view.")
-            else:
-                bars = (
-                    alt.Chart(dfb)
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("Match Sequence:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                        y=alt.Y("Delta:Q", axis=alt.Axis(format="+.4f"), title="Δ JUPR", scale=alt.Scale(zero=True)),
-                        tooltip=[
-                            alt.Tooltip("Date:T", title="Date"),
-                            alt.Tooltip("League:N", title="League"),
-                            alt.Tooltip("Score:N", title="Score"),
-                            alt.Tooltip("After:Q", title="After", format=".3f"),
-                            alt.Tooltip("Delta:Q", title="Δ", format="+.4f"),
-                        ],
-                    )
-                    .interactive()
-                )
-                st.altair_chart(bars, use_container_width=True)
-
+    
+            # NOTE: Δ per match bar chart intentionally removed (overall + leagues)
+    
         # Table
         st.subheader(f"{title_prefix} Match Log Table")
         t = df_view.sort_values("Date", ascending=False).copy()
@@ -2921,7 +3052,7 @@ elif sel == "🔍 Player Search":
         t["Overall After"] = t["Overall After"].map(lambda x: f"{float(x):.3f}" if not pd.isna(x) else "")
         t["League Δ"] = t["League Δ"].map(lambda x: f"{float(x):+.4f}" if not pd.isna(x) else "")
         t["League After"] = t["League After"].map(lambda x: f"{float(x):.3f}" if not pd.isna(x) else "")
-
+    
         cols = ["Date","Result","Score","Partner","Opponents","League","Overall Δ","Overall After","League Δ","League After","Explain"]
         st.dataframe(
             t[cols],
@@ -2929,6 +3060,7 @@ elif sel == "🔍 Player Search":
             hide_index=True,
             column_config={"Explain": st.column_config.LinkColumn("Explain", display_text="Explain")},
         )
+
 
     with tabs[0]:
         render_view(display_df, after_col="Overall After", delta_col="Overall Δ", title_prefix="Overall")
