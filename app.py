@@ -4163,7 +4163,7 @@ if sel == "🪜 Challenge Ladder":
     settings = ladder_fetch_settings()
     df_roster, df_flags, df_ch, df_pass = ladder_load_core()
 
-    tab_ladder, tab_active, tab_info = st.tabs(["🪜 Ladder", "⚔️ Active Challenges", "📘 Info"])
+    tab_ladder, tab_active, tab_info = st.tabs(["🪜 Ladder", "⚔️ Active Challenges", "📘 Quick Rules"])
 
     # -------------------------
     # TAB 1: LADDER
@@ -4261,7 +4261,7 @@ if sel == "🪜 Challenge Ladder":
     # -------------------------
     # TAB 3: INFO (UPDATED QUICK RULES)
     # -------------------------
-    with tab_info:
+    with tab_quick:
         st.subheader("📘 Challenge Ladder — Quick Rules")
     
         st.markdown(
