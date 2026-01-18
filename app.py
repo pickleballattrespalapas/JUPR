@@ -2100,18 +2100,29 @@ if sel == "🏆 Leaderboards":
         tbl = tbl.rename(columns={"matches_played": "MP", "wins": "W", "losses": "L"})
         
         html = tbl.to_html(index=False, escape=False)
+
         st.markdown(
             f"""
-            <style>
-              table {{ width: 100%; border-collapse: collapse; }}
-              th, td {{ padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.08); text-align: left; }}
-              th {{ font-weight: 700; }}
-              a {{ text-decoration: underline; }}
-            </style>
-            {html}
+            <div class="lbtable">
+              <style>
+                .lbtable {{ width: 100%; overflow-x: auto; }}
+                .lbtable table {{ width: 100%; border-collapse: collapse; }}
+                .lbtable th, .lbtable td {{
+                  padding: 8px;
+                  border-bottom: 1px solid rgba(0,0,0,0.08);
+                  text-align: left;
+                  vertical-align: middle;
+                  white-space: nowrap;
+                }}
+                .lbtable th {{ font-weight: 700; }}
+                .lbtable a {{ text-decoration: underline; }}
+              </style>
+              {html}
+            </div>
             """,
             unsafe_allow_html=True,
         )
+
 
 
 
