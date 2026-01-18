@@ -5189,14 +5189,14 @@ elif sel == "👥 Player Editor":
 
         # 2) Ladder tables (best-effort; if missing in schema, skip)
         ladder_updates = []
-            ("ladder_roster", "player_id"),
-            ("ladder_player_flags", "player_id"),
-            ("ladder_pass_usage", "player_id"),
-            ("ladder_challenges", "challenger_id"),
-            ("ladder_challenges", "defender_id"),
-            ("ladder_challenges", "winner_id"),
-            ("ladder_challenges", "forfeit_by"),
-            ("ladder_challenges", "pass_used_by"),
+        ("ladder_roster", "player_id"),
+        ("ladder_player_flags", "player_id"),
+        ("ladder_pass_usage", "player_id"),
+        ("ladder_challenges", "challenger_id"),
+        ("ladder_challenges", "defender_id"),
+        ("ladder_challenges", "winner_id"),
+        ("ladder_challenges", "forfeit_by"),
+        ("ladder_challenges", "pass_used_by"),
 
 
 
