@@ -5188,15 +5188,378 @@ elif sel == "👥 Player Editor":
             summary["matches_updated"][col] = cnt_before
 
         # 2) Ladder tables (best-effort; if missing in schema, skip)
-        ladder_updates = []
-        ("ladder_roster", "player_id"),
-        ("ladder_player_flags", "player_id"),
-        ("ladder_pass_usage", "player_id"),
-        ("ladder_challenges", "challenger_id"),
-        ("ladder_challenges", "defender_id"),
-        ("ladder_challenges", "winner_id"),
-        ("ladder_challenges", "forfeit_by"),
-        ("ladder_challenges", "pass_used_by"),
+        ladder_updates = [
+            ("ladder_roster", "player_id"),
+            ("ladder_player_flags", "player_id"),
+            ("ladder_pass_usage", "player_id"),
+            ("ladder_challenges", "challenger_id"),
+            ("ladder_challenges", "defender_id"),
+            ("ladder_challenges", "winner_id"),
+            ("ladder_challenges", "forfeit_by"),
+            ("ladder_challenges", "pass_used_by"),
+        ]
+
+        for table, col in ladder_updates:
+            try:
+                cnt_before = _count_eq(table, col, src_id)
+                if cnt_before > 0:
+                    _bulk_update_eq(table, col, src_id, dst_id)
+                summary["ladder_updated"][f"{table}.{col}"] = cnt_before
+            except Exception:
+                summary["ladder_updated"][f"{table}.{col}"] = "skipped (missing?)"
+
+        # 3) league_ratings: merge rows safely
+        summary["league_ratings"] = _merge_league_ratings(src_id, dst_id)
+
+        # 4) players: deactivate source + breadcrumb, force target active
+        src_p = (
+            supabase.table("players")
+            .select("id,name,active")
+            .eq("club_id", CLUB_ID)
+            .eq("id", int(src_id))
+            .limit(1)
+            .execute()
+        ).data or []
+
+        dst_p = (
+            supabase.table("players")
+            .select("id,name,active")
+            .eq("club_id", CLUB_ID)
+            .eq("id", int(dst_id))
+            .limit(1)
+            .execute()
+        ).data or []
+
+        src_name = str(src_p[0].get("name")) if src_p else f"#{src_id}"
+        dst_name = str(dst_p[0].get("name")) if dst_p else f"#{dst_id}"
+
+        if deactivate_source and src_p:
+            new_src_name = f"{src_name} (MERGED into {dst_name} #{dst_id})"
+            sb_retry(lambda: (
+                supabase.table("players")
+                .update({"active": False, "name": new_src_name})
+                .eq("club_id", CLUB_ID)
+                .eq("id", int(src_id))
+                .execute()
+            ))
+            summary["players"] = {"source_deactivated": True, "source_new_name": new_src_name}
+        else:
+            summary["players"] = {"source_deactivated": False}
+
+        if dst_p:
+            sb_retry(lambda: (
+                supabase.table("players")
+                .update({"active": True})
+                .eq("club_id", CLUB_ID)
+                .eq("id", int(dst_id))
+                .execute()
+            ))
+
+        # Optional audit (won't block)
+        try:
+            ladder_audit(
+                "player_merge",
+                "players",
+                f"{CLUB_ID}:src={src_id}->dst={dst_id}",
+                {"source_id": src_id, "target_id": dst_id},
+                summary,
+            )
+        except Exception:
+            pass
+
+        return summary
+
+    # -------------------------
+    # Add New Player
+    # -------------------------
+    with st.expander("➕ Add New Player", expanded=False):
+        with st.form("add_p"):
+            n = st.text_input("Name")
+            r = st.number_input("Rating", 1.0, 7.0, 3.5, step=0.1)
+            if st.form_submit_button("Add Player"):
+                ok, err = safe_add_player(n, r)
+                if not ok:
+                    st.error(err)
+                st.rerun()
+
+    st.divider()
+
+    # -------------------------
+    # Manage Player (single-player edit)
+    # -------------------------
+    st.subheader("Manage Player")
+
+    all_names = sorted(df_players_all["name"].astype(str).tolist()) if df_players_all is not None and not df_players_all.empty else []
+    p_edit = st.selectbox("Select Player to Edit/Deactivate", [""] + all_names)
+
+    if p_edit:
+        from datetime import datetime, timezone
+
+        curr = df_players_all[df_players_all["name"] == p_edit].iloc[0]
+        pid = int(curr["id"])
+
+        with st.form("edit_form"):
+            st.caption(f"Editing: {p_edit}  (#{pid})")
+            new_n = st.text_input("Name", value=str(curr["name"]))
+            new_r = st.number_input("Rating", 1.0, 7.0, float(curr.get("rating", 1200.0)) / 400.0, step=0.01)
+            active_flag = st.checkbox("Active (global player flag)", value=bool(curr.get("active", True)))
+
+            if st.form_submit_button("Update Player"):
+                supabase.table("players").update(
+                    {"name": new_n, "rating": float(new_r) * 400.0, "active": bool(active_flag)}
+                ).eq("id", pid).eq("club_id", CLUB_ID).execute()
+                st.success("Updated!")
+                time.sleep(0.6)
+                st.rerun()
+
+        st.write("---")
+        st.write("**Danger Zone**")
+        if st.button("🗑️ Deactivate Player (global)", type="primary"):
+            supabase.table("players").update({"active": False}).eq("id", pid).eq("club_id", CLUB_ID).execute()
+            st.success(f"Player {curr['name']} has been deactivated.")
+            time.sleep(0.6)
+            st.rerun()
+
+        st.divider()
+
+        # -------------------------
+        # League Ratings (your existing editor stays as-is)
+        # -------------------------
+        st.subheader("🏟️ League Ratings (Edit per League)")
+        st.caption(
+            "Per-league **Active** controls whether the player appears in **Standings** and **Top Performers** for that league."
+        )
+
+        lr_has_active_cols = True
+        try:
+            lr_resp = (
+                supabase.table("league_ratings")
+                .select("id,league_name,rating,starting_rating,wins,losses,matches_played,is_active,inactive_at")
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", int(pid))
+                .execute()
+            )
+            lr_df = pd.DataFrame(lr_resp.data)
+        except Exception:
+            lr_has_active_cols = False
+            lr_resp = (
+                supabase.table("league_ratings")
+                .select("id,league_name,rating,starting_rating,wins,losses,matches_played")
+                .eq("club_id", CLUB_ID)
+                .eq("player_id", int(pid))
+                .execute()
+            )
+            lr_df = pd.DataFrame(lr_resp.data)
+
+            st.warning(
+                "League-specific inactive controls are not enabled yet. "
+                "Add `is_active` (boolean) and `inactive_at` (timestamptz) columns to `public.league_ratings` in Supabase."
+            )
+
+        if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+            league_opts = sorted(df_meta["league_name"].dropna().unique().tolist())
+        else:
+            league_opts = sorted(lr_df["league_name"].dropna().unique().tolist()) if not lr_df.empty else []
+
+        cA, cB, cC = st.columns([2, 2, 2])
+        with cA:
+            add_league = st.selectbox("Add / ensure league row", [""] + league_opts, key=f"add_lg_{pid}")
+        with cB:
+            set_mode = st.selectbox(
+                "Quick set",
+                ["(none)", "Set league rating = overall rating", "Apply + / - adjustment"],
+                key=f"lg_set_mode_{pid}",
+            )
+        with cC:
+            adj_val = st.number_input("Adj (JUPR)", value=0.00, step=0.01, key=f"lg_adj_{pid}")
+
+        if st.button("➕ Ensure League Row"):
+            if add_league:
+                base_elo = float(curr.get("rating", 1200.0) or 1200.0)
+                ensure_league_row(pid, add_league, base_rating_elo=base_elo)
+
+                if lr_has_active_cols:
+                    sb_retry(lambda lg=add_league: (
+                        supabase.table("league_ratings")
+                        .update({"is_active": True, "inactive_at": None})
+                        .eq("club_id", CLUB_ID)
+                        .eq("player_id", int(pid))
+                        .eq("league_name", lg)
+                        .execute()
+                    ))
+                st.success("League row ready.")
+                time.sleep(0.5)
+                st.rerun()
+
+        if lr_df.empty:
+            st.info("No league ratings found for this player yet. Use 'Ensure League Row' to create one.")
+        else:
+            orig_inactive_at = {}
+            if lr_has_active_cols and "inactive_at" in lr_df.columns:
+                for _, rr in lr_df.iterrows():
+                    orig_inactive_at[int(rr["id"])] = rr.get("inactive_at", None)
+
+            lr_df = lr_df.copy()
+            lr_df["JUPR"] = lr_df["rating"].astype(float) / 400.0
+            lr_df["Start JUPR"] = lr_df["starting_rating"].astype(float) / 400.0
+
+            if set_mode == "Set league rating = overall rating":
+                base = float(curr.get("rating", 1200.0) or 1200.0) / 400.0
+                lr_df["JUPR"] = base
+            elif set_mode == "Apply + / - adjustment":
+                lr_df["JUPR"] = lr_df["JUPR"].astype(float) + float(adj_val)
+
+            edit_cols = ["league_name"]
+            if lr_has_active_cols:
+                if "is_active" not in lr_df.columns:
+                    lr_df["is_active"] = True
+                if "inactive_at" not in lr_df.columns:
+                    lr_df["inactive_at"] = None
+                edit_cols += ["is_active", "inactive_at"]
+
+            edit_cols += ["JUPR", "Start JUPR", "wins", "losses", "matches_played"]
+            editable = lr_df[["id"] + edit_cols].copy()
+
+            disabled_cols = ["id", "league_name"]
+            if lr_has_active_cols:
+                disabled_cols.append("inactive_at")
+
+            edited = st.data_editor(
+                editable,
+                hide_index=True,
+                use_container_width=True,
+                key=f"lr_editor_{pid}",
+                column_config={
+                    "league_name": st.column_config.TextColumn("League", disabled=True),
+                    "is_active": st.column_config.CheckboxColumn("Active"),
+                    "inactive_at": st.column_config.TextColumn("Inactive At (auto)", disabled=True),
+                    "JUPR": st.column_config.NumberColumn("League JUPR", min_value=1.0, max_value=7.0, step=0.01),
+                    "Start JUPR": st.column_config.NumberColumn("Start JUPR", min_value=1.0, max_value=7.0, step=0.01),
+                    "wins": st.column_config.NumberColumn("W", min_value=0, step=1),
+                    "losses": st.column_config.NumberColumn("L", min_value=0, step=1),
+                    "matches_played": st.column_config.NumberColumn("MP", min_value=0, step=1),
+                },
+                disabled=disabled_cols,
+            )
+
+            c1, c2 = st.columns([1, 3])
+            if c1.button("💾 Save League Edits"):
+                now_iso = datetime.now(timezone.utc).isoformat()
+                for _, r in edited.iterrows():
+                    rid = int(r["id"])
+                    payload = {
+                        "rating": float(r["JUPR"]) * 400.0,
+                        "starting_rating": float(r["Start JUPR"]) * 400.0,
+                        "wins": int(r["wins"]),
+                        "losses": int(r["losses"]),
+                        "matches_played": int(r["matches_played"]),
+                    }
+
+                    if lr_has_active_cols:
+                        next_active = bool(r.get("is_active", True))
+                        payload["is_active"] = next_active
+                        if next_active:
+                            payload["inactive_at"] = None
+                        else:
+                            payload["inactive_at"] = orig_inactive_at.get(rid) or now_iso
+
+                    sb_retry(lambda rid=rid, payload=payload: (
+                        supabase.table("league_ratings")
+                        .update(payload)
+                        .eq("club_id", CLUB_ID)
+                        .eq("id", rid)
+                        .execute()
+                    ))
+
+                st.success("Saved league ratings.")
+                time.sleep(0.6)
+                st.rerun()
+
+            with c2:
+                st.caption("Manual edits affect leaderboards/seeding going forward. Past snapshots are not rewritten unless you run Replay.")
+
+    st.divider()
+
+    # -------------------------
+    # MERGE PLAYER ACCOUNTS (new, belongs here)
+    # -------------------------
+    st.subheader("🧬 Merge Player Accounts")
+    st.caption(
+        "Use when a player has two accounts. This rewires Source -> Target in matches and ladder tables, "
+        "merges league rows, then deactivates Source. Afterwards run: Admin Tools → Replay History → ALL."
+    )
+
+    # Pull all players including inactive
+    try:
+        allp = (
+            supabase.table("players")
+            .select("id,name,active")
+            .eq("club_id", CLUB_ID)
+            .order("name", desc=False)
+            .execute()
+        ).data or []
+        dfp = pd.DataFrame(allp)
+    except Exception:
+        dfp = pd.DataFrame(columns=["id", "name", "active"])
+
+    if dfp.empty:
+        st.info("No players found.")
+    else:
+        dfp["label"] = dfp.apply(
+            lambda r: f"{r['name']}  (#{int(r['id'])})" + ("" if bool(r.get("active", True)) else " [inactive]"),
+            axis=1
+        )
+        label_to_id = dict(zip(dfp["label"], dfp["id"]))
+
+        cA, cB = st.columns(2)
+        with cA:
+            src_label = st.selectbox("Source (duplicate to remove)", dfp["label"].tolist(), key="merge_src_label_pe")
+        with cB:
+            dst_label = st.selectbox("Target (keeper)", dfp["label"].tolist(), key="merge_dst_label_pe")
+
+        src_id = int(label_to_id.get(src_label))
+        dst_id = int(label_to_id.get(dst_label))
+
+        if src_id == dst_id:
+            st.warning("Pick two different players.")
+        else:
+            with st.expander("Dry-run impact (counts)", expanded=True):
+                st.markdown("**Matches** referencing Source:")
+                mc = {c: _count_eq("matches", c, src_id) for c in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]}
+                st.json(mc)
+
+                st.markdown("**League rows** (league_ratings) for Source:")
+                st.write(_count_eq("league_ratings", "player_id", src_id))
+
+                st.markdown("**Ladder tables** referencing Source (best effort):")
+                ladder_cols = [
+                    ("ladder_roster", "player_id"),
+                    ("ladder_player_flags", "player_id"),
+                    ("ladder_pass_usage", "player_id"),
+                    ("ladder_challenges", "challenger_id"),
+                    ("ladder_challenges", "defender_id"),
+                    ("ladder_challenges", "winner_id"),
+                    ("ladder_challenges", "forfeit_by"),
+                    ("ladder_challenges", "pass_used_by"),
+                ]
+                lc = {f"{t}.{c}": _count_eq(t, c, src_id) for t, c in ladder_cols}
+                st.json(lc)
+
+            st.warning("After merge, run: ⚙️ Admin Tools → Replay History → ALL (Full System Reset).")
+
+            confirm = st.text_input("Type MERGE to confirm", value="", key="merge_confirm_text_pe")
+            if st.button("🧬 Execute Merge Now", type="primary", disabled=(confirm.strip().upper() != "MERGE")):
+                try:
+                    with st.status("Merging accounts...", expanded=True) as status:
+                        out = merge_player_accounts(src_id, dst_id, deactivate_source=True)
+                        status.update(label="Merge complete", state="complete")
+                    st.success("Merge completed. Now run Replay History: ALL (Full System Reset).")
+                    st.json(out)
+                    time.sleep(0.6)
+                    st.rerun()
+                except Exception as e:
+                    st.error("Merge failed.")
+                    st.exception(e)
 
 
 
