@@ -4270,6 +4270,8 @@ if sel == "🪜 Challenge Ladder":
     You move up by **challenging and defeating** players ranked above you **within your tier**.
 
     Join the Challenge Ladder by email/text Joe or register at the Tres Palapas Pro Shop
+
+    **Full Challenge Ladder Rulebook** is available at the Pro Shop.
     
     ---
     
