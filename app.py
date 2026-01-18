@@ -4262,16 +4262,18 @@ if sel == "🪜 Challenge Ladder":
     # TAB 3: INFO (UPDATED QUICK RULES)
     # -------------------------
     with tab_info:
-        st.subheader("📘 Challenge Ladder — Quick Rules (How to Participate)")
+        st.subheader("📘 Challenge Ladder — Quick Rules")
     
         st.markdown(
             """
     **The Challenge Ladder is a challenge-anytime ranking system (in-season).**  
     You move up by **challenging and defeating** players ranked above you **within your tier**.
+
+    Join the Challenge Ladder by email/text Joe or register at the Tres Palapas Pro Shop
     
     ---
     
-    ## The Flow (Read This First)
+    ## How to Play
     
     **Step 1 — Check status**  
     Confirm your status on the ladder. Your status controls what you can do.
@@ -4283,8 +4285,8 @@ if sel == "🪜 Challenge Ladder":
     A challenge is **only official once recorded by staff** in the **Pro Shop Challenge Ledger**.
     
     **Step 4 — Defender responds (48 hours)**  
-    The defender must **Accept** or **use a Monthly Pass** within 48 hours.  
-    No response (and no Pass) = **forfeit**.
+    The defender must **Accept** within 48 hours.  
+    No response = **forfeit**.
     
     **Step 5 — Play the match (7 days after acceptance)**  
     Once accepted, the match must be completed within **7 days**.
@@ -4311,9 +4313,8 @@ if sel == "🪜 Challenge Ladder":
        - **Protected (72h):** you may initiate, but cannot be challenged  
        - **Ready to Defend:** normal mode (can initiate and be challenged)
     
-    4. **Challenges must be officially recorded (Ledger = source of truth)**  
+    4. **Challenges must be officially recorded in the Pro Shop**  
        A challenge is only official once recorded by staff in the **Pro Shop Challenge Ledger**.  
-       **Top-board/token placement (if applicable) is not official until recorded in the Ledger.**
     
     5. **48-hour acceptance window**  
        The defending player has **48 hours** to accept once the challenge is recorded in the Ledger.
@@ -4329,10 +4330,11 @@ if sel == "🪜 Challenge Ladder":
        Failure to play by the deadline may result in an **admin-determined outcome** based on good-faith scheduling.
     
     9. **Match format: Swing Partner Swap**  
-       - Two doubles matches are played  
+       - Each player will bring a partner to the match (Swing Partner)
+       - Two doubles matches are played (best 2 of 3 games to 11, win by 2)
        - Ranked players stay **opponents** in both matches  
        - Swing Partners swap between matches  
-       - Swing Partners **never move** on the ladder
+       - Swing Partners **don't move** on the ladder
     
     10. **How the winner is decided**  
        - Win both matches = win the challenge  
