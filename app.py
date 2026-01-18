@@ -2806,12 +2806,24 @@ elif sel == "🔍 Player Search":
     player_names = sorted(players_df["name"].astype(str).tolist())
     # --- Deep-link support: ?page=players&pid=<id> ---
     pid_q = qp_get("pid", "").strip()
-    if pid_q.isdigit():
+    
+    # Apply pid preselect only once per pid value (prevents "stuck" behavior)
+    pid_sig = f"pid:{pid_q}" if pid_q else ""
+    last_sig = st.session_state.get("player_pid_sig_applied", "")
+    
+    if pid_q.isdigit() and pid_sig != last_sig:
         pid_int = int(pid_q)
-        # If that player exists, preselect them
         hit = players_df[players_df["id"].astype(int) == pid_int]
         if not hit.empty:
             st.session_state["player_search_name"] = str(hit.iloc[0]["name"])
+                    # Optional: remove pid from URL so user can freely browse afterward
+            try:
+                st.query_params.pop("pid", None)
+            except Exception:
+                pass
+
+            st.session_state["player_pid_sig_applied"] = pid_sig
+
 
     selected_name = st.selectbox("Select a Player:", [""] + player_names, index=0, key="player_search_name")
     if not selected_name:
