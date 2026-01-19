@@ -14,6 +14,45 @@ import urllib.parse
 from postgrest.exceptions import APIError
 import hashlib
 from jupr_court_board import court_board
+from jupr_app.domain.roster import (
+    normalize_slots,
+    swap_players,
+    move_within_court,
+    compress_courts,
+    move_player_to_court,
+    roster_df_to_courts,
+    courts_to_roster_df,
+)
+from jupr_app.domain.ratings import calculate_hybrid_elo
+from jupr_app.domain.scheduling import get_match_schedule
+from jupr_app.domain.dupes import to_int_or_neg1, canonical_dup_key
+from jupr_app.domain.timeutils import dt_utc_now, month_key_utc
+from jupr_app.domain.challenge_ladder import (
+    LADDER_OPEN_STATUSES,
+    LADDER_FINAL_STATUSES,
+    TIER_ORDER,
+    TIER_DEFS,
+    dt_utc_now,
+    month_key_utc,
+    ladder_nm,
+    ladder_parse_dt,
+    ladder_compute_status_map,
+    ladder_bucket_challenge,
+    ladder_compute_challenge_outcome,
+    tier_for_jupr,
+    tier_title,
+    tier_idx,
+    is_promotion,
+    is_demotion,
+)
+
+from jupr_app.domain.live_ladder import (
+    compute_round_stats,
+    build_movement_preview,
+    validate_courts,
+)
+from jupr_app.domain.ratings import elo_to_jupr
+
 
 
 def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side: str) -> str:
@@ -306,64 +345,6 @@ except Exception as e:
 # -------------------------
 # LOGIC ENGINES
 # -------------------------
-def calculate_hybrid_elo(
-    t1_avg,
-    t2_avg,
-    score_t1,
-    score_t2,
-    k_factor=32,
-    min_win_delta=1.0,
-    cap_loser_gain=16,
-):
-    """
-    Returns (delta_for_team1_players, delta_for_team2_players) in ELO points (not JUPR).
-
-    Policy:
-      - Winner hard rule: winner delta must be > 0. If computed <= 0, set to +min_win_delta.
-      - Loser may gain if they beat expectations (non-zero-sum behavior).
-      - ONLY cap: if the loser delta is positive, cap it to cap_loser_gain.
-    """
-    # Normalize inputs
-    s1 = int(score_t1 or 0)
-    s2 = int(score_t2 or 0)
-
-    # No movement on ties or empty scores
-    total_points = s1 + s2
-    if total_points <= 0 or s1 == s2:
-        return 0.0, 0.0
-
-    # Expected outcomes from ratings
-    expected_t1 = 1 / (1 + 10 ** ((t2_avg - t1_avg) / 400))
-    expected_t2 = 1 - expected_t1
-
-    # Observed performance proxy from score share
-    share_t1 = s1 / total_points
-    share_t2 = 1.0 - share_t1
-
-    # Base deltas (symmetric)
-    d1 = float(k_factor) * 2.0 * (share_t1 - expected_t1)
-    d2 = float(k_factor) * 2.0 * (share_t2 - expected_t2)  # == -d1
-
-    # Apply winner floor + loser-positive cap only
-    if s1 > s2:
-        # Team 1 wins
-        if d1 <= 0:
-            d1 = float(min_win_delta)
-
-        if cap_loser_gain is not None and d2 > 0:
-            d2 = min(d2, float(cap_loser_gain))
-
-        return float(d1), float(d2)
-
-    else:
-        # Team 2 wins
-        if d2 <= 0:
-            d2 = float(min_win_delta)
-
-        if cap_loser_gain is not None and d1 > 0:
-            d1 = min(d1, float(cap_loser_gain))
-
-        return float(d1), float(d2)
 
 
 # -------------------------
@@ -467,11 +448,7 @@ def load_data():
 # -------------------------
 # HELPERS
 # -------------------------
-def elo_to_jupr(elo_score):
-    try:
-        return float(elo_score) / 400.0
-    except Exception:
-        return 0.0
+
 
 def safe_add_player(name, rating_jupr):
     """
@@ -494,109 +471,7 @@ def safe_add_player(name, rating_jupr):
     except Exception as e:
         return False, str(e)
 
-def get_match_schedule(format_type, players, custom_text=None):
-    p = players
 
-    # custom schedule override
-    if custom_text and len(custom_text.strip()) > 5:
-        matches = []
-        lines = custom_text.strip().split("\n")
-        r_num = 1
-        for line in lines:
-            nums = [int(x) for x in re.findall(r"\d+", line)]
-            if len(nums) >= 4:
-                idx = [n - 1 for n in nums[:4]]
-                if all(0 <= i < len(p) for i in idx):
-                    matches.append(
-                        {"t1": [p[idx[0]], p[idx[1]]], "t2": [p[idx[2]], p[idx[3]]], "desc": f"Game {r_num}"}
-                    )
-                    r_num += 1
-        if matches:
-            return matches
-
-    # standard templates
-    needed = int(format_type.split("-")[0])
-    if len(p) < needed:
-        return []
-
-    if format_type == "4-Player":
-        return [
-            {"t1": [p[1], p[0]], "t2": [p[2], p[3]], "desc": "Rnd 1"},
-            {"t1": [p[3], p[1]], "t2": [p[0], p[2]], "desc": "Rnd 2"},
-            {"t1": [p[3], p[0]], "t2": [p[1], p[2]], "desc": "Rnd 3"},
-        ]
-    if format_type == "5-Player":
-        return [
-            {"t1": [p[0], p[1]], "t2": [p[2], p[3]], "desc": "Rnd 1"},
-            {"t1": [p[1], p[3]], "t2": [p[2], p[4]], "desc": "Rnd 2"},
-            {"t1": [p[0], p[4]], "t2": [p[1], p[2]], "desc": "Rnd 3"},
-            {"t1": [p[0], p[2]], "t2": [p[3], p[4]], "desc": "Rnd 4"},
-            {"t1": [p[0], p[3]], "t2": [p[1], p[4]], "desc": "Rnd 5"},
-        ]
-    if format_type == "6-Player":
-        return [
-            {"t1": [p[0], p[1]], "t2": [p[2], p[4]], "desc": "R1"},
-            {"t1": [p[2], p[5]], "t2": [p[0], p[4]], "desc": "R2"},
-            {"t1": [p[1], p[3]], "t2": [p[4], p[5]], "desc": "R3"},
-            {"t1": [p[0], p[5]], "t2": [p[1], p[2]], "desc": "R4"},
-            {"t1": [p[0], p[3]], "t2": [p[1], p[4]], "desc": "R5"},
-        ]
-    if format_type == "8-Player":
-        return [
-            {"t1": [p[0], p[5]], "t2": [p[1], p[4]], "desc": "Rnd 1 (Ct 1)"},
-            {"t1": [p[2], p[7]], "t2": [p[3], p[6]], "desc": "Rnd 1 (Ct 2)"},
-            {"t1": [p[1], p[2]], "t2": [p[4], p[7]], "desc": "Rnd 2 (Ct 1)"},
-            {"t1": [p[0], p[3]], "t2": [p[5], p[6]], "desc": "Rnd 2 (Ct 2)"},
-            {"t1": [p[0], p[7]], "t2": [p[2], p[5]], "desc": "Rnd 3 (Ct 1)"},
-            {"t1": [p[1], p[6]], "t2": [p[3], p[4]], "desc": "Rnd 3 (Ct 2)"},
-            {"t1": [p[0], p[1]], "t2": [p[2], p[3]], "desc": "Rnd 4 (Ct 1)"},
-            {"t1": [p[4], p[5]], "t2": [p[6], p[7]], "desc": "Rnd 4 (Ct 2)"},
-            {"t1": [p[0], p[6]], "t2": [p[1], p[7]], "desc": "Rnd 5 (Ct 1)"},
-            {"t1": [p[2], p[4]], "t2": [p[3], p[5]], "desc": "Rnd 5 (Ct 2)"},
-            {"t1": [p[1], p[5]], "t2": [p[2], p[6]], "desc": "Rnd 6 (Ct 1)"},
-            {"t1": [p[0], p[4]], "t2": [p[3], p[7]], "desc": "Rnd 6 (Ct 2)"},
-            {"t1": [p[1], p[3]], "t2": [p[5], p[7]], "desc": "Rnd 7 (Ct 1)"},
-            {"t1": [p[0], p[2]], "t2": [p[4], p[6]], "desc": "Rnd 7 (Ct 2)"},
-        ]
-    if format_type == "12-Player":
-        # unchanged (your long template)
-        return [
-            {"t1": [p[2], p[5]], "t2": [p[3], p[10]], "desc": "Rnd 1 (Ct 1)"},
-            {"t1": [p[4], p[6]], "t2": [p[8], p[9]], "desc": "Rnd 1 (Ct 2)"},
-            {"t1": [p[11], p[0]], "t2": [p[1], p[7]], "desc": "Rnd 1 (Ct 3)"},
-            {"t1": [p[5], p[8]], "t2": [p[6], p[2]], "desc": "Rnd 2 (Ct 1)"},
-            {"t1": [p[7], p[9]], "t2": [p[0], p[1]], "desc": "Rnd 2 (Ct 2)"},
-            {"t1": [p[11], p[3]], "t2": [p[4], p[10]], "desc": "Rnd 2 (Ct 3)"},
-            {"t1": [p[10], p[1]], "t2": [p[3], p[4]], "desc": "Rnd 3 (Ct 1)"},
-            {"t1": [p[11], p[6]], "t2": [p[7], p[2]], "desc": "Rnd 3 (Ct 2)"},
-            {"t1": [p[8], p[0]], "t2": [p[9], p[5]], "desc": "Rnd 3 (Ct 3)"},
-            {"t1": [p[11], p[9]], "t2": [p[10], p[5]], "desc": "Rnd 4 (Ct 1)"},
-            {"t1": [p[0], p[3]], "t2": [p[1], p[8]], "desc": "Rnd 4 (Ct 2)"},
-            {"t1": [p[2], p[4]], "t2": [p[6], p[7]], "desc": "Rnd 4 (Ct 3)"},
-            {"t1": [p[3], p[6]], "t2": [p[4], p[0]], "desc": "Rnd 5 (Ct 1)"},
-            {"t1": [p[5], p[7]], "t2": [p[9], p[10]], "desc": "Rnd 5 (Ct 2)"},
-            {"t1": [p[11], p[1]], "t2": [p[2], p[8]], "desc": "Rnd 5 (Ct 3)"},
-            {"t1": [p[8], p[10]], "t2": [p[1], p[2]], "desc": "Rnd 6 (Ct 1)"},
-            {"t1": [p[11], p[4]], "t2": [p[5], p[0]], "desc": "Rnd 6 (Ct 2)"},
-            {"t1": [p[6], p[9]], "t2": [p[7], p[3]], "desc": "Rnd 6 (Ct 3)"},
-            {"t1": [p[11], p[7]], "t2": [p[8], p[3]], "desc": "Rnd 7 (Ct 1)"},
-            {"t1": [p[9], p[1]], "t2": [p[10], p[6]], "desc": "Rnd 7 (Ct 2)"},
-            {"t1": [p[0], p[2]], "t2": [p[4], p[5]], "desc": "Rnd 7 (Ct 3)"},
-            {"t1": [p[1], p[4]], "t2": [p[2], p[9]], "desc": "Rnd 8 (Ct 1)"},
-            {"t1": [p[3], p[5]], "t2": [p[7], p[8]], "desc": "Rnd 8 (Ct 2)"},
-            {"t1": [p[11], p[10]], "t2": [p[0], p[6]], "desc": "Rnd 8 (Ct 3)"},
-            {"t1": [p[6], p[8]], "t2": [p[10], p[0]], "desc": "Rnd 9 (Ct 1)"},
-            {"t1": [p[4], p[7]], "t2": [p[5], p[1]], "desc": "Rnd 9 (Ct 2)"},
-            {"t1": [p[11], p[2]], "t2": [p[3], p[9]], "desc": "Rnd 9 (Ct 3)"},
-            {"t1": [p[11], p[5]], "t2": [p[6], p[1]], "desc": "Rnd 10 (Ct 1)"},
-            {"t1": [p[9], p[0]], "t2": [p[2], p[3]], "desc": "Rnd 10 (Ct 2)"},
-            {"t1": [p[7], p[10]], "t2": [p[8], p[4]], "desc": "Rnd 10 (Ct 3)"},
-            {"t1": [p[10], p[2]], "t2": [p[0], p[7]], "desc": "Rnd 11 (Ct 1)"},
-            {"t1": [p[11], p[8]], "t2": [p[9], p[4]], "desc": "Rnd 11 (Ct 2)"},
-            {"t1": [p[1], p[3]], "t2": [p[5], p[6]], "desc": "Rnd 11 (Ct 3)"},
-        ]
-
-    return []
 
 def secret_val(key: str, default: str = "") -> str:
     try:
@@ -1010,47 +885,6 @@ def suggest_court_sizes(total_players: int) -> dict:
 
     return {"ok": True, "sizes": sizes, "bench": bench, "note": note}
 
-def to_int_or_neg1(x):
-    """Convert to int if possible; return -1 for None/NaN/blank/bad values."""
-    try:
-        if x is None:
-            return -1
-        if isinstance(x, float) and math.isnan(x):
-            return -1
-        s = str(x).strip()
-        if s == "" or s.lower() in ("nan", "none", "null"):
-            return -1
-        return int(float(s))  # handles "12.0"
-    except Exception:
-        return -1
-
-def canonical_dup_key(row, club_id: str):
-    """
-    Canonical key that matches duplicates even if:
-    - players inside a team are swapped
-    - team1/team2 are swapped (scores swapped too)
-    """
-    a1 = to_int_or_neg1(row.get("t1_p1"))
-    a2 = to_int_or_neg1(row.get("t1_p2"))
-    b1 = to_int_or_neg1(row.get("t2_p1"))
-    b2 = to_int_or_neg1(row.get("t2_p2"))
-
-    teamA = sorted([a1, a2])
-    teamB = sorted([b1, b2])
-
-    s1 = to_int_or_neg1(row.get("score_t1"))
-    s2 = to_int_or_neg1(row.get("score_t2"))
-
-    # normalize ordering across teams; if swapped, swap scores too
-    if tuple(teamB) < tuple(teamA):
-        teamA, teamB = teamB, teamA
-        s1, s2 = s2, s1
-
-    league = str(row.get("league", "") or "").strip()
-    week = str(row.get("week_tag", "") or "").strip()
-    mtype = str(row.get("match_type", "") or "").strip()
-
-    return f"{club_id}|{league}|{week}|{mtype}|{teamA[0]}-{teamA[1]}|{teamB[0]}-{teamB[1]}|{s1}-{s2}"
 
 def ensure_league_row(player_id: int, league_name: str, base_rating_elo: float = 1200.0):
     """
@@ -1139,18 +973,8 @@ LADDER_OPEN_STATUSES = {
 }
 LADDER_FINAL_STATUSES = {"COMPLETED", "FORFEITED"}
 
-def dt_utc_now():
-    return datetime.now(timezone.utc)
 
-def month_key_utc(dt: datetime) -> str:
-    d = dt.astimezone(timezone.utc)
-    return f"{d.year:04d}-{d.month:02d}"
 
-def ladder_nm(pid: int, id_to_name: dict[int, str]) -> str:
-    try:
-        return str(id_to_name.get(int(pid), f"#{int(pid)}"))
-    except Exception:
-        return "—"
 
 def ladder_fetch_settings():
     resp = sb_retry(lambda: (
@@ -1323,176 +1147,7 @@ def ladder_set_roster_active(club_id: str, pid: int, make_active: bool, mode: st
         return True, "Deactivated."
 
 
-def ladder_parse_dt(x):
-    if x is None or str(x).strip() == "":
-        return None
-    try:
-        return pd.to_datetime(x, utc=True)
-    except Exception:
-        return None
 
-def ladder_compute_status_map(df_roster, df_flags, df_ch, df_pass, settings, id_to_name):
-    now = dt_utc_now()
-
-    accept_h = int(settings.get("accept_window_hours", 48) or 48)
-    play_d = int(settings.get("play_window_days", 7) or 7)
-    cooldown_h = int(settings.get("cooldown_hours", 72) or 72)
-    protected_h = int(settings.get("protected_hours", 72) or 72)
-    passhold_h = int(settings.get("pass_hold_hours", 72) or 72)
-
-    # Normalize datetime columns
-    if df_flags is not None and not df_flags.empty:
-        df_flags = df_flags.copy()
-        df_flags["vacation_until_dt"] = df_flags["vacation_until"].apply(ladder_parse_dt)
-    else:
-        df_flags = pd.DataFrame(columns=["player_id", "vacation_until_dt", "reinstate_required", "reinstate_notes"])
-
-    if df_ch is not None and not df_ch.empty:
-        df_ch = df_ch.copy()
-        df_ch["created_at_dt"] = df_ch["created_at"].apply(ladder_parse_dt)
-        df_ch["accept_by_dt"] = df_ch["accept_by"].apply(ladder_parse_dt)
-        df_ch["accepted_at_dt"] = df_ch["accepted_at"].apply(ladder_parse_dt)
-        df_ch["play_by_dt"] = df_ch["play_by"].apply(ladder_parse_dt)
-        df_ch["completed_at_dt"] = df_ch["completed_at"].apply(ladder_parse_dt)
-    else:
-        df_ch = pd.DataFrame()
-
-    if df_pass is not None and not df_pass.empty:
-        df_pass = df_pass.copy()
-        df_pass["used_at_dt"] = df_pass["used_at"].apply(ladder_parse_dt)
-    else:
-        df_pass = pd.DataFrame()
-
-    # Map: player -> flags
-    flags_map = {}
-    for _, r in df_flags.iterrows():
-        pid = int(r.get("player_id"))
-        flags_map[pid] = {
-            "vacation_until": r.get("vacation_until_dt"),
-            "reinstate_required": bool(r.get("reinstate_required", False)),
-            "reinstate_notes": str(r.get("reinstate_notes", "") or ""),
-        }
-
-    # Map: player -> open challenge row (for Locked context)
-    open_map = {}
-    if not df_ch.empty:
-        open_df = df_ch[df_ch["status"].isin(list(LADDER_OPEN_STATUSES))].copy()
-        # For context, keep the most recent open challenge per player
-        for _, r in open_df.iterrows():
-            for pid in (r.get("challenger_id"), r.get("defender_id")):
-                if pid is None:
-                    continue
-                pid = int(pid)
-                if pid not in open_map:
-                    open_map[pid] = r.to_dict()
-
-    # Map: player -> last finalized challenge row (for Protected/Cooldown)
-    final_map = {}
-    if not df_ch.empty:
-        fin_df = df_ch[df_ch["status"].isin(list(LADDER_FINAL_STATUSES))].copy()
-        fin_df = fin_df.sort_values("completed_at_dt", ascending=False, na_position="last")
-        for _, r in fin_df.iterrows():
-            for pid in (r.get("challenger_id"), r.get("defender_id")):
-                if pid is None:
-                    continue
-                pid = int(pid)
-                if pid not in final_map:
-                    final_map[pid] = r.to_dict()
-
-    # Map: player -> last pass used
-    pass_map = {}
-    if not df_pass.empty:
-        for _, r in df_pass.sort_values("used_at_dt", ascending=False).iterrows():
-            pid = r.get("player_id")
-            if pid is None:
-                continue
-            pid = int(pid)
-            if pid not in pass_map:
-                pass_map[pid] = r.to_dict()
-
-    # Compute status for each roster player
-    status_map = {}
-    if df_roster is None or df_roster.empty:
-        return status_map
-
-    for _, rr in df_roster.iterrows():
-        if not bool(rr.get("is_active", True)):
-            continue
-
-        pid = int(rr["player_id"])
-        f = flags_map.get(pid, {})
-        vacation_until = f.get("vacation_until")
-        reinstate_required = bool(f.get("reinstate_required", False))
-
-        # 1) Reinstate Required
-        if reinstate_required:
-            status_map[pid] = {"status": "Reinstate Required", "until": None, "detail": f.get("reinstate_notes", "")}
-            continue
-
-        # 2) Vacation
-        if vacation_until is not None and vacation_until.to_pydatetime() >= now:
-            status_map[pid] = {"status": "Vacation", "until": vacation_until, "detail": "Admin-only hold"}
-            continue
-
-        # 3) Pass Hold
-        p_last = pass_map.get(pid)
-        if p_last:
-            used_at = p_last.get("used_at_dt")
-            if used_at is not None:
-                until = used_at.to_pydatetime() + timedelta(hours=passhold_h)
-                if until >= now:
-                    status_map[pid] = {"status": "Pass Hold", "until": pd.to_datetime(until, utc=True), "detail": "72h after Pass Used"}
-                    continue
-
-        # 4) Locked (any open challenge)
-        oc = open_map.get(pid)
-        if oc:
-            opp = None
-            ch_id = oc.get("id")
-            ch_status = str(oc.get("status", "") or "")
-            if int(oc.get("challenger_id")) == pid:
-                opp = int(oc.get("defender_id"))
-                role = "Challenger"
-            else:
-                opp = int(oc.get("challenger_id"))
-                role = "Defender"
-
-            # Deadline detail
-            accept_by = oc.get("accept_by_dt")
-            play_by = oc.get("play_by_dt")
-
-            if ch_status == "PENDING_ACCEPTANCE" and accept_by is not None:
-                detail = f"{role} vs {ladder_nm(opp, id_to_name)} • Accept by {accept_by.strftime('%Y-%m-%d %H:%M UTC')}"
-            elif play_by is not None:
-                detail = f"{role} vs {ladder_nm(opp, id_to_name)} • Play by {play_by.strftime('%Y-%m-%d %H:%M UTC')}"
-            else:
-                detail = f"{role} vs {ladder_nm(opp, id_to_name)}"
-
-            status_map[pid] = {"status": "Locked", "until": None, "detail": detail, "challenge_id": ch_id}
-            continue
-
-        # 5/6) Protected or Cooldown based on last finalized
-        last_fin = final_map.get(pid)
-        if last_fin:
-            completed_at = last_fin.get("completed_at_dt")
-            winner_id = last_fin.get("winner_id")
-            if completed_at is not None and winner_id is not None:
-                completed_dt = completed_at.to_pydatetime()
-                if int(winner_id) == pid:
-                    until = completed_dt + timedelta(hours=protected_h)
-                    if until >= now:
-                        status_map[pid] = {"status": "Protected", "until": pd.to_datetime(until, utc=True), "detail": "72h after win"}
-                        continue
-                else:
-                    until = completed_dt + timedelta(hours=cooldown_h)
-                    if until >= now:
-                        status_map[pid] = {"status": "Cooldown", "until": pd.to_datetime(until, utc=True), "detail": "72h after loss"}
-                        continue
-
-        # 7) Ready
-        status_map[pid] = {"status": "Ready to Defend", "until": None, "detail": ""}
-
-    return status_map
 
 def match_end_elo_for_pid(m: dict, pid: int) -> float | None:
     try:
@@ -1598,30 +1253,6 @@ def compute_out_of_tier_streak(
     return {"dest_tier": dest, "count": int(count), "latest_match_at": latest_dt}
 
 
-def ladder_bucket_challenge(row: dict) -> str:
-    now = dt_utc_now()
-    status = str(row.get("status", "") or "")
-    accept_by = ladder_parse_dt(row.get("accept_by"))
-    play_by = ladder_parse_dt(row.get("play_by"))
-    accepted_at = ladder_parse_dt(row.get("accepted_at"))
-
-    if status == "PENDING_ACCEPTANCE":
-        if accept_by is not None and accept_by.to_pydatetime() < now:
-            return "Acceptance Overdue"
-        return "Pending Acceptance"
-
-    if status in ("ACCEPTED_SCHEDULING", "IN_PROGRESS", "AWAITING_VERIFICATION", "OVERDUE_PLAY"):
-        if play_by is not None and play_by.to_pydatetime() < now:
-            return "Play Overdue"
-        return "Accepted / In Window"
-
-    if status in ("COMPLETED", "FORFEITED"):
-        return "Recently Completed"
-
-    if status in ("CANCELED", "EXPIRED_ACCEPTANCE"):
-        return "Closed (No Result)"
-
-    return "Other"
 
 def ladder_audit(action_type: str, entity_type: str, entity_id: str, before: dict | None, after: dict | None):
     actor = "admin" if st.session_state.get("admin_logged_in", False) else "system"
@@ -1640,138 +1271,9 @@ def ladder_audit(action_type: str, entity_type: str, entity_id: str, before: dic
         # audit should never block core operations
         pass
 
-def ladder_compute_challenge_outcome(df_match_rows: pd.DataFrame):
-    """
-    Returns dict:
-      winner_side: 'DEF' or 'CHAL'
-      match_wins_def/chal
-      games_def/chal
-      points_def/chal
-      point_diff_def (def - chal)
-    Enforces tie-break: match wins -> games -> point diff -> defender holds
-    """
-    def parse_int(x):
-        try:
-            if x is None: return None
-            return int(x)
-        except Exception:
-            return None
-
-    def match_summary(row):
-        games = []
-        for i in (1,2,3):
-            a = parse_int(row.get(f"g{i}_def"))
-            b = parse_int(row.get(f"g{i}_chal"))
-            if a is None or b is None:
-                continue
-            games.append((a,b))
-
-        def_g = sum(1 for a,b in games if a > b)
-        chal_g = sum(1 for a,b in games if b > a)
-
-        def_pts = sum(a for a,b in games)
-        chal_pts = sum(b for a,b in games)
-
-        # winner by best-of-3
-        if def_g > chal_g:
-            win = "DEF"
-        elif chal_g > def_g:
-            win = "CHAL"
-        else:
-            win = "TIE"
-
-        return {"win": win, "def_g": def_g, "chal_g": chal_g, "def_pts": def_pts, "chal_pts": chal_pts}
-
-    if df_match_rows is None or df_match_rows.empty:
-        return None
-
-    ms = []
-    for _, r in df_match_rows.sort_values("match_no").iterrows():
-        ms.append(match_summary(r.to_dict()))
-
-    # Require 2 matches present
-    if len(ms) < 2:
-        return None
-
-    match_wins_def = sum(1 for x in ms if x["win"] == "DEF")
-    match_wins_chal = sum(1 for x in ms if x["win"] == "CHAL")
-
-    games_def = sum(x["def_g"] for x in ms)
-    games_chal = sum(x["chal_g"] for x in ms)
-
-    pts_def = sum(x["def_pts"] for x in ms)
-    pts_chal = sum(x["chal_pts"] for x in ms)
-    pdiff = pts_def - pts_chal
-
-    # Tie-break
-    if match_wins_def > match_wins_chal:
-        winner_side = "DEF"
-    elif match_wins_chal > match_wins_def:
-        winner_side = "CHAL"
-    else:
-        if games_def > games_chal:
-            winner_side = "DEF"
-        elif games_chal > games_def:
-            winner_side = "CHAL"
-        else:
-            if pdiff > 0:
-                winner_side = "DEF"
-            elif pdiff < 0:
-                winner_side = "CHAL"
-            else:
-                winner_side = "DEF"  # defender holds
-
-    return {
-        "winner_side": winner_side,
-        "match_wins_def": match_wins_def,
-        "match_wins_chal": match_wins_chal,
-        "games_def": games_def,
-        "games_chal": games_chal,
-        "points_def": pts_def,
-        "points_chal": pts_chal,
-        "point_diff_def": pdiff,
-    }
-
 # -------------------------
 # TIER DEFINITIONS (Option A, range-labeled)
 # -------------------------
-TIER_ORDER = ["DEV", "INT", "ADV", "PREM"]
-
-TIER_DEFS = {
-    "DEV":  {"label": "Developing",    "min": None,  "max": 3.25, "range": "< 3.25"},
-    "INT":  {"label": "Intermediate",  "min": 3.25,  "max": 3.75, "range": "3.25–3.75"},
-    "ADV":  {"label": "Advanced",      "min": 3.75,  "max": 4.25, "range": "3.75–4.25"},
-    "PREM": {"label": "Premier",       "min": 4.25,  "max": None, "range": "4.25+"},
-}
-
-def tier_for_jupr(jupr: float) -> str:
-    try:
-        x = float(jupr)
-    except Exception:
-        return "INT"
-    if x < 3.25:
-        return "DEV"
-    if x < 3.75:
-        return "INT"
-    if x < 4.25:
-        return "ADV"
-    return "PREM"
-
-def tier_title(tier_id: str) -> str:
-    t = TIER_DEFS.get(str(tier_id), {"label": str(tier_id), "range": ""})
-    rng = t.get("range", "")
-    return f"{t.get('label','Tier')} — {rng}".strip(" —")
-
-def tier_idx(tier_id: str) -> int:
-    tid = str(tier_id)
-    return TIER_ORDER.index(tid) if tid in TIER_ORDER else 999
-
-def is_promotion(from_tier: str, to_tier: str) -> bool:
-    return tier_idx(to_tier) > tier_idx(from_tier)
-
-def is_demotion(from_tier: str, to_tier: str) -> bool:
-    return tier_idx(to_tier) < tier_idx(from_tier)
-
 def build_challenge_notice_message(
     *,
     challenge_id: int | None,
@@ -1795,11 +1297,15 @@ def build_challenge_notice_message(
     cid = f"#{int(challenge_id)}" if challenge_id else "(pending id)"
 
     # Allow blanks / placeholders
-    chal_contact = challenger_contact.strip() or "[ADD CHALLENGER CONTACT]"
+    chal_contact = (challenger_contact or "").strip() or "[ADD CHALLENGER CONTACT]"
     adm_name = (admin_name or "").strip() or "Ladder Admin"
     adm_contact = (admin_contact or "").strip() or "[ADD ADMIN CONTACT]"
 
     subject = f"Challenge Ladder Notice — Action Required (48 hours) — {challenger_name} vs {defender_name}"
+
+    ledger_line = ""
+    if ledger_ref is not None and str(ledger_ref).strip():
+        ledger_line = "\nLedger ref: " + str(ledger_ref).strip()
 
     body = f"""Hi {defender_name},
 
@@ -1818,7 +1324,7 @@ Reply with one of:
 - PASS (use Monthly Pass, if available)
 
 Challenge ID: {cid}
-Tier: {tier_id}{f"\nLedger ref: {ledger_ref.strip()}" if (ledger_ref and ledger_ref.strip()) else ""}
+Tier: {tier_id}{ledger_line}
 
 Thank you,
 {adm_name}
@@ -1832,7 +1338,6 @@ Thank you,
     )
 
     return {"email_full": f"Subject: {subject}\n\n{body}", "sms": sms}
-
 
 
 # -------------------------
@@ -3223,108 +2728,11 @@ JUPR is designed to reflect **performance at Tres Palapas** based on recorded pl
 # JUPR Leagues (PART 2 / 2)
 # Paste this after PART 1.
 # =========================
-def normalize_slots(roster_df: pd.DataFrame) -> pd.DataFrame:
-    df = roster_df.copy()
-    if "slot" not in df.columns:
-        df["slot"] = 1
-    df["court"] = df["court"].astype(int)
-    df["slot"] = df["slot"].astype(int)
-
-    for c in sorted(df["court"].unique()):
-        idx = df[df["court"] == c].sort_values("slot").index
-        df.loc[idx, "slot"] = list(range(1, len(idx) + 1))
-    return df.sort_values(["court", "slot"]).reset_index(drop=True)
-
-def swap_players(roster_df: pd.DataFrame, a: str, b: str) -> pd.DataFrame:
-    df = roster_df.copy()
-    ia = df.index[df["name"] == a]
-    ib = df.index[df["name"] == b]
-    if len(ia) != 1 or len(ib) != 1:
-        return df
-    ia, ib = int(ia[0]), int(ib[0])
-
-    # Swap court+slot (keeps court sizes constant)
-    ca, sa = int(df.at[ia, "court"]), int(df.at[ia, "slot"])
-    cb, sb = int(df.at[ib, "court"]), int(df.at[ib, "slot"])
-    df.at[ia, "court"], df.at[ia, "slot"] = cb, sb
-    df.at[ib, "court"], df.at[ib, "slot"] = ca, sa
-    return normalize_slots(df)
-
-def move_within_court(roster_df: pd.DataFrame, player: str, new_slot: int) -> pd.DataFrame:
-    df = roster_df.copy()
-    if player not in df["name"].tolist():
-        return df
-    row = df[df["name"] == player].iloc[0]
-    c = int(row["court"])
-
-    grp = df[df["court"] == c].sort_values("slot").copy()
-    names = grp["name"].tolist()
-    if player not in names:
-        return df
-
-    names.remove(player)
-    new_slot = max(1, min(int(new_slot), len(names) + 1))
-    names.insert(new_slot - 1, player)
-
-    # Write back slot order
-    for i, nm in enumerate(names, start=1):
-        df.loc[(df["court"] == c) & (df["name"] == nm), "slot"] = i
-
-    return normalize_slots(df)
-
-def compress_courts(roster_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Re-map court numbers to be contiguous 1..N (fixes gaps if a court becomes empty).
-    """
-    df = roster_df.copy()
-    courts = sorted(df["court"].astype(int).unique().tolist())
-    mapping = {old: i + 1 for i, old in enumerate(courts)}
-    df["court"] = df["court"].astype(int).map(mapping)
-    return normalize_slots(df)
-
-def move_player_to_court(roster_df: pd.DataFrame, player: str, target_court: int, target_slot: int = 1) -> pd.DataFrame:
-    """
-    Move a player to a different court and insert them at target_slot within that court.
-    Court sizes will change accordingly. Slots are normalized after.
-    """
-    df = roster_df.copy()
-    if player not in df["name"].astype(str).tolist():
-        return df
-
-    target_court = int(target_court)
-    target_slot = int(target_slot)
-
-    # Remove player row
-    row = df[df["name"] == player].iloc[0].copy()
-    df = df[df["name"] != player].copy()
-
-    # Ensure courts/slots are stable before insert
-    df = normalize_slots(df)
-
-    # Build target court name order, insert player
-    target_names = df[df["court"] == target_court].sort_values("slot")["name"].tolist()
-    target_slot = max(1, min(target_slot, len(target_names) + 1))
-    target_names.insert(target_slot - 1, player)
-
-    # Apply target court ordering
-    for i, nm in enumerate(target_names, start=1):
-        df.loc[(df["court"] == target_court) & (df["name"] == nm), "slot"] = i
-
-       # Add player back on target court (if it wasn’t already in df)
-    if player not in df["name"].tolist():
-        df = pd.concat([df, pd.DataFrame([{
-            "player_id": int(row.get("player_id")) if "player_id" in row else None,
-            "name": player,
-            "rating": float(row.get("rating", 1200.0)),
-            "court": target_court,
-            "slot": target_slot
-        }])], ignore_index=True)
 
 
-    # Normalize + compress (handles empty courts)
-    df = normalize_slots(df)
-    df = compress_courts(df)
-    return df
+
+
+
 
 def sync_ladder_court_sizes_from_roster(roster_df: pd.DataFrame):
     """
@@ -3337,104 +2745,12 @@ def sync_ladder_court_sizes_from_roster(roster_df: pd.DataFrame):
         sizes.append(int((roster_df["court"].astype(int) == c).sum()))
     st.session_state.ladder_court_sizes = sizes
 
-def roster_df_to_courts(roster_df: pd.DataFrame) -> list[dict]:
-    df = roster_df.copy()
-
-    # Normalize types (defensive)
-    if "court" in df.columns:
-        df["court"] = df["court"].astype(int)
-    if "player_id" in df.columns:
-        df["player_id"] = df["player_id"].astype(int)
-
-    # Ensure stable ordering within court
-    if "slot" in df.columns:
-        df["slot"] = df["slot"].astype(int)
-        df = df.sort_values(["court", "slot"], ascending=[True, True])
-    else:
-        df = df.sort_values(["court", "rating"], ascending=[True, False])
-
-    # Prefer the configured court structure from the prior screen
-    sizes = st.session_state.get("ladder_court_sizes", None)
-    if isinstance(sizes, list) and len(sizes) > 0:
-        court_nums = list(range(1, len(sizes) + 1))
-    else:
-        court_nums = sorted(df["court"].unique().tolist()) if (not df.empty and "court" in df.columns) else [1]
-
-    courts: list[dict] = []
-    for c in court_nums:
-        cdf = df[df["court"] == int(c)].copy() if (not df.empty and "court" in df.columns) else pd.DataFrame()
-        players = []
-        if not cdf.empty:
-            for _, r in cdf.iterrows():
-                players.append(
-                    {
-                        "player_id": str(int(r["player_id"])),      # draggableId must be string
-                        "name": str(r["name"]),
-                        "rating": float(r.get("rating", 1200.0)) / 400.0,  # display JUPR
-                    }
-                )
-
-        # Optional metadata for the frontend (safe if ignored)
-        target_size = None
-        try:
-            if isinstance(sizes, list) and (0 <= (int(c) - 1) < len(sizes)):
-                target_size = int(sizes[int(c) - 1])
-        except Exception:
-            target_size = None
-
-        courts.append(
-            {
-                "court_id": f"Court {int(c)}",
-                "players": players,
-                "target_size": target_size,  # frontend may ignore; harmless
-            }
-        )
-
-    # Always include Bench
-    courts.append({"court_id": "Bench", "players": []})
-    return courts
 
 
 
 
-def courts_to_roster_df(courts: list[dict], prev_roster_df: pd.DataFrame) -> pd.DataFrame:
-    df_prev = prev_roster_df.copy()
-    df_prev["player_id"] = df_prev["player_id"].astype(int)
 
-    elo_map = dict(zip(df_prev["player_id"], df_prev["rating"]))
-    name_map = dict(zip(df_prev["player_id"], df_prev["name"]))
 
-    rows = []
-    for c in courts:
-        cid = str(c.get("court_id", ""))
-        if cid == "Bench":
-            continue
-
-        m = re.findall(r"\d+", cid)
-        if not m:
-            continue
-        cnum = int(m[0])
-
-        players = c.get("players", []) or []
-        for i, p in enumerate(players, start=1):
-            pid = int(p["player_id"])
-            rows.append(
-                {
-                    "player_id": pid,
-                    "name": name_map.get(pid, str(p.get("name", pid))),
-                    "rating": float(elo_map.get(pid, 1200.0)),
-                    "court": int(cnum),
-                    "slot": int(i),
-                }
-            )
-
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return prev_roster_df
-
-    out = out.sort_values(["court", "slot"], ascending=[True, True]).reset_index(drop=True)
-    out = compress_courts(normalize_slots(out))
-    return out
 
 # -------------------------
 # PAGE: LEAGUE MANAGER
@@ -3705,7 +3021,11 @@ if sel == "🏟️ League Manager":
             # Build roster/courts payload for the board
             roster_df = normalize_slots(st.session_state.ladder_live_roster.copy())
             roster_df = compress_courts(roster_df)
-            courts_payload = roster_df_to_courts(roster_df)
+            courts_payload = roster_df_to_courts(
+                roster_df,
+                ladder_court_sizes=st.session_state.get("ladder_court_sizes", None),
+            )
+
 
             # Round-aware key (prevents board state carryover between rounds)
             round_num = int(st.session_state.get("ladder_round_num", 1))
@@ -3726,30 +3046,24 @@ if sel == "🏟️ League Manager":
                     st.session_state.pop("current_schedule_round", None)
                     st.rerun()
 
-            # --- Validation gate (must always define can_start BEFORE using it) ---
-            can_start = True
-            df_check = st.session_state.ladder_live_roster.copy()
-            court_counts = df_check.groupby("court").size().to_dict()
+            # Validation gate
+            check = validate_courts(
+                st.session_state.ladder_live_roster,
+                min_players_per_court=4,
+                target_sizes=st.session_state.get("ladder_court_sizes", None),
+            )
 
-            problems = []
-            for c, n in sorted(court_counts.items()):
-                if int(n) < 4:
-                    problems.append(f"Court {c} has {n} players (min 4).")
-
-            warnings = []
-            for c, n in sorted(court_counts.items()):
-                if int(n) != 4:
-                    warnings.append(f"Court {c} has {n} players (target 4).")
-
-            if warnings:
+            if check["warnings"]:
                 st.info(
                     "Court sizes don't need to be perfect to edit, but double-check before you start:\n\n- "
-                    + "\n- ".join(warnings)
+                    + "\n- ".join(check["warnings"])
                 )
 
-            if problems:
-                st.warning("Fix these before starting:\n\n- " + "\n- ".join(problems))
-                can_start = False
+            if check["problems"]:
+                st.warning("Fix these before starting:\n\n- " + "\n- ".join(check["problems"]))
+
+            can_start = bool(check["can_start"])
+
 
             # Start button (DO NOT reset round_num here)
             start_label = "✅ Start Event (Round 1)" if round_num == 1 else f"✅ Start Round {round_num} / {total_r}"
@@ -3972,28 +3286,22 @@ if sel == "🏟️ League Manager":
                         st.warning("No scores entered (all matches 0–0), so nothing was saved.")
 
 
-                    # movement calculations
-                    round_stats = {}
-                    for pid in st.session_state.ladder_live_roster["player_id"].astype(int).unique():
-                        round_stats[int(pid)] = {"w": 0, "diff": 0, "pts": 0}
-                    
-                    for r in valid_matches:
-                        win_team1 = r["s1"] > r["s2"]
-                        diff = abs(r["s1"] - r["s2"])
-                    
-                        for pid in [r["t1_p1"], r["t1_p2"]]:
-                            pid = int(pid)
-                            round_stats[pid]["pts"] += int(r["s1"])
-                            round_stats[pid]["diff"] += diff if win_team1 else -diff
-                            if win_team1:
-                                round_stats[pid]["w"] += 1
-                    
-                        for pid in [r["t2_p1"], r["t2_p2"]]:
-                            pid = int(pid)
-                            round_stats[pid]["pts"] += int(r["s2"])
-                            round_stats[pid]["diff"] += -diff if win_team1 else diff
-                            if not win_team1:
-                                round_stats[pid]["w"] += 1
+                    # --- Movement calculations (domain) ---
+                    roster_df = st.session_state.ladder_live_roster.copy()
+                    roster_pids = roster_df["player_id"].astype(int).unique().tolist()
+
+                    round_stats = compute_round_stats(valid_matches, roster_pids)
+
+                    max_court = len(st.session_state.get("ladder_court_sizes", [])) or int(roster_df["court"].max() or 1)
+
+                    preview_df = build_movement_preview(roster_df, round_stats, max_court=max_court)
+
+                    st.session_state.ladder_movement_preview = preview_df
+                    st.session_state.ladder_state = "CONFIRM_MOVEMENT"
+                    if "current_schedule" in st.session_state:
+                        del st.session_state.current_schedule
+                    st.rerun()
+
                     
                     df_roster = st.session_state.ladder_live_roster.copy()
                     df_roster["Round Wins"] = df_roster["player_id"].astype(int).map(lambda pid: round_stats.get(int(pid), {}).get("w", 0))
