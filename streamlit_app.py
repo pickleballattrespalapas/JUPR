@@ -94,10 +94,35 @@ def hide_sidebar_and_header_for_public():
     st.markdown(
         "<style>"
         "[data-testid='stSidebar']{display:none;}"
+        "div[data-testid='collapsedControl']{display:none;}"
         "header{visibility:hidden;}"
         "</style>",
         unsafe_allow_html=True,
     )
+
+
+def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> str:
+    """
+    Public mode top navigation (horizontal radio).
+    Returns the selected label.
+    """
+    st.markdown("**Go to:**")
+
+    # Ensure we always have a valid index
+    try:
+        idx = labels_in_order.index(current_label)
+    except ValueError:
+        idx = 0
+
+    sel = st.radio(
+        label="public_top_nav",
+        options=labels_in_order,
+        index=idx,
+        horizontal=True,
+        key="public_top_nav_radio",
+        label_visibility="collapsed",
+    )
+    return sel
 
 
 def main():
@@ -105,7 +130,12 @@ def main():
     Main Streamlit entrypoint. Keep this deterministic for reloads.
     """
     try:
-        st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
+        st.set_page_config(
+            page_title="JUPR Leagues",
+            layout="wide",
+            page_icon="🌵",
+            initial_sidebar_state="collapsed",
+        )
 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
@@ -241,38 +271,71 @@ def main():
             "🛠️ Challenge Ladder Admin",
         }
 
-        labels = list(PAGES.keys())
+        # Build visible labels based on auth
+        all_labels = list(PAGES.keys())
         if not admin_logged_in:
-            labels = [x for x in labels if x not in ADMIN_ONLY_LABELS]
+            visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
+        else:
+            visible_labels = all_labels
 
-        # ---- Deep link (apply once, only if visible) ----
+        # -------------------------
+        # Public top-nav order (matches your old UX)
+        # -------------------------
+        PUBLIC_NAV_KEYS = [
+            "leaderboards",
+            "match_explorer",
+            "players",
+            "challenge_ladder",
+            "faqs",
+        ]
+        public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
+
+        # -------------------------
+        # Deep link resolution
+        # -------------------------
         deep_page_key = qp_get("page", "").strip().lower()
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
-        if (not bool(st.session_state.get("deep_link_applied", False))) and (deep_label in labels):
-            st.session_state["main_nav"] = deep_label
-            st.session_state["deep_link_applied"] = True
+        # Public mode:
+        # - Do NOT use the sidebar nav
+        # - Drive selection from query param (with fallback), then render top nav
+        if PUBLIC_MODE:
+            # Guard against someone typing an admin-only page into the URL
+            if deep_label in ADMIN_ONLY_LABELS:
+                deep_label = ""
 
-        # Ensure valid selection
-        if "main_nav" not in st.session_state or st.session_state["main_nav"] not in labels:
-            st.session_state["main_nav"] = labels[0]
+            current_label = deep_label if deep_label in public_labels_in_order else public_labels_in_order[0]
 
-        # Sidebar selection
-        if not PUBLIC_MODE:
+            sel = render_public_top_nav(
+                labels_in_order=public_labels_in_order,
+                current_label=current_label,
+            )
+
+        else:
+            # Admin mode:
+            # Apply deep link once (only if that page is visible)
+            if (not bool(st.session_state.get("deep_link_applied", False))) and (deep_label in visible_labels):
+                st.session_state["main_nav"] = deep_label
+                st.session_state["deep_link_applied"] = True
+
+            # Ensure valid selection
+            if "main_nav" not in st.session_state or st.session_state["main_nav"] not in visible_labels:
+                st.session_state["main_nav"] = visible_labels[0]
+
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
                 get_data.clear()
                 st.rerun()
 
-            sel = st.sidebar.radio("Go to:", labels, key="main_nav")
-        else:
-            sel = st.session_state["main_nav"]
+            sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
 
-        # Final guard
-        if sel not in labels:
-            sel = labels[0]
-            st.session_state["main_nav"] = sel
+            # Final guard
+            if sel not in visible_labels:
+                sel = visible_labels[0]
+                st.session_state["main_nav"] = sel
 
+        # -------------------------
         # Keep URL synced
+        # -------------------------
         try:
             st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
             if PUBLIC_MODE:
@@ -283,8 +346,14 @@ def main():
         except Exception:
             pass
 
+        # -------------------------
         # Render page
-        page_mod = PAGES[sel]
+        # -------------------------
+        page_mod = PAGES.get(sel)
+        if page_mod is None:
+            st.error(f"Unknown page selection: {sel}")
+            st.stop()
+
         render_fn = getattr(page_mod, "render", None)
         if not callable(render_fn):
             st.error(f"Page module for '{sel}' has no render(ctx) function.")
