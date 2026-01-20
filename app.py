@@ -23,34 +23,44 @@ def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side
     return "sc_" + hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def sb_retry(fn, retries: int = 4, base_sleep: float = 0.6):
+import time
+from postgrest.exceptions import APIError
+
+def sb_try(fn, retries: int = 2, base_sleep: float = 0.35):
     """
-    Retries transient Supabase/httpx failures.
-    DOES NOT retry PostgREST APIErrors (those are usually permanent: RLS/constraints).
+    Safe supabase wrapper that never raises.
+    Returns: (ok: bool, result: any, err: str)
     """
-    last = None
-    for attempt in range(retries):
+    last_err = ""
+
+    for attempt in range(1, retries + 1):
         try:
-            return fn()
+            return True, fn(), ""
         except APIError as e:
-            # APIError contains a dict payload; don't retry it—surface it.
-            payload = e.args[0] if e.args else {}
-            msg = payload.get("message", str(e))
-            details = payload.get("details", "")
-            hint = payload.get("hint", "")
-            code = payload.get("code", "")
+            payload = None
+            if getattr(e, "args", None):
+                payload = e.args[0]
 
-            st.error(f"Supabase APIError ({code}): {msg}")
-            if details:
-                st.code(details)
-            if hint:
-                st.info(hint)
+            if isinstance(payload, dict):
+                msg = payload.get("message") or ""
+                details = payload.get("details") or ""
+                hint = payload.get("hint") or ""
+                code = payload.get("code") or ""
+                last_err = (
+                    f"APIError attempt {attempt}/{retries} "
+                    f"code={code} msg={msg} details={details} hint={hint}"
+                )
+            else:
+                last_err = f"APIError attempt {attempt}/{retries}: {str(e)} payload={repr(payload)}"
 
-            raise  # stop retrying; this won't fix itself with sleep
         except Exception as e:
-            last = e
-            time.sleep(base_sleep * (2 ** attempt))
-    raise last
+            last_err = f"Non-APIError attempt {attempt}/{retries}: {repr(e)}"
+
+        if attempt < retries:
+            time.sleep(base_sleep * attempt)
+
+    return False, None, last_err
+
 
 
 # --- 1. PAGE CONFIG ---
