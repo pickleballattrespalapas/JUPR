@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import traceback
+from collections.abc import Mapping
+
 import streamlit as st
-import pandas as pd
+import pandas as pd  # kept because your pages may rely on it
 
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
@@ -27,38 +29,53 @@ from jupr_app.ui.context import AppContext
 from jupr_app.ui.url import qp_get
 
 
-# ---- CONFIG ----
+# -------------------------
+# CONFIG
+# -------------------------
 CLUB_ID = "tres_palapas"
 
 
-def _get_secret(path: list[str], default=None):
+# -------------------------
+# Secrets helpers (FIXED)
+# -------------------------
+def get_secret(path: list[str], default=None):
     """
-    Safe nested secret getter. Example: _get_secret(["supabase", "url"])
+    Safe nested secret getter that works with Streamlit's secrets object.
+    Streamlit secrets behaves like a Mapping, not necessarily a dict.
     """
     cur = st.secrets
-    for k in path:
-        if not isinstance(cur, dict) or k not in cur:
-            return default
-        cur = cur[k]
-    return cur
+    try:
+        for k in path:
+            if not isinstance(cur, Mapping):
+                return default
+            cur = cur[k]
+        return cur
+    except Exception:
+        return default
 
 
+def require_secret(path: list[str]) -> str:
+    v = get_secret(path, None)
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        raise KeyError("Missing secret: " + ".".join(path))
+    return v
+
+
+# -------------------------
+# Supabase + data loading
+# -------------------------
 @st.cache_resource
 def get_supabase():
     """
-    Build Supabase client from Streamlit secrets.
-
-    Secrets expected (Streamlit Cloud: Manage app -> Secrets, or local: .streamlit/secrets.toml):
+    Requires Streamlit secrets:
 
     [supabase]
-    url = "https://xxxx.supabase.co"
-    anon_key = "xxxxx"   # OR key = "xxxxx" (we accept either)
-    admin_password = "xxxxx"  # used only for admin login
+    url = "https://....supabase.co"
+    anon_key = "..."   # OR key = "..." (either is accepted)
+    admin_password = "..."  # your chosen admin login password
     """
-    url = _get_secret(["supabase", "url"])
-    anon_key = _get_secret(["supabase", "anon_key"])
-    key_fallback = _get_secret(["supabase", "key"])
-    key = anon_key or key_fallback
+    url = get_secret(["supabase", "url"])
+    key = get_secret(["supabase", "anon_key"]) or get_secret(["supabase", "key"])
 
     if not url or not key:
         st.error("Supabase secrets are missing or misnamed.")
@@ -68,6 +85,12 @@ def get_supabase():
             'anon_key = "YOUR_SUPABASE_ANON_KEY"  # or use key = "…"\n'
             'admin_password = "YOUR_ADMIN_PASSWORD"\n'
         )
+        # Debug keys only (no values)
+        try:
+            st.write("Secrets keys:", list(st.secrets.keys()))
+            st.write("Supabase keys:", list(st.secrets.get("supabase", {}).keys()))
+        except Exception:
+            pass
         st.stop()
 
     return make_supabase(url, key)
@@ -75,14 +98,14 @@ def get_supabase():
 
 @st.cache_data(ttl=30)
 def get_data(club_id: str):
-    """
-    Cached data loader.
-    """
     supabase = get_supabase()
     return load_data(supabase, club_id, match_limit=5000)
 
 
-def _hide_sidebar_and_header_for_public():
+# -------------------------
+# UI helpers
+# -------------------------
+def hide_sidebar_and_header_for_public():
     st.markdown(
         "<style>"
         "[data-testid='stSidebar']{display:none;}"
@@ -94,33 +117,30 @@ def _hide_sidebar_and_header_for_public():
 
 def main():
     """
-    Main Streamlit entrypoint. This MUST exist so jupr/app.py can call it.
+    Main Streamlit entrypoint. Keep this deterministic for reloads.
     """
     try:
-        # ---- Page config ----
         st.set_page_config(page_title="JUPR Leagues", layout="wide", page_icon="🌵")
 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
 
-        # ---- Ensure session keys ----
-        if "admin_logged_in" not in st.session_state:
-            st.session_state.admin_logged_in = False
-        if "deep_link_applied" not in st.session_state:
-            st.session_state.deep_link_applied = False
+        # ---- Session defaults ----
+        st.session_state.setdefault("admin_logged_in", False)
+        st.session_state.setdefault("deep_link_applied", False)
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
-            _hide_sidebar_and_header_for_public()
+            hide_sidebar_and_header_for_public()
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            # Admin login controls
             if not st.session_state.admin_logged_in:
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
+
                     if st.button("Login", key="admin_login_btn"):
-                        expected = _get_secret(["supabase", "admin_password"], "")
+                        expected = get_secret(["supabase", "admin_password"], "")
                         if not expected:
                             st.error("Admin password is not configured in secrets (supabase.admin_password).")
                         elif pwd == expected:
@@ -134,10 +154,10 @@ def main():
                     st.session_state.admin_logged_in = False
                     st.rerun()
 
-        # Canonical admin flag for this run (never true in public mode)
+        # Canonical admin flag (never true in public mode)
         admin_logged_in = (not PUBLIC_MODE) and bool(st.session_state.admin_logged_in)
 
-        # Allow pages to force-refresh cached data
+        # Optional: allow pages to request a refresh of cached data
         if st.session_state.get("force_data_refresh", False):
             try:
                 get_data.clear()
@@ -171,7 +191,7 @@ def main():
             admin_logged_in=admin_logged_in,
         )
 
-        # ---- NAV (router) ----
+        # ---- Router ----
         PAGES = {
             "🏆 Leaderboards": leaderboards,
             "🎯 Match Explorer": match_explorer,
@@ -206,7 +226,6 @@ def main():
             "admin_guide": "📘 Admin Guide",
             "challenge_ladder_admin": "🛠️ Challenge Ladder Admin",
         }
-
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
         ADMIN_ONLY_LABELS = {
@@ -223,7 +242,7 @@ def main():
         if not admin_logged_in:
             labels = [x for x in labels if x not in ADMIN_ONLY_LABELS]
 
-        # ---- Deep link support (apply once, only if allowed/visible) ----
+        # ---- Deep link (apply once, only if visible) ----
         deep_page_key = qp_get("page", "").strip().lower()
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
@@ -231,45 +250,44 @@ def main():
             st.session_state["main_nav"] = deep_label
             st.session_state.deep_link_applied = True
 
-        # Ensure main_nav is valid
+        # Ensure valid selection
         if "main_nav" not in st.session_state or st.session_state["main_nav"] not in labels:
             st.session_state["main_nav"] = labels[0]
 
         # Sidebar selection
         if not PUBLIC_MODE:
-            if admin_logged_in:
-                if st.sidebar.button("🔄 Refresh data"):
-                    get_data.clear()
-                    st.rerun()
+            if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
+                get_data.clear()
+                st.rerun()
 
             sel = st.sidebar.radio("Go to:", labels, key="main_nav")
         else:
             sel = st.session_state["main_nav"]
 
-        # Final guard (logout mid-run, etc.)
+        # Final guard
         if sel not in labels:
             sel = labels[0]
             st.session_state["main_nav"] = sel
 
-        # Keep URL in sync with nav selection
+        # Keep URL synced
         try:
             st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
             if PUBLIC_MODE:
                 st.query_params["public"] = "1"
             else:
-                # optional: remove public param if present
                 if "public" in st.query_params:
                     st.query_params.pop("public", None)
         except Exception:
             pass
 
-        # ---- Render page ----
+        # Render page
         page_mod = PAGES[sel]
-        if not hasattr(page_mod, "render"):
+        render_fn = getattr(page_mod, "render", None)
+        if not callable(render_fn):
             st.error(f"Page module for '{sel}' has no render(ctx) function.")
             st.stop()
 
-        page_mod.render(ctx)
+        render_fn(ctx)
 
     except Exception:
         st.error("streamlit_app.main() crashed")
