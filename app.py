@@ -4873,7 +4873,7 @@ elif sel == "🛠️ Challenge Ladder Admin":
             # -------------------------
             # Next rank within THAT tier
             # -------------------------
-            max_rank_resp = sb_retry(lambda tier_for_player=tier_for_player: (
+            max_rank_resp = sb_retry(lambda: (
                 supabase.table("ladder_roster")
                 .select("rank")
                 .eq("club_id", CLUB_ID)
@@ -4882,8 +4882,10 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 .order("rank", desc=True)
                 .limit(1)
                 .execute()
-            ))
+            ), label="ladder_roster max rank (tier)")
+            
             next_rank = (int(max_rank_resp.data[0]["rank"]) + 1) if max_rank_resp.data else 1
+
     
             # If player already exists in ladder_roster, update/reactivate instead of inserting
             existing_row = sb_retry(lambda pid=pid: (
