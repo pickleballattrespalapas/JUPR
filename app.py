@@ -4805,7 +4805,50 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 tier_for_player = tier_for_jupr(jupr)
             else:
                 tier_for_player = manual_tier_val
-    
+            import time
+            from postgrest.exceptions import APIError
+            
+            def sb_retry(fn, retries: int = 4, base_sleep: float = 0.35):
+                last_exc = None
+            
+                for attempt in range(1, retries + 1):
+                    try:
+                        return fn()
+            
+                    except APIError as e:
+                        last_exc = e
+            
+                        # PostgREST APIError often has .args[0] as dict, but not always
+                        payload = None
+                        if getattr(e, "args", None):
+                            payload = e.args[0]
+            
+                        # Build a useful message without assuming dict
+                        if isinstance(payload, dict):
+                            msg = payload.get("message") or payload.get("details") or str(e)
+                            code = payload.get("code", "")
+                            hint = payload.get("hint", "")
+                            details = payload.get("details", "")
+                            raise RuntimeError(
+                                f"Supabase APIError (attempt {attempt}/{retries}) "
+                                f"code={code} msg={msg} details={details} hint={hint}"
+                            ) from e
+                        else:
+                            raise RuntimeError(
+                                f"Supabase APIError (attempt {attempt}/{retries}): {str(e)} | payload={repr(payload)}"
+                            ) from e
+            
+                    except Exception as e:
+                        last_exc = e
+                        # Transient network-ish issues: retry; otherwise fail fast.
+                        if attempt < retries:
+                            time.sleep(base_sleep * attempt)
+                            continue
+                        raise
+            
+                # Should never reach here, but just in case:
+                raise last_exc
+
             # -------------------------
             # Next rank within THAT tier
             # -------------------------
