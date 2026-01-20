@@ -10,20 +10,7 @@ import pandas as pd  # kept because your pages may rely on it
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
 
-from jupr_app.ui.pages import (
-    leaderboards,
-    match_explorer,
-    faqs,
-    players,
-    challenge_ladder,
-    challenge_ladder_admin,
-    match_uploader,
-    league_manager,
-    match_log,
-    player_editor,
-    admin_tools,
-    admin_guide,
-)
+
 
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.url import qp_get
@@ -39,19 +26,15 @@ CLUB_ID = "tres_palapas"
 # Secrets helpers (FIXED)
 # -------------------------
 def get_secret(path: list[str], default=None):
-    """
-    Safe nested secret getter that works with Streamlit's secrets object.
-    Streamlit secrets behaves like a Mapping, not necessarily a dict.
-    """
-    cur = st.secrets
-    try:
-        for k in path:
-            if not isinstance(cur, Mapping):
-                return default
-            cur = cur[k]
-        return cur
-    except Exception:
-        return default
+    cur: object = st.secrets
+    for k in path:
+        if not isinstance(cur, Mapping):
+            return default
+        if k not in cur:
+            return default
+        cur = cur[k]
+    return cur
+
 
 
 def require_secret(path: list[str]) -> str:
@@ -88,10 +71,12 @@ def get_supabase():
         # Debug keys only (no values)
         try:
             st.write("Secrets keys:", list(st.secrets.keys()))
-            st.write("Supabase keys:", list(st.secrets.get("supabase", {}).keys()))
+            sb = get_secret(["supabase"], default={})
+            if isinstance(sb, Mapping):
+                st.write("Supabase keys:", list(sb.keys()))
         except Exception:
             pass
-        st.stop()
+
 
     return make_supabase(url, key)
 
@@ -189,6 +174,21 @@ def main():
             id_to_name=id_to_name,
             public_mode=PUBLIC_MODE,
             admin_logged_in=admin_logged_in,
+        )
+        # Lazy import pages so no page can crash the app at module import time
+        from jupr_app.ui.pages import (
+            leaderboards,
+            match_explorer,
+            faqs,
+            players,
+            challenge_ladder,
+            challenge_ladder_admin,
+            match_uploader,
+            league_manager,
+            match_log,
+            player_editor,
+            admin_tools,
+            admin_guide,
         )
 
         # ---- Router ----
