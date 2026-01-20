@@ -26,11 +26,19 @@ def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side
 import time
 from postgrest.exceptions import APIError
 
-def sb_try(fn, retries: int = 2, base_sleep: float = 0.35):
+
+def sb_retry(fn, retries: int = 2, base_sleep: float = 0.35, *, label: str = "Supabase call"):
     """
-    Safe supabase wrapper that never raises.
-    Returns: (ok: bool, result: any, err: str)
+    Backward-compatible wrapper so you don't have to replace sb_retry everywhere today.
+    It will NOT raise; it will show the real error in the UI and stop.
     """
+    ok, resp, err = sb_try(fn, retries=retries, base_sleep=base_sleep)
+    if not ok:
+        st.error(f"{label} failed.")
+        st.code(err)
+        st.stop()
+    return resp
+
     last_err = ""
 
     for attempt in range(1, retries + 1):
@@ -4931,7 +4939,13 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     "joined_at": now_iso,
                     "left_at": None,
                 }
-                sb_retry(lambda ins=ins: supabase.table("ladder_roster").insert(ins).execute())
+                ok, resp, err = sb_try(lambda ins=ins: supabase.table("ladder_roster").insert(ins).execute())
+                if not ok:
+                    st.error("Insert into ladder_roster failed.")
+                    st.code(err)
+                    st.json(ins)   # shows exactly what you're trying to insert
+                    st.stop()
+
                 ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
                 st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
                 st.rerun()
