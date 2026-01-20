@@ -18,6 +18,9 @@ from jupr_app.ui.url import qp_get
 # -------------------------
 CLUB_ID = "tres_palapas"
 
+# Public base URL used for share links + link buttons (Streamlit Cloud)
+PUBLIC_BASE_URL = "https://8lkemld946rmtwwptk2gcs.streamlit.app"
+
 
 # -------------------------
 # Secrets helpers (SAFE)
@@ -91,9 +94,10 @@ def get_data(club_id: str):
 # UI helpers
 # -------------------------
 def hide_sidebar_and_header_for_public():
+    # Hide sidebar + collapse control for public, keep app content full-width.
     st.markdown(
         "<style>"
-        "[data-testid='stSidebar']{display:none;}"
+        "section[data-testid='stSidebar']{display:none;}"
         "div[data-testid='collapsedControl']{display:none;}"
         "header{visibility:hidden;}"
         "</style>",
@@ -108,7 +112,6 @@ def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> 
     """
     st.markdown("**Go to:**")
 
-    # Ensure we always have a valid index
     try:
         idx = labels_in_order.index(current_label)
     except ValueError:
@@ -139,6 +142,10 @@ def main():
 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
+
+        # Make base_url available to all pages (leaderboards uses this for share links)
+        # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
+        st.session_state["base_url"] = PUBLIC_BASE_URL
 
         # ---- Session defaults ----
         st.session_state.setdefault("admin_logged_in", False)
@@ -230,6 +237,7 @@ def main():
             "🎯 Match Explorer": match_explorer,
             "🔍 Player Search": players,
             "🪜 Challenge Ladder": challenge_ladder,
+            "❓ FAQs": faqs,
 
             # Admin-only
             "🏟️ League Manager": league_manager,
@@ -239,8 +247,6 @@ def main():
             "⚙️ Admin Tools": admin_tools,
             "📘 Admin Guide": admin_guide,
             "🛠️ Challenge Ladder Admin": challenge_ladder_admin,
-
-            "❓ FAQs": faqs,
         }
 
         PAGE_KEY_TO_LABEL = {
@@ -271,23 +277,15 @@ def main():
             "🛠️ Challenge Ladder Admin",
         }
 
-        # Build visible labels based on auth
+        # Visible labels based on auth
         all_labels = list(PAGES.keys())
         if not admin_logged_in:
             visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         else:
             visible_labels = all_labels
 
-        # -------------------------
-        # Public top-nav order (matches your old UX)
-        # -------------------------
-        PUBLIC_NAV_KEYS = [
-            "leaderboards",
-            "match_explorer",
-            "players",
-            "challenge_ladder",
-            "faqs",
-        ]
+        # Public nav order (old UX)
+        PUBLIC_NAV_KEYS = ["leaderboards", "match_explorer", "players", "challenge_ladder", "faqs"]
         public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
 
         # -------------------------
@@ -296,23 +294,18 @@ def main():
         deep_page_key = qp_get("page", "").strip().lower()
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
-        # Public mode:
-        # - Do NOT use the sidebar nav
-        # - Drive selection from query param (with fallback), then render top nav
         if PUBLIC_MODE:
-            # Guard against someone typing an admin-only page into the URL
+            # Block admin-only deep links in public mode
             if deep_label in ADMIN_ONLY_LABELS:
                 deep_label = ""
 
             current_label = deep_label if deep_label in public_labels_in_order else public_labels_in_order[0]
-
             sel = render_public_top_nav(
                 labels_in_order=public_labels_in_order,
                 current_label=current_label,
             )
 
         else:
-            # Admin mode:
             # Apply deep link once (only if that page is visible)
             if (not bool(st.session_state.get("deep_link_applied", False))) and (deep_label in visible_labels):
                 st.session_state["main_nav"] = deep_label
@@ -328,13 +321,12 @@ def main():
 
             sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
 
-            # Final guard
             if sel not in visible_labels:
                 sel = visible_labels[0]
                 st.session_state["main_nav"] = sel
 
         # -------------------------
-        # Keep URL synced
+        # Keep URL synced (canonical deep links)
         # -------------------------
         try:
             st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
@@ -369,7 +361,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
 
