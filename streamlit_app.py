@@ -5,13 +5,10 @@ import traceback
 from collections.abc import Mapping
 
 import streamlit as st
-import pandas as pd  # kept because your pages may rely on it
+import pandas as pd  # kept because pages may rely on it
 
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
-
-
-
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.url import qp_get
 
@@ -23,25 +20,26 @@ CLUB_ID = "tres_palapas"
 
 
 # -------------------------
-# Secrets helpers (FIXED)
+# Secrets helpers (SAFE)
 # -------------------------
 def get_secret(path: list[str], default=None):
-    cur: object = st.secrets
+    """
+    Safe nested secret getter that works with Streamlit's secrets object.
+    Never raises KeyError.
+    """
+    try:
+        cur: object = st.secrets
+    except Exception:
+        return default
+
     for k in path:
         if not isinstance(cur, Mapping):
             return default
         if k not in cur:
             return default
         cur = cur[k]
+
     return cur
-
-
-
-def require_secret(path: list[str]) -> str:
-    v = get_secret(path, None)
-    if v is None or (isinstance(v, str) and v.strip() == ""):
-        raise KeyError("Missing secret: " + ".".join(path))
-    return v
 
 
 # -------------------------
@@ -57,8 +55,8 @@ def get_supabase():
     anon_key = "..."   # OR key = "..." (either is accepted)
     admin_password = "..."  # your chosen admin login password
     """
-    url = get_secret(["supabase", "url"])
-    key = get_secret(["supabase", "anon_key"]) or get_secret(["supabase", "key"])
+    url = get_secret(["supabase", "url"], "")
+    key = get_secret(["supabase", "anon_key"], "") or get_secret(["supabase", "key"], "")
 
     if not url or not key:
         st.error("Supabase secrets are missing or misnamed.")
@@ -68,7 +66,8 @@ def get_supabase():
             'anon_key = "YOUR_SUPABASE_ANON_KEY"  # or use key = "…"\n'
             'admin_password = "YOUR_ADMIN_PASSWORD"\n'
         )
-        # Debug keys only (no values)
+
+        # Debug keys only (no values) - Mapping-safe (no .get usage)
         try:
             st.write("Secrets keys:", list(st.secrets.keys()))
             sb = get_secret(["supabase"], default={})
@@ -77,8 +76,9 @@ def get_supabase():
         except Exception:
             pass
 
+        st.stop()
 
-    return make_supabase(url, key)
+    return make_supabase(str(url), str(key))
 
 
 @st.cache_data(ttl=30)
@@ -120,30 +120,30 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not st.session_state.admin_logged_in:
+            if not bool(st.session_state.get("admin_logged_in", False)):
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
 
                     if st.button("Login", key="admin_login_btn"):
-                        expected = get_secret(["supabase", "admin_password"], "")
+                        expected = str(get_secret(["supabase", "admin_password"], "") or "")
                         if not expected:
                             st.error("Admin password is not configured in secrets (supabase.admin_password).")
                         elif pwd == expected:
-                            st.session_state.admin_logged_in = True
+                            st.session_state["admin_logged_in"] = True
                             st.rerun()
                         else:
                             st.error("Incorrect password.")
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
-                    st.session_state.admin_logged_in = False
+                    st.session_state["admin_logged_in"] = False
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and bool(st.session_state.admin_logged_in)
+        admin_logged_in = (not PUBLIC_MODE) and bool(st.session_state.get("admin_logged_in", False))
 
         # Optional: allow pages to request a refresh of cached data
-        if st.session_state.get("force_data_refresh", False):
+        if bool(st.session_state.get("force_data_refresh", False)):
             try:
                 get_data.clear()
             except Exception:
@@ -175,7 +175,10 @@ def main():
             public_mode=PUBLIC_MODE,
             admin_logged_in=admin_logged_in,
         )
-        # Lazy import pages so no page can crash the app at module import time
+
+        # -------------------------
+        # LAZY IMPORT PAGES (prevents import-time KeyError crashes)
+        # -------------------------
         from jupr_app.ui.pages import (
             leaderboards,
             match_explorer,
@@ -246,9 +249,9 @@ def main():
         deep_page_key = qp_get("page", "").strip().lower()
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
-        if (not st.session_state.deep_link_applied) and (deep_label in labels):
+        if (not bool(st.session_state.get("deep_link_applied", False))) and (deep_label in labels):
             st.session_state["main_nav"] = deep_label
-            st.session_state.deep_link_applied = True
+            st.session_state["deep_link_applied"] = True
 
         # Ensure valid selection
         if "main_nav" not in st.session_state or st.session_state["main_nav"] not in labels:
@@ -297,6 +300,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
