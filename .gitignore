@@ -1,1 +1,11 @@
 .streamlit/secrets.toml
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtualenv
+.venv/
+
+# Local scratch
+archive/

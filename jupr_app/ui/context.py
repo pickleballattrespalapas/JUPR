@@ -1,10 +1,13 @@
+# jupr_app/ui/context.py
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any
 import pandas as pd
+
 
 @dataclass
 class AppContext:
-    supabase: Any
+    supabase: object
     club_id: str
     df_players_all: pd.DataFrame
     df_players_active: pd.DataFrame

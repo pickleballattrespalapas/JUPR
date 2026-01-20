@@ -1,16 +1,13 @@
-from typing import Tuple
-import math
-
-
 def calculate_hybrid_elo(
-    t1_avg,
-    t2_avg,
-    score_t1,
-    score_t2,
-    k_factor=32,
-    min_win_delta=1.0,
-    cap_loser_gain=16,
-):
+    t1_avg: float,
+    t2_avg: float,
+    score_t1: int,
+    score_t2: int,
+    *,
+    k_factor: float = 32,
+    min_win_delta: float = 1.0,
+    cap_loser_gain: float | None = 16.0,
+) -> tuple[float, float]:
     """
     Returns (delta_for_team1_players, delta_for_team2_players) in ELO points (not JUPR).
 
@@ -20,20 +17,28 @@ def calculate_hybrid_elo(
       - ONLY cap: if the loser delta is positive, cap it to cap_loser_gain.
     """
     # Normalize inputs
-    s1 = int(score_t1 or 0)
-    s2 = int(score_t2 or 0)
+    try:
+        s1 = int(score_t1 or 0)
+    except Exception:
+        s1 = 0
+    try:
+        s2 = int(score_t2 or 0)
+    except Exception:
+        s2 = 0
 
-    # No movement on ties or empty scores
     total_points = s1 + s2
     if total_points <= 0 or s1 == s2:
         return 0.0, 0.0
 
-    # Expected outcomes from ratings
-    expected_t1 = 1 / (1 + 10 ** ((t2_avg - t1_avg) / 400))
-    expected_t2 = 1 - expected_t1
+    # Expected outcome from ratings
+    try:
+        expected_t1 = 1.0 / (1.0 + 10.0 ** ((float(t2_avg) - float(t1_avg)) / 400.0))
+    except Exception:
+        expected_t1 = 0.5
+    expected_t2 = 1.0 - expected_t1
 
     # Observed performance proxy from score share
-    share_t1 = s1 / total_points
+    share_t1 = s1 / float(total_points)
     share_t2 = 1.0 - share_t1
 
     # Base deltas (symmetric)
@@ -51,18 +56,25 @@ def calculate_hybrid_elo(
 
         return float(d1), float(d2)
 
-    else:
-        # Team 2 wins
-        if d2 <= 0:
-            d2 = float(min_win_delta)
+    # Team 2 wins
+    if d2 <= 0:
+        d2 = float(min_win_delta)
 
-        if cap_loser_gain is not None and d1 > 0:
-            d1 = min(d1, float(cap_loser_gain))
+    if cap_loser_gain is not None and d1 > 0:
+        d1 = min(d1, float(cap_loser_gain))
 
-        return float(d1), float(d2)
+    return float(d1), float(d2)
 
-def elo_to_jupr(elo_score):
+
+def elo_to_jupr(elo_score: float) -> float:
     try:
         return float(elo_score) / 400.0
     except Exception:
         return 0.0
+
+
+def jupr_to_elo(jupr: float) -> float:
+    try:
+        return float(jupr) * 400.0
+    except Exception:
+        return 1200.0

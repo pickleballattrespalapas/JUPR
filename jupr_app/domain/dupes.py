@@ -1,7 +1,7 @@
 import math
-from typing import Any
 
-def to_int_or_neg1(x):
+
+def to_int_or_neg1(x) -> int:
     """Convert to int if possible; return -1 for None/NaN/blank/bad values."""
     try:
         if x is None:
@@ -15,11 +15,14 @@ def to_int_or_neg1(x):
     except Exception:
         return -1
 
-def canonical_dup_key(row, club_id: str):
+
+def canonical_dup_key(row: dict, club_id: str) -> str:
     """
     Canonical key that matches duplicates even if:
-    - players inside a team are swapped
-    - team1/team2 are swapped (scores swapped too)
+      - players inside a team are swapped
+      - team1/team2 are swapped (scores swapped too)
+
+    `row` can be a dict (recommended) or any mapping with .get().
     """
     a1 = to_int_or_neg1(row.get("t1_p1"))
     a2 = to_int_or_neg1(row.get("t1_p2"))
@@ -32,7 +35,7 @@ def canonical_dup_key(row, club_id: str):
     s1 = to_int_or_neg1(row.get("score_t1"))
     s2 = to_int_or_neg1(row.get("score_t2"))
 
-    # normalize ordering across teams; if swapped, swap scores too
+    # Normalize ordering across teams; if swapped, swap scores too
     if tuple(teamB) < tuple(teamA):
         teamA, teamB = teamB, teamA
         s1, s2 = s2, s1
