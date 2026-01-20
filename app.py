@@ -4808,46 +4808,44 @@ elif sel == "🛠️ Challenge Ladder Admin":
             import time
             from postgrest.exceptions import APIError
             
-            def sb_retry(fn, retries: int = 4, base_sleep: float = 0.35):
-                last_exc = None
+            import time
+            from postgrest.exceptions import APIError
+            
+            def sb_try(fn, retries: int = 2, base_sleep: float = 0.35):
+                """
+                Safe supabase wrapper that never raises.
+                Returns: (ok: bool, result: any, err: str)
+                """
+                last_err = ""
             
                 for attempt in range(1, retries + 1):
                     try:
-                        return fn()
-            
+                        return True, fn(), ""
                     except APIError as e:
-                        last_exc = e
-            
-                        # PostgREST APIError often has .args[0] as dict, but not always
                         payload = None
                         if getattr(e, "args", None):
                             payload = e.args[0]
             
-                        # Build a useful message without assuming dict
                         if isinstance(payload, dict):
-                            msg = payload.get("message") or payload.get("details") or str(e)
-                            code = payload.get("code", "")
-                            hint = payload.get("hint", "")
-                            details = payload.get("details", "")
-                            raise RuntimeError(
-                                f"Supabase APIError (attempt {attempt}/{retries}) "
+                            msg = payload.get("message") or ""
+                            details = payload.get("details") or ""
+                            hint = payload.get("hint") or ""
+                            code = payload.get("code") or ""
+                            last_err = (
+                                f"APIError attempt {attempt}/{retries} "
                                 f"code={code} msg={msg} details={details} hint={hint}"
-                            ) from e
+                            )
                         else:
-                            raise RuntimeError(
-                                f"Supabase APIError (attempt {attempt}/{retries}): {str(e)} | payload={repr(payload)}"
-                            ) from e
+                            last_err = f"APIError attempt {attempt}/{retries}: {str(e)} payload={repr(payload)}"
             
                     except Exception as e:
-                        last_exc = e
-                        # Transient network-ish issues: retry; otherwise fail fast.
-                        if attempt < retries:
-                            time.sleep(base_sleep * attempt)
-                            continue
-                        raise
+                        last_err = f"Non-APIError attempt {attempt}/{retries}: {repr(e)}"
             
-                # Should never reach here, but just in case:
-                raise last_exc
+                    if attempt < retries:
+                        time.sleep(base_sleep * attempt)
+            
+                return False, None, last_err
+
 
             # -------------------------
             # Next rank within THAT tier
