@@ -4707,7 +4707,11 @@ elif sel == "🛠️ Challenge Ladder Admin":
     # -------------------------
     with tabs[3]:
         st.subheader("👥 Ladder Roster")
-    
+        # Put near the top of the tab (before the form)
+        flash = st.session_state.pop("ladder_roster_flash", "")
+        if flash:
+            st.success(flash)
+
         # -------------------------
         # Tier context for roster tools
         # -------------------------
@@ -4862,8 +4866,9 @@ elif sel == "🛠️ Challenge Ladder Admin":
                     before,
                     {**before, **upd},
                 )
-                st.success(f"Reactivated '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
+                st.session_state["ladder_roster_flash"] = f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}."
                 st.rerun()
+
     
             else:
                 ins = {
@@ -4879,7 +4884,10 @@ elif sel == "🛠️ Challenge Ladder Admin":
                 ladder_audit("roster_append", "ladder_roster", f"{CLUB_ID}:{pid}", None, ins)
                 st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
                 st.rerun()
-    
+                st.session_state["ladder_roster_tier_ctx"] = tier_for_player
+                st.session_state["ladder_roster_flash"] = f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}."
+                st.rerun()
+
         st.divider()
     
         # -------------------------
