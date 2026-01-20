@@ -619,6 +619,143 @@ def render(ctx):
         st.divider()
 
         # -------------------------
+        # Move ACTIVE player to a different tier (admin)
+        # -------------------------
+        st.markdown("#### 🔁 Move active player to a different tier")
+        st.caption(
+            "Moves an ACTIVE ladder player to a new tier and appends them to the bottom of that tier. "
+            "Optionally re-compresses ranks in the tier they leave to avoid gaps."
+        )
+
+        active_all = r0[r0["is_active"] == True].copy()
+        active_all = active_all.sort_values(["tier_id", "rank"])
+
+        # Build label -> pid map for active roster
+        active_all["label"] = active_all.apply(
+            lambda rr: f"{rr['name']}  •  {tier_title(str(rr['tier_id']))} (rank {int(rr['rank'])})",
+            axis=1,
+        )
+        label_to_pid = dict(zip(active_all["label"], active_all["player_id"]))
+
+        with st.form("ladder_move_tier_form"):
+            pick_label = st.selectbox("Pick an ACTIVE player", [""] + active_all["label"].tolist(), index=0)
+            dest_tier = st.selectbox("Destination tier", TIER_ORDER, format_func=tier_title, key="ladder_move_dest_tier")
+            recompress_old = st.checkbox("Re-compress ranks in the tier they leave (recommended)", value=True)
+            move_notes = st.text_input("Optional notes (audit only)", value="")
+            do_move = st.form_submit_button("Move player")
+
+        if do_move:
+            if not pick_label:
+                st.error("Pick an active player.")
+                st.stop()
+
+            pid = int(label_to_pid[pick_label])
+
+            # Pull current row (authoritative from DB)
+            ex = sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .select("id,club_id,player_id,tier_id,rank,is_active,joined_at,left_at,notes,updated_at")
+                .eq("club_id", club_id)
+                .eq("player_id", pid)
+                .limit(1)
+                .execute()
+            ))
+            ex_df = pd.DataFrame(getattr(ex, "data", None) or [])
+            if ex_df.empty:
+                st.error("Could not load roster row for this player.")
+                st.stop()
+
+            before = ex_df.iloc[0].to_dict()
+            if not bool(before.get("is_active", False)):
+                st.error("That player is not active on the ladder right now.")
+                st.stop()
+
+            cur_tier = str(before.get("tier_id"))
+            cur_rank = int(before.get("rank") or 999999)
+            dest_tier = str(dest_tier)
+
+            if dest_tier == cur_tier:
+                st.info("Destination tier is the same as current tier. No move performed.")
+                st.stop()
+
+            now_iso = dt_utc_now().isoformat()
+
+            # Compute next rank in destination tier
+            max_rank_resp = sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .select("rank")
+                .eq("club_id", club_id)
+                .eq("tier_id", dest_tier)
+                .eq("is_active", True)
+                .order("rank", desc=True)
+                .limit(1)
+                .execute()
+            ))
+            next_rank = (int(max_rank_resp.data[0]["rank"]) + 1) if getattr(max_rank_resp, "data", None) else 1
+
+            # Update player's roster row (move + append)
+            upd = {
+                "tier_id": dest_tier,
+                "rank": int(next_rank),
+                "updated_at": now_iso,
+            }
+
+            sb_retry(lambda: (
+                supabase.table("ladder_roster")
+                .update(upd)
+                .eq("club_id", club_id)
+                .eq("player_id", pid)
+                .execute()
+            ))
+
+            ladder_audit(
+                supabase,
+                club_id,
+                "roster_move_tier",
+                "ladder_roster",
+                f"{club_id}:{pid}",
+                before,
+                {**before, **upd, "admin_notes": (move_notes.strip() or None)},
+            )
+
+            # Optional: recompress ranks in the tier they left (close gaps)
+            if recompress_old:
+                # Fetch active players in old tier, excluding moved pid, ordered by rank
+                old_resp = sb_retry(lambda: (
+                    supabase.table("ladder_roster")
+                    .select("player_id,rank")
+                    .eq("club_id", club_id)
+                    .eq("tier_id", cur_tier)
+                    .eq("is_active", True)
+                    .order("rank", desc=False)
+                    .execute()
+                ))
+                old_df = pd.DataFrame(getattr(old_resp, "data", None) or [])
+                if not old_df.empty:
+                    old_df["player_id"] = old_df["player_id"].astype(int)
+                    old_df = old_df[old_df["player_id"] != pid].copy()
+                    old_df = old_df.sort_values("rank")
+
+                    # Re-rank 1..N
+                    for i, rr in enumerate(old_df.itertuples(index=False), start=1):
+                        p2 = int(rr.player_id)
+                        if int(rr.rank) != i:
+                            sb_retry(lambda p2=p2, i=i: (
+                                supabase.table("ladder_roster")
+                                .update({"rank": int(i), "updated_at": now_iso})
+                                .eq("club_id", club_id)
+                                .eq("player_id", p2)
+                                .execute()
+                            ))
+
+            st.success(
+                f"Moved {ladder_nm(pid, ctx.id_to_name)} from {tier_title(cur_tier)} (rank {cur_rank}) "
+                f"to {tier_title(dest_tier)} (rank {next_rank})."
+            )
+            st.rerun()
+
+
+        # -------------------------
         # Replace tier roster (paste ranked list)
         # -------------------------
         st.markdown("#### Initialize / Replace Tier Roster (paste ranked list)")
