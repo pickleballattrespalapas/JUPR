@@ -1,1 +1,2 @@
-from . import streamlit_app
+# jupr/app.py
+import streamlit_app  # noqa: F401
