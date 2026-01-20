@@ -26,19 +26,11 @@ def match_key(round_num: int, court_num: int, t1: list[int], t2: list[int], side
 import time
 from postgrest.exceptions import APIError
 
-
-def sb_retry(fn, retries: int = 2, base_sleep: float = 0.35, *, label: str = "Supabase call"):
+def sb_try(fn, retries: int = 2, base_sleep: float = 0.35):
     """
-    Backward-compatible wrapper so you don't have to replace sb_retry everywhere today.
-    It will NOT raise; it will show the real error in the UI and stop.
+    Safe supabase wrapper that never raises.
+    Returns: (ok: bool, result: any, err: str)
     """
-    ok, resp, err = sb_try(fn, retries=retries, base_sleep=base_sleep)
-    if not ok:
-        st.error(f"{label} failed.")
-        st.code(err)
-        st.stop()
-    return resp
-
     last_err = ""
 
     for attempt in range(1, retries + 1):
@@ -68,6 +60,19 @@ def sb_retry(fn, retries: int = 2, base_sleep: float = 0.35, *, label: str = "Su
             time.sleep(base_sleep * attempt)
 
     return False, None, last_err
+
+
+def sb_retry(fn, retries: int = 2, base_sleep: float = 0.35, *, label: str = "Supabase call"):
+    """
+    Backward-compatible wrapper that shows errors in the UI and stops (does not raise).
+    """
+    ok, resp, err = sb_try(fn, retries=retries, base_sleep=base_sleep)
+    if not ok:
+        st.error(f"{label} failed.")
+        st.code(err)
+        st.stop()
+    return resp
+
 
 
 
