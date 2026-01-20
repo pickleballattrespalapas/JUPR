@@ -6,8 +6,6 @@ from jupr_app.ui.helpers import build_standings_link, build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
 
 
-
-
 def render(ctx):
     # Always use 4-space indentation in this file.
     df_players = ctx.df_players_active
@@ -21,9 +19,6 @@ def render(ctx):
 
     st.header("🏆 Leaderboards")
 
-    public_url = build_public_url(page="leaderboards", params={"league": league_name})
-    st.text_input("Public link", value=public_url)
-    public_link_button("Open Public Standings", public_url)                    
     # -------------------------
     # Available leagues
     # -------------------------
@@ -48,18 +43,18 @@ def render(ctx):
     except Exception:
         pass
 
-    # Share link (admin only)
-    admin_logged_in = bool(getattr(ctx, "admin_logged_in", st.session_state.get("admin_logged_in", False)))
-    if (not PUBLIC_MODE) and admin_logged_in:
-        st.caption("Share standings:")
-        share_link = build_standings_link(target_league, public=True)
-        st.text_input("Public standings link", value=share_link)
-        try:
-            st.link_button("Open Public Standings", share_link)
-        except Exception:
-            pass
+    # -------------------------
+    # Share link + open button (works in admin + public)
+    # -------------------------
+    public_url = build_public_url(page="leaderboards", params={"league": target_league})
 
+    st.caption("Public standings link")
+    st.text_input("", value=public_url, label_visibility="collapsed")
+    public_link_button("Open Public Standings", public_url)
+
+    # -------------------------
     # Min games requirement (league views only)
+    # -------------------------
     min_games_req = 0
     if target_league != "OVERALL" and df_meta is not None and not df_meta.empty:
         cfg = df_meta[df_meta["league_name"] == target_league]
@@ -82,7 +77,6 @@ def render(ctx):
         # Normalize expected columns
         if not display_df.empty:
             if "name" not in display_df.columns and "id" in display_df.columns:
-                # If your active players df doesn't include name, try mapping
                 display_df["name"] = display_df["id"].map(id_to_name)
 
             if "starting_rating" not in display_df.columns:
@@ -111,6 +105,7 @@ def render(ctx):
                 )
                 display_df = pd.DataFrame(lr_resp.data) if lr_resp and lr_resp.data is not None else pd.DataFrame()
             except Exception as e:
+                admin_logged_in = bool(getattr(ctx, "admin_logged_in", st.session_state.get("admin_logged_in", False)))
                 if (not PUBLIC_MODE) and admin_logged_in:
                     st.warning(f"Could not fetch league_ratings for {target_league}: {e}")
                 display_df = pd.DataFrame()
@@ -258,3 +253,4 @@ def render(ctx):
         """,
         unsafe_allow_html=True,
     )
+
