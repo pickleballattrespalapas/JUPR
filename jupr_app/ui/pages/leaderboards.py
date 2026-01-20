@@ -3,6 +3,11 @@ import pandas as pd
 
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.helpers import build_standings_link, build_player_profile_link
+from jupr_app.ui.public_links import build_public_url, public_link_button
+
+public_url = build_public_url(page="leaderboards", params={"league": league_name})
+st.text_input("Public link", value=public_url)
+public_link_button("Open Public Standings", public_url)
 
 
 def render(ctx):
