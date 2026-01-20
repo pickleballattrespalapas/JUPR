@@ -1,1 +1,1 @@
-from . import streamlit_app  # noqa: F401
+from . import streamlit_app
