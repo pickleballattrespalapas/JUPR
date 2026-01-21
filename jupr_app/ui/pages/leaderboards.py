@@ -36,6 +36,20 @@ def render(ctx):
     pre = st.session_state.get("preselect_league", "") or qp_get("league", "")
     default_idx = available_leagues.index(pre) if (pre and pre in available_leagues) else 0
 
+    st.markdown(
+        """
+        <style>
+          @media (prefers-color-scheme: dark) {
+            [data-testid="stVerticalBlockBorderWrapper"] {
+              border-color: rgba(51, 65, 85, 0.85) !important;
+              background: rgba(15, 23, 42, 0.45) !important;
+            }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # -------------------------
     # Controls + share link (visual framing only)
     # -------------------------
@@ -246,6 +260,7 @@ def render(ctx):
         f"""
         <div class="lbtable">
           <style>
+            /* Base (light) */
             .lbtable {{
               width: 100%;
               overflow-x: auto;
@@ -278,10 +293,30 @@ def render(ctx):
             .lbtable a {{
               text-decoration: underline;
             }}
+    
+            /* Dark theme override (automatic when OS/browser is dark) */
+            @media (prefers-color-scheme: dark) {{
+              .lbtable {{
+                border: 1px solid rgba(51, 65, 85, 0.9);
+                background: rgba(15, 23, 42, 0.80);         /* slate-900-ish */
+                box-shadow: 0 1px 2px rgba(0,0,0,0.55);
+              }}
+              .lbtable th, .lbtable td {{
+                border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+                color: rgba(226, 232, 240, 0.92);           /* slate-200 */
+              }}
+              .lbtable th {{
+                color: rgba(148, 163, 184, 0.95);           /* slate-400 */
+                background: rgba(30, 41, 59, 0.85);         /* slate-800 */
+              }}
+              .lbtable a {{
+                color: rgba(96, 165, 250, 0.95);            /* blue-400 */
+                text-decoration: underline;
+              }}
+            }}
           </style>
-          {html_tbl}
+          {html}
         </div>
         """,
         unsafe_allow_html=True,
     )
-
