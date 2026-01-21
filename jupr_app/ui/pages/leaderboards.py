@@ -260,6 +260,18 @@ def render(ctx):
         f"""
         <div class="lbtable">
           <style>
+            /* Force proper table layout even if Streamlit/global CSS interferes */
+            .lbtable table {{
+              width: 100% !important;
+              border-collapse: separate !important;
+              border-spacing: 0 !important;
+              table-layout: auto !important;
+            }}
+            .lbtable thead {{ display: table-header-group !important; }}
+            .lbtable tbody {{ display: table-row-group !important; }}
+            .lbtable tr {{ display: table-row !important; }}
+            .lbtable th, .lbtable td {{ display: table-cell !important; }}
+    
             /* Base (light) */
             .lbtable {{
               width: 100%;
@@ -269,18 +281,13 @@ def render(ctx):
               background: #FFFFFF;
               box-shadow: 0 1px 2px rgba(0,0,0,0.06);
             }}
-            .lbtable table {{
-              width: 100%;
-              border-collapse: separate;
-              border-spacing: 0;
-            }}
             .lbtable th, .lbtable td {{
               padding: 10px 12px;
               border-bottom: 1px solid rgba(238,240,243,1);
               text-align: left;
               vertical-align: middle;
-              white-space: nowrap;
               font-size: 0.93rem;
+              white-space: nowrap;
             }}
             .lbtable th {{
               font-weight: 750;
@@ -294,11 +301,16 @@ def render(ctx):
               text-decoration: underline;
             }}
     
+            /* Optional: subtle zebra striping (very light) */
+            .lbtable tbody tr:nth-child(even) td {{
+              background: rgba(0,0,0,0.015);
+            }}
+    
             /* Dark theme override */
             @media (prefers-color-scheme: dark) {{
               .lbtable {{
                 border: 1px solid rgba(51, 65, 85, 0.9);
-                background: rgba(15, 23, 42, 0.80);
+                background: rgba(15, 23, 42, 0.55);
                 box-shadow: 0 1px 2px rgba(0,0,0,0.55);
               }}
               .lbtable th, .lbtable td {{
@@ -307,11 +319,14 @@ def render(ctx):
               }}
               .lbtable th {{
                 color: rgba(148, 163, 184, 0.95);
-                background: rgba(30, 41, 59, 0.85);
+                background: rgba(30, 41, 59, 0.75);
               }}
               .lbtable a {{
                 color: rgba(96, 165, 250, 0.95);
                 text-decoration: underline;
+              }}
+              .lbtable tbody tr:nth-child(even) td {{
+                background: rgba(255,255,255,0.03);
               }}
             }}
           </style>
@@ -320,4 +335,3 @@ def render(ctx):
         """,
         unsafe_allow_html=True,
     )
-
