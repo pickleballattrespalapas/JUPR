@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from jupr_app.ui.url import qp_get
-from jupr_app.ui.helpers import build_standings_link, build_player_profile_link
+from jupr_app.ui.helpers import build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
 
 
@@ -17,7 +17,11 @@ def render(ctx):
     PUBLIC_MODE = bool(ctx.public_mode)
     club_id = str(ctx.club_id)
 
-    st.header("🏆 Leaderboards")
+    # -------------------------
+    # Page header (visual only)
+    # -------------------------
+    st.markdown("# Leaderboards")
+    st.caption("Standings by overall rating or by league view.")
 
     # -------------------------
     # Available leagues
@@ -32,7 +36,20 @@ def render(ctx):
     pre = st.session_state.get("preselect_league", "") or qp_get("league", "")
     default_idx = available_leagues.index(pre) if (pre and pre in available_leagues) else 0
 
-    target_league = st.selectbox("Select View", available_leagues, index=default_idx, key="lb_league")
+    # -------------------------
+    # Controls + share link (visual framing only)
+    # -------------------------
+    with st.container(border=True):
+        c1, c2 = st.columns([1.05, 1.0])
+
+        with c1:
+            target_league = st.selectbox("Select View", available_leagues, index=default_idx, key="lb_league")
+
+        with c2:
+            public_url = build_public_url(page="leaderboards", params={"league": target_league})
+            st.caption("Public standings link")
+            st.text_input("", value=public_url, label_visibility="collapsed")
+            public_link_button("Open Public Standings", public_url)
 
     # Keep URL in sync (do not indent other blocks under this try/except)
     try:
@@ -42,15 +59,6 @@ def render(ctx):
             st.query_params["public"] = "1"
     except Exception:
         pass
-
-    # -------------------------
-    # Share link + open button (works in admin + public)
-    # -------------------------
-    public_url = build_public_url(page="leaderboards", params={"league": target_league})
-
-    st.caption("Public standings link")
-    st.text_input("", value=public_url, label_visibility="collapsed")
-    public_link_button("Open Public Standings", public_url)
 
     # -------------------------
     # Min games requirement (league views only)
@@ -154,39 +162,40 @@ def render(ctx):
     if target_league != "OVERALL":
         qualified_df = display_df[display_df["matches_played"].astype(int) >= int(min_games_req)].copy()
         if not qualified_df.empty:
-            st.markdown(f"### 🏅 Top Performers (Min {min_games_req} Games)")
-            c1, c2, c3, c4 = st.columns(4)
+            with st.container(border=True):
+                st.markdown(f"### Top Performers (Min {min_games_req} Games)")
+                c1, c2, c3, c4 = st.columns(4)
 
-            with c1:
-                st.markdown("**👑 Highest Rating**")
-                top = qualified_df.sort_values("rating", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{float(r['JUPR']):.3f}** - {r['name']}")
+                with c1:
+                    st.markdown("**Highest Rating**")
+                    top = qualified_df.sort_values("rating", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{float(r['JUPR']):.3f}** - {r['name']}")
 
-            with c2:
-                st.markdown("**🔥 Most Improved**")
-                top = qualified_df.sort_values("rating_gain", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{(float(r['rating_gain'])/400.0):+.3f}** - {r['name']}")
+                with c2:
+                    st.markdown("**Most Improved**")
+                    top = qualified_df.sort_values("rating_gain", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{(float(r['rating_gain'])/400.0):+.3f}** - {r['name']}")
 
-            with c3:
-                st.markdown("**🎯 Best Win %**")
-                top = qualified_df.sort_values("Win %", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{float(r['Win %']):.1f}%** - {r['name']}")
+                with c3:
+                    st.markdown("**Best Win %**")
+                    top = qualified_df.sort_values("Win %", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{float(r['Win %']):.1f}%** - {r['name']}")
 
-            with c4:
-                st.markdown("**🚜 Most Wins**")
-                top = qualified_df.sort_values("wins", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{int(r['wins'])} Wins** - {r['name']}")
+                with c4:
+                    st.markdown("**Most Wins**")
+                    top = qualified_df.sort_values("wins", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{int(r['wins'])} Wins** - {r['name']}")
 
             st.divider()
 
     # -------------------------
     # Standings table
     # -------------------------
-    st.markdown("### 📊 Standings")
+    st.markdown("### Standings")
     final_view = display_df.sort_values("rating", ascending=False).copy()
 
     # Canonical pid column for links
@@ -230,25 +239,47 @@ def render(ctx):
     tbl["Win %"] = tbl["Win %"].map(lambda x: f"{float(x):.1f}%")
     tbl = tbl.rename(columns={"matches_played": "MP", "wins": "W", "losses": "L"})
 
-    html = tbl.to_html(index=False, escape=False)
+    html_tbl = tbl.to_html(index=False, escape=False)
 
+    # Visual-only: cleaner table skin + subtle header row.
     st.markdown(
         f"""
         <div class="lbtable">
           <style>
-            .lbtable {{ width: 100%; overflow-x: auto; }}
-            .lbtable table {{ width: 100%; border-collapse: collapse; }}
+            .lbtable {{
+              width: 100%;
+              overflow-x: auto;
+              border: 1px solid rgba(229,231,235,1);
+              border-radius: 14px;
+              background: #FFFFFF;
+              box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+            }}
+            .lbtable table {{
+              width: 100%;
+              border-collapse: separate;
+              border-spacing: 0;
+            }}
             .lbtable th, .lbtable td {{
-              padding: 8px;
-              border-bottom: 1px solid rgba(0,0,0,0.08);
+              padding: 10px 12px;
+              border-bottom: 1px solid rgba(238,240,243,1);
               text-align: left;
               vertical-align: middle;
               white-space: nowrap;
+              font-size: 0.93rem;
             }}
-            .lbtable th {{ font-weight: 700; }}
-            .lbtable a {{ text-decoration: underline; }}
+            .lbtable th {{
+              font-weight: 750;
+              color: #6B7280;
+              background: #FAFAFB;
+            }}
+            .lbtable tr:last-child td {{
+              border-bottom: none;
+            }}
+            .lbtable a {{
+              text-decoration: underline;
+            }}
           </style>
-          {html}
+          {html_tbl}
         </div>
         """,
         unsafe_allow_html=True,
