@@ -294,29 +294,30 @@ def render(ctx):
               text-decoration: underline;
             }}
     
-            /* Dark theme override (automatic when OS/browser is dark) */
+            /* Dark theme override */
             @media (prefers-color-scheme: dark) {{
               .lbtable {{
                 border: 1px solid rgba(51, 65, 85, 0.9);
-                background: rgba(15, 23, 42, 0.80);         /* slate-900-ish */
+                background: rgba(15, 23, 42, 0.80);
                 box-shadow: 0 1px 2px rgba(0,0,0,0.55);
               }}
               .lbtable th, .lbtable td {{
                 border-bottom: 1px solid rgba(51, 65, 85, 0.65);
-                color: rgba(226, 232, 240, 0.92);           /* slate-200 */
+                color: rgba(226, 232, 240, 0.92);
               }}
               .lbtable th {{
-                color: rgba(148, 163, 184, 0.95);           /* slate-400 */
-                background: rgba(30, 41, 59, 0.85);         /* slate-800 */
+                color: rgba(148, 163, 184, 0.95);
+                background: rgba(30, 41, 59, 0.85);
               }}
               .lbtable a {{
-                color: rgba(96, 165, 250, 0.95);            /* blue-400 */
+                color: rgba(96, 165, 250, 0.95);
                 text-decoration: underline;
               }}
             }}
           </style>
-          {html}
+          {html_tbl}
         </div>
         """,
         unsafe_allow_html=True,
     )
+
