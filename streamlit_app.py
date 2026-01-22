@@ -1,6 +1,9 @@
 # jupr/streamlit_app.py
 from __future__ import annotations
 
+import hashlib
+import hmac
+import time
 import traceback
 from collections.abc import Mapping
 
@@ -46,6 +49,69 @@ def get_secret(path: list[str], default=None):
 
 
 # -------------------------
+# Admin session helpers
+# -------------------------
+ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
+
+
+def _get_admin_session_secret() -> str:
+    return str(
+        get_secret(["supabase", "admin_session_secret"], "")
+        or get_secret(["admin_session_secret"], "")
+        or ""
+    )
+
+
+def _sign_admin_session(expires_at: int, secret: str) -> str:
+    msg = f"{expires_at}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def _create_admin_session() -> None:
+    secret = _get_admin_session_secret()
+    if not secret:
+        st.error("Admin session secret is missing. Set supabase.admin_session_secret in secrets.")
+        st.stop()
+
+    expires_at = int(time.time()) + int(ADMIN_SESSION_TTL_SECONDS)
+    token = _sign_admin_session(expires_at, secret)
+    st.session_state["admin_session"] = {"exp": expires_at, "token": token}
+
+
+def _clear_admin_session() -> None:
+    st.session_state.pop("admin_session", None)
+
+
+def _validate_admin_session() -> bool:
+    secret = _get_admin_session_secret()
+    if not secret:
+        _clear_admin_session()
+        return False
+
+    data = st.session_state.get("admin_session")
+    if not isinstance(data, dict):
+        return False
+
+    try:
+        expires_at = int(data.get("exp", 0))
+    except Exception:
+        _clear_admin_session()
+        return False
+
+    if expires_at <= int(time.time()):
+        _clear_admin_session()
+        return False
+
+    token = str(data.get("token", ""))
+    expected = _sign_admin_session(expires_at, secret)
+    if not hmac.compare_digest(token, expected):
+        _clear_admin_session()
+        return False
+
+    return True
+
+
+# -------------------------
 # Supabase + data loading
 # -------------------------
 @st.cache_resource
@@ -57,6 +123,7 @@ def get_supabase():
     url = "https://....supabase.co"
     anon_key = "..."   # OR key = "..." (either is accepted)
     admin_password = "..."  # your chosen admin login password
+    admin_session_secret = "..."  # used to sign short-lived admin sessions
     """
     url = get_secret(["supabase", "url"], "")
     key = get_secret(["supabase", "anon_key"], "") or get_secret(["supabase", "key"], "")
@@ -68,6 +135,7 @@ def get_supabase():
             'url = "https://YOUR_PROJECT_REF.supabase.co"\n'
             'anon_key = "YOUR_SUPABASE_ANON_KEY"  # or use key = "…"\n'
             'admin_password = "YOUR_ADMIN_PASSWORD"\n'
+            'admin_session_secret = "YOUR_ADMIN_SESSION_SECRET"\n'
         )
 
         # Debug keys only (no values) - Mapping-safe (no .get usage)
@@ -158,7 +226,6 @@ def main():
         st.session_state["base_url"] = PUBLIC_BASE_URL
 
         # ---- Session defaults ----
-        st.session_state.setdefault("admin_logged_in", False)
         st.session_state.setdefault("deep_link_applied", False)
 
         # ---- Sidebar / Auth ----
@@ -167,7 +234,7 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not bool(st.session_state.get("admin_logged_in", False)):
+            if not _validate_admin_session():
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
 
@@ -176,18 +243,18 @@ def main():
                         if not expected:
                             st.error("Admin password is not configured in secrets (supabase.admin_password).")
                         elif pwd == expected:
-                            st.session_state["admin_logged_in"] = True
+                            _create_admin_session()
                             st.rerun()
                         else:
                             st.error("Incorrect password.")
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
-                    st.session_state["admin_logged_in"] = False
+                    _clear_admin_session()
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and bool(st.session_state.get("admin_logged_in", False))
+        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_session()
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
@@ -371,5 +438,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
