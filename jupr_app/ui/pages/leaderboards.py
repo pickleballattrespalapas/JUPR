@@ -278,22 +278,8 @@ def render(ctx):
     st.markdown(
         f"""
         <div class="lbtable">
-          <style>
-            .lbtable {{ width: 100%; overflow-x: auto; }}
-            .lbtable table {{ width: 100%; border-collapse: collapse; }}
-            .lbtable th, .lbtable td {{
-              padding: 8px;
-              border-bottom: 1px solid rgba(0,0,0,0.08);
-              text-align: left;
-              vertical-align: middle;
-              white-space: nowrap;
-            }}
-            .lbtable th {{ font-weight: 700; }}
-            .lbtable a {{ text-decoration: underline; }}
-          </style>
           {html}
         </div>
         """,
         unsafe_allow_html=True,
     )
-

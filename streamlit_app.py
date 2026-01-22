@@ -13,6 +13,7 @@ import pandas as pd  # kept because pages may rely on it
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
 from jupr_app.ui.context import AppContext
+from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
 
@@ -207,16 +208,7 @@ def main():
             page_icon="🌵",
             initial_sidebar_state="collapsed",
         )
-        # 1) streamlit_app.py (or jupr/streamlit_app.py)
-        # Add this near the top, AFTER st.set_page_config(...)
-        
-        from jupr_app.ui.theme_clean import apply_clean_theme
-        
-        def main():
-            st.set_page_config(page_title="JUPR Leagues", layout="wide")
-            apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
-        
-            # ... rest of your app boot + routing
+        apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
                                 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")

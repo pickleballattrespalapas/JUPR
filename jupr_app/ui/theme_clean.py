@@ -15,13 +15,52 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
     <style>
       :root {{
         --accent: {accent_hex};
+        --accent-contrast: #F8FAFC;
         --bg: #F6F7FB;
-        --panel: #FFFFFF;
+        --panel: #FDFDFE;
         --text: #111827;
         --muted: #6B7280;
         --border: #E5E7EB;
-        --shadow: 0 1px 2px rgba(0,0,0,0.06);
+        --border-strong: #CBD5E1;
+        --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+        --link: #1D4ED8;
+        --link-hover: #1E40AF;
+        --focus: rgba(59, 130, 246, 0.45);
+        --table-stripe: #F3F4F6;
+        --pill-bg: #F8FAFC;
         --radius: 14px;
+      }}
+
+      html[data-theme="dark"] {{
+        --bg: #0F1218;
+        --panel: #161B24;
+        --text: #E5E7EB;
+        --muted: #9CA3AF;
+        --border: #2B3240;
+        --border-strong: #3B4557;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+        --link: #8CB4FF;
+        --link-hover: #B3CCFF;
+        --focus: rgba(96, 165, 250, 0.55);
+        --table-stripe: #1C2230;
+        --pill-bg: #1B2230;
+      }}
+
+      @media (prefers-color-scheme: dark) {{
+        :root {{
+          --bg: #0F1218;
+          --panel: #161B24;
+          --text: #E5E7EB;
+          --muted: #9CA3AF;
+          --border: #2B3240;
+          --border-strong: #3B4557;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+          --link: #8CB4FF;
+          --link-hover: #B3CCFF;
+          --focus: rgba(96, 165, 250, 0.55);
+          --table-stripe: #1C2230;
+          --pill-bg: #1B2230;
+        }}
       }}
 
       /* App background */
@@ -55,6 +94,12 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
       .stCaption, .stMarkdown p {{
         color: var(--muted);
       }}
+      a {{
+        color: var(--link);
+      }}
+      a:hover {{
+        color: var(--link-hover);
+      }}
 
       /* Panel look for bordered containers (Streamlit uses this wrapper for border=True) */
       [data-testid="stVerticalBlockBorderWrapper"] {{
@@ -73,20 +118,25 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         font-weight: 650;
         padding: 0.55rem 0.9rem;
         box-shadow: 0 1px 1px rgba(0,0,0,0.04);
+        transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
       }}
       .stButton > button:hover {{
-        border-color: #D1D5DB;
+        border-color: var(--border-strong);
         transform: translateY(-1px);
+      }}
+      .stButton > button:focus-visible {{
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
       }}
 
       /* Primary buttons: use accent */
       .stButton > button[kind="primary"] {{
         background: var(--accent);
-        color: #FFFFFF;
+        color: var(--accent-contrast);
         border-color: rgba(0,0,0,0.0);
       }}
       .stButton > button[kind="primary"]:hover {{
-        filter: brightness(0.97);
+        filter: brightness(0.95);
       }}
 
       /* Inputs: soft borders */
@@ -94,6 +144,9 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         border-radius: 12px !important;
       }}
       [data-baseweb="select"] > div {{
+        border-radius: 12px !important;
+      }}
+      [data-baseweb="input"] > div {{
         border-radius: 12px !important;
       }}
 
@@ -137,7 +190,7 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         font-size: 0.78rem;
         font-weight: 750;
         border: 1px solid var(--border);
-        background: #F9FAFB;
+        background: var(--pill-bg);
         color: var(--text);
         white-space: nowrap;
       }}
@@ -153,6 +206,60 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         border: 1px solid var(--border);
         box-shadow: var(--shadow);
         background: var(--panel);
+      }}
+
+      /* Leaderboard table (HTML) */
+      .lbtable {{
+        width: 100%;
+        overflow-x: auto;
+      }}
+      .lbtable table {{
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        color: var(--text);
+      }}
+      .lbtable th, .lbtable td {{
+        padding: 8px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: middle;
+        white-space: nowrap;
+      }}
+      .lbtable th {{
+        font-weight: 700;
+        background: var(--table-stripe);
+      }}
+      .lbtable tr:nth-child(even) td {{
+        background: var(--table-stripe);
+      }}
+      .lbtable a {{
+        text-decoration: underline;
+      }}
+
+      /* Public link button fallback */
+      .jupr-link-button {{
+        text-decoration: none;
+      }}
+      .jupr-link-button__btn {{
+        padding: 0.5rem 1rem;
+        font-size: 1rem;
+        border-radius: 0.75rem;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        font-weight: 650;
+        box-shadow: 0 1px 1px rgba(0,0,0,0.04);
+        transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+      }}
+      .jupr-link-button__btn:hover {{
+        border-color: var(--border-strong);
+        transform: translateY(-1px);
+      }}
+      .jupr-link-button__btn:focus-visible {{
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
       }}
     </style>
     """

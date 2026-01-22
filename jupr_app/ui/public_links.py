@@ -34,8 +34,7 @@ def public_link_button(label: str, url: str):
         st.link_button(label, url)
     except Exception:
         st.markdown(
-            f'<a href="{url}" target="_blank" rel="noopener noreferrer">'
-            f'<button style="padding:0.5rem 1rem; font-size:1rem; border-radius:0.5rem; cursor:pointer;">'
-            f'{label}</button></a>',
+            f'<a class="jupr-link-button" href="{url}" target="_blank" rel="noopener noreferrer">'
+            f'<button class="jupr-link-button__btn">{label}</button></a>',
             unsafe_allow_html=True,
         )
