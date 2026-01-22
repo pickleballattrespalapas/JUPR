@@ -16,6 +16,8 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
       :root {{
         --accent: {accent_hex};
         --accent-contrast: #F8FAFC;
+        --accent-soft: rgba(47, 111, 237, 0.12);
+        --accent-border: rgba(47, 111, 237, 0.30);
         --bg: #F6F7FB;
         --panel: #FDFDFE;
         --text: #111827;
@@ -23,12 +25,16 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         --border: #E5E7EB;
         --border-strong: #CBD5E1;
         --shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+        --shadow-lg: 0 14px 32px rgba(15, 23, 42, 0.16);
         --link: #1D4ED8;
         --link-hover: #1E40AF;
         --focus: rgba(59, 130, 246, 0.45);
         --table-stripe: #F3F4F6;
         --pill-bg: #F8FAFC;
         --radius: 14px;
+        --font-sm: 0.86rem;
+        --font-base: 1rem;
+        --font-lg: 1.2rem;
       }}
 
       html[data-theme="dark"] {{
@@ -39,11 +45,14 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         --border: #2B3240;
         --border-strong: #3B4557;
         --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+        --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.55);
         --link: #8CB4FF;
         --link-hover: #B3CCFF;
         --focus: rgba(96, 165, 250, 0.55);
         --table-stripe: #1C2230;
         --pill-bg: #1B2230;
+        --accent-soft: rgba(140, 180, 255, 0.16);
+        --accent-border: rgba(140, 180, 255, 0.35);
       }}
 
       @media (prefers-color-scheme: dark) {{
@@ -55,11 +64,14 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
           --border: #2B3240;
           --border-strong: #3B4557;
           --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+          --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.55);
           --link: #8CB4FF;
           --link-hover: #B3CCFF;
           --focus: rgba(96, 165, 250, 0.55);
           --table-stripe: #1C2230;
           --pill-bg: #1B2230;
+          --accent-soft: rgba(140, 180, 255, 0.16);
+          --accent-border: rgba(140, 180, 255, 0.35);
         }}
       }}
 
@@ -109,6 +121,104 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         box-shadow: var(--shadow);
       }}
 
+      /* Topbar */
+      .jupr-topbar {{
+        position: sticky;
+        top: 0.75rem;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.85rem 1.1rem;
+        border-radius: calc(var(--radius) + 2px);
+        border: 1px solid var(--border);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+        margin-bottom: 1rem;
+      }}
+      .jupr-topbar__title {{
+        font-size: var(--font-lg);
+        font-weight: 750;
+        color: var(--text);
+        margin-bottom: 0.1rem;
+      }}
+      .jupr-topbar__subtitle {{
+        font-size: var(--font-sm);
+        color: var(--muted);
+      }}
+      .jupr-topbar__right {{
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: var(--muted);
+        font-size: var(--font-sm);
+      }}
+
+      /* Cards + sections */
+      .jupr-card {{
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        padding: 1rem 1.1rem;
+      }}
+      .jupr-card--hover {{
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+      }}
+      .jupr-card--hover:hover {{
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+        border-color: var(--accent-border);
+      }}
+      .jupr-section-title {{
+        font-size: var(--font-lg);
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+        color: var(--text);
+      }}
+      .jupr-divider {{
+        height: 1px;
+        background: var(--border);
+        margin: 0.75rem 0;
+      }}
+
+      /* Callouts */
+      .jupr-callout {{
+        border: 1px solid var(--accent-border);
+        background: var(--accent-soft);
+        border-radius: var(--radius);
+        padding: 0.85rem 1rem;
+        box-shadow: var(--shadow);
+      }}
+      .jupr-callout .title {{
+        font-weight: 700;
+        font-size: var(--font-base);
+        color: var(--text);
+        margin-bottom: 0.2rem;
+      }}
+      .jupr-callout .body {{
+        font-size: var(--font-sm);
+        color: var(--text);
+      }}
+      .jupr-callout.info {{
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+      }}
+      .jupr-callout.success {{
+        border-color: rgba(16, 185, 129, 0.35);
+        background: rgba(16, 185, 129, 0.12);
+      }}
+      .jupr-callout.warn {{
+        border-color: rgba(245, 158, 11, 0.35);
+        background: rgba(245, 158, 11, 0.12);
+      }}
+      .jupr-callout.danger {{
+        border-color: rgba(239, 68, 68, 0.35);
+        background: rgba(239, 68, 68, 0.12);
+      }}
+
       /* Buttons: subtle, modern */
       .stButton > button {{
         border-radius: 12px;
@@ -148,6 +258,61 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
       }}
       [data-baseweb="input"] > div {{
         border-radius: 12px !important;
+      }}
+      [data-baseweb="textarea"] > div {{
+        border-radius: 12px !important;
+      }}
+      [data-baseweb="input"] > div,
+      [data-baseweb="select"] > div,
+      [data-baseweb="textarea"] > div {{
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }}
+      [data-baseweb="input"] > div:hover,
+      [data-baseweb="select"] > div:hover,
+      [data-baseweb="textarea"] > div:hover {{
+        border-color: var(--border-strong);
+      }}
+      [data-baseweb="input"] > div:focus-within,
+      [data-baseweb="select"] > div:focus-within,
+      [data-baseweb="textarea"] > div:focus-within {{
+        border-color: var(--accent-border);
+        box-shadow: 0 0 0 3px var(--focus);
+      }}
+
+      /* Tabs */
+      .stTabs [data-baseweb="tab-list"] {{
+        gap: 0.35rem;
+      }}
+      .stTabs [data-baseweb="tab"] {{
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 0.35rem 0.85rem;
+        background: var(--panel);
+        color: var(--muted);
+        font-weight: 650;
+        transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+      }}
+      .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+        border-color: var(--accent-border);
+        color: var(--text);
+        box-shadow: 0 0 0 1px var(--accent-soft);
+      }}
+      .stTabs [data-baseweb="tab-border"] {{
+        display: none;
+      }}
+
+      /* Expanders */
+      details[data-testid="stExpander"] {{
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        padding: 0.35rem 0.6rem;
+      }}
+      details[data-testid="stExpander"] > summary {{
+        font-weight: 650;
+        font-size: var(--font-base);
+        color: var(--text);
       }}
 
       /* KPI cards */
@@ -233,6 +398,9 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
       .lbtable tr:nth-child(even) td {{
         background: var(--table-stripe);
       }}
+      .lbtable tr:hover td {{
+        background: var(--accent-soft);
+      }}
       .lbtable a {{
         text-decoration: underline;
       }}
@@ -266,6 +434,73 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
     st.markdown(css, unsafe_allow_html=True)
 
 
+def topbar(title: str, subtitle: str = "", *, right_html: str = "") -> None:
+    """
+    Render a sticky top bar with a title, subtitle, and optional right-aligned HTML.
+    """
+    title_html = html.escape(title)
+    subtitle_html = html.escape(subtitle)
+
+    st.markdown(
+        f"""
+        <div class="jupr-topbar">
+          <div class="jupr-topbar__left">
+            <div class="jupr-topbar__title">{title_html}</div>
+            <div class="jupr-topbar__subtitle">{subtitle_html}</div>
+          </div>
+          <div class="jupr-topbar__right">{right_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def card(html_body: str, *, hover: bool = False, escape: bool = False) -> None:
+    """
+    Render a card wrapper for arbitrary HTML content.
+    """
+    class_name = "jupr-card"
+    if hover:
+        class_name += " jupr-card--hover"
+
+    body_html = html.escape(html_body) if escape else html_body
+
+    st.markdown(
+        f"""
+        <div class="{class_name}">
+          {body_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def divider() -> None:
+    """
+    Render a simple divider line.
+    """
+    st.markdown('<div class="jupr-divider"></div>', unsafe_allow_html=True)
+
+
+def callout(kind: str, title: str, body: str) -> None:
+    """
+    Render a callout block with a title and body.
+    """
+    variant = kind if kind in {"info", "success", "warn", "danger"} else "info"
+    title_html = html.escape(title)
+    body_html = html.escape(body)
+
+    st.markdown(
+        f"""
+        <div class="jupr-callout {variant}">
+          <div class="title">{title_html}</div>
+          <div class="body">{body_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def kpi_card(label: str, value: str, *, delta: str = "", icon: str = "") -> None:
     """
     Slot-in KPI card. Keep icons minimal and consistent (use only here + key headers).
@@ -296,3 +531,13 @@ def pill(text: str, kind: str = "neutral") -> str:
     t = html.escape(text)
     k = html.escape(kind)
     return f'<span class="jupr-pill {k}">{t}</span>'
+
+
+# Demo snippet (comment-only):
+#
+# apply_clean_theme()
+# topbar("JUPR Dashboard", "Season overview", right_html="<a href='#'>Settings</a>")
+# kpi_card("Total Matches", "128", delta="+12 vs last month")
+# callout("info", "Heads up", "Rankings refresh nightly at 2am.")
+# divider()
+# card("<strong>Card content</strong>", hover=True)
