@@ -79,20 +79,19 @@ def render_top_performers_cards(
             margin-top: 8px;
         }
         .tp-cards .tp-card {
-            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+            background: rgba(255,255,255,0.02);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 14px;
             padding: 14px 16px;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
             border-top: 3px solid var(--tp-accent);
-            min-height: 196px;
         }
         .tp-cards .tp-label {
             font-size: 11px;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
             color: rgba(255,255,255,0.55);
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
         .tp-cards .tp-value {
             font-size: 26px;
@@ -127,7 +126,7 @@ def render_top_performers_cards(
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            max-width: 150px;
+            max-width: 160px;
             text-align: right;
         }
         </style>
