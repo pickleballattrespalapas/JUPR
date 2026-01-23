@@ -13,6 +13,7 @@ from jupr_app.domain.challenge_ladder import (
     TIER_ORDER,
     tier_title,
     tier_for_jupr,
+    tier_idx,
     ladder_nm,
     ladder_parse_dt,
     dt_utc_now,
@@ -630,7 +631,10 @@ def render(ctx):
         )
 
         active_all = r0[r0["is_active"] == True].copy()
-        active_all = active_all.sort_values(["tier_id", "rank"])
+        active_all = active_all.sort_values(
+            ["tier_id", "rank"],
+            key=lambda s: s.map(tier_idx) if s.name == "tier_id" else s,
+        )
 
         # Build label -> pid map for active roster
         active_all["label"] = active_all.apply(
