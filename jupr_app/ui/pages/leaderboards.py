@@ -399,7 +399,18 @@ def render(ctx):
     )
 
     if target_league != "OVERALL":
-        display_df["Qualified"] = display_df["matches_played"].astype(int) >= int(min_games_req)
+        if "matches_played" in display_df.columns:
+            try:
+                display_df["Qualified"] = display_df["matches_played"].astype(int) >= int(
+                    min_games_req or 0
+                )
+            except Exception:
+                display_df["Qualified"] = False
+        else:
+            display_df["Qualified"] = False
+
+    if target_league != "OVERALL" and "Qualified" not in display_df.columns:
+        display_df["Qualified"] = False
 
     final_view = display_df.sort_values("rating", ascending=False, kind="mergesort").copy()
     final_view["RankNum"] = range(1, len(final_view) + 1)
@@ -559,14 +570,18 @@ def render(ctx):
     st.markdown("### 📊 Standings")
 
     standings = final_view.copy()
-    if target_league != "OVERALL" and show_qualified_only:
-        standings = standings[standings["Qualified"] == True].copy()
+    if target_league != "OVERALL":
+        if "Qualified" not in standings.columns:
+            standings["Qualified"] = False
+        if show_qualified_only and "Qualified" in standings.columns:
+            standings = standings[standings["Qualified"] == True].copy()
 
     standings["Player"] = standings["name"].astype(str)
-    standings["Qualified"] = standings.get("Qualified", False)
+    if "Qualified" in standings.columns:
+        standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
 
     columns = ["Rank", "Player", "JUPR", "Gain", "Gap"]
-    if target_league != "OVERALL":
+    if target_league != "OVERALL" and "Qualified" in standings.columns:
         columns.append("Qualified")
     columns.extend(["matches_played", "wins", "losses", "Win %"])
     standings = standings[columns].rename(
@@ -577,7 +592,8 @@ def render(ctx):
         }
     )
 
-    standings["Qualified"] = standings["Qualified"].map(lambda x: "✓" if x else "")
+    if "Qualified" in standings.columns:
+        standings["Qualified"] = standings["Qualified"].map(lambda x: "✓" if x else "")
 
     def _gain_style(v):
         try:
