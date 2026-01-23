@@ -1,9 +1,9 @@
 import html
+import urllib.parse
 import streamlit as st
 import pandas as pd
 
 from jupr_app.ui.url import qp_get
-from jupr_app.ui.helpers import build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
@@ -39,15 +39,13 @@ def _player_profile_url(pid, public_mode, ctx):
         player_id = int(pid)
     except Exception:
         return None
+    params = {"page": "players", "pid": str(player_id)}
     if public_mode:
-        params = {"pid": str(player_id)}
+        params["public"] = "1"
         if getattr(ctx, "club_id", None):
             params["club_id"] = str(ctx.club_id)
-        return build_public_url(page="players", params=params)
-    try:
-        return build_player_profile_link(player_id, public=public_mode)
-    except Exception:
-        return None
+    query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
+    return f"/?{query}"
 
 
 def _build_player_link(pid, name, public_mode, ctx):
@@ -183,7 +181,7 @@ def render_top_performers_cards(
     st.markdown(
         """
         <style>
-        .tp-cards .tp-card {
+        .tp-card {
             background: rgba(255,255,255,0.03);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 16px;
@@ -191,36 +189,36 @@ def render_top_performers_cards(
             box-shadow: 0 6px 16px rgba(0,0,0,0.16);
             border-top: 3px solid var(--tp-accent);
         }
-        .tp-cards .tp-label {
+        .tp-label {
             font-size: 12px;
             letter-spacing: 0.04em;
             text-transform: uppercase;
             color: rgba(255,255,255,0.55);
             margin-bottom: 6px;
         }
-        .tp-cards .tp-value {
+        .tp-value {
             font-size: 24px;
             font-weight: 700;
             color: var(--tp-accent);
             margin-bottom: 2px;
         }
-        .tp-cards .tp-name {
+        .tp-name {
             font-size: 14px;
             color: rgba(255,255,255,0.8);
             margin-bottom: 8px;
         }
-        .tp-cards .tp-list {
+        .tp-list {
             display: flex;
             flex-direction: column;
             gap: 4px;
         }
-        .tp-cards .tp-list-item {
+        .tp-list-item {
             display: flex;
             justify-content: space-between;
             font-size: 12px;
             color: rgba(255,255,255,0.55);
         }
-        .tp-cards .tp-list-value {
+        .tp-list-value {
             font-weight: 600;
             color: rgba(255,255,255,0.65);
             margin-right: 8px;
@@ -230,7 +228,6 @@ def render_top_performers_cards(
         unsafe_allow_html=True,
     )
 
-    st.markdown(f'<div class="tp-cards" style="--tp-accent: {accent};">', unsafe_allow_html=True)
     column_count = 2 if compact_view else 4
     cols = st.columns(column_count)
     for idx, card in enumerate(top_perf_dict):
@@ -246,7 +243,7 @@ def render_top_performers_cards(
             for entry in secondary
         )
         card_html = f"""
-        <div class="tp-card">
+        <div class="tp-card" style="--tp-accent: {accent};">
             <div class="tp-label">{html.escape(str(card.get("label", "")))}</div>
             <div class="tp-value">{html.escape(primary["value"])}</div>
             <div class="tp-name">{html.escape(primary["name"])}</div>
@@ -255,7 +252,6 @@ def render_top_performers_cards(
         """
         with col:
             st.markdown(card_html, unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render(ctx):
@@ -504,7 +500,6 @@ def render(ctx):
         """,
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="lb-wrap">', unsafe_allow_html=True)
     delta_up = "#6DBE7C"
     delta_flat = "#8D94A3"
     delta_down = "#C08A3C"
@@ -669,7 +664,6 @@ def render(ctx):
     # -------------------------
     if display_df is None or display_df.empty or "rating" not in display_df.columns:
         st.info("No data.")
-        st.markdown("</div>", unsafe_allow_html=True)
         return
 
     # Defensive numeric conversions + canonical columns
@@ -839,7 +833,6 @@ def render(ctx):
     # Controls
     # -------------------------
     st.markdown("### Full Standings")
-    st.markdown('<div class="lb-controls">', unsafe_allow_html=True)
     control_cols = st.columns([2.2, 1.2, 1.2])
     with control_cols[0]:
         try:
@@ -877,7 +870,6 @@ def render(ctx):
         st.text_input("Find player", key="lb_search")
     if target_league != "OVERALL" and not PUBLIC_MODE:
         st.checkbox("Show inactive", key="lb_show_inactive", value=False)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     # -------------------------
     # Share link + open button (ADMIN ONLY)
@@ -973,19 +965,16 @@ def render(ctx):
         else:
             player_url = None
         if player_url:
-            st.markdown('<div class="lb-actions" style="margin-top:12px;">', unsafe_allow_html=True)
             try:
                 st.link_button("View full player page", player_url)
             except Exception:
                 st.markdown(f"[View full player page]({player_url})")
-            st.markdown("</div>", unsafe_allow_html=True)
 
         selected_idx = int(selected_row["RankNum"]) - 1
         start_idx = max(selected_idx - 2, 0)
         end_idx = min(selected_idx + 3, len(final_view))
         neighborhood = final_view.iloc[start_idx:end_idx].copy()
         st.markdown("##### Around Me")
-        st.markdown('<div class="lb-row">', unsafe_allow_html=True)
         for _, row in neighborhood.iterrows():
             gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
             gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
@@ -1006,7 +995,6 @@ def render(ctx):
                 """,
                 unsafe_allow_html=True,
             )
-        st.markdown("</div>", unsafe_allow_html=True)
 
         link_params = {"league": target_league}
         if selected_pid is not None:
@@ -1085,5 +1073,3 @@ def render(ctx):
                 pass
     except Exception:
         pass
-
-    st.markdown("</div>", unsafe_allow_html=True)
