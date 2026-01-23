@@ -14,6 +14,7 @@ from . import match_log
 from . import player_editor
 from . import admin_tools
 from . import admin_guide
+from . import moneyball
 
 __all__ = [
     "leaderboards",
@@ -28,4 +29,5 @@ __all__ = [
     "player_editor",
     "admin_tools",
     "admin_guide",
+    "moneyball",
 ]
