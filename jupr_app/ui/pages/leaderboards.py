@@ -6,6 +6,7 @@ from jupr_app.ui.helpers import build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
+from jupr_app.ui.theme import color_for_delta
 
 
 def render(ctx):
@@ -259,7 +260,7 @@ def render(ctx):
         return str(r)
 
     final_view["Rank"] = final_view["RankNum"].apply(_rank_badge)
-    final_view["Gain"] = (final_view["rating_gain"].astype(float) / 400.0).map("{:+.3f}".format)
+    final_view["Gain"] = final_view["rating_gain"].astype(float) / 400.0
 
     def _name_link(row):
         nm = str(row.get("name", "—") or "—")
@@ -278,6 +279,13 @@ def render(ctx):
 
     tbl = final_view[["Rank", "Player", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]].copy()
     tbl["JUPR"] = tbl["JUPR"].map(lambda x: f"{float(x):.3f}")
+    tbl["Gain"] = tbl["Gain"].map(
+        lambda x: (
+            f"<span style='color: {color_for_delta(x)};'>{float(x):+.3f}</span>"
+            if pd.notna(x)
+            else ""
+        )
+    )
     tbl["Win %"] = tbl["Win %"].map(lambda x: f"{float(x):.1f}%")
     tbl = tbl.rename(columns={"matches_played": "MP", "wins": "W", "losses": "L"})
 

@@ -3,6 +3,7 @@ import pandas as pd
 
 from jupr_app.ui.helpers import qp_get, build_match_explorer_link
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.theme import MATCH_COLORS, color_for_delta, color_for_result
 
 try:
     import altair as alt
@@ -385,6 +386,23 @@ def render(ctx):
             return f"{s1}-{s2}"
         return f"{s2}-{s1}"
 
+    def result_for_player(r):
+        try:
+            t1p1 = _safe_int(r.get("t1_p1"))
+            t1p2 = _safe_int(r.get("t1_p2"))
+            s1 = _safe_int(r.get("score_t1"), 0) or 0
+            s2 = _safe_int(r.get("score_t2"), 0) or 0
+        except Exception:
+            return ""
+
+        if s1 == s2:
+            return "DRAW"
+        on_t1 = pid in {t1p1, t1p2}
+        winner = "WIN" if s1 > s2 else "LOSS"
+        if not on_t1:
+            winner = "WIN" if s2 > s1 else "LOSS"
+        return winner
+
     def explain_link(r):
         try:
             t1p1 = _safe_int(r.get("t1_p1"))
@@ -491,6 +509,7 @@ def render(ctx):
                 "League": str(r.get("league", "") or "").strip(),
                 "match_type": str(r.get("match_type", "") or "").strip(),
                 "Score": score_for_player(r),
+                "Result": result_for_player(r),
                 "Overall Δ": delta_jupr,
                 "Overall After": after_jupr,
                 "Explain": explain_link(r),
@@ -619,16 +638,47 @@ def render(ctx):
 
         show = view_df.sort_values(["Date", "id"], ascending=[False, False]).copy()
         show["date"] = pd.to_datetime(show["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-        show["Overall Δ"] = show["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
+        show["delta_raw"] = pd.to_numeric(show["Overall Δ"], errors="coerce")
+        show["Overall Δ"] = show["delta_raw"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
         show["Overall After"] = show["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
 
-        show = show[["date", "League", "Score", "match_type", "Overall Δ", "Overall After", "Explain"]]
+        def result_badge(result: str) -> str:
+            color = color_for_result(result) or MATCH_COLORS["draw"]
+            text_color = (
+                MATCH_COLORS["text_light"]
+                if str(result).strip().upper() in {"DRAW", "PUSH", "EVEN", "TIE"}
+                else "#FFFFFF"
+            )
+            label = str(result or "").strip().upper() or "—"
+            return (
+                f"<span style='background: {color}; color: {text_color}; padding: 2px 8px; "
+                "border-radius: 999px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;'>"
+                f"{label}</span>"
+            )
 
-        st.dataframe(
-            show,
-            use_container_width=True,
-            hide_index=True,
-            column_config={"Explain": st.column_config.LinkColumn("Explain", display_text="Explain")},
+        def delta_span(delta_str: str, delta_raw: float | None) -> str:
+            color = color_for_delta(delta_raw) or MATCH_COLORS["text_light"]
+            if not delta_str:
+                return ""
+            return f"<span style='color: {color}; font-weight: 600;'>{delta_str}</span>"
+
+        show["Result"] = show["Result"].map(result_badge)
+        show["Overall Δ"] = show.apply(lambda row: delta_span(row["Overall Δ"], row["delta_raw"]), axis=1)
+        show["Explain"] = show["Explain"].map(
+            lambda url: f"<a href='{url}' target='_self'>Explain</a>" if url else ""
+        )
+
+        show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "Explain"]]
+
+        html_table = show.to_html(index=False, escape=False)
+
+        st.markdown(
+            f"""
+            <div class="match-history-table">
+              {html_table}
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
     with tabs[0]:
