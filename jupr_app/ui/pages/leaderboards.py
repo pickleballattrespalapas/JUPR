@@ -216,15 +216,8 @@ def render(ctx):
 
     st.text_input("Find yourself", key="lb_search")
 
-    qualified_default = True if PUBLIC_MODE else False
-    show_qualified_only = False
     show_inactive = False
     if target_league != "OVERALL":
-        show_qualified_only = st.checkbox(
-            "Qualified only",
-            key="lb_qualified_only",
-            value=qualified_default,
-        )
         if not PUBLIC_MODE:
             show_inactive = st.checkbox(
                 "Show inactive",
@@ -573,8 +566,6 @@ def render(ctx):
     if target_league != "OVERALL":
         if "Qualified" not in standings.columns:
             standings["Qualified"] = False
-        if show_qualified_only and "Qualified" in standings.columns:
-            standings = standings[standings["Qualified"] == True].copy()
 
     standings["Player"] = standings["name"].astype(str)
     if "Qualified" in standings.columns:
