@@ -7,7 +7,29 @@ from jupr_app.ui.helpers import build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
-from jupr_app.ui.theme import color_for_delta
+
+
+def _delta_color(delta, up_color, flat_color, down_color):
+    try:
+        if pd.isna(delta):
+            return flat_color
+    except Exception:
+        return flat_color
+    try:
+        delta = float(delta)
+    except Exception:
+        return flat_color
+    if delta > 0:
+        return up_color
+    if delta < 0:
+        return down_color
+    return flat_color
+
+
+def _format_win_pct(value):
+    if pd.notna(value):
+        return f"{float(value):.1f}%"
+    return "—"
 
 
 def render_top_performers_cards(
@@ -169,21 +191,21 @@ def render(ctx):
     )
 
     mode_label = "Public" if PUBLIC_MODE else "Admin"
-    page_shell("🏆 Leaderboards", "Standings and top performers by league.", mode_label=mode_label)
+    page_shell("Leaderboards", "Standings and standout moments by league.", mode_label=mode_label)
     st.markdown(
         """
         <style>
         .lb-wrap {
-            max-width: 1100px;
+            max-width: 1120px;
             margin: 0 auto;
             padding-bottom: 24px;
         }
         .lb-card {
             background: rgba(255,255,255,0.02);
             border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
+            border-radius: 18px;
             padding: 18px 20px;
-            box-shadow: 0 8px 22px rgba(0,0,0,0.16);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.16);
         }
         .lb-row {
             display: flex;
@@ -221,6 +243,134 @@ def render(ctx):
         .lb-muted {
             color: rgba(255,255,255,0.6);
         }
+        .lb-hero {
+            border-radius: 22px;
+            padding: 24px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01));
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .lb-hero-grid {
+            display: flex;
+            gap: 16px;
+            align-items: stretch;
+            flex-wrap: nowrap;
+        }
+        .lb-hero-card {
+            flex: 1 1 0;
+            background: rgba(255,255,255,0.03);
+            border-radius: 18px;
+            padding: 18px;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .lb-hero-card.is-top {
+            flex: 1.3 1 0;
+            background: rgba(255,255,255,0.04);
+        }
+        .lb-hero-card.is-second,
+        .lb-hero-card.is-third {
+            flex: 1 1 0;
+        }
+        .lb-hero-rank {
+            font-size: 38px;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 8px;
+        }
+        .lb-hero-name {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .lb-hero-name.is-top {
+            font-size: 26px;
+        }
+        .lb-hero-rating {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .lb-hero-accent {
+            display: inline-block;
+            border-bottom: 2px solid var(--lb-accent);
+            padding-bottom: 2px;
+        }
+        .lb-story-grid {
+            display: grid;
+            gap: 14px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+        .lb-story-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 16px;
+        }
+        .lb-story-icon {
+            font-size: 16px;
+            margin-bottom: 10px;
+            color: rgba(255,255,255,0.6);
+        }
+        .lb-story-title {
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.6);
+            margin-bottom: 6px;
+        }
+        .lb-story-text {
+            font-size: 14px;
+            color: rgba(255,255,255,0.85);
+            margin-bottom: 6px;
+        }
+        .lb-standings-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .lb-standings-top {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+        }
+        .lb-standings-rank {
+            font-weight: 700;
+            font-size: 16px;
+            min-width: 38px;
+        }
+        .lb-standings-name {
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .lb-standings-rating {
+            font-size: 16px;
+            font-weight: 700;
+            text-align: right;
+        }
+        .lb-standings-stats {
+            font-size: 12px;
+            color: rgba(255,255,255,0.6);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .lb-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.18);
+            color: rgba(255,255,255,0.65);
+        }
+        .lb-controls {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 16px;
+        }
         .lb-actions a,
         .lb-actions button {
             width: 100%;
@@ -231,7 +381,7 @@ def render(ctx):
                 padding: 0 4px 24px;
             }
             .lb-card {
-                padding: 18px;
+                padding: 16px;
             }
             .lb-row {
                 flex-direction: column;
@@ -239,16 +389,29 @@ def render(ctx):
             .lb-kpi {
                 min-width: 0;
             }
-            .tp-cards [data-testid="column"] {
-                flex: 1 1 100% !important;
-                width: 100% !important;
+            .lb-hero-grid {
+                flex-wrap: wrap;
+            }
+            .lb-hero-card.is-top {
+                order: 1;
+                flex: 1 1 100%;
+            }
+            .lb-hero-card.is-second,
+            .lb-hero-card.is-third {
+                order: 2;
+                flex: 1 1 47%;
+            }
+            .lb-story-grid {
+                display: flex;
+                overflow-x: auto;
+                padding-bottom: 4px;
+            }
+            .lb-story-card {
+                min-width: 220px;
             }
             .stButton > button,
             .stLinkButton > a {
                 width: 100% !important;
-            }
-            .stDataFrame {
-                font-size: 12px;
             }
         }
         </style>
@@ -256,6 +419,10 @@ def render(ctx):
         unsafe_allow_html=True,
     )
     st.markdown('<div class="lb-wrap">', unsafe_allow_html=True)
+    accent = st.get_option("theme.primaryColor") or "#6AA6FF"
+    delta_up = "#6DBE7C"
+    delta_flat = "#8D94A3"
+    delta_down = "#C08A3C"
 
     # -------------------------
     # Available leagues
@@ -287,34 +454,13 @@ def render(ctx):
     if pre and pre in available_leagues:
         default_idx = available_leagues.index(pre)
 
-    with st.container(border=True):
-        st.markdown('<div class="lb-title">Standings Filters</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="lb-subtitle">Pick a league and find your player card.</div>',
-            unsafe_allow_html=True,
-        )
-        control_cols = st.columns([1.4, 1.4, 1])
-        with control_cols[0]:
-            target_league = st.selectbox(
-                "Select View",
-                available_leagues,
-                index=default_idx,
-                key="lb_league",
-            )
-        with control_cols[1]:
-            st.text_input("Find yourself", key="lb_search")
-        with control_cols[2]:
-            st.toggle(
-                "Compact view",
-                key="lb_compact",
-                value=PUBLIC_MODE,
-            )
-        if target_league != "OVERALL" and not PUBLIC_MODE:
-            st.checkbox(
-                "Show inactive",
-                key="lb_show_inactive",
-                value=False,
-            )
+    st.session_state.setdefault("lb_league", available_leagues[default_idx])
+    st.session_state.setdefault("lb_view_mode", "Story View")
+    st.session_state.setdefault("lb_show_inactive", False)
+    target_league = st.session_state.get("lb_league", available_leagues[default_idx])
+    if target_league not in available_leagues:
+        target_league = available_leagues[default_idx]
+        st.session_state["lb_league"] = target_league
 
     qp_player = (qp_get("player", "") or "").strip()
     qp_pid_raw = (qp_get("pid", "") or "").strip()
@@ -346,17 +492,6 @@ def render(ctx):
         pass
 
     # -------------------------
-    # Share link + open button (ADMIN ONLY)
-    # -------------------------
-    public_url = build_public_url(page="leaderboards", params={"league": target_league})
-    if not PUBLIC_MODE:
-        with st.container(border=True):
-            st.markdown("### Public standings")
-            st.caption("Share this link with players.")
-            st.text_input("", value=public_url, label_visibility="collapsed")
-            public_link_button("Open Public Standings", public_url)
-
-    # -------------------------
     # Min games requirement (league views only)
     # -------------------------
     min_games_req = 0
@@ -372,6 +507,7 @@ def render(ctx):
             min_games_req = 0
 
     inactive_hidden = 0
+    inactive_notice = None
 
     # -------------------------
     # Build display_df
@@ -439,10 +575,8 @@ def render(ctx):
 
         # ADMIN ONLY message (never show in public mode)
         if inactive_hidden > 0 and (not PUBLIC_MODE):
-            callout(
-                "info",
-                "Heads up",
-                f"{inactive_hidden} inactive player(s) hidden from Standings/Top Performers for this league.",
+            inactive_notice = (
+                f"{inactive_hidden} inactive player(s) hidden from standings for this league."
             )
 
     # -------------------------
@@ -514,21 +648,212 @@ def render(ctx):
     final_view = display_df.sort_values("rating", ascending=False, kind="mergesort").copy()
     final_view["RankNum"] = range(1, len(final_view) + 1)
 
-    def _rank_badge(r):
-        r = int(r)
-        if r == 1:
-            return "🥇"
-        if r == 2:
-            return "🥈"
-        if r == 3:
-            return "🥉"
-        return str(r)
-
-    final_view["Rank"] = final_view["RankNum"].apply(_rank_badge)
+    final_view["Rank"] = final_view["RankNum"].astype(int).astype(str)
     final_view["Gap"] = (final_view["rating"].shift(1) - final_view["rating"]) / 400.0
 
+    def _player_link(pid, name):
+        safe_name = html.escape(str(name))
+        if pd.isna(pid):
+            return safe_name
+        try:
+            url = build_player_profile_link(int(pid), public=PUBLIC_MODE)
+        except Exception:
+            return safe_name
+        return f'<a href="{url}" style="color: inherit; text-decoration: none;">{safe_name}</a>'
+
     # -------------------------
-    # Player-first: My Snapshot
+    # Hero podium
+    # -------------------------
+    podium = final_view.head(3).copy()
+    st.markdown("### Who’s on top right now?")
+    if not podium.empty:
+        hero_cards = []
+        for idx, (_, row) in enumerate(podium.iterrows(), start=1):
+            rank_class = "is-top" if idx == 1 else ("is-second" if idx == 2 else "is-third")
+            rank_style = f"color:{accent};" if idx != 1 else "color: rgba(255,255,255,0.8);"
+            name_html = _player_link(row["_pid"], row["name"])
+            if idx == 1:
+                name_html = f'<span class="lb-hero-accent">{name_html}</span>'
+            hero_cards.append(
+                f"""
+                <div class="lb-hero-card {rank_class}">
+                    <div class="lb-hero-rank" style="{rank_style}">{idx}</div>
+                    <div class="lb-hero-name {'is-top' if idx == 1 else ''}">{name_html}</div>
+                    <div class="lb-hero-rating">{float(row['JUPR']):.3f}</div>
+                    <div class="lb-subtitle">{int(row['matches_played'])} games • {_format_win_pct(row['Win %'])} win %</div>
+                </div>
+                """
+            )
+        st.markdown(
+            f"""
+            <div class="lb-hero" style="--lb-accent: {accent};">
+                <div class="lb-hero-grid">
+                    {hero_cards[1] if len(hero_cards) > 1 else ""}
+                    {hero_cards[0] if len(hero_cards) > 0 else ""}
+                    {hero_cards[2] if len(hero_cards) > 2 else ""}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # -------------------------
+    # Storytelling highlights
+    # -------------------------
+    view_mode = st.session_state.get("lb_view_mode", "Story View")
+    show_highlights = view_mode == "Story View"
+    if show_highlights:
+        highlights = []
+        recent_delta_col = None
+        for col in [
+            "rating_gain_recent",
+            "recent_gain",
+            "recent_delta",
+            "delta_recent",
+            "rating_delta_recent",
+            "rating_delta_week",
+            "rating_delta_7d",
+        ]:
+            if col in display_df.columns:
+                recent_delta_col = col
+                break
+
+        if recent_delta_col is not None:
+            recent_delta = pd.to_numeric(display_df[recent_delta_col], errors="coerce")
+            riser = display_df.loc[recent_delta.idxmax()] if recent_delta.notna().any() else None
+            slide = display_df.loc[recent_delta.idxmin()] if recent_delta.notna().any() else None
+
+            if riser is not None and float(recent_delta.max()) > 0:
+                delta_val = float(recent_delta.max()) / 400.0
+                highlights.append(
+                    {
+                        "icon": "▲",
+                        "title": "Biggest Riser",
+                        "text": f"{_player_link(riser['_pid'], riser['name'])} climbed {delta_val:+.3f} JUPR across {int(riser['matches_played'])} games.",
+                        "secondary": f"Rating now {float(riser['JUPR']):.3f}",
+                    }
+                )
+            if slide is not None and float(recent_delta.min()) < 0:
+                delta_val = float(recent_delta.min()) / 400.0
+                highlights.append(
+                    {
+                        "icon": "▼",
+                        "title": "Toughest Slide",
+                        "text": f"{_player_link(slide['_pid'], slide['name'])} slipped {delta_val:+.3f} JUPR across {int(slide['matches_played'])} games.",
+                        "secondary": f"Rating now {float(slide['JUPR']):.3f}",
+                    }
+                )
+
+        active_df = display_df.copy()
+        if "matches_played" in active_df.columns:
+            active_df = active_df.sort_values("matches_played", ascending=False, kind="mergesort")
+            if not active_df.empty and int(active_df.iloc[0]["matches_played"]) > 0:
+                most_active = active_df.iloc[0]
+                highlights.append(
+                    {
+                        "icon": "●",
+                        "title": "Most Active",
+                        "text": f"{_player_link(most_active['_pid'], most_active['name'])} logged {int(most_active['matches_played'])} games.",
+                        "secondary": f"Win rate {_format_win_pct(most_active['Win %'])}",
+                    }
+                )
+
+        best_win_df = display_df.copy()
+        if min_games_req > 0:
+            best_win_df = best_win_df[
+                best_win_df["matches_played"].astype(int) >= int(min_games_req)
+            ].copy()
+        best_win_df = best_win_df[pd.notna(best_win_df["Win %"])].copy()
+        if not best_win_df.empty:
+            best_win_df = best_win_df.sort_values("Win %", ascending=False, kind="mergesort")
+            best_win = best_win_df.iloc[0]
+            highlights.append(
+                {
+                    "icon": "◎",
+                    "title": "Best Win %",
+                    "text": f"{_player_link(best_win['_pid'], best_win['name'])} holds {_format_win_pct(best_win['Win %'])} over {int(best_win['matches_played'])} games.",
+                    "secondary": f"Rating {float(best_win['JUPR']):.3f}",
+                }
+            )
+
+        if len(highlights) >= 2:
+            st.markdown("### This Week at Tres Palapas")
+            st.markdown(
+                '<div class="lb-subtitle">Based on recent JUPR activity</div>',
+                unsafe_allow_html=True,
+            )
+            highlight_html = "".join(
+                f"""
+                <div class="lb-story-card">
+                    <div class="lb-story-icon">{card['icon']}</div>
+                    <div class="lb-story-title">{html.escape(card['title'])}</div>
+                    <div class="lb-story-text">{card['text']}</div>
+                    <div class="lb-muted" style="font-size:12px;">{html.escape(card['secondary'])}</div>
+                </div>
+                """
+                for card in highlights[:4]
+            )
+            st.markdown(f'<div class="lb-story-grid">{highlight_html}</div>', unsafe_allow_html=True)
+
+    # -------------------------
+    # Controls
+    # -------------------------
+    st.markdown("### Full Standings")
+    st.markdown('<div class="lb-controls">', unsafe_allow_html=True)
+    control_cols = st.columns([2.2, 1.2, 1.2])
+    with control_cols[0]:
+        try:
+            target_league = st.segmented_control(
+                "League",
+                available_leagues,
+                default=target_league,
+                key="lb_league",
+            )
+        except Exception:
+            target_league = st.radio(
+                "League",
+                available_leagues,
+                index=available_leagues.index(target_league),
+                horizontal=True,
+                key="lb_league",
+            )
+    with control_cols[1]:
+        try:
+            view_mode = st.segmented_control(
+                "View",
+                ["Story View", "Stats View"],
+                default=view_mode,
+                key="lb_view_mode",
+            )
+        except Exception:
+            view_mode = st.radio(
+                "View",
+                ["Story View", "Stats View"],
+                index=0 if view_mode == "Story View" else 1,
+                horizontal=True,
+                key="lb_view_mode",
+            )
+    with control_cols[2]:
+        st.text_input("Find player", key="lb_search")
+    if target_league != "OVERALL" and not PUBLIC_MODE:
+        st.checkbox("Show inactive", key="lb_show_inactive", value=False)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # -------------------------
+    # Share link + open button (ADMIN ONLY)
+    # -------------------------
+    public_url = build_public_url(page="leaderboards", params={"league": target_league})
+    if not PUBLIC_MODE:
+        with st.container(border=True):
+            st.markdown("#### Public standings")
+            st.caption("Share this link with players.")
+            st.text_input("", value=public_url, label_visibility="collapsed")
+            public_link_button("Open Public Standings", public_url)
+    if inactive_notice and not PUBLIC_MODE:
+        callout("info", "Heads up", inactive_notice)
+
+    # -------------------------
+    # Standings list
     # -------------------------
     selected_row = None
     selected_pid = None
@@ -554,9 +879,7 @@ def render(ctx):
                 "Select player",
                 options,
                 key="lb_pick_player",
-                format_func=lambda x: str(
-                    matches.loc[matches["_pid"] == x, "name"].iloc[0]
-                ),
+                format_func=lambda x: str(matches.loc[matches["_pid"] == x, "name"].iloc[0]),
             )
             pick_row = matches[matches["_pid"] == pick_pid]
             if not pick_row.empty:
@@ -566,21 +889,17 @@ def render(ctx):
             st.info("No matching player found.")
 
     if selected_row is not None:
-        win_pct_display = (
-            f"{float(selected_row['Win %']):.1f}%"
-            if pd.notna(selected_row["Win %"])
-            else "—"
-        )
+        win_pct_display = _format_win_pct(selected_row["Win %"])
         gain_value = float(selected_row["Gain"]) if pd.notna(selected_row["Gain"]) else 0.0
-        gain_color = color_for_delta(gain_value)
-        st.markdown("### My Snapshot")
+        gain_color = _delta_color(gain_value, delta_up, delta_flat, delta_down)
+        st.markdown("#### My Snapshot")
         st.markdown(
             f"""
             <div class="lb-card">
                 <div class="lb-row" style="align-items:center; justify-content:space-between;">
                     <div>
-                        <div class="lb-title">{html.escape(str(selected_row['name']))}</div>
-                        <div class="lb-subtitle">Rank {selected_row['Rank']} · #{int(selected_row['RankNum'])}</div>
+                        <div class="lb-title">{_player_link(selected_row['_pid'], selected_row['name'])}</div>
+                        <div class="lb-subtitle">Rank {int(selected_row['RankNum'])}</div>
                     </div>
                     <div style="font-size:20px; font-weight:700;">
                         {float(selected_row['JUPR']):.3f}
@@ -589,7 +908,7 @@ def render(ctx):
                 </div>
                 <div class="lb-row" style="margin-top:12px;">
                     <div class="lb-kpi">
-                        <div class="lb-kpi-label">Gain</div>
+                        <div class="lb-kpi-label">Δ Rating</div>
                         <div class="lb-kpi-value" style="color:{gain_color};">{gain_value:+.3f}</div>
                     </div>
                     <div class="lb-kpi">
@@ -597,7 +916,7 @@ def render(ctx):
                         <div class="lb-kpi-value">{win_pct_display}</div>
                     </div>
                     <div class="lb-kpi">
-                        <div class="lb-kpi-label">Matches</div>
+                        <div class="lb-kpi-label">Games</div>
                         <div class="lb-kpi-value">{int(selected_row['matches_played'])}</div>
                     </div>
                     <div class="lb-kpi">
@@ -619,36 +938,31 @@ def render(ctx):
             st.markdown("</div>", unsafe_allow_html=True)
 
         selected_idx = int(selected_row["RankNum"]) - 1
-        start_idx = max(selected_idx - 3, 0)
-        end_idx = min(selected_idx + 4, len(final_view))
+        start_idx = max(selected_idx - 2, 0)
+        end_idx = min(selected_idx + 3, len(final_view))
         neighborhood = final_view.iloc[start_idx:end_idx].copy()
-        neighborhood = neighborhood[["Rank", "name", "JUPR", "Gain"]].rename(
-            columns={
-                "name": "Player",
-            }
-        )
-
-        st.markdown("#### Around Me")
-        st.caption("Your neighborhood in the standings.")
-        def _gain_style_cell(v):
-            try:
-                if pd.isna(v):
-                    return ""
-            except Exception:
-                return ""
-            try:
-                return f"color: {color_for_delta(float(v))}"
-            except Exception:
-                return ""
-
-        neighborhood_style = neighborhood.style.format(
-            {
-                "JUPR": lambda x: f"{float(x):.3f}",
-                "Gain": lambda x: f"{float(x):+.3f}" if pd.notna(x) else "",
-            }
-        ).applymap(_gain_style_cell, subset=["Gain"])
-        st.markdown('<div class="lb-card">', unsafe_allow_html=True)
-        st.dataframe(neighborhood_style, use_container_width=True, hide_index=True)
+        st.markdown("##### Around Me")
+        st.markdown('<div class="lb-row">', unsafe_allow_html=True)
+        for _, row in neighborhood.iterrows():
+            gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
+            gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
+            st.markdown(
+                f"""
+                <div class="lb-standings-card" style="min-width: 200px;">
+                    <div class="lb-standings-top">
+                        <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
+                        <div class="lb-standings-name">{_player_link(row['_pid'], row['name'])}</div>
+                        <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
+                    </div>
+                    <div class="lb-standings-stats">
+                        <span>{int(row['matches_played'])} games</span>
+                        <span>{_format_win_pct(row['Win %'])} win %</span>
+                        <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         st.markdown("</div>", unsafe_allow_html=True)
 
         link_params = {"league": target_league}
@@ -663,95 +977,54 @@ def render(ctx):
             value=share_url,
             label_visibility="collapsed",
         )
-        st.divider()
 
-    # -------------------------
-    # Top performers (league views)
-    # -------------------------
+    standings = final_view.copy()
     if target_league != "OVERALL":
-        qualified_df = display_df[display_df["matches_played"].astype(int) >= int(min_games_req)].copy()
+        if "Qualified" not in standings.columns:
+            standings["Qualified"] = False
+    if "Qualified" in standings.columns:
+        standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
 
-        if not qualified_df.empty:
-            with st.expander(
-                "Top Performers",
-                expanded=not PUBLIC_MODE,
-            ):
-                render_top_performers_cards(
-                    qualified_df=qualified_df,
-                    title=f"Top Performers (Min {min_games_req} Games)",
-                    compact_view=bool(st.session_state.get("lb_compact", PUBLIC_MODE)),
-                )
-            st.divider()
+    st.session_state.setdefault("lb_limit", 50)
+    limit = int(st.session_state.get("lb_limit", 50))
+    if limit < 50:
+        limit = 50
+        st.session_state["lb_limit"] = 50
 
-    # -------------------------
-    # Standings table
-    # -------------------------
-    with st.expander("📊 Standings", expanded=True):
-        standings = final_view.copy()
-        if target_league != "OVERALL":
-            if "Qualified" not in standings.columns:
-                standings["Qualified"] = False
-
-        standings["Player"] = standings["name"].astype(str)
-        if "Qualified" in standings.columns:
-            standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
-
-        standings["W-L"] = standings.apply(
-            lambda r: f"{int(r['wins'])}-{int(r['losses'])}",
-            axis=1,
-        )
-        compact_view = bool(st.session_state.get("lb_compact", PUBLIC_MODE))
-
-        compact_columns = ["Rank", "Player", "JUPR", "Gain", "W-L", "Win %"]
-        full_columns = [
-            "Rank",
-            "Player",
-            "JUPR",
-            "Gain",
-            "matches_played",
-            "wins",
-            "losses",
-            "Win %",
-        ]
-        if target_league != "OVERALL" and "Qualified" in standings.columns:
-            compact_columns.insert(2, "Qualified")
-            full_columns.insert(2, "Qualified")
-
-        columns = compact_columns if compact_view else full_columns
-        standings = standings[columns].rename(
-            columns={
-                "matches_played": "MP",
-                "wins": "W",
-                "losses": "L",
-            }
+    for _, row in standings.head(limit).iterrows():
+        gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
+        gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
+        badges = []
+        if target_league != "OVERALL" and not row.get("Qualified", True):
+            badges.append("Min games not met")
+        is_active_value = row.get("is_active")
+        if pd.notna(is_active_value) and not bool(is_active_value):
+            badges.append("Inactive")
+        if row.get("matches_played", 0) == 0:
+            badges.append("New")
+        badge_html = "".join(f'<span class="lb-badge">{html.escape(b)}</span>' for b in badges)
+        st.markdown(
+            f"""
+            <div class="lb-standings-card">
+                <div class="lb-standings-top">
+                    <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
+                    <div class="lb-standings-name">{_player_link(row['_pid'], row['name'])}</div>
+                    <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
+                </div>
+                <div class="lb-standings-stats">
+                    <span>{int(row['matches_played'])} games</span>
+                    <span>{_format_win_pct(row['Win %'])} win %</span>
+                    <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
+                </div>
+                <div class="lb-row" style="gap:6px;">{badge_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        if "Qualified" in standings.columns:
-            standings["Qualified"] = standings["Qualified"].map(lambda x: "✓" if x else "")
-
-        def _gain_style(v):
-            try:
-                if pd.isna(v):
-                    return ""
-            except Exception:
-                return ""
-            try:
-                return f"color: {color_for_delta(float(v))}"
-            except Exception:
-                return ""
-
-        standings_style = standings.style.format(
-            {
-                "JUPR": lambda x: f"{float(x):.3f}",
-                "Gain": lambda x: f"{float(x):+.3f}" if pd.notna(x) else "",
-                "Win %": lambda x: f"{float(x):.1f}%" if pd.notna(x) else "—",
-            }
-        ).applymap(_gain_style, subset=["Gain"])
-
-        if standings.empty:
-            st.info("No data.")
-        else:
-            st.dataframe(standings_style, use_container_width=True, hide_index=True)
+    if len(standings) > limit:
+        if st.button("Load more", key="lb_load_more"):
+            st.session_state["lb_limit"] = limit + 50
 
     # Keep URL in sync with selected player
     try:
