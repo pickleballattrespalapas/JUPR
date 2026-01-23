@@ -302,6 +302,7 @@ def main():
             player_editor,
             admin_tools,
             admin_guide,
+            moneyball,
         )
 
         # ---- Router ----
@@ -320,6 +321,7 @@ def main():
             "⚙️ Admin Tools": admin_tools,
             "📘 Admin Guide": admin_guide,
             "🛠️ Challenge Ladder Admin": challenge_ladder_admin,
+            "💰 Moneyball": moneyball,
         }
 
         PAGE_KEY_TO_LABEL = {
@@ -337,6 +339,7 @@ def main():
             "admin_tools": "⚙️ Admin Tools",
             "admin_guide": "📘 Admin Guide",
             "challenge_ladder_admin": "🛠️ Challenge Ladder Admin",
+            "moneyball": "💰 Moneyball",
         }
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
@@ -348,6 +351,7 @@ def main():
             "⚙️ Admin Tools",
             "📘 Admin Guide",
             "🛠️ Challenge Ladder Admin",
+            "💰 Moneyball",
         }
 
         # Visible labels based on auth
