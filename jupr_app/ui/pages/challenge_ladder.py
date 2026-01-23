@@ -14,6 +14,7 @@ from jupr_app.domain.challenge_ladder import (
     ladder_bucket_challenge,
     ladder_compute_status_map,
 )
+from jupr_app.ui.layout import page_shell
 
 # -------------------------
 # Supabase retry (page-local)
@@ -130,7 +131,8 @@ def ladder_load_core(supabase, club_id: str) -> Tuple[pd.DataFrame, pd.DataFrame
 # Page render
 # -------------------------
 def render(ctx):
-    st.header("🪜 Challenge Ladder")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("🪜 Challenge Ladder", "Current ladder standings and active challenges.", mode_label=mode_label)
 
     settings = ladder_fetch_settings(ctx.supabase, ctx.club_id)
     df_roster, df_flags, df_ch, df_pass = ladder_load_core(ctx.supabase, ctx.club_id)

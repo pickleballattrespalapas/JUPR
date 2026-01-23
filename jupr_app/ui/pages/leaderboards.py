@@ -4,6 +4,7 @@ import pandas as pd
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.helpers import build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
+from jupr_app.ui.layout import page_shell, theme_sanity_block
 
 
 def render(ctx):
@@ -21,7 +22,9 @@ def render(ctx):
         getattr(ctx, "admin_logged_in", st.session_state.get("admin_logged_in", False))
     )
 
-    st.header("🏆 Leaderboards")
+    mode_label = "Public" if PUBLIC_MODE else "Admin"
+    page_shell("🏆 Leaderboards", "Standings and top performers by league.", mode_label=mode_label)
+    theme_sanity_block()
 
     # -------------------------
     # Available leagues

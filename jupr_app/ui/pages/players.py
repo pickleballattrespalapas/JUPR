@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from jupr_app.ui.helpers import qp_get, build_match_explorer_link
+from jupr_app.ui.layout import page_shell
 
 try:
     import altair as alt
@@ -219,7 +220,9 @@ def build_league_snapshot_map(_supabase, club_id: str, league_name: str, df_meta
 
 
 def render(ctx):
-    st.header("🔍 Player Search")
+    PUBLIC_MODE = bool(getattr(ctx, "public_mode", False))
+    mode_label = "Public" if PUBLIC_MODE else "Admin"
+    page_shell("🔍 Player Search", "Find players and view ratings.", mode_label=mode_label)
 
     df_players_all = ctx.df_players_all
     df_leagues = getattr(ctx, "df_leagues", None)
@@ -636,4 +639,3 @@ def render(ctx):
             df_lg = df[df["League"].astype(str).str.strip() == lg].copy()
             # Show league replay trend if available; otherwise overall trend filtered to that league’s matches.
             render_chart_and_table(df_lg, f"League: {lg}", league_trend=True, league_name=lg)
-

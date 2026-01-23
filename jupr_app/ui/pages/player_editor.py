@@ -3,8 +3,11 @@ import pandas as pd
 import time
 from datetime import datetime, timezone
 
+from jupr_app.ui.layout import page_shell
+
 def render(ctx):
-    st.header("👥 Player Editor")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")

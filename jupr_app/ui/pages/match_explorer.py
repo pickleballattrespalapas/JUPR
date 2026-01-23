@@ -6,6 +6,7 @@ import altair as alt
 from jupr_app.ui.helpers import qp_get
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR, MIN_WIN_DELTA_ELO, CAP_LOSER_GAIN_ELO
+from jupr_app.ui.layout import page_shell
 
 
 def render(ctx):
@@ -16,8 +17,12 @@ def render(ctx):
     id_to_name = ctx.id_to_name
     PUBLIC_MODE = bool(ctx.public_mode)
 
-    st.header("🎯 Match Explorer")
-    st.caption("Preview win odds, expectation, and projected JUPR movement — from your perspective. Preview only; ratings do not change.")
+    mode_label = "Public" if PUBLIC_MODE else "Admin"
+    page_shell(
+        "🎯 Match Explorer",
+        "Preview win odds and projected JUPR movement.",
+        mode_label=mode_label,
+    )
 
     # -------- Helpers --------
     def win_label(p: float) -> str:

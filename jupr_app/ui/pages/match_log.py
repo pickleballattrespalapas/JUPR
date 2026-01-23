@@ -2,9 +2,11 @@ import streamlit as st
 import pandas as pd
 
 from jupr_app.domain.dupes import canonical_dup_key
+from jupr_app.ui.layout import page_shell
 
 def render(ctx):
-    st.header("📝 Match Log")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("📝 Match Log", "Review and filter recorded matches.", mode_label=mode_label)
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")

@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.ui.layout import page_shell
 
 def render(ctx):
-    st.header("⚙️ Admin Tools")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("⚙️ Admin Tools", "Diagnostics, replays, and system maintenance.", mode_label=mode_label)
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")
