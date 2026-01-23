@@ -105,8 +105,8 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
 
 BADGE_ICONS = {
     "participant": "🎟️",
-    "dedicated_participant": "🧭",
-    "lifetime_participant": "🏅",
+    "dedicated_participant_50": "🧭",
+    "lifetime_participant_200": "🏅",
     "mountain_climber": "🧗",
     "breakthrough": "🚀",
     "above_expectations": "⭐",
@@ -414,11 +414,21 @@ def render(ctx):
         st.caption("No league ratings table entries found for this player yet.")
 
     st.markdown("### Badges")
-    try:
-        badges_df = fetch_player_badges(_supabase, club_id, pid)
-    except Exception:
-        logger.exception("Failed to fetch badges for player view")
-        badges_df = pd.DataFrame()
+    badges_df = pd.DataFrame()
+    if getattr(ctx, "df_player_badges", None) is not None and getattr(ctx, "df_badges", None) is not None:
+        pb_df = ctx.df_player_badges
+        b_df = ctx.df_badges
+        if isinstance(pb_df, pd.DataFrame) and isinstance(b_df, pd.DataFrame) and not pb_df.empty:
+            pb_df = pb_df[pb_df.get("player_id") == int(pid)].copy()
+            if not pb_df.empty and "badge_id" in pb_df.columns:
+                badges_df = pb_df.merge(b_df, on="badge_id", how="left")
+
+    if badges_df.empty:
+        try:
+            badges_df = fetch_player_badges(_supabase, club_id, pid)
+        except Exception:
+            logger.exception("Failed to fetch badges for player view")
+            badges_df = pd.DataFrame()
 
     if badges_df.empty:
         st.caption("No badges earned yet.")
@@ -427,6 +437,25 @@ def render(ctx):
         badges_df["prestige"] = pd.to_numeric(badges_df.get("prestige", 0), errors="coerce").fillna(0)
         badges_df = badges_df.sort_values(["prestige", "earned_at_dt"], ascending=[False, False])
 
+        participation_order = ["lifetime_participant_200", "dedicated_participant_50", "participant"]
+        participation_df = badges_df[badges_df["badge_id"].isin(participation_order)].copy()
+        participation_badge = None
+        if not participation_df.empty:
+            participation_df["tier_rank"] = participation_df["badge_id"].map(
+                {badge_id: idx for idx, badge_id in enumerate(participation_order)}
+            )
+            participation_df = participation_df.sort_values(["tier_rank", "earned_at_dt"])
+            participation_badge = participation_df.iloc[0]
+
+        st.subheader("Participation")
+        if participation_badge is None:
+            st.caption("No participation badge earned yet.")
+        else:
+            icon = badge_icon(participation_badge.get("badge_id"), participation_badge.get("category"))
+            st.markdown(f"**{icon} {participation_badge.get('name', 'Badge')}**")
+            st.caption(f"Prestige {int(participation_badge.get('prestige', 0) or 0)}")
+
+        st.subheader("All badges")
         top_badges = badges_df.head(3).copy()
         cols = st.columns(len(top_badges))
         for idx, (_, row) in enumerate(top_badges.iterrows()):
