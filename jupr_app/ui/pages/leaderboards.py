@@ -56,61 +56,35 @@ def _build_player_link(pid, name, public_mode, ctx):
     return f'<a href="{url}" style="color: inherit; text-decoration: none;">{safe_name}</a>'
 
 
-def _render_hero_section_html(top3_rows, ctx):
-    if top3_rows is None or top3_rows.empty:
-        return ""
-
-    accent = st.get_option("theme.primaryColor") or "#6AA6FF"
-    hero_cards = []
-    for idx, (_, row) in enumerate(top3_rows.iterrows(), start=1):
-        rank_class = "is-top" if idx == 1 else ("is-second" if idx == 2 else "is-third")
-        rank_style = f"color:{accent};" if idx != 1 else "color: rgba(255,255,255,0.8);"
-        name_html = _build_player_link(row["_pid"], row["name"], bool(ctx.public_mode), ctx)
-        if idx == 1:
-            name_html = f'<span class="lb-hero-accent">{name_html}</span>'
-        hero_cards.append(
-            f"""
-            <div class="lb-hero-card {rank_class}">
-                <div class="lb-hero-rank" style="{rank_style}">{idx}</div>
-                <div class="lb-hero-name {'is-top' if idx == 1 else ''}">{name_html}</div>
-                <div class="lb-hero-rating">{float(row['JUPR']):.3f}</div>
-                <div class="lb-subtitle">{int(row['matches_played'])} games • {_format_win_pct(row['Win %'])} win %</div>
-            </div>
-            """
-        )
-
-    card_order = [
-        hero_cards[1] if len(hero_cards) > 1 else "",
-        hero_cards[0] if len(hero_cards) > 0 else "",
-        hero_cards[2] if len(hero_cards) > 2 else "",
-    ]
-
-    return f"""
-    <section class="lb-hero" style="--lb-accent: {accent};">
-        <div class="lb-hero-band">
-            <div class="lb-hero-grid">
-                {''.join(card_order)}
-            </div>
-        </div>
-    </section>
-    """
+def _format_player_markdown_link(pid, name, public_mode, ctx):
+    url = _player_profile_url(pid, public_mode, ctx)
+    if not url:
+        return str(name)
+    return f"[{name}]({url})"
 
 
-def _render_story_highlights_html(highlights, ctx):
-    if not highlights:
-        return ""
-    cards_html = "".join(
-        f"""
-        <div class="lb-story-card">
-            <div class="lb-story-icon">{html.escape(card.get('icon', ''))}</div>
-            <div class="lb-story-title">{html.escape(card.get('title', ''))}</div>
-            <div class="lb-story-text">{card.get('text', '')}</div>
-            <div class="lb-muted" style="font-size:12px;">{html.escape(card.get('secondary', ''))}</div>
-        </div>
-        """
-        for card in highlights[:4]
-    )
-    return f'<div class="lb-story-grid">{cards_html}</div>'
+def _render_hero_card(row, rank, public_mode, ctx, is_top=False):
+    url = _player_profile_url(row["_pid"], public_mode, ctx)
+    name = str(row["name"])
+    matches = int(row["matches_played"])
+    win_pct = _format_win_pct(row["Win %"])
+    rating = float(row["JUPR"])
+    with st.container(border=True):
+        if is_top:
+            st.markdown(f"### :blue[#{rank}]")
+        else:
+            st.markdown(f"#### #{rank}")
+        if url:
+            try:
+                st.page_link(url, label=name)
+            except Exception:
+                st.markdown(f"**[{name}]({url})**")
+        else:
+            st.markdown(f"**{name}**")
+        st.markdown(f"**{rating:.3f}**")
+        if is_top:
+            st.markdown("—")
+        st.caption(f"{matches} games • {win_pct} win %")
 
 
 def render_top_performers_cards(
@@ -322,88 +296,6 @@ def render(ctx):
         .lb-muted {
             color: rgba(255,255,255,0.6);
         }
-        .lb-hero {
-            border-radius: 22px;
-            padding: 24px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01));
-            border: 1px solid rgba(255,255,255,0.08);
-        }
-        .lb-hero-band {
-            width: 100%;
-        }
-        .lb-hero-grid {
-            display: flex;
-            gap: 16px;
-            align-items: stretch;
-            flex-wrap: nowrap;
-        }
-        .lb-hero-card {
-            flex: 1 1 0;
-            background: rgba(255,255,255,0.03);
-            border-radius: 18px;
-            padding: 18px;
-            border: 1px solid rgba(255,255,255,0.08);
-        }
-        .lb-hero-card.is-top {
-            flex: 1.3 1 0;
-            background: rgba(255,255,255,0.04);
-        }
-        .lb-hero-card.is-second,
-        .lb-hero-card.is-third {
-            flex: 1 1 0;
-        }
-        .lb-hero-rank {
-            font-size: 38px;
-            font-weight: 700;
-            line-height: 1;
-            margin-bottom: 8px;
-        }
-        .lb-hero-name {
-            font-size: 20px;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }
-        .lb-hero-name.is-top {
-            font-size: 26px;
-        }
-        .lb-hero-rating {
-            font-size: 22px;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }
-        .lb-hero-accent {
-            display: inline-block;
-            border-bottom: 2px solid var(--lb-accent);
-            padding-bottom: 2px;
-        }
-        .lb-story-grid {
-            display: grid;
-            gap: 14px;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        }
-        .lb-story-card {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
-            padding: 16px;
-        }
-        .lb-story-icon {
-            font-size: 16px;
-            margin-bottom: 10px;
-            color: rgba(255,255,255,0.6);
-        }
-        .lb-story-title {
-            font-size: 12px;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: rgba(255,255,255,0.6);
-            margin-bottom: 6px;
-        }
-        .lb-story-text {
-            font-size: 14px;
-            color: rgba(255,255,255,0.85);
-            margin-bottom: 6px;
-        }
         .lb-standings-card {
             background: rgba(255,255,255,0.02);
             border: 1px solid rgba(255,255,255,0.08);
@@ -470,26 +362,6 @@ def render(ctx):
             }
             .lb-kpi {
                 min-width: 0;
-            }
-            .lb-hero-grid {
-                flex-wrap: wrap;
-            }
-            .lb-hero-card.is-top {
-                order: 1;
-                flex: 1 1 100%;
-            }
-            .lb-hero-card.is-second,
-            .lb-hero-card.is-third {
-                order: 2;
-                flex: 1 1 47%;
-            }
-            .lb-story-grid {
-                display: flex;
-                overflow-x: auto;
-                padding-bottom: 4px;
-            }
-            .lb-story-card {
-                min-width: 220px;
             }
             .stButton > button,
             .stLinkButton > a {
@@ -736,9 +608,20 @@ def render(ctx):
     podium = final_view.head(3).copy()
     st.markdown("### Who’s on top right now?")
     if not podium.empty:
-        hero_html = _render_hero_section_html(podium, ctx)
-        if hero_html:
-            st.markdown(hero_html, unsafe_allow_html=True)
+        with st.container():
+            top_row = podium.iloc[0] if len(podium) > 0 else None
+            if top_row is not None:
+                _render_hero_card(top_row, 1, PUBLIC_MODE, ctx, is_top=True)
+            side_rows = []
+            if len(podium) > 1:
+                side_rows.append((2, podium.iloc[1]))
+            if len(podium) > 2:
+                side_rows.append((3, podium.iloc[2]))
+            if side_rows:
+                cols = st.columns(len(side_rows))
+                for (rank, row), col in zip(side_rows, cols):
+                    with col:
+                        _render_hero_card(row, rank, PUBLIC_MODE, ctx, is_top=False)
 
     # -------------------------
     # Storytelling highlights
@@ -768,21 +651,27 @@ def render(ctx):
 
             if riser is not None and float(recent_delta.max()) > 0:
                 delta_val = float(recent_delta.max()) / 400.0
+                riser_link = _format_player_markdown_link(
+                    riser["_pid"], riser["name"], PUBLIC_MODE, ctx
+                )
                 highlights.append(
                     {
                         "icon": "▲",
                         "title": "Biggest Riser",
-                        "text": f"{_build_player_link(riser['_pid'], riser['name'], PUBLIC_MODE, ctx)} climbed {delta_val:+.3f} JUPR across {int(riser['matches_played'])} games.",
+                        "text": f"{riser_link} climbed {delta_val:+.3f} JUPR across {int(riser['matches_played'])} games.",
                         "secondary": f"Rating now {float(riser['JUPR']):.3f}",
                     }
                 )
             if slide is not None and float(recent_delta.min()) < 0:
                 delta_val = float(recent_delta.min()) / 400.0
+                slide_link = _format_player_markdown_link(
+                    slide["_pid"], slide["name"], PUBLIC_MODE, ctx
+                )
                 highlights.append(
                     {
                         "icon": "▼",
                         "title": "Toughest Slide",
-                        "text": f"{_build_player_link(slide['_pid'], slide['name'], PUBLIC_MODE, ctx)} slipped {delta_val:+.3f} JUPR across {int(slide['matches_played'])} games.",
+                        "text": f"{slide_link} slipped {delta_val:+.3f} JUPR across {int(slide['matches_played'])} games.",
                         "secondary": f"Rating now {float(slide['JUPR']):.3f}",
                     }
                 )
@@ -792,11 +681,14 @@ def render(ctx):
             active_df = active_df.sort_values("matches_played", ascending=False, kind="mergesort")
             if not active_df.empty and int(active_df.iloc[0]["matches_played"]) > 0:
                 most_active = active_df.iloc[0]
+                most_active_link = _format_player_markdown_link(
+                    most_active["_pid"], most_active["name"], PUBLIC_MODE, ctx
+                )
                 highlights.append(
                     {
                         "icon": "●",
                         "title": "Most Active",
-                        "text": f"{_build_player_link(most_active['_pid'], most_active['name'], PUBLIC_MODE, ctx)} logged {int(most_active['matches_played'])} games.",
+                        "text": f"{most_active_link} logged {int(most_active['matches_played'])} games.",
                         "secondary": f"Win rate {_format_win_pct(most_active['Win %'])}",
                     }
                 )
@@ -810,24 +702,31 @@ def render(ctx):
         if not best_win_df.empty:
             best_win_df = best_win_df.sort_values("Win %", ascending=False, kind="mergesort")
             best_win = best_win_df.iloc[0]
+            best_win_link = _format_player_markdown_link(
+                best_win["_pid"], best_win["name"], PUBLIC_MODE, ctx
+            )
             highlights.append(
                 {
                     "icon": "◎",
                     "title": "Best Win %",
-                    "text": f"{_build_player_link(best_win['_pid'], best_win['name'], PUBLIC_MODE, ctx)} holds {_format_win_pct(best_win['Win %'])} over {int(best_win['matches_played'])} games.",
+                    "text": f"{best_win_link} holds {_format_win_pct(best_win['Win %'])} over {int(best_win['matches_played'])} games.",
                     "secondary": f"Rating {float(best_win['JUPR']):.3f}",
                 }
             )
 
         if len(highlights) >= 2:
             st.markdown("### This Week at Tres Palapas")
-            st.markdown(
-                '<div class="lb-subtitle">Based on recent JUPR activity</div>',
-                unsafe_allow_html=True,
-            )
-            story_html = _render_story_highlights_html(highlights, ctx)
-            if story_html:
-                st.markdown(story_html, unsafe_allow_html=True)
+            st.caption("Based on recent JUPR activity")
+            highlight_cards = highlights[:4]
+            for idx in range(0, len(highlight_cards), 2):
+                row_cards = highlight_cards[idx : idx + 2]
+                cols = st.columns(len(row_cards))
+                for card, col in zip(row_cards, cols):
+                    with col:
+                        with st.container(border=True):
+                            st.caption(f"{card.get('icon', '')} {card.get('title', '')}")
+                            st.markdown(card.get("text", ""))
+                            st.caption(card.get("secondary", ""))
 
     # -------------------------
     # Controls
