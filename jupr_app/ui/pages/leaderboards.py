@@ -5,6 +5,7 @@ from jupr_app.ui.url import qp_get
 from jupr_app.ui.helpers import build_player_profile_link
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.theme_clean import callout
 
 
 def render(ctx):
@@ -82,9 +83,11 @@ def render(ctx):
     # -------------------------
     public_url = build_public_url(page="leaderboards", params={"league": target_league})
     if not PUBLIC_MODE:
-        st.caption("Public standings link")
-        st.text_input("", value=public_url, label_visibility="collapsed")
-        public_link_button("Open Public Standings", public_url)
+        with st.container(border=True):
+            st.markdown("### Public standings")
+            st.caption("Share this link with players.")
+            st.text_input("", value=public_url, label_visibility="collapsed")
+            public_link_button("Open Public Standings", public_url)
 
     # -------------------------
     # Min games requirement (league views only)
@@ -168,8 +171,10 @@ def render(ctx):
 
         # ADMIN ONLY message (never show in public mode)
         if inactive_hidden > 0 and (not PUBLIC_MODE):
-            st.caption(
-                f"{inactive_hidden} inactive player(s) hidden from Standings/Top Performers for this league."
+            callout(
+                "info",
+                "Heads up",
+                f"{inactive_hidden} inactive player(s) hidden from Standings/Top Performers for this league.",
             )
 
     # -------------------------
@@ -200,31 +205,32 @@ def render(ctx):
 
         if not qualified_df.empty:
             st.markdown(f"### 🏅 Top Performers (Min {min_games_req} Games)")
-            c1, c2, c3, c4 = st.columns(4)
+            with st.container(border=True):
+                c1, c2, c3, c4 = st.columns(4)
 
-            with c1:
-                st.markdown("**👑 Highest Rating**")
-                top = qualified_df.sort_values("rating", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{float(r['JUPR']):.3f}** - {r['name']}")
+                with c1:
+                    st.markdown("**👑 Highest Rating**")
+                    top = qualified_df.sort_values("rating", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{float(r['JUPR']):.3f}** - {r['name']}")
 
-            with c2:
-                st.markdown("**🔥 Most Improved**")
-                top = qualified_df.sort_values("rating_gain", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{(float(r['rating_gain'])/400.0):+.3f}** - {r['name']}")
+                with c2:
+                    st.markdown("**🔥 Most Improved**")
+                    top = qualified_df.sort_values("rating_gain", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{(float(r['rating_gain'])/400.0):+.3f}** - {r['name']}")
 
-            with c3:
-                st.markdown("**🎯 Best Win %**")
-                top = qualified_df.sort_values("Win %", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{float(r['Win %']):.1f}%** - {r['name']}")
+                with c3:
+                    st.markdown("**🎯 Best Win %**")
+                    top = qualified_df.sort_values("Win %", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{float(r['Win %']):.1f}%** - {r['name']}")
 
-            with c4:
-                st.markdown("**🚜 Most Wins**")
-                top = qualified_df.sort_values("wins", ascending=False).head(5)
-                for _, r in top.iterrows():
-                    st.markdown(f"**{int(r['wins'])} Wins** - {r['name']}")
+                with c4:
+                    st.markdown("**🚜 Most Wins**")
+                    top = qualified_df.sort_values("wins", ascending=False).head(5)
+                    for _, r in top.iterrows():
+                        st.markdown(f"**{int(r['wins'])} Wins** - {r['name']}")
 
             st.divider()
 
