@@ -306,9 +306,12 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         display: flex;
         flex-wrap: wrap;
         gap: 0.35rem;
+        align-items: center;
       }}
       div[data-testid="stRadio"] label[data-baseweb="radio"] {{
         margin: 0 !important;
+        gap: 0 !important;
+        padding-left: 0 !important;
       }}
       div[data-testid="stRadio"] label[data-baseweb="radio"] > div {{
         border-radius: 999px;
@@ -318,6 +321,9 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         color: var(--muted);
         font-weight: 650;
         transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+      }}
+      div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {{
+        display: none !important;
       }}
       div[data-testid="stRadio"] label[data-baseweb="radio"] input:checked + div {{
         border-color: var(--accent-border);
