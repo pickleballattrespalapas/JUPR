@@ -53,7 +53,9 @@ def render_top_performers_cards(
                 "entries": _build_entries(
                     qualified_df,
                     "Win %",
-                    lambda r: f"{float(r['Win %']):.1f}%",
+                    lambda r: f"{float(r['Win %']):.1f}%"
+                    if pd.notna(r["Win %"])
+                    else "—",
                 ),
             },
             {
@@ -203,6 +205,33 @@ def render(ctx):
         key="lb_league",
     )
 
+    qp_player = (qp_get("player", "") or "").strip()
+    qp_pid_raw = (qp_get("pid", "") or "").strip()
+    selected_pid_param = None
+    if qp_pid_raw.isdigit():
+        selected_pid_param = int(qp_pid_raw)
+
+    if qp_player and not st.session_state.get("lb_search"):
+        st.session_state["lb_search"] = qp_player
+
+    st.text_input("Find yourself", key="lb_search")
+
+    qualified_default = True if PUBLIC_MODE else False
+    show_qualified_only = False
+    show_inactive = False
+    if target_league != "OVERALL":
+        show_qualified_only = st.checkbox(
+            "Qualified only",
+            key="lb_qualified_only",
+            value=qualified_default,
+        )
+        if not PUBLIC_MODE:
+            show_inactive = st.checkbox(
+                "Show inactive",
+                key="lb_show_inactive",
+                value=False,
+            )
+
     # Keep URL in sync
     try:
         st.query_params["page"] = "leaderboards"
@@ -297,7 +326,8 @@ def render(ctx):
                     inactive_hidden = int((display_df["is_active"] == False).sum())
                 except Exception:
                     inactive_hidden = 0
-                display_df = display_df[display_df["is_active"] == True].copy()
+                if PUBLIC_MODE or (not show_inactive):
+                    display_df = display_df[display_df["is_active"] == True].copy()
 
             if "name" not in display_df.columns:
                 display_df["name"] = display_df["player_id"].map(id_to_name)
@@ -324,44 +354,54 @@ def render(ctx):
         st.info("No data.")
         return
 
-    # Defensive numeric conversions
+    # Defensive numeric conversions + canonical columns
     display_df = display_df.copy()
+    if target_league == "OVERALL":
+        display_df["_pid"] = display_df["id"].astype(int) if ("id" in display_df.columns) else None
+    else:
+        display_df["_pid"] = (
+            display_df["player_id"].astype(int) if ("player_id" in display_df.columns) else None
+        )
+
+    if "name" in display_df.columns:
+        display_df["name"] = display_df["name"].astype(str)
+    else:
+        display_df["name"] = ""
     display_df["rating"] = pd.to_numeric(display_df["rating"], errors="coerce").fillna(0.0)
-    display_df["starting_rating"] = pd.to_numeric(display_df.get("starting_rating", display_df["rating"]), errors="coerce").fillna(display_df["rating"])
-    display_df["wins"] = pd.to_numeric(display_df.get("wins", 0), errors="coerce").fillna(0).astype(int)
-    display_df["losses"] = pd.to_numeric(display_df.get("losses", 0), errors="coerce").fillna(0).astype(int)
-    display_df["matches_played"] = pd.to_numeric(display_df.get("matches_played", 0), errors="coerce").fillna(0).astype(int)
+    display_df["starting_rating"] = pd.to_numeric(
+        display_df.get("starting_rating", display_df["rating"]), errors="coerce"
+    ).fillna(display_df["rating"])
+    display_df["wins"] = (
+        pd.to_numeric(display_df.get("wins", 0), errors="coerce").fillna(0).astype(int)
+    )
+    display_df["losses"] = (
+        pd.to_numeric(display_df.get("losses", 0), errors="coerce").fillna(0).astype(int)
+    )
+    display_df["matches_played"] = (
+        pd.to_numeric(display_df.get("matches_played", 0), errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+
+    if "is_active" not in display_df.columns:
+        display_df["is_active"] = pd.NA
 
     display_df["JUPR"] = display_df["rating"].astype(float) / 400.0
-    mp = display_df["matches_played"].replace(0, 1).astype(float)
-    display_df["Win %"] = (display_df["wins"].astype(float) / mp) * 100.0
     display_df["rating_gain"] = (display_df["rating"] - display_df["starting_rating"]).astype(float)
+    display_df["Gain"] = display_df["rating_gain"].astype(float) / 400.0
+    display_df["Win %"] = display_df.apply(
+        lambda r: (
+            (float(r["wins"]) / float(r["matches_played"]) * 100.0)
+            if int(r["matches_played"]) > 0
+            else pd.NA
+        ),
+        axis=1,
+    )
 
-    # -------------------------
-    # Top performers (league views)
-    # -------------------------
     if target_league != "OVERALL":
-        qualified_df = display_df[display_df["matches_played"].astype(int) >= int(min_games_req)].copy()
+        display_df["Qualified"] = display_df["matches_played"].astype(int) >= int(min_games_req)
 
-        if not qualified_df.empty:
-            render_top_performers_cards(
-                qualified_df=qualified_df,
-                title=f"Top Performers (Min {min_games_req} Games)",
-            )
-            st.divider()
-
-    # -------------------------
-    # Standings table
-    # -------------------------
-    st.markdown("### 📊 Standings")
-    final_view = display_df.sort_values("rating", ascending=False).copy()
-
-    # Canonical pid column for links
-    if target_league == "OVERALL":
-        final_view["_pid"] = final_view["id"].astype(int) if ("id" in final_view.columns) else None
-    else:
-        final_view["_pid"] = final_view["player_id"].astype(int) if ("player_id" in final_view.columns) else None
-
+    final_view = display_df.sort_values("rating", ascending=False, kind="mergesort").copy()
     final_view["RankNum"] = range(1, len(final_view) + 1)
 
     def _rank_badge(r):
@@ -375,42 +415,208 @@ def render(ctx):
         return str(r)
 
     final_view["Rank"] = final_view["RankNum"].apply(_rank_badge)
-    final_view["Gain"] = final_view["rating_gain"].astype(float) / 400.0
+    final_view["Gap"] = (final_view["rating"].shift(1) - final_view["rating"]) / 400.0
 
-    def _name_link(row):
-        nm = str(row.get("name", "—") or "—")
-        pid = row.get("_pid", None)
-        if pid is None or (isinstance(pid, float) and pd.isna(pid)):
-            return nm
-        url = build_player_profile_link(int(pid), public=PUBLIC_MODE)
-        safe_nm = nm.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return f"<a href='{url}' target='_self'>{safe_nm}</a>"
+    # -------------------------
+    # Player-first: My Snapshot
+    # -------------------------
+    selected_row = None
+    selected_pid = None
+    search_text = (st.session_state.get("lb_search") or "").strip()
 
-    final_view["Player"] = final_view.apply(_name_link, axis=1)
+    if selected_pid_param is not None and "_pid" in final_view.columns:
+        hit = final_view[final_view["_pid"] == int(selected_pid_param)]
+        if not hit.empty:
+            selected_row = hit.iloc[0]
+            selected_pid = int(selected_row["_pid"])
 
-    final_view["JUPR"] = final_view["rating"].astype(float) / 400.0
-    mp2 = final_view["matches_played"].replace(0, 1).astype(float)
-    final_view["Win %"] = (final_view["wins"].astype(float) / mp2) * 100.0
+    if selected_row is None and search_text:
+        matches = final_view[
+            final_view["name"].astype(str).str.contains(search_text, case=False, na=False)
+        ].copy()
+        matches = matches[pd.notna(matches["_pid"])].copy()
+        if len(matches) == 1:
+            selected_row = matches.iloc[0]
+            selected_pid = int(selected_row["_pid"]) if pd.notna(selected_row["_pid"]) else None
+        elif len(matches) > 1:
+            options = matches["_pid"].tolist()
+            pick_pid = st.selectbox(
+                "Select player",
+                options,
+                key="lb_pick_player",
+                format_func=lambda x: str(
+                    matches.loc[matches["_pid"] == x, "name"].iloc[0]
+                ),
+            )
+            pick_row = matches[matches["_pid"] == pick_pid]
+            if not pick_row.empty:
+                selected_row = pick_row.iloc[0]
+                selected_pid = int(selected_row["_pid"]) if pd.notna(selected_row["_pid"]) else None
+        else:
+            st.info("No matching player found.")
 
-    tbl = final_view[["Rank", "Player", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]].copy()
-    tbl["JUPR"] = tbl["JUPR"].map(lambda x: f"{float(x):.3f}")
-    tbl["Gain"] = tbl["Gain"].map(
-        lambda x: (
-            f"<span style='color: {color_for_delta(x)};'>{float(x):+.3f}</span>"
-            if pd.notna(x)
-            else ""
+    if selected_row is not None:
+        win_pct_display = (
+            f"{float(selected_row['Win %']):.1f}%"
+            if pd.notna(selected_row["Win %"])
+            else "—"
         )
-    )
-    tbl["Win %"] = tbl["Win %"].map(lambda x: f"{float(x):.1f}%")
-    tbl = tbl.rename(columns={"matches_played": "MP", "wins": "W", "losses": "L"})
+        gain_value = float(selected_row["Gain"]) if pd.notna(selected_row["Gain"]) else 0.0
+        gain_color = color_for_delta(gain_value)
+        with st.container(border=True):
+            st.markdown("### 👤 My Snapshot")
+            st.markdown(
+                f"""
+                <div style="display:flex; flex-wrap:wrap; gap:16px;">
+                    <div><strong>Rank</strong><br>{selected_row['Rank']} (#{int(selected_row['RankNum'])})</div>
+                    <div><strong>Name</strong><br>{html.escape(str(selected_row['name']))}</div>
+                    <div><strong>JUPR</strong><br>{float(selected_row['JUPR']):.3f}</div>
+                    <div><strong>Gain</strong><br><span style="color:{gain_color};">{gain_value:+.3f}</span></div>
+                    <div><strong>MP</strong><br>{int(selected_row['matches_played'])}</div>
+                    <div><strong>W-L</strong><br>{int(selected_row['wins'])}-{int(selected_row['losses'])}</div>
+                    <div><strong>Win %</strong><br>{win_pct_display}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if selected_pid is not None:
+                player_url = build_player_profile_link(int(selected_pid), public=PUBLIC_MODE)
+                try:
+                    st.link_button("View full player page", player_url)
+                except Exception:
+                    st.markdown(f"[View full player page]({player_url})")
 
-    html = tbl.to_html(index=False, escape=False)
+        selected_idx = int(selected_row["RankNum"]) - 1
+        start_idx = max(selected_idx - 3, 0)
+        end_idx = min(selected_idx + 4, len(final_view))
+        neighborhood = final_view.iloc[start_idx:end_idx].copy()
+        neighborhood = neighborhood[
+            ["Rank", "name", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]
+        ].rename(
+            columns={
+                "name": "Player",
+                "matches_played": "MP",
+                "wins": "W",
+                "losses": "L",
+            }
+        )
+        neighborhood["JUPR"] = neighborhood["JUPR"].map(lambda x: f"{float(x):.3f}")
+        neighborhood["Gain"] = neighborhood["Gain"].map(lambda x: f"{float(x):+.3f}")
+        neighborhood["Win %"] = neighborhood["Win %"].map(
+            lambda x: f"{float(x):.1f}%" if pd.notna(x) else "—"
+        )
 
-    st.markdown(
-        f"""
-        <div class="lbtable">
-          {html}
-        </div>
-        """,
-        unsafe_allow_html=True,
+        st.markdown("#### Around Me")
+        st.caption("Your neighborhood in the standings.")
+        def _gain_style_cell(v):
+            try:
+                if pd.isna(v):
+                    return ""
+            except Exception:
+                return ""
+            try:
+                return f"color: {color_for_delta(float(v))}"
+            except Exception:
+                return ""
+
+        neighborhood_style = neighborhood.style.applymap(_gain_style_cell, subset=["Gain"])
+        st.dataframe(neighborhood_style, use_container_width=True, hide_index=True)
+
+        link_params = {"league": target_league}
+        if selected_pid is not None:
+            link_params["pid"] = str(selected_pid)
+        else:
+            link_params["player"] = str(selected_row["name"])
+
+        share_url = build_public_url(page="leaderboards", params=link_params)
+        st.text_input(
+            "Copy link to this view",
+            value=share_url,
+            label_visibility="collapsed",
+        )
+        st.divider()
+
+    # -------------------------
+    # Top performers (league views)
+    # -------------------------
+    if target_league != "OVERALL":
+        qualified_df = display_df[display_df["matches_played"].astype(int) >= int(min_games_req)].copy()
+
+        if not qualified_df.empty:
+            with st.expander(
+                "Top Performers",
+                expanded=not PUBLIC_MODE,
+            ):
+                render_top_performers_cards(
+                    qualified_df=qualified_df,
+                    title=f"Top Performers (Min {min_games_req} Games)",
+                )
+            st.divider()
+
+    # -------------------------
+    # Standings table
+    # -------------------------
+    st.markdown("### 📊 Standings")
+
+    standings = final_view.copy()
+    if target_league != "OVERALL" and show_qualified_only:
+        standings = standings[standings["Qualified"] == True].copy()
+
+    standings["Player"] = standings["name"].astype(str)
+    standings["Qualified"] = standings.get("Qualified", False)
+
+    columns = ["Rank", "Player", "JUPR", "Gain", "Gap"]
+    if target_league != "OVERALL":
+        columns.append("Qualified")
+    columns.extend(["matches_played", "wins", "losses", "Win %"])
+    standings = standings[columns].rename(
+        columns={
+            "matches_played": "MP",
+            "wins": "W",
+            "losses": "L",
+        }
     )
+
+    standings["Qualified"] = standings["Qualified"].map(lambda x: "✓" if x else "")
+
+    def _gain_style(v):
+        try:
+            if pd.isna(v):
+                return ""
+        except Exception:
+            return ""
+        try:
+            return f"color: {color_for_delta(float(v))}"
+        except Exception:
+            return ""
+
+    standings_style = standings.style.format(
+        {
+            "JUPR": lambda x: f"{float(x):.3f}",
+            "Gain": lambda x: f"{float(x):+.3f}" if pd.notna(x) else "",
+            "Gap": lambda x: f"{float(x):.3f}" if pd.notna(x) else "",
+            "Win %": lambda x: f"{float(x):.1f}%" if pd.notna(x) else "—",
+        }
+    ).applymap(_gain_style, subset=["Gain"])
+
+    if standings.empty:
+        st.info("No data.")
+    else:
+        st.dataframe(standings_style, use_container_width=True, hide_index=True)
+
+    # Keep URL in sync with selected player
+    try:
+        if selected_pid is not None:
+            st.query_params["pid"] = str(selected_pid)
+            try:
+                st.query_params.pop("player", None)
+            except Exception:
+                pass
+        else:
+            try:
+                st.query_params.pop("pid", None)
+                st.query_params.pop("player", None)
+            except Exception:
+                pass
+    except Exception:
+        pass
