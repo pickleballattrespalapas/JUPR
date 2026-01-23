@@ -23,6 +23,7 @@ from jupr_app.domain.roster import (
     swap_players,
 )
 from jupr_app.domain.schedule import get_match_schedule
+from jupr_app.ui.layout import page_shell
 
 
 def _utc_iso_now() -> str:
@@ -96,7 +97,8 @@ def _suggest_court_sizes(total_players: int) -> dict:
 
 
 def render(ctx):
-    st.header("🏟️ League Manager")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("🏟️ League Manager", "Run live events and manage ladders.", mode_label=mode_label)
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")

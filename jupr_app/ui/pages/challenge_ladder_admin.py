@@ -27,6 +27,7 @@ from jupr_app.domain.challenge_ladder import (
 from jupr_app.domain.build_challenge_notice_message import build_challenge_notice_message
 
   # adjust if needed
+from jupr_app.ui.layout import page_shell
 
 
 # -------------------------
@@ -156,7 +157,8 @@ def ladder_audit(supabase, club_id: str, action_type: str, entity_type: str, ent
 # Page render
 # -------------------------
 def render(ctx):
-    st.header("🛠️ Challenge Ladder Admin")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("🛠️ Challenge Ladder Admin", "Manage ladder ops, roster, and challenges.", mode_label=mode_label)
 
     if bool(ctx.public_mode):
         st.error("Admin page is not available in public mode.")

@@ -1,7 +1,11 @@
 import streamlit as st
 
+from jupr_app.ui.layout import page_shell
+
+
 def render(ctx):
-    st.header("❓ JUPR Rating FAQs")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("❓ JUPR Rating FAQs", "Answers about JUPR ratings and recorded play.", mode_label=mode_label)
     st.markdown(
         """
 JUPR (Joe’s Unique Pickleball Ratings) is Tres Palapas’ **in-house rating system** used to create better matchups, seed events, and keep leveled play fair.

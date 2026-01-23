@@ -1,7 +1,10 @@
 import streamlit as st
 
+from jupr_app.ui.layout import page_shell
+
 def render(ctx):
-    st.header("📘 Admin Guide")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("📘 Admin Guide", "Operational playbook for admins.", mode_label=mode_label)
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")

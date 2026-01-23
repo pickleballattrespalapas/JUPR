@@ -8,10 +8,12 @@ import streamlit as st
 
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.ui.layout import page_shell
 
 
 def render(ctx):
-    st.header("📝 Match Uploader (Quick/Pop-Up)")
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("📝 Match Uploader", "Quick entry for pop-up or league matches.", mode_label=mode_label)
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin only.")
         return

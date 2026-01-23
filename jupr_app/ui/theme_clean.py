@@ -301,6 +301,31 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         display: none;
       }}
 
+      /* Radio navigation (public top nav) */
+      div[data-testid="stRadio"] div[role="radiogroup"] {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }}
+      div[data-testid="stRadio"] label[data-baseweb="radio"] {{
+        margin: 0 !important;
+      }}
+      div[data-testid="stRadio"] label[data-baseweb="radio"] > div {{
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 0.35rem 0.85rem;
+        background: var(--panel);
+        color: var(--muted);
+        font-weight: 650;
+        transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+      }}
+      div[data-testid="stRadio"] label[data-baseweb="radio"] input:checked + div {{
+        border-color: var(--accent-border);
+        color: var(--text);
+        background: var(--accent-soft);
+        box-shadow: 0 0 0 1px var(--accent-soft);
+      }}
+
       /* Expanders */
       details[data-testid="stExpander"] {{
         border: 1px solid var(--border);
