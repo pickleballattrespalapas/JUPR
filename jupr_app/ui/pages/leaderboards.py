@@ -32,26 +32,42 @@ def _format_win_pct(value):
     return "—"
 
 
-def _build_player_link(pid, name, public_mode):
-    safe_name = html.escape(str(name))
+def _player_profile_url(pid, public_mode, ctx):
     if pd.isna(pid):
-        return safe_name
+        return None
     try:
-        url = build_player_profile_link(int(pid), public=public_mode)
+        player_id = int(pid)
     except Exception:
+        return None
+    if public_mode:
+        params = {"pid": str(player_id)}
+        if getattr(ctx, "club_id", None):
+            params["club_id"] = str(ctx.club_id)
+        return build_public_url(page="players", params=params)
+    try:
+        return build_player_profile_link(player_id, public=public_mode)
+    except Exception:
+        return None
+
+
+def _build_player_link(pid, name, public_mode, ctx):
+    safe_name = html.escape(str(name))
+    url = _player_profile_url(pid, public_mode, ctx)
+    if not url:
         return safe_name
     return f'<a href="{url}" style="color: inherit; text-decoration: none;">{safe_name}</a>'
 
 
-def _render_hero_podium_html(top3_rows, public_mode, accent):
+def _render_hero_section_html(top3_rows, ctx):
     if top3_rows is None or top3_rows.empty:
         return ""
 
+    accent = st.get_option("theme.primaryColor") or "#6AA6FF"
     hero_cards = []
     for idx, (_, row) in enumerate(top3_rows.iterrows(), start=1):
         rank_class = "is-top" if idx == 1 else ("is-second" if idx == 2 else "is-third")
         rank_style = f"color:{accent};" if idx != 1 else "color: rgba(255,255,255,0.8);"
-        name_html = _build_player_link(row["_pid"], row["name"], public_mode)
+        name_html = _build_player_link(row["_pid"], row["name"], bool(ctx.public_mode), ctx)
         if idx == 1:
             name_html = f'<span class="lb-hero-accent">{name_html}</span>'
         hero_cards.append(
@@ -80,6 +96,23 @@ def _render_hero_podium_html(top3_rows, public_mode, accent):
         </div>
     </section>
     """
+
+
+def _render_story_highlights_html(highlights, ctx):
+    if not highlights:
+        return ""
+    cards_html = "".join(
+        f"""
+        <div class="lb-story-card">
+            <div class="lb-story-icon">{html.escape(card.get('icon', ''))}</div>
+            <div class="lb-story-title">{html.escape(card.get('title', ''))}</div>
+            <div class="lb-story-text">{card.get('text', '')}</div>
+            <div class="lb-muted" style="font-size:12px;">{html.escape(card.get('secondary', ''))}</div>
+        </div>
+        """
+        for card in highlights[:4]
+    )
+    return f'<div class="lb-story-grid">{cards_html}</div>'
 
 
 def render_top_performers_cards(
@@ -472,7 +505,6 @@ def render(ctx):
         unsafe_allow_html=True,
     )
     st.markdown('<div class="lb-wrap">', unsafe_allow_html=True)
-    accent = st.get_option("theme.primaryColor") or "#6AA6FF"
     delta_up = "#6DBE7C"
     delta_flat = "#8D94A3"
     delta_down = "#C08A3C"
@@ -710,7 +742,7 @@ def render(ctx):
     podium = final_view.head(3).copy()
     st.markdown("### Who’s on top right now?")
     if not podium.empty:
-        hero_html = _render_hero_podium_html(podium, PUBLIC_MODE, accent)
+        hero_html = _render_hero_section_html(podium, ctx)
         if hero_html:
             st.markdown(hero_html, unsafe_allow_html=True)
 
@@ -746,7 +778,7 @@ def render(ctx):
                     {
                         "icon": "▲",
                         "title": "Biggest Riser",
-                        "text": f"{_build_player_link(riser['_pid'], riser['name'], PUBLIC_MODE)} climbed {delta_val:+.3f} JUPR across {int(riser['matches_played'])} games.",
+                        "text": f"{_build_player_link(riser['_pid'], riser['name'], PUBLIC_MODE, ctx)} climbed {delta_val:+.3f} JUPR across {int(riser['matches_played'])} games.",
                         "secondary": f"Rating now {float(riser['JUPR']):.3f}",
                     }
                 )
@@ -756,7 +788,7 @@ def render(ctx):
                     {
                         "icon": "▼",
                         "title": "Toughest Slide",
-                        "text": f"{_build_player_link(slide['_pid'], slide['name'], PUBLIC_MODE)} slipped {delta_val:+.3f} JUPR across {int(slide['matches_played'])} games.",
+                        "text": f"{_build_player_link(slide['_pid'], slide['name'], PUBLIC_MODE, ctx)} slipped {delta_val:+.3f} JUPR across {int(slide['matches_played'])} games.",
                         "secondary": f"Rating now {float(slide['JUPR']):.3f}",
                     }
                 )
@@ -770,7 +802,7 @@ def render(ctx):
                     {
                         "icon": "●",
                         "title": "Most Active",
-                        "text": f"{_build_player_link(most_active['_pid'], most_active['name'], PUBLIC_MODE)} logged {int(most_active['matches_played'])} games.",
+                        "text": f"{_build_player_link(most_active['_pid'], most_active['name'], PUBLIC_MODE, ctx)} logged {int(most_active['matches_played'])} games.",
                         "secondary": f"Win rate {_format_win_pct(most_active['Win %'])}",
                     }
                 )
@@ -788,7 +820,7 @@ def render(ctx):
                 {
                     "icon": "◎",
                     "title": "Best Win %",
-                    "text": f"{_build_player_link(best_win['_pid'], best_win['name'], PUBLIC_MODE)} holds {_format_win_pct(best_win['Win %'])} over {int(best_win['matches_played'])} games.",
+                    "text": f"{_build_player_link(best_win['_pid'], best_win['name'], PUBLIC_MODE, ctx)} holds {_format_win_pct(best_win['Win %'])} over {int(best_win['matches_played'])} games.",
                     "secondary": f"Rating {float(best_win['JUPR']):.3f}",
                 }
             )
@@ -799,18 +831,9 @@ def render(ctx):
                 '<div class="lb-subtitle">Based on recent JUPR activity</div>',
                 unsafe_allow_html=True,
             )
-            highlight_html = "".join(
-                f"""
-                <div class="lb-story-card">
-                    <div class="lb-story-icon">{card['icon']}</div>
-                    <div class="lb-story-title">{html.escape(card['title'])}</div>
-                    <div class="lb-story-text">{card['text']}</div>
-                    <div class="lb-muted" style="font-size:12px;">{html.escape(card['secondary'])}</div>
-                </div>
-                """
-                for card in highlights[:4]
-            )
-            st.markdown(f'<div class="lb-story-grid">{highlight_html}</div>', unsafe_allow_html=True)
+            story_html = _render_story_highlights_html(highlights, ctx)
+            if story_html:
+                st.markdown(story_html, unsafe_allow_html=True)
 
     # -------------------------
     # Controls
@@ -915,7 +938,7 @@ def render(ctx):
             <div class="lb-card">
                 <div class="lb-row" style="align-items:center; justify-content:space-between;">
                     <div>
-                        <div class="lb-title">{_build_player_link(selected_row['_pid'], selected_row['name'], PUBLIC_MODE)}</div>
+                        <div class="lb-title">{_build_player_link(selected_row['_pid'], selected_row['name'], PUBLIC_MODE, ctx)}</div>
                         <div class="lb-subtitle">Rank {int(selected_row['RankNum'])}</div>
                     </div>
                     <div style="font-size:20px; font-weight:700;">
@@ -946,7 +969,10 @@ def render(ctx):
             unsafe_allow_html=True,
         )
         if selected_pid is not None:
-            player_url = build_player_profile_link(int(selected_pid), public=PUBLIC_MODE)
+            player_url = _player_profile_url(int(selected_pid), PUBLIC_MODE, ctx)
+        else:
+            player_url = None
+        if player_url:
             st.markdown('<div class="lb-actions" style="margin-top:12px;">', unsafe_allow_html=True)
             try:
                 st.link_button("View full player page", player_url)
@@ -968,7 +994,7 @@ def render(ctx):
                 <div class="lb-standings-card" style="min-width: 200px;">
                     <div class="lb-standings-top">
                         <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
-                        <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE)}</div>
+                        <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
                         <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
                     </div>
                     <div class="lb-standings-stats">
@@ -1025,7 +1051,7 @@ def render(ctx):
             <div class="lb-standings-card">
                 <div class="lb-standings-top">
                     <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
-                    <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE)}</div>
+                    <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
                     <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
                 </div>
                 <div class="lb-standings-stats">
