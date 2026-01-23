@@ -14,6 +14,7 @@ def render_top_performers_cards(
     top_perf_dict=None,
     qualified_df=None,
     title="Top Performers (Min 6 Games)",
+    compact_view=False,
 ):
     if top_perf_dict is None:
         if qualified_df is None or qualified_df.empty:
@@ -73,16 +74,16 @@ def render_top_performers_cards(
 
     accent = st.get_option("theme.primaryColor") or "#4C78A8"
 
-    st.markdown(f"### 🏅 {title}")
+    st.markdown(f"### {title}")
     st.markdown(
         """
         <style>
         .tp-cards .tp-card {
-            background: rgba(255,255,255,0.02);
+            background: rgba(255,255,255,0.03);
             border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 14px;
-            padding: 14px 16px;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+            border-radius: 16px;
+            padding: 16px 18px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.16);
             border-top: 3px solid var(--tp-accent);
         }
         .tp-cards .tp-label {
@@ -93,7 +94,7 @@ def render_top_performers_cards(
             margin-bottom: 6px;
         }
         .tp-cards .tp-value {
-            font-size: 26px;
+            font-size: 24px;
             font-weight: 700;
             color: var(--tp-accent);
             margin-bottom: 2px;
@@ -125,8 +126,10 @@ def render_top_performers_cards(
     )
 
     st.markdown(f'<div class="tp-cards" style="--tp-accent: {accent};">', unsafe_allow_html=True)
-    cols = st.columns(4)
-    for col, card in zip(cols, top_perf_dict):
+    column_count = 2 if compact_view else 4
+    cols = st.columns(column_count)
+    for idx, card in enumerate(top_perf_dict):
+        col = cols[idx % column_count]
         entries = card.get("entries", [])
         if not entries:
             continue
@@ -167,6 +170,92 @@ def render(ctx):
 
     mode_label = "Public" if PUBLIC_MODE else "Admin"
     page_shell("🏆 Leaderboards", "Standings and top performers by league.", mode_label=mode_label)
+    st.markdown(
+        """
+        <style>
+        .lb-wrap {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding-bottom: 24px;
+        }
+        .lb-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 18px 20px;
+            box-shadow: 0 8px 22px rgba(0,0,0,0.16);
+        }
+        .lb-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .lb-kpi {
+            flex: 1 1 140px;
+            min-width: 120px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 10px 12px;
+        }
+        .lb-kpi .lb-kpi-label {
+            font-size: 11px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.6);
+            margin-bottom: 4px;
+        }
+        .lb-kpi .lb-kpi-value {
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .lb-title {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+        .lb-subtitle {
+            font-size: 13px;
+            color: rgba(255,255,255,0.65);
+        }
+        .lb-muted {
+            color: rgba(255,255,255,0.6);
+        }
+        .lb-actions a,
+        .lb-actions button {
+            width: 100%;
+            justify-content: center;
+        }
+        @media (max-width: 640px) {
+            .lb-wrap {
+                padding: 0 4px 24px;
+            }
+            .lb-card {
+                padding: 18px;
+            }
+            .lb-row {
+                flex-direction: column;
+            }
+            .lb-kpi {
+                min-width: 0;
+            }
+            .tp-cards [data-testid="column"] {
+                flex: 1 1 100% !important;
+                width: 100% !important;
+            }
+            .stButton > button,
+            .stLinkButton > a {
+                width: 100% !important;
+            }
+            .stDataFrame {
+                font-size: 12px;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="lb-wrap">', unsafe_allow_html=True)
 
     # -------------------------
     # Available leagues
@@ -198,12 +287,34 @@ def render(ctx):
     if pre and pre in available_leagues:
         default_idx = available_leagues.index(pre)
 
-    target_league = st.selectbox(
-        "Select View",
-        available_leagues,
-        index=default_idx,
-        key="lb_league",
-    )
+    with st.container(border=True):
+        st.markdown('<div class="lb-title">Standings Filters</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="lb-subtitle">Pick a league and find your player card.</div>',
+            unsafe_allow_html=True,
+        )
+        control_cols = st.columns([1.4, 1.4, 1])
+        with control_cols[0]:
+            target_league = st.selectbox(
+                "Select View",
+                available_leagues,
+                index=default_idx,
+                key="lb_league",
+            )
+        with control_cols[1]:
+            st.text_input("Find yourself", key="lb_search")
+        with control_cols[2]:
+            st.toggle(
+                "Compact view",
+                key="lb_compact",
+                value=PUBLIC_MODE,
+            )
+        if target_league != "OVERALL" and not PUBLIC_MODE:
+            st.checkbox(
+                "Show inactive",
+                key="lb_show_inactive",
+                value=False,
+            )
 
     qp_player = (qp_get("player", "") or "").strip()
     qp_pid_raw = (qp_get("pid", "") or "").strip()
@@ -214,16 +325,10 @@ def render(ctx):
     if qp_player and not st.session_state.get("lb_search"):
         st.session_state["lb_search"] = qp_player
 
-    st.text_input("Find yourself", key="lb_search")
-
     show_inactive = False
     if target_league != "OVERALL":
         if not PUBLIC_MODE:
-            show_inactive = st.checkbox(
-                "Show inactive",
-                key="lb_show_inactive",
-                value=False,
-            )
+            show_inactive = bool(st.session_state.get("lb_show_inactive", False))
 
     # Keep URL in sync
     try:
@@ -345,6 +450,7 @@ def render(ctx):
     # -------------------------
     if display_df is None or display_df.empty or "rating" not in display_df.columns:
         st.info("No data.")
+        st.markdown("</div>", unsafe_allow_html=True)
         return
 
     # Defensive numeric conversions + canonical columns
@@ -467,47 +573,59 @@ def render(ctx):
         )
         gain_value = float(selected_row["Gain"]) if pd.notna(selected_row["Gain"]) else 0.0
         gain_color = color_for_delta(gain_value)
-        with st.container(border=True):
-            st.markdown("### 👤 My Snapshot")
-            st.markdown(
-                f"""
-                <div style="display:flex; flex-wrap:wrap; gap:16px;">
-                    <div><strong>Rank</strong><br>{selected_row['Rank']} (#{int(selected_row['RankNum'])})</div>
-                    <div><strong>Name</strong><br>{html.escape(str(selected_row['name']))}</div>
-                    <div><strong>JUPR</strong><br>{float(selected_row['JUPR']):.3f}</div>
-                    <div><strong>Gain</strong><br><span style="color:{gain_color};">{gain_value:+.3f}</span></div>
-                    <div><strong>MP</strong><br>{int(selected_row['matches_played'])}</div>
-                    <div><strong>W-L</strong><br>{int(selected_row['wins'])}-{int(selected_row['losses'])}</div>
-                    <div><strong>Win %</strong><br>{win_pct_display}</div>
+        st.markdown("### My Snapshot")
+        st.markdown(
+            f"""
+            <div class="lb-card">
+                <div class="lb-row" style="align-items:center; justify-content:space-between;">
+                    <div>
+                        <div class="lb-title">{html.escape(str(selected_row['name']))}</div>
+                        <div class="lb-subtitle">Rank {selected_row['Rank']} · #{int(selected_row['RankNum'])}</div>
+                    </div>
+                    <div style="font-size:20px; font-weight:700;">
+                        {float(selected_row['JUPR']):.3f}
+                        <div class="lb-muted" style="font-size:12px; font-weight:500;">JUPR</div>
+                    </div>
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if selected_pid is not None:
-                player_url = build_player_profile_link(int(selected_pid), public=PUBLIC_MODE)
-                try:
-                    st.link_button("View full player page", player_url)
-                except Exception:
-                    st.markdown(f"[View full player page]({player_url})")
+                <div class="lb-row" style="margin-top:12px;">
+                    <div class="lb-kpi">
+                        <div class="lb-kpi-label">Gain</div>
+                        <div class="lb-kpi-value" style="color:{gain_color};">{gain_value:+.3f}</div>
+                    </div>
+                    <div class="lb-kpi">
+                        <div class="lb-kpi-label">Win %</div>
+                        <div class="lb-kpi-value">{win_pct_display}</div>
+                    </div>
+                    <div class="lb-kpi">
+                        <div class="lb-kpi-label">Matches</div>
+                        <div class="lb-kpi-value">{int(selected_row['matches_played'])}</div>
+                    </div>
+                    <div class="lb-kpi">
+                        <div class="lb-kpi-label">W-L</div>
+                        <div class="lb-kpi-value">{int(selected_row['wins'])}-{int(selected_row['losses'])}</div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if selected_pid is not None:
+            player_url = build_player_profile_link(int(selected_pid), public=PUBLIC_MODE)
+            st.markdown('<div class="lb-actions" style="margin-top:12px;">', unsafe_allow_html=True)
+            try:
+                st.link_button("View full player page", player_url)
+            except Exception:
+                st.markdown(f"[View full player page]({player_url})")
+            st.markdown("</div>", unsafe_allow_html=True)
 
         selected_idx = int(selected_row["RankNum"]) - 1
         start_idx = max(selected_idx - 3, 0)
         end_idx = min(selected_idx + 4, len(final_view))
         neighborhood = final_view.iloc[start_idx:end_idx].copy()
-        neighborhood = neighborhood[
-            ["Rank", "name", "JUPR", "Gain", "matches_played", "wins", "losses", "Win %"]
-        ].rename(
+        neighborhood = neighborhood[["Rank", "name", "JUPR", "Gain"]].rename(
             columns={
                 "name": "Player",
-                "matches_played": "MP",
-                "wins": "W",
-                "losses": "L",
             }
-        )
-        neighborhood["JUPR"] = neighborhood["JUPR"].map(lambda x: f"{float(x):.3f}")
-        neighborhood["Gain"] = neighborhood["Gain"].map(lambda x: f"{float(x):+.3f}")
-        neighborhood["Win %"] = neighborhood["Win %"].map(
-            lambda x: f"{float(x):.1f}%" if pd.notna(x) else "—"
         )
 
         st.markdown("#### Around Me")
@@ -523,8 +641,15 @@ def render(ctx):
             except Exception:
                 return ""
 
-        neighborhood_style = neighborhood.style.applymap(_gain_style_cell, subset=["Gain"])
+        neighborhood_style = neighborhood.style.format(
+            {
+                "JUPR": lambda x: f"{float(x):.3f}",
+                "Gain": lambda x: f"{float(x):+.3f}" if pd.notna(x) else "",
+            }
+        ).applymap(_gain_style_cell, subset=["Gain"])
+        st.markdown('<div class="lb-card">', unsafe_allow_html=True)
         st.dataframe(neighborhood_style, use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
         link_params = {"league": target_league}
         if selected_pid is not None:
@@ -554,62 +679,79 @@ def render(ctx):
                 render_top_performers_cards(
                     qualified_df=qualified_df,
                     title=f"Top Performers (Min {min_games_req} Games)",
+                    compact_view=bool(st.session_state.get("lb_compact", PUBLIC_MODE)),
                 )
             st.divider()
 
     # -------------------------
     # Standings table
     # -------------------------
-    st.markdown("### 📊 Standings")
+    with st.expander("📊 Standings", expanded=True):
+        standings = final_view.copy()
+        if target_league != "OVERALL":
+            if "Qualified" not in standings.columns:
+                standings["Qualified"] = False
 
-    standings = final_view.copy()
-    if target_league != "OVERALL":
-        if "Qualified" not in standings.columns:
-            standings["Qualified"] = False
+        standings["Player"] = standings["name"].astype(str)
+        if "Qualified" in standings.columns:
+            standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
 
-    standings["Player"] = standings["name"].astype(str)
-    if "Qualified" in standings.columns:
-        standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
+        standings["W-L"] = standings.apply(
+            lambda r: f"{int(r['wins'])}-{int(r['losses'])}",
+            axis=1,
+        )
+        compact_view = bool(st.session_state.get("lb_compact", PUBLIC_MODE))
 
-    columns = ["Rank", "Player", "JUPR", "Gain", "Gap"]
-    if target_league != "OVERALL" and "Qualified" in standings.columns:
-        columns.append("Qualified")
-    columns.extend(["matches_played", "wins", "losses", "Win %"])
-    standings = standings[columns].rename(
-        columns={
-            "matches_played": "MP",
-            "wins": "W",
-            "losses": "L",
-        }
-    )
+        compact_columns = ["Rank", "Player", "JUPR", "Gain", "W-L", "Win %"]
+        full_columns = [
+            "Rank",
+            "Player",
+            "JUPR",
+            "Gain",
+            "matches_played",
+            "wins",
+            "losses",
+            "Win %",
+        ]
+        if target_league != "OVERALL" and "Qualified" in standings.columns:
+            compact_columns.insert(2, "Qualified")
+            full_columns.insert(2, "Qualified")
 
-    if "Qualified" in standings.columns:
-        standings["Qualified"] = standings["Qualified"].map(lambda x: "✓" if x else "")
+        columns = compact_columns if compact_view else full_columns
+        standings = standings[columns].rename(
+            columns={
+                "matches_played": "MP",
+                "wins": "W",
+                "losses": "L",
+            }
+        )
 
-    def _gain_style(v):
-        try:
-            if pd.isna(v):
+        if "Qualified" in standings.columns:
+            standings["Qualified"] = standings["Qualified"].map(lambda x: "✓" if x else "")
+
+        def _gain_style(v):
+            try:
+                if pd.isna(v):
+                    return ""
+            except Exception:
                 return ""
-        except Exception:
-            return ""
-        try:
-            return f"color: {color_for_delta(float(v))}"
-        except Exception:
-            return ""
+            try:
+                return f"color: {color_for_delta(float(v))}"
+            except Exception:
+                return ""
 
-    standings_style = standings.style.format(
-        {
-            "JUPR": lambda x: f"{float(x):.3f}",
-            "Gain": lambda x: f"{float(x):+.3f}" if pd.notna(x) else "",
-            "Gap": lambda x: f"{float(x):.3f}" if pd.notna(x) else "",
-            "Win %": lambda x: f"{float(x):.1f}%" if pd.notna(x) else "—",
-        }
-    ).applymap(_gain_style, subset=["Gain"])
+        standings_style = standings.style.format(
+            {
+                "JUPR": lambda x: f"{float(x):.3f}",
+                "Gain": lambda x: f"{float(x):+.3f}" if pd.notna(x) else "",
+                "Win %": lambda x: f"{float(x):.1f}%" if pd.notna(x) else "—",
+            }
+        ).applymap(_gain_style, subset=["Gain"])
 
-    if standings.empty:
-        st.info("No data.")
-    else:
-        st.dataframe(standings_style, use_container_width=True, hide_index=True)
+        if standings.empty:
+            st.info("No data.")
+        else:
+            st.dataframe(standings_style, use_container_width=True, hide_index=True)
 
     # Keep URL in sync with selected player
     try:
@@ -627,3 +769,5 @@ def render(ctx):
                 pass
     except Exception:
         pass
+
+    st.markdown("</div>", unsafe_allow_html=True)
