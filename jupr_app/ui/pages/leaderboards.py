@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 import pandas as pd
 
@@ -7,6 +8,144 @@ from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.theme import color_for_delta
+
+
+def render_top_performers_cards(
+    top_perf_dict=None,
+    qualified_df=None,
+    title="Top Performers (Min 6 Games)",
+):
+    if top_perf_dict is None:
+        if qualified_df is None or qualified_df.empty:
+            return
+
+        def _build_entries(df, sort_key, value_fn):
+            top = df.sort_values(sort_key, ascending=False).head(5)
+            entries = []
+            for _, r in top.iterrows():
+                entries.append(
+                    {
+                        "value": value_fn(r),
+                        "name": str(r.get("name", "")),
+                    }
+                )
+            return entries
+
+        top_perf_dict = [
+            {
+                "label": "Highest Rating",
+                "entries": _build_entries(
+                    qualified_df,
+                    "rating",
+                    lambda r: f"{float(r['JUPR']):.3f}",
+                ),
+            },
+            {
+                "label": "Most Improved",
+                "entries": _build_entries(
+                    qualified_df,
+                    "rating_gain",
+                    lambda r: f"{(float(r['rating_gain'])/400.0):+.3f}",
+                ),
+            },
+            {
+                "label": "Best Win %",
+                "entries": _build_entries(
+                    qualified_df,
+                    "Win %",
+                    lambda r: f"{float(r['Win %']):.1f}%",
+                ),
+            },
+            {
+                "label": "Most Wins",
+                "entries": _build_entries(
+                    qualified_df,
+                    "wins",
+                    lambda r: f"{int(r['wins'])}",
+                ),
+            },
+        ]
+
+    if not top_perf_dict:
+        return
+
+    accent = st.get_option("theme.primaryColor") or "#4C78A8"
+
+    st.markdown(f"### 🏅 {title}")
+    st.markdown(
+        """
+        <style>
+        .tp-cards .tp-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 14px 16px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+            border-top: 3px solid var(--tp-accent);
+        }
+        .tp-cards .tp-label {
+            font-size: 12px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.55);
+            margin-bottom: 6px;
+        }
+        .tp-cards .tp-value {
+            font-size: 26px;
+            font-weight: 700;
+            color: var(--tp-accent);
+            margin-bottom: 2px;
+        }
+        .tp-cards .tp-name {
+            font-size: 14px;
+            color: rgba(255,255,255,0.8);
+            margin-bottom: 8px;
+        }
+        .tp-cards .tp-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .tp-cards .tp-list-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: rgba(255,255,255,0.55);
+        }
+        .tp-cards .tp-list-value {
+            font-weight: 600;
+            color: rgba(255,255,255,0.65);
+            margin-right: 8px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(f'<div class="tp-cards" style="--tp-accent: {accent};">', unsafe_allow_html=True)
+    cols = st.columns(4)
+    for col, card in zip(cols, top_perf_dict):
+        entries = card.get("entries", [])
+        if not entries:
+            continue
+        primary = entries[0]
+        secondary = entries[1:5]
+        list_items = "".join(
+            f'<div class="tp-list-item"><span class="tp-list-value">{html.escape(entry["value"])}</span>'
+            f'<span class="tp-list-name">{html.escape(entry["name"])}</span></div>'
+            for entry in secondary
+        )
+        card_html = f"""
+        <div class="tp-card">
+            <div class="tp-label">{html.escape(str(card.get("label", "")))}</div>
+            <div class="tp-value">{html.escape(primary["value"])}</div>
+            <div class="tp-name">{html.escape(primary["name"])}</div>
+            <div class="tp-list">{list_items}</div>
+        </div>
+        """
+        with col:
+            st.markdown(card_html, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render(ctx):
@@ -205,34 +344,10 @@ def render(ctx):
         qualified_df = display_df[display_df["matches_played"].astype(int) >= int(min_games_req)].copy()
 
         if not qualified_df.empty:
-            st.markdown(f"### 🏅 Top Performers (Min {min_games_req} Games)")
-            with st.container(border=True):
-                c1, c2, c3, c4 = st.columns(4)
-
-                with c1:
-                    st.markdown("**👑 Highest Rating**")
-                    top = qualified_df.sort_values("rating", ascending=False).head(5)
-                    for _, r in top.iterrows():
-                        st.markdown(f"**{float(r['JUPR']):.3f}** - {r['name']}")
-
-                with c2:
-                    st.markdown("**🔥 Most Improved**")
-                    top = qualified_df.sort_values("rating_gain", ascending=False).head(5)
-                    for _, r in top.iterrows():
-                        st.markdown(f"**{(float(r['rating_gain'])/400.0):+.3f}** - {r['name']}")
-
-                with c3:
-                    st.markdown("**🎯 Best Win %**")
-                    top = qualified_df.sort_values("Win %", ascending=False).head(5)
-                    for _, r in top.iterrows():
-                        st.markdown(f"**{float(r['Win %']):.1f}%** - {r['name']}")
-
-                with c4:
-                    st.markdown("**🚜 Most Wins**")
-                    top = qualified_df.sort_values("wins", ascending=False).head(5)
-                    for _, r in top.iterrows():
-                        st.markdown(f"**{int(r['wins'])} Wins** - {r['name']}")
-
+            render_top_performers_cards(
+                qualified_df=qualified_df,
+                title=f"Top Performers (Min {min_games_req} Games)",
+            )
             st.divider()
 
     # -------------------------
