@@ -24,8 +24,8 @@ class BadgeDefinition:
 
 BADGE_DEFINITIONS: list[BadgeDefinition] = [
     BadgeDefinition("participant", "Participant", 10, "Participation", False),
-    BadgeDefinition("dedicated_participant", "Dedicated Participant", 25, "Participation", False),
-    BadgeDefinition("lifetime_participant", "Lifetime Participant", 50, "Participation", False),
+    BadgeDefinition("dedicated_participant_50", "Dedicated Participant", 25, "Participation", False),
+    BadgeDefinition("lifetime_participant_200", "Lifetime Participant", 50, "Participation", False),
     BadgeDefinition("mountain_climber", "Mountain Climber", 45, "Momentum & Progress", True),
     BadgeDefinition("breakthrough", "Breakthrough", 55, "Momentum & Progress", False),
     BadgeDefinition("above_expectations", "Above Expectations", 50, "Performance vs Expectation", False),
@@ -39,8 +39,6 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
 ]
 
 
-PARTICIPATION_DEDICATED_GAMES = 50
-PARTICIPATION_LIFETIME_GAMES = 200
 BREAKTHROUGH_TOP_N = 5
 BREAKTHROUGH_RATING = 1600.0
 EXPECTED_WIN_DELTA = 2.0
@@ -154,39 +152,6 @@ def _compute_badges(ctx, existing: set[tuple[str, str, str | None]]) -> list[dic
                 "value_json": value_json,
             }
         )
-
-    df_players = getattr(ctx, "df_players_all", None)
-    if df_players is None or df_players.empty:
-        return awards
-
-    df_players = df_players.copy()
-    if "matches_played" not in df_players.columns:
-        df_players["matches_played"] = 0
-
-    for _, row in df_players.iterrows():
-        try:
-            player_id = int(row.get("id"))
-        except Exception:
-            continue
-        games = int(row.get("matches_played") or 0)
-        if games >= 1:
-            add_badge(player_id, "participant", context_type="overall", context_id="overall", value_num=games)
-        if games >= PARTICIPATION_DEDICATED_GAMES:
-            add_badge(
-                player_id,
-                "dedicated_participant",
-                context_type="overall",
-                context_id="overall",
-                value_num=games,
-            )
-        if games >= PARTICIPATION_LIFETIME_GAMES:
-            add_badge(
-                player_id,
-                "lifetime_participant",
-                context_type="overall",
-                context_id="overall",
-                value_num=games,
-            )
 
     _award_league_badges(ctx, add_badge)
     _award_match_badges(ctx, add_badge)

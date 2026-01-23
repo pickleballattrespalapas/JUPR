@@ -11,6 +11,8 @@ class AppContext:
     df_leagues: pd.DataFrame
     df_matches: pd.DataFrame
     df_meta: pd.DataFrame
+    df_badges: pd.DataFrame
+    df_player_badges: pd.DataFrame
     name_to_id: dict
     id_to_name: dict
     public_mode: bool

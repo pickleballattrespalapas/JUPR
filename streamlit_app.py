@@ -13,6 +13,7 @@ import pandas as pd  # kept because pages may rely on it
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
 from jupr_app.domain.badges import ensure_badges
+from jupr_app.domain.badges_participation import ensure_participation_badges
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
@@ -269,6 +270,8 @@ def main():
             df_leagues,
             df_matches,
             df_meta,
+            df_badges,
+            df_player_badges,
             name_to_id,
             id_to_name,
         ) = get_data(CLUB_ID)
@@ -281,6 +284,8 @@ def main():
             df_leagues=df_leagues,
             df_matches=df_matches,
             df_meta=df_meta,
+            df_badges=df_badges,
+            df_player_badges=df_player_badges,
             name_to_id=name_to_id,
             id_to_name=id_to_name,
             public_mode=PUBLIC_MODE,
@@ -288,6 +293,14 @@ def main():
         )
 
         ensure_badges(ctx)
+        data_sig = (
+            str(CLUB_ID),
+            int(len(df_players_all) if df_players_all is not None else 0),
+            int(len(df_matches) if df_matches is not None else 0),
+        )
+        if st.session_state.get("participation_badges_sig") != data_sig:
+            ensure_participation_badges(ctx)
+            st.session_state["participation_badges_sig"] = data_sig
 
         # -------------------------
         # LAZY IMPORT PAGES (prevents import-time KeyError crashes)

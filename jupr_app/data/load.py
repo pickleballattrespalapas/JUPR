@@ -5,7 +5,8 @@ import pandas as pd
 def load_data(supabase, club_id: str, match_limit: int = 5000):
     """
     Loads club-scoped tables and returns:
-      df_players_all, df_players_active, df_leagues, df_matches, df_meta, name_to_id, id_to_name
+      df_players_all, df_players_active, df_leagues, df_matches, df_meta, df_badges,
+      df_player_badges, name_to_id, id_to_name
 
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
@@ -61,6 +62,19 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             )
             df_meta = pd.DataFrame(meta_resp.data or [])
 
+            # Badges (global definitions)
+            badges_resp = supabase.table("badges").select("*").execute()
+            df_badges = pd.DataFrame(badges_resp.data or [])
+
+            # Player badges (club-scoped)
+            pb_resp = (
+                supabase.table("player_badges")
+                .select("*")
+                .eq("club_id", club_id)
+                .execute()
+            )
+            df_player_badges = pd.DataFrame(pb_resp.data or [])
+
             # Mappings
             if (
                 not df_players_all.empty
@@ -98,6 +112,8 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 df_leagues,
                 df_matches,
                 df_meta,
+                df_badges,
+                df_player_badges,
                 name_to_id,
                 id_to_name,
             )
