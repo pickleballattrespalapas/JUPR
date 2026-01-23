@@ -54,13 +54,14 @@ def ladder_nm(pid: int, id_to_name: Dict[int, str]) -> str:
 # -------------------------
 # Tier definitions (Option A, range-labeled)
 # -------------------------
-TIER_ORDER = ["DEV", "INT", "ADV", "PREM"]
+TIER_ORDER = ["PREM", "ADV", "INT", "DEV", "EMER"]
 
 TIER_DEFS = {
-    "DEV":  {"label": "Developing",    "min": None,  "max": 3.25, "range": "< 3.25"},
-    "INT":  {"label": "Intermediate",  "min": 3.25,  "max": 3.75, "range": "3.25–3.75"},
-    "ADV":  {"label": "Advanced",      "min": 3.75,  "max": 4.25, "range": "3.75–4.25"},
-    "PREM": {"label": "Premier",       "min": 4.25,  "max": None, "range": "4.25+"},
+    "PREM": {"label": "Premier",       "min": 4.25, "max": None, "range": "4.25+"},
+    "ADV":  {"label": "Advanced",      "min": 3.75, "max": 4.25, "range": "3.75–4.25"},
+    "INT":  {"label": "Intermediate",  "min": 3.25, "max": 3.75, "range": "3.25–3.75"},
+    "DEV":  {"label": "Developing",    "min": 3.0,  "max": 3.25, "range": "3.0–3.25"},
+    "EMER": {"label": "Emerging",      "min": None, "max": 3.0,  "range": "< 3.0"},
 }
 
 
@@ -69,6 +70,8 @@ def tier_for_jupr(jupr: float) -> str:
         x = float(jupr)
     except Exception:
         return "INT"
+    if x < 3.0:
+        return "EMER"
     if x < 3.25:
         return "DEV"
     if x < 3.75:
@@ -90,11 +93,24 @@ def tier_idx(tier_id: str) -> int:
 
 
 def is_promotion(from_tier: str, to_tier: str) -> bool:
-    return tier_idx(to_tier) > tier_idx(from_tier)
+    return tier_idx(to_tier) < tier_idx(from_tier)
 
 
 def is_demotion(from_tier: str, to_tier: str) -> bool:
-    return tier_idx(to_tier) < tier_idx(from_tier)
+    return tier_idx(to_tier) > tier_idx(from_tier)
+
+
+def sorted_tiers(tiers: list[str]) -> list[str]:
+    """Return tiers sorted by TIER_ORDER (highest -> lowest).
+
+    >>> sorted_tiers(["DEV", "PREM", "EMER"])
+    ['PREM', 'DEV', 'EMER']
+    """
+    seen = set()
+    input_set = {str(t) for t in tiers}
+    ordered = [tid for tid in TIER_ORDER if tid in input_set and not (tid in seen or seen.add(tid))]
+    extras = [str(t) for t in tiers if str(t) not in TIER_ORDER and str(t) not in seen and not seen.add(str(t))]
+    return ordered + extras
 
 
 # -------------------------
