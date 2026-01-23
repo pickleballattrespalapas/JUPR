@@ -1,9 +1,13 @@
+import logging
+
 import streamlit as st
 import pandas as pd
 
 from jupr_app.ui.helpers import qp_get, build_match_explorer_link
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme import MATCH_COLORS, color_for_delta, color_for_result
+
+logger = logging.getLogger(__name__)
 
 try:
     import altair as alt
@@ -57,6 +61,67 @@ def fetch_player_matches(_supabase, club_id: str, pid: int, limit: int = 600) ->
         return _run(snap_select)
     except Exception:
         return _run(base_select)
+
+
+@st.cache_data(ttl=60)
+def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
+    try:
+        resp = (
+            _supabase.table("player_badges")
+            .select("badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
+            .eq("club_id", str(club_id))
+            .eq("player_id", int(pid))
+            .execute()
+        )
+        pb_df = pd.DataFrame(resp.data or [])
+    except Exception:
+        logger.exception("Failed to load player_badges")
+        return pd.DataFrame()
+
+    if pb_df.empty or "badge_id" not in pb_df.columns:
+        return pd.DataFrame()
+
+    badge_ids = pb_df["badge_id"].dropna().astype(str).unique().tolist()
+    if not badge_ids:
+        return pd.DataFrame()
+
+    try:
+        b_resp = (
+            _supabase.table("badges")
+            .select("badge_id,name,prestige,category")
+            .in_("badge_id", badge_ids)
+            .execute()
+        )
+        badges_df = pd.DataFrame(b_resp.data or [])
+    except Exception:
+        logger.exception("Failed to load badges definitions")
+        return pd.DataFrame()
+
+    if badges_df.empty:
+        return pd.DataFrame()
+
+    return pb_df.merge(badges_df, on="badge_id", how="left")
+
+
+BADGE_ICONS = {
+    "participant": "🎟️",
+    "dedicated_participant": "🧭",
+    "lifetime_participant": "🏅",
+    "mountain_climber": "🧗",
+    "breakthrough": "🚀",
+    "above_expectations": "⭐",
+    "clutch_performer": "⚡",
+    "dominant_run": "🔥",
+    "high_output": "💥",
+    "battle_tested": "🛡️",
+    "consistency": "🎯",
+    "giant_slayer": "🗡️",
+    "upset_champion": "👑",
+}
+
+
+def badge_icon(badge_id: str, category: str | None = None) -> str:
+    return BADGE_ICONS.get(str(badge_id), "🏆")
 
 
 @st.cache_data(ttl=300)
@@ -347,6 +412,48 @@ def render(ctx):
             )
     else:
         st.caption("No league ratings table entries found for this player yet.")
+
+    st.markdown("### Badges")
+    try:
+        badges_df = fetch_player_badges(_supabase, club_id, pid)
+    except Exception:
+        logger.exception("Failed to fetch badges for player view")
+        badges_df = pd.DataFrame()
+
+    if badges_df.empty:
+        st.caption("No badges earned yet.")
+    else:
+        badges_df["earned_at_dt"] = pd.to_datetime(badges_df.get("earned_at", None), utc=True, errors="coerce")
+        badges_df["prestige"] = pd.to_numeric(badges_df.get("prestige", 0), errors="coerce").fillna(0)
+        badges_df = badges_df.sort_values(["prestige", "earned_at_dt"], ascending=[False, False])
+
+        top_badges = badges_df.head(3).copy()
+        cols = st.columns(len(top_badges))
+        for idx, (_, row) in enumerate(top_badges.iterrows()):
+            with cols[idx]:
+                icon = badge_icon(row.get("badge_id"), row.get("category"))
+                st.markdown(f"**{icon} {row.get('name', 'Badge')}**")
+                st.caption(f"Prestige {int(row.get('prestige', 0) or 0)}")
+
+        with st.expander("View all badges", expanded=False):
+            show_cols = ["name", "prestige", "category", "earned_at_dt"]
+            show_df = badges_df[show_cols].rename(
+                columns={
+                    "name": "Badge",
+                    "prestige": "Prestige",
+                    "category": "Category",
+                    "earned_at_dt": "Earned",
+                }
+            )
+            st.dataframe(
+                show_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Prestige": st.column_config.NumberColumn(format="%d"),
+                    "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                },
+            )
 
     st.divider()
 
