@@ -402,15 +402,32 @@ def render(ctx):
             font-weight: 700;
             font-size: 16px;
             min-width: 38px;
+            flex: 0 0 42px;
         }
         .lb-standings-name {
-            font-size: 15px;
-            font-weight: 600;
+            font-size: 18px;
+            font-weight: 650;
+            color: var(--accent);
+            letter-spacing: 0.2px;
+            flex: 1 1 240px;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .lb-standings-name a {
+            color: inherit;
+            text-decoration: none;
+        }
+        .lb-standings-name a:hover {
+            text-decoration: underline;
+            opacity: 0.95;
         }
         .lb-standings-rating {
             font-size: 16px;
             font-weight: 700;
             text-align: right;
+            flex: 0 0 72px;
         }
         .lb-standings-stats {
             font-size: 12px;
@@ -468,6 +485,12 @@ def render(ctx):
             }
             .lb-kpi {
                 min-width: 0;
+            }
+            .lb-standings-name {
+                white-space: normal;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
             }
             .stButton > button,
             .stLinkButton > a {
@@ -1080,11 +1103,13 @@ def render(ctx):
                     )
                     name = badge.get("name", "Badge")
                     prestige = badge.get("prestige", 0)
-                    title = (
-                        f"{name} (Prestige {prestige})"
-                        if prestige and int(prestige) > 0
-                        else str(name)
-                    )
+                    category = badge.get("category")
+                    title_parts = [str(name)]
+                    if category:
+                        title_parts.append(str(category))
+                    if prestige and int(prestige) > 0:
+                        title_parts.append(f"Prestige {int(prestige)}")
+                    title = " • ".join(title_parts)
                     badge_parts.append(
                         f'<span class="lb-story-badge" title="{html.escape(title)}">'
                         f"{html.escape(str(icon))}</span>"
