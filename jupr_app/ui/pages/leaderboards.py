@@ -1,4 +1,5 @@
 import html
+import logging
 import urllib.parse
 import streamlit as st
 import pandas as pd
@@ -7,6 +8,11 @@ from jupr_app.ui.url import qp_get
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
+from jupr_app.ui.pages.players import badge_icon
+
+
+logger = logging.getLogger(__name__)
+MAX_STORY_BADGES = 2
 
 
 def _delta_color(delta, up_color, flat_color, down_color):
@@ -54,6 +60,115 @@ def _build_player_link(pid, name, public_mode, ctx):
     if not url:
         return safe_name
     return f'<a href="{url}" style="color: inherit; text-decoration: none;">{safe_name}</a>'
+
+
+def _fetch_story_badges(ctx, player_ids):
+    if not player_ids:
+        return pd.DataFrame()
+
+    pb_df = getattr(ctx, "df_player_badges", None)
+    badges_df = getattr(ctx, "df_badges", None)
+
+    if (
+        pb_df is not None
+        and badges_df is not None
+        and not pb_df.empty
+        and not badges_df.empty
+    ):
+        pb_copy = pb_df.copy()
+        if "club_id" in pb_copy.columns:
+            pb_copy = pb_copy[pb_copy["club_id"].astype(str) == str(ctx.club_id)]
+        pb_copy = pb_copy[pb_copy["player_id"].isin(player_ids)]
+        if pb_copy.empty:
+            return pd.DataFrame()
+        return pb_copy.merge(badges_df, on="badge_id", how="left")
+
+    try:
+        resp = (
+            ctx.supabase.table("player_badges")
+            .select(
+                "player_id,badge_id,earned_at,created_at,"
+                "badges:badges(badge_id,name,prestige,category,icon,code)"
+            )
+            .eq("club_id", str(ctx.club_id))
+            .in_("player_id", player_ids)
+            .execute()
+        )
+    except Exception:
+        logger.exception("Failed to fetch story badges")
+        return pd.DataFrame()
+
+    data = resp.data or []
+    if not data:
+        return pd.DataFrame()
+
+    story_df = pd.json_normalize(data, sep=".")
+    column_map = {
+        "badges.badge_id": "badge_id",
+        "badges.name": "name",
+        "badges.prestige": "prestige",
+        "badges.category": "category",
+        "badges.icon": "icon",
+        "badges.code": "code",
+    }
+    return story_df.rename(columns=column_map)
+
+
+def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[dict]]:
+    if badges_df is None or badges_df.empty:
+        return {}
+
+    story_df = badges_df.copy()
+    if "badge_id" not in story_df.columns or "player_id" not in story_df.columns:
+        return {}
+
+    earned_col = "earned_at" if "earned_at" in story_df.columns else "created_at"
+    story_df["earned_at_dt"] = pd.to_datetime(
+        story_df.get(earned_col, None), utc=True, errors="coerce"
+    )
+    story_df["prestige"] = pd.to_numeric(story_df.get("prestige", 0), errors="coerce").fillna(0)
+
+    story_df = story_df.sort_values(
+        ["player_id", "badge_id", "earned_at_dt"], ascending=[True, True, False]
+    ).drop_duplicates(subset=["player_id", "badge_id"], keep="first")
+
+    story_df = story_df.sort_values(
+        ["prestige", "earned_at_dt"], ascending=[False, False]
+    )
+
+    badges_by_player: dict[int, list[dict]] = {}
+    for _, row in story_df.iterrows():
+        try:
+            pid = int(row["player_id"])
+        except Exception:
+            continue
+        badges_by_player.setdefault(pid, []).append(
+            {
+                "badge_id": row.get("badge_id"),
+                "name": row.get("name", "Badge"),
+                "prestige": int(row.get("prestige", 0) or 0),
+                "category": row.get("category"),
+                "icon": row.get("icon"),
+                "earned_at_dt": row.get("earned_at_dt"),
+            }
+        )
+
+    return badges_by_player
+
+
+def _verify_story_badges(badges_by_player, story_player_ids, badges_df, admin_logged_in):
+    if not admin_logged_in or not story_player_ids:
+        return
+    if badges_df is None or badges_df.empty:
+        return
+    try:
+        eligible = badges_df[badges_df["player_id"].isin(story_player_ids)]
+        if eligible.empty:
+            return
+        if not any(badges_by_player.get(pid) for pid in story_player_ids):
+            logger.warning("Story View badge map empty despite eligible player badges.")
+    except Exception:
+        logger.exception("Story View badge verification failed")
 
 
 def render_top_performers_cards(
@@ -307,6 +422,20 @@ def render(ctx):
             border-radius: 999px;
             border: 1px solid rgba(255,255,255,0.18);
             color: rgba(255,255,255,0.65);
+        }
+        .lb-badge-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+        }
+        .lb-story-badge {
+            font-size: 15px;
+            line-height: 1;
+            padding: 2px 6px;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
         }
         .lb-controls {
             background: rgba(255,255,255,0.02);
@@ -766,18 +895,69 @@ def render(ctx):
         limit = 50
         st.session_state["lb_limit"] = 50
 
+    story_badges_by_player = {}
+    story_badges_df = pd.DataFrame()
+    story_player_ids = []
+    show_story_badges = view_mode == "Story View"
+    if show_story_badges:
+        story_player_ids = (
+            standings.head(limit)["_pid"].dropna().astype(int).unique().tolist()
+        )
+        story_badges_df = _fetch_story_badges(ctx, story_player_ids)
+        story_badges_by_player = _build_story_badge_map(story_badges_df)
+        _verify_story_badges(
+            story_badges_by_player,
+            story_player_ids,
+            story_badges_df,
+            admin_logged_in,
+        )
+
     for _, row in standings.head(limit).iterrows():
         gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
         gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
-        badges = []
+        status_badges = []
         if target_league != "OVERALL" and not row.get("Qualified", True):
-            badges.append("Min games not met")
+            status_badges.append("Min games not met")
         is_active_value = row.get("is_active")
         if pd.notna(is_active_value) and not bool(is_active_value):
-            badges.append("Inactive")
-        if row.get("matches_played", 0) == 0:
-            badges.append("New")
-        badge_html = "".join(f'<span class="lb-badge">{html.escape(b)}</span>' for b in badges)
+            status_badges.append("Inactive")
+        if not show_story_badges and row.get("matches_played", 0) == 0:
+            status_badges.append("New")
+        badge_html = "".join(
+            f'<span class="lb-badge">{html.escape(b)}</span>' for b in status_badges
+        )
+
+        story_badges_html = ""
+        if show_story_badges:
+            player_id = row.get("_pid")
+            story_badges = []
+            if pd.notna(player_id):
+                try:
+                    story_badges = story_badges_by_player.get(int(player_id), [])
+                except Exception:
+                    story_badges = []
+            if story_badges:
+                badge_parts = []
+                for badge in story_badges[:MAX_STORY_BADGES]:
+                    icon = badge.get("icon") or badge_icon(
+                        badge.get("badge_id"), badge.get("category")
+                    )
+                    name = badge.get("name", "Badge")
+                    prestige = badge.get("prestige", 0)
+                    title = (
+                        f"{name} (Prestige {prestige})"
+                        if prestige and int(prestige) > 0
+                        else str(name)
+                    )
+                    badge_parts.append(
+                        f'<span class="lb-story-badge" title="{html.escape(title)}">'
+                        f"{html.escape(str(icon))}</span>"
+                    )
+                story_badges_html = f'<div class="lb-badge-strip">{"".join(badge_parts)}</div>'
+            elif row.get("matches_played", 0) == 0:
+                story_badges_html = (
+                    '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
+                )
         st.markdown(
             f"""
             <div class="lb-standings-card">
@@ -791,6 +971,7 @@ def render(ctx):
                     <span>{_format_win_pct(row['Win %'])} win %</span>
                     <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
                 </div>
+                {story_badges_html}
                 <div class="lb-row" style="gap:6px;">{badge_html}</div>
             </div>
             """,
