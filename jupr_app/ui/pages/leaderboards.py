@@ -61,7 +61,7 @@ def _build_player_link(pid, name, public_mode, ctx):
     url = _player_profile_url(pid, public_mode, ctx)
     if not url:
         return safe_name
-    return f'<a href="{url}" style="color: inherit; text-decoration: none;">{safe_name}</a>'
+    return f'<a href="{url}" target="_self" class="lb-link">{safe_name}</a>'
 
 
 def _fetch_story_badges(ctx, player_ids):
@@ -347,6 +347,14 @@ def render(ctx):
             padding: 18px 20px;
             box-shadow: 0 8px 20px rgba(0,0,0,0.16);
         }
+        .lb-link {
+            color: inherit;
+            text-decoration: none;
+        }
+        .lb-link:hover {
+            text-decoration: underline;
+            opacity: 0.95;
+        }
         .lb-row {
             display: flex;
             flex-wrap: wrap;
@@ -417,11 +425,6 @@ def render(ctx):
         }
         .lb-standings-name a {
             color: inherit;
-            text-decoration: none;
-        }
-        .lb-standings-name a:hover {
-            text-decoration: underline;
-            opacity: 0.95;
         }
         .lb-standings-rating {
             font-size: 16px;
@@ -467,6 +470,36 @@ def render(ctx):
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 16px;
             padding: 16px;
+        }
+        .lb-table-wrap {
+            overflow-x: auto;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(255,255,255,0.02);
+        }
+        .lb-table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 720px;
+        }
+        .lb-table th,
+        .lb-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            font-size: 13px;
+        }
+        .lb-table th {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: rgba(255,255,255,0.65);
+            background: rgba(255,255,255,0.03);
+            position: sticky;
+            top: 0;
+        }
+        .lb-table tbody tr:hover {
+            background: rgba(255,255,255,0.04);
         }
         .lb-actions a,
         .lb-actions button {
@@ -538,7 +571,6 @@ def render(ctx):
     st.session_state.setdefault("lb_league", available_leagues[default_idx])
     st.session_state.setdefault("lb_view_mode", "Story View")
     st.session_state.setdefault("lb_show_inactive", False)
-    st.session_state.setdefault("lb_show_stories", True)
     target_league = st.session_state.get("lb_league", available_leagues[default_idx])
     if target_league not in available_leagues:
         target_league = available_leagues[default_idx]
@@ -773,8 +805,6 @@ def render(ctx):
             )
     with control_cols[2]:
         st.text_input("Find player", key="lb_search")
-        if view_mode == "Story View":
-            st.checkbox("Show stories", key="lb_show_stories", value=True)
     if target_league != "OVERALL" and not PUBLIC_MODE:
         st.checkbox("Show inactive", key="lb_show_inactive", value=False)
 
@@ -927,11 +957,9 @@ def render(ctx):
         table_df["Wins"] = table_df["wins"].astype(int)
         table_df["Losses"] = table_df["losses"].astype(int)
         table_df["Rating (JUPR)"] = table_df["JUPR"].astype(float)
-        table_df["Profile"] = table_df["_pid"].apply(
-            lambda pid: _player_profile_url(pid, PUBLIC_MODE, ctx)
-        )
         table_df = table_df[
             [
+                "_pid",
                 "Rank",
                 "Player",
                 "Rating (JUPR)",
@@ -940,32 +968,55 @@ def render(ctx):
                 "Losses",
                 "Win %",
                 "Rating Δ",
-                "Profile",
             ]
         ]
-        table_config = {
-            "Rank": st.column_config.NumberColumn(format="%d"),
-            "Rating (JUPR)": st.column_config.NumberColumn(format="%.3f"),
-            "Win %": st.column_config.NumberColumn(format="%.1f"),
-            "Rating Δ": st.column_config.NumberColumn(format="%+.3f"),
-            "Games": st.column_config.NumberColumn(format="%d"),
-            "Wins": st.column_config.NumberColumn(format="%d"),
-            "Losses": st.column_config.NumberColumn(format="%d"),
-        }
-        try:
-            table_config["Profile"] = st.column_config.LinkColumn(
-                "Profile",
-                help="Open player profile",
+        table_rows = []
+        for _, row in table_df.iterrows():
+            player_link = _build_player_link(row["_pid"], row["Player"], PUBLIC_MODE, ctx)
+            rating_val = row.get("Rating (JUPR)")
+            rating_display = f"{float(rating_val):.3f}" if pd.notna(rating_val) else "—"
+            win_pct_display = _format_win_pct(row.get("Win %"))
+            rating_delta = row.get("Rating Δ")
+            rating_delta_display = (
+                f"{float(rating_delta):+.3f}" if pd.notna(rating_delta) else "—"
             )
-        except Exception:
-            table_config["Profile"] = st.column_config.TextColumn("Profile")
+            table_rows.append(
+                "<tr>"
+                f"<td>{int(row['Rank'])}</td>"
+                f"<td>{player_link}</td>"
+                f"<td>{html.escape(rating_display)}</td>"
+                f"<td>{int(row['Games'])}</td>"
+                f"<td>{int(row['Wins'])}</td>"
+                f"<td>{int(row['Losses'])}</td>"
+                f"<td>{html.escape(win_pct_display)}</td>"
+                f"<td>{html.escape(rating_delta_display)}</td>"
+                "</tr>"
+            )
 
-        st.dataframe(
-            table_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config=table_config,
-        )
+        table_html = """
+        <div class="lb-table-wrap">
+            <table class="lb-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Player</th>
+                        <th>Rating (JUPR)</th>
+                        <th>Games</th>
+                        <th>Wins</th>
+                        <th>Losses</th>
+                        <th>Win %</th>
+                        <th>Rating Δ</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        table_html += "".join(table_rows) if table_rows else ""
+        table_html += """
+                </tbody>
+            </table>
+        </div>
+        """
+        st.markdown(table_html, unsafe_allow_html=True)
 
         st.markdown("#### Standings Analytics")
         chart_data = standings.copy()
@@ -1119,11 +1170,10 @@ def render(ctx):
                 story_badges_html = (
                     '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
                 )
-            if st.session_state.get("lb_show_stories", True):
-                story_text = build_badge_story(row, story_badges)
-                if not story_text:
-                    story_text = build_badge_story(row, [])
-                story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
+            story_text = build_badge_story(row, story_badges)
+            if not story_text:
+                story_text = build_badge_story(row, [])
+            story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
             st.markdown(
                 f"""
                 <div class="lb-standings-card">
