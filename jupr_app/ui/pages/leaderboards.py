@@ -420,8 +420,8 @@ def render(ctx):
             gap: 8px;
         }
         .lb-story-text {
-            font-size: 12px;
-            color: rgba(255,255,255,0.65);
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.70);
             margin-top: 6px;
         }
         .lb-badge {
@@ -1032,6 +1032,21 @@ def render(ctx):
             story_badges_df,
             admin_logged_in,
         )
+        if admin_logged_in and story_badges_by_player:
+            if not st.session_state.get("lb_story_sanity_logged"):
+                sanity_story = ""
+                for _, row in standings.head(limit).iterrows():
+                    pid = row.get("_pid")
+                    if pd.notna(pid) and story_badges_by_player.get(int(pid)):
+                        sanity_story = build_badge_story(
+                            row, story_badges_by_player.get(int(pid), [])
+                        )
+                        break
+                if not sanity_story:
+                    logger.warning(
+                        "Story View sanity check failed: no story generated for badges."
+                    )
+                st.session_state["lb_story_sanity_logged"] = True
 
         for _, row in standings.head(limit).iterrows():
             gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
@@ -1081,8 +1096,9 @@ def render(ctx):
                 )
             if st.session_state.get("lb_show_stories", True):
                 story_text = build_badge_story(row, story_badges)
-                if story_text:
-                    story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
+                if not story_text:
+                    story_text = build_badge_story(row, [])
+                story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
             st.markdown(
                 f"""
                 <div class="lb-standings-card">
