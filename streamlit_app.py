@@ -307,6 +307,7 @@ def main():
         # -------------------------
         from jupr_app.ui.pages import (
             leaderboards,
+            league_results,
             match_explorer,
             faqs,
             players,
@@ -324,6 +325,7 @@ def main():
         # ---- Router ----
         PAGES = {
             "🏆 Leaderboards": leaderboards,
+            "📊 League Results": league_results,
             "🎯 Match Explorer": match_explorer,
             "🔍 Player Search": players,
             "🪜 Challenge Ladder": challenge_ladder,
@@ -342,6 +344,7 @@ def main():
 
         PAGE_KEY_TO_LABEL = {
             "leaderboards": "🏆 Leaderboards",
+            "league_results": "📊 League Results",
             "match_explorer": "🎯 Match Explorer",
             "players": "🔍 Player Search",
             "challenge_ladder": "🪜 Challenge Ladder",
@@ -378,7 +381,7 @@ def main():
             visible_labels = all_labels
 
         # Public nav order (old UX)
-        PUBLIC_NAV_KEYS = ["leaderboards", "match_explorer", "players", "challenge_ladder", "faqs"]
+        PUBLIC_NAV_KEYS = ["leaderboards", "league_results", "match_explorer", "players", "challenge_ladder", "faqs"]
         public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
 
         # -------------------------
