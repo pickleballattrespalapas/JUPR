@@ -10,6 +10,7 @@ from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
+from jupr_app.ui.helpers import build_badge_story
 
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,7 @@ def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[dict]]:
                 "name": row.get("name", "Badge"),
                 "prestige": int(row.get("prestige", 0) or 0),
                 "category": row.get("category"),
+                "code": row.get("code"),
                 "icon": row.get("icon"),
                 "earned_at_dt": row.get("earned_at_dt"),
             }
@@ -417,6 +419,11 @@ def render(ctx):
             flex-wrap: wrap;
             gap: 8px;
         }
+        .lb-story-text {
+            font-size: 12px;
+            color: rgba(255,255,255,0.65);
+            margin-top: 6px;
+        }
         .lb-badge {
             font-size: 11px;
             padding: 2px 8px;
@@ -508,6 +515,7 @@ def render(ctx):
     st.session_state.setdefault("lb_league", available_leagues[default_idx])
     st.session_state.setdefault("lb_view_mode", "Story View")
     st.session_state.setdefault("lb_show_inactive", False)
+    st.session_state.setdefault("lb_show_stories", True)
     target_league = st.session_state.get("lb_league", available_leagues[default_idx])
     if target_league not in available_leagues:
         target_league = available_leagues[default_idx]
@@ -742,6 +750,8 @@ def render(ctx):
             )
     with control_cols[2]:
         st.text_input("Find player", key="lb_search")
+        if view_mode == "Story View":
+            st.checkbox("Show stories", key="lb_show_stories", value=True)
     if target_league != "OVERALL" and not PUBLIC_MODE:
         st.checkbox("Show inactive", key="lb_show_inactive", value=False)
 
@@ -1039,6 +1049,7 @@ def render(ctx):
             )
 
             story_badges_html = ""
+            story_text_html = ""
             player_id = row.get("_pid")
             story_badges = []
             if pd.notna(player_id):
@@ -1068,6 +1079,10 @@ def render(ctx):
                 story_badges_html = (
                     '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
                 )
+            if st.session_state.get("lb_show_stories", True):
+                story_text = build_badge_story(row, story_badges)
+                if story_text:
+                    story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
             st.markdown(
                 f"""
                 <div class="lb-standings-card">
@@ -1082,6 +1097,7 @@ def render(ctx):
                         <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
                     </div>
                     {story_badges_html}
+                    {story_text_html}
                     <div class="lb-row" style="gap:6px;">{badge_html}</div>
                 </div>
                 """,
