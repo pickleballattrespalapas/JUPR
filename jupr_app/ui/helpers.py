@@ -128,6 +128,11 @@ def build_badge_story(player_row: dict | pd.Series, earned_badges: list[dict]) -
     if len(story) > 180 and len(headline_badges) > 1:
         short_badge_sentence = _build_badge_sentence(name, headline_badges[:1])
         story = short_badge_sentence
+    if not story:
+        if games <= 0:
+            return "New to the standings—play your first matches to begin earning badges."
+        games_str = f"{games} game" + ("s" if games != 1 else "")
+        return f"Active this season with {games_str} logged."
     return story
 
 
