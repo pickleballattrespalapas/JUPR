@@ -3,6 +3,7 @@ import logging
 import urllib.parse
 import streamlit as st
 import pandas as pd
+import altair as alt
 
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.public_links import build_public_url, public_link_button
@@ -794,81 +795,6 @@ def render(ctx):
             st.info("No matching player found.")
 
     if selected_row is not None:
-        win_pct_display = _format_win_pct(selected_row["Win %"])
-        gain_value = float(selected_row["Gain"]) if pd.notna(selected_row["Gain"]) else 0.0
-        gain_color = _delta_color(gain_value, delta_up, delta_flat, delta_down)
-        st.markdown("#### My Snapshot")
-        st.markdown(
-            f"""
-            <div class="lb-card">
-                <div class="lb-row" style="align-items:center; justify-content:space-between;">
-                    <div>
-                        <div class="lb-title">{_build_player_link(selected_row['_pid'], selected_row['name'], PUBLIC_MODE, ctx)}</div>
-                        <div class="lb-subtitle">Rank {int(selected_row['RankNum'])}</div>
-                    </div>
-                    <div style="font-size:20px; font-weight:700;">
-                        {float(selected_row['JUPR']):.3f}
-                        <div class="lb-muted" style="font-size:12px; font-weight:500;">JUPR</div>
-                    </div>
-                </div>
-                <div class="lb-row" style="margin-top:12px;">
-                    <div class="lb-kpi">
-                        <div class="lb-kpi-label">Δ Rating</div>
-                        <div class="lb-kpi-value" style="color:{gain_color};">{gain_value:+.3f}</div>
-                    </div>
-                    <div class="lb-kpi">
-                        <div class="lb-kpi-label">Win %</div>
-                        <div class="lb-kpi-value">{win_pct_display}</div>
-                    </div>
-                    <div class="lb-kpi">
-                        <div class="lb-kpi-label">Games</div>
-                        <div class="lb-kpi-value">{int(selected_row['matches_played'])}</div>
-                    </div>
-                    <div class="lb-kpi">
-                        <div class="lb-kpi-label">W-L</div>
-                        <div class="lb-kpi-value">{int(selected_row['wins'])}-{int(selected_row['losses'])}</div>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if selected_pid is not None:
-            player_url = _player_profile_url(int(selected_pid), PUBLIC_MODE, ctx)
-        else:
-            player_url = None
-        if player_url:
-            try:
-                st.link_button("View full player page", player_url)
-            except Exception:
-                st.markdown(f"[View full player page]({player_url})")
-
-        selected_idx = int(selected_row["RankNum"]) - 1
-        start_idx = max(selected_idx - 2, 0)
-        end_idx = min(selected_idx + 3, len(final_view))
-        neighborhood = final_view.iloc[start_idx:end_idx].copy()
-        st.markdown("##### Around Me")
-        for _, row in neighborhood.iterrows():
-            gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
-            gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
-            st.markdown(
-                f"""
-                <div class="lb-standings-card" style="min-width: 200px;">
-                    <div class="lb-standings-top">
-                        <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
-                        <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
-                        <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
-                    </div>
-                    <div class="lb-standings-stats">
-                        <span>{int(row['matches_played'])} games</span>
-                        <span>{_format_win_pct(row['Win %'])} win %</span>
-                        <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
         link_params = {"league": target_league}
         if selected_pid is not None:
             link_params["pid"] = str(selected_pid)
@@ -882,6 +808,74 @@ def render(ctx):
             label_visibility="collapsed",
         )
 
+        if view_mode == "Story View":
+            win_pct_display = _format_win_pct(selected_row["Win %"])
+            gain_value = float(selected_row["Gain"]) if pd.notna(selected_row["Gain"]) else 0.0
+            gain_color = _delta_color(gain_value, delta_up, delta_flat, delta_down)
+            st.markdown("#### My Snapshot")
+            st.markdown(
+                f"""
+                <div class="lb-card">
+                    <div class="lb-row" style="align-items:center; justify-content:space-between;">
+                        <div>
+                            <div class="lb-title">{_build_player_link(selected_row['_pid'], selected_row['name'], PUBLIC_MODE, ctx)}</div>
+                            <div class="lb-subtitle">Rank {int(selected_row['RankNum'])}</div>
+                        </div>
+                        <div style="font-size:20px; font-weight:700;">
+                            {float(selected_row['JUPR']):.3f}
+                            <div class="lb-muted" style="font-size:12px; font-weight:500;">JUPR</div>
+                        </div>
+                    </div>
+                    <div class="lb-row" style="margin-top:12px;">
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">Δ Rating</div>
+                            <div class="lb-kpi-value" style="color:{gain_color};">{gain_value:+.3f}</div>
+                        </div>
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">Win %</div>
+                            <div class="lb-kpi-value">{win_pct_display}</div>
+                        </div>
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">Games</div>
+                            <div class="lb-kpi-value">{int(selected_row['matches_played'])}</div>
+                        </div>
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">W-L</div>
+                            <div class="lb-kpi-value">{int(selected_row['wins'])}-{int(selected_row['losses'])}</div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown("#### Player Snapshot")
+            player_url = (
+                _player_profile_url(int(selected_pid), PUBLIC_MODE, ctx)
+                if selected_pid is not None
+                else None
+            )
+            header_cols = st.columns([3, 1])
+            with header_cols[0]:
+                st.markdown(f"**{selected_row['name']}** (Rank {int(selected_row['RankNum'])})")
+            with header_cols[1]:
+                if player_url:
+                    try:
+                        st.link_button("Open profile", player_url)
+                    except Exception:
+                        st.markdown(f"[Open profile]({player_url})")
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("JUPR", f"{float(selected_row['JUPR']):.3f}")
+            metric_cols[1].metric(
+                "Rating Δ",
+                f"{float(selected_row['Gain']):+.3f}" if pd.notna(selected_row["Gain"]) else "—",
+            )
+            metric_cols[2].metric(
+                "Win %",
+                _format_win_pct(selected_row["Win %"]),
+            )
+            metric_cols[3].metric("Games", int(selected_row["matches_played"]))
+
     standings = final_view.copy()
     if target_league != "OVERALL":
         if "Qualified" not in standings.columns:
@@ -889,17 +883,134 @@ def render(ctx):
     if "Qualified" in standings.columns:
         standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
 
-    st.session_state.setdefault("lb_limit", 50)
-    limit = int(st.session_state.get("lb_limit", 50))
-    if limit < 50:
-        limit = 50
-        st.session_state["lb_limit"] = 50
+    if view_mode == "Stats View":
+        st.markdown("#### Standings Table")
+        table_df = standings.copy()
+        table_df["Rank"] = table_df["RankNum"].astype(int)
+        table_df["Player"] = table_df["name"].astype(str)
+        table_df["Rating Δ"] = table_df["Gain"]
+        table_df["Win %"] = pd.to_numeric(table_df["Win %"], errors="coerce")
+        table_df["Games"] = table_df["matches_played"].astype(int)
+        table_df["Wins"] = table_df["wins"].astype(int)
+        table_df["Losses"] = table_df["losses"].astype(int)
+        table_df["Rating (JUPR)"] = table_df["JUPR"].astype(float)
+        table_df["Profile"] = table_df["_pid"].apply(
+            lambda pid: _player_profile_url(pid, PUBLIC_MODE, ctx)
+        )
+        table_df = table_df[
+            [
+                "Rank",
+                "Player",
+                "Rating (JUPR)",
+                "Games",
+                "Wins",
+                "Losses",
+                "Win %",
+                "Rating Δ",
+                "Profile",
+            ]
+        ]
+        table_config = {
+            "Rank": st.column_config.NumberColumn(format="%d"),
+            "Rating (JUPR)": st.column_config.NumberColumn(format="%.3f"),
+            "Win %": st.column_config.NumberColumn(format="%.1f"),
+            "Rating Δ": st.column_config.NumberColumn(format="%+.3f"),
+            "Games": st.column_config.NumberColumn(format="%d"),
+            "Wins": st.column_config.NumberColumn(format="%d"),
+            "Losses": st.column_config.NumberColumn(format="%d"),
+        }
+        try:
+            table_config["Profile"] = st.column_config.LinkColumn(
+                "Profile",
+                help="Open player profile",
+            )
+        except Exception:
+            table_config["Profile"] = st.column_config.TextColumn("Profile")
 
-    story_badges_by_player = {}
-    story_badges_df = pd.DataFrame()
-    story_player_ids = []
-    show_story_badges = view_mode == "Story View"
-    if show_story_badges:
+        st.dataframe(
+            table_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=table_config,
+        )
+
+        st.markdown("#### Standings Analytics")
+        chart_data = standings.copy()
+        chart_data = chart_data[pd.notna(chart_data["Win %"])].copy()
+        chart_data["Player"] = chart_data["name"].astype(str)
+        chart_data["Games"] = chart_data["matches_played"].astype(int)
+        chart_data["Rating"] = chart_data["JUPR"].astype(float)
+        chart_data["WinPct"] = chart_data["Win %"].astype(float)
+        chart_data["RatingDelta"] = chart_data["Gain"].astype(float)
+
+        scatter = (
+            alt.Chart(chart_data)
+            .mark_circle(opacity=0.75)
+            .encode(
+                x=alt.X("Rating", title="JUPR Rating"),
+                y=alt.Y("WinPct", title="Win %"),
+                size=alt.Size("Games", title="Games"),
+                tooltip=[
+                    alt.Tooltip("Player", title="Player"),
+                    alt.Tooltip("Rating", title="Rating", format=".3f"),
+                    alt.Tooltip("WinPct", title="Win %", format=".1f"),
+                    alt.Tooltip("Games", title="Games"),
+                    alt.Tooltip("RatingDelta", title="Rating Δ", format="+.3f"),
+                ],
+            )
+            .properties(height=320)
+            .interactive()
+        )
+        st.altair_chart(scatter, use_container_width=True)
+
+        rating_hist = (
+            alt.Chart(chart_data)
+            .mark_bar(opacity=0.8)
+            .encode(
+                x=alt.X("Rating", bin=alt.Bin(maxbins=20), title="JUPR Rating"),
+                y=alt.Y("count()", title="Players"),
+                tooltip=[alt.Tooltip("count()", title="Players")],
+            )
+            .properties(height=220)
+        )
+        st.altair_chart(rating_hist, use_container_width=True)
+
+        min_games_chart = int(min_games_req or 0)
+        top_candidates = standings.copy()
+        top_candidates = top_candidates[top_candidates["matches_played"] >= max(min_games_chart, 1)]
+        top_candidates = top_candidates[pd.notna(top_candidates["Win %"])]
+        top_candidates = top_candidates.sort_values("Win %", ascending=False).head(10)
+        if not top_candidates.empty:
+            top_candidates["Player"] = top_candidates["name"].astype(str)
+            top_candidates["WinPct"] = top_candidates["Win %"].astype(float)
+            win_bar = (
+                alt.Chart(top_candidates)
+                .mark_bar()
+                .encode(
+                    x=alt.X("WinPct", title="Win %", axis=alt.Axis(format=".1f")),
+                    y=alt.Y("Player", sort="-x", title="Player"),
+                    tooltip=[
+                        alt.Tooltip("Player", title="Player"),
+                        alt.Tooltip("WinPct", title="Win %", format=".1f"),
+                        alt.Tooltip("matches_played", title="Games"),
+                    ],
+                )
+                .properties(height=260)
+            )
+            st.altair_chart(win_bar, use_container_width=True)
+        else:
+            st.caption("Not enough games recorded yet for Top Win %.")
+    else:
+        st.session_state.setdefault("lb_limit", 50)
+        limit = int(st.session_state.get("lb_limit", 50))
+        if limit < 50:
+            limit = 50
+            st.session_state["lb_limit"] = 50
+
+        story_badges_by_player = {}
+        story_badges_df = pd.DataFrame()
+        story_player_ids = []
+        show_story_badges = True
         story_player_ids = (
             standings.head(limit)["_pid"].dropna().astype(int).unique().tolist()
         )
@@ -912,23 +1023,22 @@ def render(ctx):
             admin_logged_in,
         )
 
-    for _, row in standings.head(limit).iterrows():
-        gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
-        gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
-        status_badges = []
-        if target_league != "OVERALL" and not row.get("Qualified", True):
-            status_badges.append("Min games not met")
-        is_active_value = row.get("is_active")
-        if pd.notna(is_active_value) and not bool(is_active_value):
-            status_badges.append("Inactive")
-        if not show_story_badges and row.get("matches_played", 0) == 0:
-            status_badges.append("New")
-        badge_html = "".join(
-            f'<span class="lb-badge">{html.escape(b)}</span>' for b in status_badges
-        )
+        for _, row in standings.head(limit).iterrows():
+            gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
+            gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
+            status_badges = []
+            if target_league != "OVERALL" and not row.get("Qualified", True):
+                status_badges.append("Min games not met")
+            is_active_value = row.get("is_active")
+            if pd.notna(is_active_value) and not bool(is_active_value):
+                status_badges.append("Inactive")
+            if row.get("matches_played", 0) == 0:
+                status_badges.append("New")
+            badge_html = "".join(
+                f'<span class="lb-badge">{html.escape(b)}</span>' for b in status_badges
+            )
 
-        story_badges_html = ""
-        if show_story_badges:
+            story_badges_html = ""
             player_id = row.get("_pid")
             story_badges = []
             if pd.notna(player_id):
@@ -958,29 +1068,29 @@ def render(ctx):
                 story_badges_html = (
                     '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
                 )
-        st.markdown(
-            f"""
-            <div class="lb-standings-card">
-                <div class="lb-standings-top">
-                    <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
-                    <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
-                    <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
+            st.markdown(
+                f"""
+                <div class="lb-standings-card">
+                    <div class="lb-standings-top">
+                        <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
+                        <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
+                        <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
+                    </div>
+                    <div class="lb-standings-stats">
+                        <span>{int(row['matches_played'])} games</span>
+                        <span>{_format_win_pct(row['Win %'])} win %</span>
+                        <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
+                    </div>
+                    {story_badges_html}
+                    <div class="lb-row" style="gap:6px;">{badge_html}</div>
                 </div>
-                <div class="lb-standings-stats">
-                    <span>{int(row['matches_played'])} games</span>
-                    <span>{_format_win_pct(row['Win %'])} win %</span>
-                    <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
-                </div>
-                {story_badges_html}
-                <div class="lb-row" style="gap:6px;">{badge_html}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                """,
+                unsafe_allow_html=True,
+            )
 
-    if len(standings) > limit:
-        if st.button("Load more", key="lb_load_more"):
-            st.session_state["lb_limit"] = limit + 50
+        if len(standings) > limit:
+            if st.button("Load more", key="lb_load_more"):
+                st.session_state["lb_limit"] = limit + 50
 
     # Keep URL in sync with selected player
     try:
