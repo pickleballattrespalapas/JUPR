@@ -188,19 +188,33 @@ def render(ctx):
     bulk_view = df_bulk[bulk_cols].copy()
     bulk_view.insert(0, "Select", False)
 
-    if "bulk_week_editor" not in st.session_state:
-        st.session_state["bulk_week_editor"] = bulk_view
+    current_filters = (
+        bulk_league,
+        bulk_match_type,
+        bulk_week_tag,
+        tuple(date_range) if isinstance(date_range, tuple) else date_range,
+    )
+    if "bulk_week_editor_version" not in st.session_state:
+        st.session_state["bulk_week_editor_version"] = 0
+    if st.session_state.get("bulk_week_filters") != current_filters:
+        st.session_state["bulk_week_filters"] = current_filters
+        st.session_state["bulk_week_df"] = bulk_view.copy()
+        st.session_state["bulk_week_editor_version"] += 1
+    if "bulk_week_df" not in st.session_state:
+        st.session_state["bulk_week_df"] = bulk_view.copy()
 
     edited_bulk = st.data_editor(
-        bulk_view,
+        st.session_state["bulk_week_df"],
         column_config={"Select": st.column_config.CheckboxColumn(default=False)},
         hide_index=True,
         use_container_width=True,
-        key="bulk_week_editor",
+        key=f"bulk_week_editor_{st.session_state['bulk_week_editor_version']}",
     )
+    st.session_state["bulk_week_df"] = edited_bulk.copy()
 
     if st.button("Clear selection", key="bulk_week_clear"):
-        st.session_state["bulk_week_editor"] = bulk_view
+        st.session_state["bulk_week_df"] = bulk_view.copy()
+        st.session_state["bulk_week_editor_version"] += 1
         st.rerun()
 
     selected_bulk = edited_bulk[edited_bulk["Select"] == True].copy()
@@ -241,7 +255,8 @@ def render(ctx):
                     "club_id", str(ctx.club_id)
                 ).in_("id", selected_ids).execute()
                 st.success(f"Updated {len(selected_ids)} match(es).")
-                st.session_state["bulk_week_editor"] = bulk_view
+                st.session_state["bulk_week_df"] = bulk_view.copy()
+                st.session_state["bulk_week_editor_version"] += 1
                 st.rerun()
             except Exception as exc:
                 st.error(f"Unable to update week_tag: {exc}")
