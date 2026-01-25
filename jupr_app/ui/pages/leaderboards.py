@@ -1253,7 +1253,7 @@ def render(ctx):
                     if partner:
                         inserts.append(_build_partner_story(partner, id_to_name))
                 if inserts:
-                    story_text = f\"{story_text} {' '.join(inserts)}\".strip()
+                    story_text = f"{story_text} {' '.join(inserts)}".strip()
             story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
             st.markdown(
                 f"""
