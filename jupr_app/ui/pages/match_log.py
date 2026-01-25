@@ -203,19 +203,35 @@ def render(ctx):
     if "bulk_week_df" not in st.session_state:
         st.session_state["bulk_week_df"] = bulk_view.copy()
 
+    editor_key = f"bulk_week_editor_{st.session_state['bulk_week_editor_version']}"
     edited_bulk = st.data_editor(
         st.session_state["bulk_week_df"],
         column_config={"Select": st.column_config.CheckboxColumn(default=False)},
         hide_index=True,
         use_container_width=True,
-        key=f"bulk_week_editor_{st.session_state['bulk_week_editor_version']}",
+        key=editor_key,
     )
     st.session_state["bulk_week_df"] = edited_bulk.copy()
 
-    if st.button("Clear selection", key="bulk_week_clear"):
-        st.session_state["bulk_week_df"] = bulk_view.copy()
-        st.session_state["bulk_week_editor_version"] += 1
-        st.rerun()
+    selected_count = int(edited_bulk["Select"].sum()) if "Select" in edited_bulk.columns else 0
+    total_count = int(len(edited_bulk))
+    c_select, c_clear, c_summary = st.columns([1, 1, 2])
+    with c_select:
+        if st.button("Select all", key="bulk_week_select_all", disabled=total_count == 0):
+            df_select = st.session_state["bulk_week_df"].copy()
+            df_select["Select"] = True
+            st.session_state["bulk_week_df"] = df_select
+            st.session_state["bulk_week_editor_version"] += 1
+            st.rerun()
+    with c_clear:
+        if st.button("Clear selection", key="bulk_week_clear", disabled=total_count == 0):
+            df_clear = st.session_state["bulk_week_df"].copy()
+            df_clear["Select"] = False
+            st.session_state["bulk_week_df"] = df_clear
+            st.session_state["bulk_week_editor_version"] += 1
+            st.rerun()
+    with c_summary:
+        st.caption(f"Selected: {selected_count} / {total_count}")
 
     selected_bulk = edited_bulk[edited_bulk["Select"] == True].copy()
     selected_ids = selected_bulk["id"].astype(int).tolist() if not selected_bulk.empty else []
