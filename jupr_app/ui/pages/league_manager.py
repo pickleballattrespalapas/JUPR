@@ -626,8 +626,8 @@ def render(ctx):
                     st.caption(str(st.session_state.ladder_roster_change_note))
                 bench_ids = st.session_state.get("ladder_roster_bench_ids") or []
                 if bench_ids:
-                    bench_names = [id_to_name.get(int(pid), f\"#{pid}\") for pid in bench_ids]
-                    st.warning(f\"Sit-out this round: {', '.join(bench_names)}\")
+                    bench_names = [id_to_name.get(int(pid), f"#{pid}") for pid in bench_ids]
+                    st.warning(f"Sit-out this round: {', '.join(bench_names)}")
 
             st.markdown("#### Roster Changes (Between Rounds)")
             st.caption("Roster changes apply to the next round only. Completed rounds stay unchanged.")
