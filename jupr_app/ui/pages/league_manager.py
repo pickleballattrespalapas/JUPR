@@ -648,10 +648,17 @@ def render(ctx):
                 st.caption(roster_change_msg)
 
             if st.session_state.get("ladder_show_roster_change_dialog", False):
-                with st.dialog("Roster Changes (Next Round)"):
+                @st.dialog("Roster Changes (Next Round)")
+                def roster_changes_dialog() -> None:
                     next_round = int(current_r + 1)
                     final_round = int(total_r)
                     tabs_rc = st.tabs(["Substitute", "Add Player"])
+
+                    close_cols = st.columns([1, 1, 6])
+                    with close_cols[0]:
+                        if st.button("Close", key="ladder_roster_change_close"):
+                            st.session_state.ladder_show_roster_change_dialog = False
+                            st.rerun()
 
                     def _player_options() -> tuple[list[str], dict[str, dict]]:
                         rows = ctx.df_players_all if ctx.df_players_all is not None else pd.DataFrame()
@@ -767,7 +774,12 @@ def render(ctx):
                         if use_guest_add:
                             guest_name = st.text_input("Guest name", key="ladder_add_guest_name")
                             guest_rating = st.number_input(
-                                "Guest starting JUPR", min_value=1.0, max_value=7.0, step=0.1, value=3.5, key="ladder_add_guest_rating"
+                                "Guest starting JUPR",
+                                min_value=1.0,
+                                max_value=7.0,
+                                step=0.1,
+                                value=3.5,
+                                key="ladder_add_guest_rating",
                             )
                             add_player = {"name": guest_name.strip(), "rating": float(guest_rating)}
                         else:
@@ -832,6 +844,8 @@ def render(ctx):
                                 st.rerun()
                             except RosterChangeError as exc:
                                 st.error(str(exc))
+
+                roster_changes_dialog()
 
             if st.button(btn_label):
                 if current_r >= total_r:
