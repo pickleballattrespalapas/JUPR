@@ -56,6 +56,74 @@ def _parse_week_num(week_tag: str) -> int | None:
         return None
 
 
+def _coerce_week_value(value) -> int | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, (int,)):
+        return int(value)
+    if isinstance(value, (float,)):
+        try:
+            return int(value)
+        except Exception:
+            return None
+    return _parse_week_num(value)
+
+
+def _build_league_weeks(
+    df_meta: pd.DataFrame | None, league_name: str, league_matches: pd.DataFrame
+) -> pd.DataFrame:
+    week_nums: list[int] = []
+    if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+        meta = df_meta.copy()
+        meta["league_name"] = meta["league_name"].fillna("").astype(str).str.strip()
+        hit = meta[meta["league_name"] == str(league_name).strip()]
+        if not hit.empty:
+            row = hit.iloc[0]
+            start_week = _coerce_week_value(row.get("start_week", row.get("week_start")))
+            end_week = _coerce_week_value(row.get("end_week", row.get("week_end")))
+            if start_week is not None and end_week is not None and end_week >= start_week and start_week > 0:
+                week_nums = list(range(int(start_week), int(end_week) + 1))
+            else:
+                total_weeks = _coerce_week_value(row.get("num_weeks", row.get("total_weeks", row.get("weeks"))))
+                if total_weeks is not None and int(total_weeks) > 0:
+                    week_nums = list(range(1, int(total_weeks) + 1))
+
+    if not week_nums and league_matches is not None and not league_matches.empty:
+        match_weeks = league_matches["week_num"].dropna().astype(int).unique().tolist()
+        if match_weeks:
+            week_nums = list(range(min(match_weeks), max(match_weeks) + 1))
+
+    weeks_df = pd.DataFrame({"week_num": week_nums})
+    if weeks_df.empty:
+        return weeks_df
+    weeks_df["week_label"] = weeks_df["week_num"].apply(lambda x: f"Week {int(x)}")
+    return weeks_df
+
+
+def _week_label_order(weeks_df: pd.DataFrame, data_df: pd.DataFrame | None = None) -> list[str]:
+    if weeks_df is not None and not weeks_df.empty and "week_label" in weeks_df.columns:
+        return weeks_df["week_label"].tolist()
+    if data_df is None or data_df.empty or "week_num" not in data_df.columns:
+        return []
+    week_nums = (
+        data_df.dropna(subset=["week_num"])
+        .assign(week_num=lambda d: d["week_num"].astype(int))
+        .sort_values("week_num")["week_num"]
+        .unique()
+        .tolist()
+    )
+    return [f"Week {int(x)}" for x in week_nums]
+
+
+def _attach_week_label(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+    data = df.copy()
+    if "week_label" not in data.columns:
+        data["week_label"] = data["week_num"].apply(lambda x: f"Week {int(x)}" if pd.notna(x) else None)
+    return data
+
+
 def _league_options(df_meta: pd.DataFrame | None, df_matches: pd.DataFrame | None, df_leagues: pd.DataFrame | None) -> list[str]:
     leagues = []
     if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
@@ -427,6 +495,8 @@ def render(ctx):
 
     replay_df = _replay_league_ratings(league_matches, league_name, df_meta, df_players_all)
     weekly_rating = _weekly_rating_summary(replay_df)
+    weeks_df = _build_league_weeks(df_meta, league_name, league_matches)
+    league_week_nums = weeks_df["week_num"].tolist() if not weeks_df.empty else []
 
     tabs = st.tabs(["Overall", "Weekly", "Player"])
 
@@ -482,7 +552,7 @@ def render(ctx):
 
     with tabs[1]:
         st.subheader("Weekly Results")
-        week_nums = sorted(player_frame["week_num"].dropna().astype(int).unique().tolist())
+        week_nums = league_week_nums or sorted(player_frame["week_num"].dropna().astype(int).unique().tolist())
         if not week_nums:
             st.info("No week numbers found in league matches yet.")
             return
@@ -603,7 +673,13 @@ def render(ctx):
 
         st.markdown("### Rank over time")
         player_weekly_stats = weekly_stats[weekly_stats["player_id"] == player_id].copy() if not weekly_stats.empty else pd.DataFrame()
-        player_weekly_stats = player_weekly_stats.sort_values("week_num")
+        if not weeks_df.empty:
+            player_weekly_stats = weeks_df.merge(player_weekly_stats, on="week_num", how="left")
+            player_weekly_stats["games"] = player_weekly_stats["games"].fillna(0).astype(int)
+            player_weekly_stats["wins"] = player_weekly_stats["wins"].fillna(0).astype(int)
+            player_weekly_stats["losses"] = player_weekly_stats["losses"].fillna(0).astype(int)
+            player_weekly_stats["win_pct"] = player_weekly_stats["win_pct"].where(player_weekly_stats["games"] > 0, pd.NA)
+        player_weekly_stats = _attach_week_label(player_weekly_stats).sort_values("week_num")
 
         rank_series = pd.DataFrame()
         rank_label = "Weekly performance rank"
@@ -627,13 +703,21 @@ def render(ctx):
         if rank_series.empty:
             st.caption("Not enough weekly data to build a rank series.")
         else:
-            rank_series = rank_series.sort_values("week_num")
+            if not weeks_df.empty:
+                rank_series = weeks_df.merge(rank_series, on="week_num", how="left")
+            rank_series = _attach_week_label(rank_series).sort_values("week_num")
+            week_labels = _week_label_order(weeks_df, rank_series)
             if alt is not None:
                 chart = (
                     alt.Chart(rank_series)
                     .mark_line(point=True)
                     .encode(
-                        x=alt.X("week_num:O", title="Week"),
+                        x=alt.X(
+                            "week_label:N",
+                            title="Week",
+                            sort=week_labels,
+                            axis=alt.Axis(labelAngle=0, labelFontSize=14),
+                        ),
                         y=alt.Y("rank:Q", title=rank_label, scale=alt.Scale(reverse=True)),
                         tooltip=[alt.Tooltip("week_num:O", title="Week"), alt.Tooltip("rank:Q", title="Rank")],
                     )
@@ -648,8 +732,9 @@ def render(ctx):
             st.caption("No weekly results available for this player.")
         else:
             trend_cols = st.columns(2)
-            games_series = player_weekly_stats[["week_num", "games"]].copy()
-            win_series = player_weekly_stats[["week_num", "win_pct"]].copy()
+            games_series = player_weekly_stats[["week_num", "week_label", "games"]].copy()
+            win_series = player_weekly_stats[["week_num", "week_label", "win_pct"]].copy()
+            week_labels = _week_label_order(weeks_df, player_weekly_stats)
 
             with trend_cols[0]:
                 st.markdown("**Games by week**")
@@ -658,7 +743,12 @@ def render(ctx):
                         alt.Chart(games_series)
                         .mark_bar()
                         .encode(
-                            x=alt.X("week_num:O", title="Week"),
+                            x=alt.X(
+                                "week_label:N",
+                                title="Week",
+                                sort=week_labels,
+                                axis=alt.Axis(labelAngle=0, labelFontSize=14),
+                            ),
                             y=alt.Y("games:Q", title="Games"),
                             tooltip=[alt.Tooltip("week_num:O", title="Week"), alt.Tooltip("games:Q", title="Games")],
                         )
@@ -670,15 +760,19 @@ def render(ctx):
 
             with trend_cols[1]:
                 st.markdown("**Win % by week**")
-                win_series = win_series.dropna(subset=["win_pct"]).copy()
-                if win_series.empty:
+                if win_series.dropna(subset=["win_pct"]).empty:
                     st.caption("No win % data.")
                 elif alt is not None:
                     win_chart = (
                         alt.Chart(win_series)
                         .mark_line(point=True)
                         .encode(
-                            x=alt.X("week_num:O", title="Week"),
+                            x=alt.X(
+                                "week_label:N",
+                                title="Week",
+                                sort=week_labels,
+                                axis=alt.Axis(labelAngle=0, labelFontSize=14),
+                            ),
                             y=alt.Y("win_pct:Q", title="Win %"),
                             tooltip=[alt.Tooltip("week_num:O", title="Week"), alt.Tooltip("win_pct:Q", title="Win %", format=".1f")],
                         )
@@ -691,13 +785,21 @@ def render(ctx):
             rating_weekly = weekly_rating[weekly_rating["player_id"] == player_id] if not weekly_rating.empty else pd.DataFrame()
             if not rating_weekly.empty:
                 st.markdown("**Weekly rating Δ**")
-                rating_weekly = rating_weekly.sort_values("week_num")
+                if not weeks_df.empty:
+                    rating_weekly = weeks_df.merge(rating_weekly, on="week_num", how="left")
+                rating_weekly = _attach_week_label(rating_weekly).sort_values("week_num")
+                week_labels = _week_label_order(weeks_df, rating_weekly)
                 if alt is not None:
                     delta_chart = (
                         alt.Chart(rating_weekly)
                         .mark_bar()
                         .encode(
-                            x=alt.X("week_num:O", title="Week"),
+                            x=alt.X(
+                                "week_label:N",
+                                title="Week",
+                                sort=week_labels,
+                                axis=alt.Axis(labelAngle=0, labelFontSize=14),
+                            ),
                             y=alt.Y("rating_delta:Q", title="Rating Δ"),
                             tooltip=[alt.Tooltip("week_num:O", title="Week"), alt.Tooltip("rating_delta:Q", title="Rating Δ", format="+.3f")],
                         )
