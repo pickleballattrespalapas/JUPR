@@ -53,6 +53,15 @@ def _render_boot_error(exc: Exception) -> None:
 
 def _import_streamlit_app():
     this_dir = Path(__file__).resolve().parent
+    sys.path = [
+        entry
+        for entry in sys.path
+        if not (
+            isinstance(entry, str)
+            and entry
+            and entry.endswith(".py")
+        )
+    ]
     if str(this_dir) not in sys.path:
         sys.path.insert(0, str(this_dir))
 
