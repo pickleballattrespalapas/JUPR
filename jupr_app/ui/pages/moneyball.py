@@ -551,10 +551,13 @@ def render(ctx):
     table_html = summary_df.to_html(index=False, float_format="%.2f", border=0)
     html_body = (
         "<html><head><style>"
-        "body{font-family:Arial, sans-serif;}"
-        "table{border-collapse:collapse;width:100%;}"
-        "th,td{border:1px solid #ddd;padding:6px;text-align:center;}"
-        "th{background:#f2f2f2;}"
+        "body{font-family:Arial, sans-serif;"
+        "color:var(--text-primary);"
+        "background:var(--bg);}"
+        "table{border-collapse:collapse;width:100%;"
+        "background:var(--panel);color:var(--text-primary);}"
+        "th,td{border:1px solid var(--border);padding:6px;text-align:center;}"
+        "th{background:var(--table-stripe);color:var(--text-muted);}"
         "</style></head><body>"
         f"{header_html}{table_html}"
         "</body></html>"

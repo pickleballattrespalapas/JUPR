@@ -5,7 +5,6 @@ import pandas as pd
 
 from jupr_app.ui.helpers import qp_get, build_match_explorer_link
 from jupr_app.ui.layout import page_shell
-from jupr_app.ui.theme import MATCH_COLORS, color_for_delta, color_for_result
 
 logger = logging.getLogger(__name__)
 
@@ -779,24 +778,29 @@ def render(ctx):
         show["Overall After"] = show["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
 
         def result_badge(result: str) -> str:
-            color = color_for_result(result) or MATCH_COLORS["draw"]
-            text_color = (
-                MATCH_COLORS["text_light"]
-                if str(result).strip().upper() in {"DRAW", "PUSH", "EVEN", "TIE"}
-                else "#FFFFFF"
-            )
             label = str(result or "").strip().upper() or "—"
-            return (
-                f"<span style='background: {color}; color: {text_color}; padding: 2px 8px; "
-                "border-radius: 999px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;'>"
-                f"{label}</span>"
-            )
+            normalized = label.upper()
+            if normalized in {"W", "WIN", "WON"}:
+                variant = "win"
+            elif normalized in {"L", "LOSS", "LOST"}:
+                variant = "loss"
+            else:
+                variant = "draw"
+            return f"<span class='jupr-result-badge {variant}'>{label}</span>"
 
         def delta_span(delta_str: str, delta_raw: float | None) -> str:
-            color = color_for_delta(delta_raw) or MATCH_COLORS["text_light"]
             if not delta_str:
                 return ""
-            return f"<span style='color: {color}; font-weight: 600;'>{delta_str}</span>"
+            kind = "zero"
+            try:
+                delta_val = float(delta_raw)
+            except (TypeError, ValueError):
+                delta_val = 0.0
+            if delta_val > 0:
+                kind = "pos"
+            elif delta_val < 0:
+                kind = "neg"
+            return f"<span class='jupr-delta {kind}'>{delta_str}</span>"
 
         show["Result"] = show["Result"].map(result_badge)
         show["Overall Δ"] = show.apply(lambda row: delta_span(row["Overall Δ"], row["delta_raw"]), axis=1)

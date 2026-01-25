@@ -236,25 +236,25 @@ def render_top_performers_cards(
     if not top_perf_dict:
         return
 
-    accent = st.get_option("theme.primaryColor") or "#4C78A8"
+    accent = st.get_option("theme.primaryColor") or "var(--accent)"
 
     st.markdown(f"### {title}")
     st.markdown(
         """
         <style>
         .tp-card {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
+            background: var(--panel);
+            border: 1px solid var(--border);
             border-radius: 16px;
             padding: 16px 18px;
-            box-shadow: 0 6px 16px rgba(0,0,0,0.16);
+            box-shadow: var(--shadow);
             border-top: 3px solid var(--tp-accent);
         }
         .tp-label {
             font-size: 12px;
             letter-spacing: 0.04em;
             text-transform: uppercase;
-            color: rgba(255,255,255,0.55);
+            color: var(--text-muted);
             margin-bottom: 6px;
         }
         .tp-value {
@@ -265,7 +265,7 @@ def render_top_performers_cards(
         }
         .tp-name {
             font-size: 14px;
-            color: rgba(255,255,255,0.8);
+            color: var(--text-primary);
             margin-bottom: 8px;
         }
         .tp-list {
@@ -277,11 +277,11 @@ def render_top_performers_cards(
             display: flex;
             justify-content: space-between;
             font-size: 12px;
-            color: rgba(255,255,255,0.55);
+            color: var(--text-muted);
         }
         .tp-list-value {
             font-weight: 600;
-            color: rgba(255,255,255,0.65);
+            color: var(--text-secondary);
             margin-right: 8px;
         }
         </style>
@@ -341,11 +341,11 @@ def render(ctx):
             padding-bottom: 24px;
         }
         .lb-card {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.08);
+            background: var(--panel);
+            border: 1px solid var(--border);
             border-radius: 18px;
             padding: 18px 20px;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.16);
+            box-shadow: var(--shadow);
         }
         .lb-link {
             color: inherit;
@@ -363,8 +363,8 @@ def render(ctx):
         .lb-kpi {
             flex: 1 1 140px;
             min-width: 120px;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
+            background: var(--panel);
+            border: 1px solid var(--border);
             border-radius: 12px;
             padding: 10px 12px;
         }
@@ -372,7 +372,7 @@ def render(ctx):
             font-size: 11px;
             letter-spacing: 0.04em;
             text-transform: uppercase;
-            color: rgba(255,255,255,0.6);
+            color: var(--text-muted);
             margin-bottom: 4px;
         }
         .lb-kpi .lb-kpi-value {
@@ -386,14 +386,14 @@ def render(ctx):
         }
         .lb-subtitle {
             font-size: 13px;
-            color: rgba(255,255,255,0.65);
+            color: var(--text-muted);
         }
         .lb-muted {
-            color: rgba(255,255,255,0.6);
+            color: var(--text-muted);
         }
         .lb-standings-card {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.08);
+            background: var(--panel);
+            border: 1px solid var(--border);
             border-radius: 16px;
             padding: 14px 16px;
             display: flex;
@@ -434,22 +434,23 @@ def render(ctx):
         }
         .lb-standings-stats {
             font-size: 12px;
-            color: rgba(255,255,255,0.6);
+            color: var(--text-muted);
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
         }
         .lb-story-text {
             font-size: 0.9rem;
-            color: rgba(255,255,255,0.70);
+            color: var(--text-secondary);
             margin-top: 6px;
         }
         .lb-badge {
             font-size: 11px;
             padding: 2px 8px;
             border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.18);
-            color: rgba(255,255,255,0.65);
+            border: 1px solid var(--border-strong);
+            color: var(--text-muted);
+            background: var(--pill-bg);
         }
         .lb-badge-strip {
             display: flex;
@@ -462,20 +463,20 @@ def render(ctx):
             line-height: 1;
             padding: 2px 6px;
             border-radius: 8px;
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
+            background: var(--pill-bg);
+            border: 1px solid var(--border);
         }
         .lb-controls {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.08);
+            background: var(--panel);
+            border: 1px solid var(--border);
             border-radius: 16px;
             padding: 16px;
         }
         .lb-table-wrap {
             overflow-x: auto;
             border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.08);
-            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            background: var(--panel);
         }
         .lb-table {
             width: 100%;
@@ -486,20 +487,20 @@ def render(ctx):
         .lb-table td {
             padding: 10px 12px;
             text-align: left;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
+            border-bottom: 1px solid var(--border);
             font-size: 13px;
         }
         .lb-table th {
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            color: rgba(255,255,255,0.65);
-            background: rgba(255,255,255,0.03);
+            color: var(--text-muted);
+            background: var(--table-stripe);
             position: sticky;
             top: 0;
         }
         .lb-table tbody tr:hover {
-            background: rgba(255,255,255,0.04);
+            background: var(--accent-soft);
         }
         .lb-actions a,
         .lb-actions button {
@@ -534,9 +535,9 @@ def render(ctx):
         """,
         unsafe_allow_html=True,
     )
-    delta_up = "#6DBE7C"
-    delta_flat = "#8D94A3"
-    delta_down = "#C08A3C"
+    delta_up = "var(--delta-pos)"
+    delta_flat = "var(--delta-zero)"
+    delta_down = "var(--delta-neg)"
 
     # -------------------------
     # Available leagues
