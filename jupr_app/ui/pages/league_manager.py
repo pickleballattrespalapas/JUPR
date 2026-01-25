@@ -12,6 +12,12 @@ from jupr_court_board import court_board
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
+from jupr_app.domain.league_night_roster import (
+    RosterChangeError,
+    apply_roster_change,
+    roster_change_availability,
+    suggest_court_sizes,
+)
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.roster import (
     compress_courts,
@@ -54,46 +60,14 @@ def _seed_rating_for_player(pid: int, league_name: str, df_players_all: pd.DataF
     return 1200.0
 
 
-def _suggest_court_sizes(total_players: int) -> dict:
-    """
-    Courts may be size 4 or 5 only.
-    Prefer exact fit (bench=0), then fewer 5s, then fewer courts.
-    """
-    n = int(total_players or 0)
-    if n <= 0:
-        return {"ok": False, "sizes": [], "bench": 0, "note": "No players."}
-
-    if n in (20, 40) and n % 4 == 0:
-        sizes = [4] * (n // 4)
-        return {"ok": True, "sizes": sizes, "bench": 0, "note": f"Preferred all-4s for total {n}."}
-
-    candidates = []
-    min_courts = (n + 5 - 1) // 5
-    max_courts = max(1, n // 4)
-
-    for courts in range(max(1, min_courts - 2), max_courts + 3):
-        for fives in range(0, courts + 1):
-            fours = courts - fives
-            capacity = 4 * fours + 5 * fives
-            if capacity > n:
-                continue
-            bench = n - capacity
-            score = (bench, fives, courts)
-            candidates.append((score, fours, fives, bench))
-
-    if not candidates:
-        return {"ok": False, "sizes": [], "bench": n, "note": "No feasible setup with 4/5 courts."}
-
-    candidates.sort(key=lambda x: x[0])
-    _, fours, fives, bench = candidates[0]
-    sizes = ([4] * int(fours)) + ([5] * int(fives))
-
-    if bench == 0:
-        note = f"Exact fit: {fours} court(s) of 4 and {fives} court(s) of 5."
-    else:
-        note = f"Closest fit: {fours} court(s) of 4 and {fives} court(s) of 5, with {bench} bench."
-
-    return {"ok": True, "sizes": sizes, "bench": int(bench), "note": note}
+def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
+    if roster_df is None or roster_df.empty:
+        return pd.DataFrame()
+    cols = [c for c in ["court", "slot", "name", "player_id", "rating"] if c in roster_df.columns]
+    df = roster_df[cols].copy()
+    df["court"] = pd.to_numeric(df.get("court"), errors="coerce").fillna(0).astype(int)
+    df["slot"] = pd.to_numeric(df.get("slot"), errors="coerce").fillna(0).astype(int)
+    return df.sort_values(["court", "slot"]).reset_index(drop=True)
 
 
 def render(ctx):
@@ -340,7 +314,7 @@ def render(ctx):
             total_p = len(st.session_state.ladder_roster)
             st.info(f"Total Players: {total_p}")
 
-            auto = _suggest_court_sizes(total_p)
+            auto = suggest_court_sizes(total_p)
             use_auto = st.checkbox("Use suggested setup (4s/5s only)", value=True, key="ladder_use_auto_courts")
 
             if use_auto and auto["ok"]:
@@ -635,6 +609,230 @@ def render(ctx):
             total_r = int(st.session_state.get("ladder_total_rounds", 1))
             btn_label = "Start Next Round" if current_r < total_r else "🏁 Finish League Night"
 
+            base_next_roster = editor_df.copy()
+            base_next_roster["court"] = base_next_roster["Proposed Court"].astype(int)
+            base_next_roster = base_next_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
+            base_next_roster["slot"] = base_next_roster.groupby("court").cumcount() + 1
+            base_next_roster = base_next_roster[["player_id", "name", "rating", "court", "slot"]].copy()
+
+            if st.session_state.get("ladder_next_roster_override") is not None:
+                st.info("Roster changes queued for the next round.")
+                st.dataframe(
+                    _summarize_roster(st.session_state.ladder_next_roster_override),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if st.session_state.get("ladder_roster_change_note"):
+                    st.caption(str(st.session_state.ladder_roster_change_note))
+                bench_ids = st.session_state.get("ladder_roster_bench_ids") or []
+                if bench_ids:
+                    bench_names = [id_to_name.get(int(pid), f\"#{pid}\") for pid in bench_ids]
+                    st.warning(f\"Sit-out this round: {', '.join(bench_names)}\")
+
+            st.markdown("#### Roster Changes (Between Rounds)")
+            st.caption("Roster changes apply to the next round only. Completed rounds stay unchanged.")
+
+            roster_change_enabled, roster_change_msg = roster_change_availability(
+                ladder_state=st.session_state.get("ladder_state"),
+                current_round=current_r,
+                total_rounds=total_r,
+                is_admin=bool(ctx.admin_logged_in),
+            )
+            if st.button(
+                "Substitute / Add Player",
+                key="ladder_roster_change_btn",
+                disabled=not roster_change_enabled,
+            ):
+                st.session_state.ladder_show_roster_change_dialog = True
+            if not roster_change_enabled and roster_change_msg:
+                st.caption(roster_change_msg)
+
+            if st.session_state.get("ladder_show_roster_change_dialog", False):
+                with st.dialog("Roster Changes (Next Round)"):
+                    next_round = int(current_r + 1)
+                    final_round = int(total_r)
+                    tabs_rc = st.tabs(["Substitute", "Add Player"])
+
+                    def _player_options() -> tuple[list[str], dict[str, dict]]:
+                        rows = ctx.df_players_all if ctx.df_players_all is not None else pd.DataFrame()
+                        options = []
+                        mapping = {}
+                        if rows is None or rows.empty:
+                            return options, mapping
+                        for _, row in rows.iterrows():
+                            pid = int(row.get("id"))
+                            nm = str(row.get("name", "")).strip()
+                            if not nm:
+                                continue
+                            label = f"{nm} (#{pid})"
+                            options.append(label)
+                            mapping[label] = {
+                                "id": pid,
+                                "name": nm,
+                                "rating": float(row.get("rating", 1200.0) or 1200.0),
+                            }
+                        return options, mapping
+
+                    options, option_map = _player_options()
+
+                    with tabs_rc[0]:
+                        st.markdown("Replace player (active roster):")
+                        active_names = preview_df["name"].astype(str).tolist()
+                        active_map = {
+                            str(r["name"]): {
+                                "id": int(r["player_id"]),
+                                "name": str(r["name"]),
+                                "rating": float(r.get("rating", 1200.0)),
+                            }
+                            for _, r in preview_df.iterrows()
+                        }
+                        replaced_name = st.selectbox("Replace player", active_names, key="ladder_sub_out")
+                        replace_info = active_map.get(replaced_name, {})
+
+                        st.markdown("Substitute with:")
+                        use_guest_sub = st.checkbox("Create guest substitute", value=False, key="ladder_sub_guest")
+                        if use_guest_sub:
+                            guest_name = st.text_input("Guest name", key="ladder_sub_guest_name")
+                            guest_rating = st.number_input(
+                                "Guest starting JUPR", min_value=1.0, max_value=7.0, step=0.1, value=3.5, key="ladder_sub_guest_rating"
+                            )
+                            sub_player = {"name": guest_name.strip(), "rating": float(guest_rating)}
+                        else:
+                            sub_label = st.selectbox("Select substitute", options, key="ladder_sub_in")
+                            sub_player = option_map.get(sub_label, {})
+
+                        st.text(f"Effective round: {next_round}")
+                        st.warning(
+                            f\"This will regenerate matchups for rounds {next_round}–{final_round}. Completed rounds will not change.\"
+                        )
+                        confirm_sub = st.checkbox("I understand and want to apply this substitute.", key="ladder_sub_confirm")
+
+                        if st.button("Apply Substitute", type="primary", key="ladder_sub_apply"):
+                            if not confirm_sub:
+                                st.error("Please confirm the roster change before applying.")
+                                st.stop()
+                            try:
+                                if use_guest_sub:
+                                    if not sub_player.get("name"):
+                                        raise RosterChangeError("Guest name is required.")
+                                    ok, err = safe_add_player(
+                                        supabase=ctx.supabase,
+                                        club_id=str(ctx.club_id),
+                                        name=sub_player["name"],
+                                        rating_jupr=float(sub_player.get("rating", 3.5)),
+                                    )
+                                    if not ok:
+                                        raise RosterChangeError(f"Could not add guest: {err}")
+
+                                    fetch = (
+                                        ctx.supabase.table("players")
+                                        .select("id,name,rating")
+                                        .eq("club_id", str(ctx.club_id))
+                                        .eq("name", sub_player["name"])
+                                        .execute()
+                                    )
+                                    rows = fetch.data or []
+                                    if not rows:
+                                        raise RosterChangeError("Guest player was created but could not be loaded.")
+                                    row = rows[0]
+                                    sub_player = {
+                                        "id": int(row["id"]),
+                                        "name": str(row["name"]),
+                                        "rating": float(row.get("rating", 1200.0) or 1200.0),
+                                    }
+                                    id_to_name[int(row["id"])] = str(row["name"])
+                                    name_to_id[str(row["name"])] = int(row["id"])
+
+                                result = apply_roster_change(
+                                    roster_df=base_next_roster,
+                                    change_type="substitute",
+                                    replaced_player_id=int(replace_info.get("id")),
+                                    new_player=sub_player,
+                                    court_sizes=st.session_state.get("ladder_court_sizes"),
+                                    roster_locked=False,
+                                )
+                                st.session_state.ladder_next_roster_override = result.roster_df
+                                st.session_state.ladder_next_court_sizes = result.court_sizes
+                                st.session_state.ladder_roster_change_note = result.note
+                                st.session_state.ladder_roster_bench_ids = result.bench_ids
+                                st.session_state.ladder_show_roster_change_dialog = False
+                                st.success("Substitution queued for next round.")
+                                st.rerun()
+                            except RosterChangeError as exc:
+                                st.error(str(exc))
+
+                    with tabs_rc[1]:
+                        st.markdown("Add player (late arrival):")
+                        use_guest_add = st.checkbox("Create guest player", value=False, key="ladder_add_guest")
+                        if use_guest_add:
+                            guest_name = st.text_input("Guest name", key="ladder_add_guest_name")
+                            guest_rating = st.number_input(
+                                "Guest starting JUPR", min_value=1.0, max_value=7.0, step=0.1, value=3.5, key="ladder_add_guest_rating"
+                            )
+                            add_player = {"name": guest_name.strip(), "rating": float(guest_rating)}
+                        else:
+                            add_label = st.selectbox("Select player", options, key="ladder_add_player")
+                            add_player = option_map.get(add_label, {})
+
+                        st.text(f"Effective round: {next_round}")
+                        st.warning(
+                            f\"This will regenerate matchups for rounds {next_round}–{final_round}. Completed rounds will not change.\"
+                        )
+                        confirm_add = st.checkbox("I understand and want to add this player.", key="ladder_add_confirm")
+
+                        if st.button("Apply Add Player", type="primary", key="ladder_add_apply"):
+                            if not confirm_add:
+                                st.error("Please confirm the roster change before applying.")
+                                st.stop()
+                            try:
+                                if use_guest_add:
+                                    if not add_player.get("name"):
+                                        raise RosterChangeError("Guest name is required.")
+                                    ok, err = safe_add_player(
+                                        supabase=ctx.supabase,
+                                        club_id=str(ctx.club_id),
+                                        name=add_player["name"],
+                                        rating_jupr=float(add_player.get("rating", 3.5)),
+                                    )
+                                    if not ok:
+                                        raise RosterChangeError(f"Could not add guest: {err}")
+
+                                    fetch = (
+                                        ctx.supabase.table("players")
+                                        .select("id,name,rating")
+                                        .eq("club_id", str(ctx.club_id))
+                                        .eq("name", add_player["name"])
+                                        .execute()
+                                    )
+                                    rows = fetch.data or []
+                                    if not rows:
+                                        raise RosterChangeError("Guest player was created but could not be loaded.")
+                                    row = rows[0]
+                                    add_player = {
+                                        "id": int(row["id"]),
+                                        "name": str(row["name"]),
+                                        "rating": float(row.get("rating", 1200.0) or 1200.0),
+                                    }
+                                    id_to_name[int(row["id"])] = str(row["name"])
+                                    name_to_id[str(row["name"])] = int(row["id"])
+
+                                result = apply_roster_change(
+                                    roster_df=base_next_roster,
+                                    change_type="add",
+                                    new_player=add_player,
+                                    court_sizes=st.session_state.get("ladder_court_sizes"),
+                                    roster_locked=False,
+                                )
+                                st.session_state.ladder_next_roster_override = result.roster_df
+                                st.session_state.ladder_next_court_sizes = result.court_sizes
+                                st.session_state.ladder_roster_change_note = result.note
+                                st.session_state.ladder_roster_bench_ids = result.bench_ids
+                                st.session_state.ladder_show_roster_change_dialog = False
+                                st.success("Player added for next round.")
+                                st.rerun()
+                            except RosterChangeError as exc:
+                                st.error(str(exc))
+
             if st.button(btn_label):
                 if current_r >= total_r:
                     st.success("League Night Complete! All matches saved.")
@@ -654,14 +852,17 @@ def render(ctx):
                     st.session_state.ladder_state = "SETUP"
                     st.rerun()
 
-                # Next round roster
-                new_roster = editor_df.copy()
-                new_roster["court"] = new_roster["Proposed Court"].astype(int)
-                new_roster = new_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
-                new_roster["slot"] = new_roster.groupby("court").cumcount() + 1
+                new_roster = st.session_state.get("ladder_next_roster_override") or base_next_roster
+                new_court_sizes = st.session_state.get("ladder_next_court_sizes") or [
+                    int(x) for x in new_roster["court"].value_counts().sort_index().tolist()
+                ]
 
-                st.session_state.ladder_live_roster = new_roster[["player_id", "name", "rating", "court", "slot"]].copy()
-                st.session_state.ladder_court_sizes = [int(x) for x in new_roster["court"].value_counts().sort_index().tolist()]
+                st.session_state.ladder_live_roster = new_roster.copy()
+                st.session_state.ladder_court_sizes = new_court_sizes
+                st.session_state.pop("ladder_next_roster_override", None)
+                st.session_state.pop("ladder_next_court_sizes", None)
+                st.session_state.pop("ladder_roster_change_note", None)
+                st.session_state.pop("ladder_roster_bench_ids", None)
 
                 st.session_state.ladder_round_num = current_r + 1
                 st.session_state.ladder_state = "CONFIRM_START"
