@@ -11,6 +11,10 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
 from jupr_app.ui.helpers import build_badge_story
+from jupr_app.domain.story_stats import (
+    build_best_partner_map,
+    build_rival_map,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,39 @@ def _format_win_pct(value):
     if pd.notna(value):
         return f"{float(value):.1f}%"
     return "—"
+
+
+def _format_pct(value: float | None) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value) * 100.0:.1f}%"
+    except Exception:
+        return "—"
+
+
+def _build_rival_story(rival: dict, id_to_name: dict[int, str]) -> str:
+    rival_id = rival.get("opponent_id")
+    rival_name = id_to_name.get(int(rival_id), f"#{rival_id}") if rival_id is not None else "Unknown"
+    games = int(rival.get("games", 0))
+    win_pct = float(rival.get("win_pct", 0.0))
+    win_pct_str = _format_pct(win_pct)
+    loss_pct_str = _format_pct(1.0 - win_pct if games else 0.0)
+    return (
+        f"Rival: {rival_name} ({games} games, {win_pct_str} win%). "
+        f"You and {rival_name} are {win_pct_str}-{loss_pct_str} over {games} games."
+    )
+
+
+def _build_partner_story(partner: dict, id_to_name: dict[int, str]) -> str:
+    partner_id = partner.get("partner_id")
+    partner_name = id_to_name.get(int(partner_id), f"#{partner_id}") if partner_id is not None else "Unknown"
+    games = int(partner.get("games", 0))
+    win_pct_str = _format_pct(partner.get("win_pct", 0.0))
+    return (
+        f"Best partner: {partner_name} ({games} games, {win_pct_str}). "
+        f"Your best results come with {partner_name}: {win_pct_str} over {games} games."
+    )
 
 
 def _player_profile_url(pid, public_mode, ctx):
@@ -1107,6 +1144,34 @@ def render(ctx):
             story_badges_df,
             admin_logged_in,
         )
+        story_rivals_by_player = {}
+        story_partners_by_player = {}
+        df_matches = getattr(ctx, "df_matches", None)
+        if (
+            df_matches is not None
+            and isinstance(df_matches, pd.DataFrame)
+            and not df_matches.empty
+            and story_player_ids
+        ):
+            eligible_ids = []
+            if df_players is not None and not df_players.empty and "id" in df_players.columns:
+                eligible_ids = df_players["id"].dropna().astype(int).tolist()
+            context_filters = {
+                "club_id": club_id,
+                "league_name": None if target_league == "OVERALL" else target_league,
+                "exclude_popups": target_league != "OVERALL",
+                "eligible_player_ids": eligible_ids,
+            }
+            story_rivals_by_player = build_rival_map(
+                story_player_ids,
+                context_filters,
+                df_matches,
+            )
+            story_partners_by_player = build_best_partner_map(
+                story_player_ids,
+                context_filters,
+                df_matches,
+            )
         if admin_logged_in and story_badges_by_player:
             if not st.session_state.get("lb_story_sanity_logged"):
                 sanity_story = ""
@@ -1174,6 +1239,21 @@ def render(ctx):
             story_text = build_badge_story(row, story_badges)
             if not story_text:
                 story_text = build_badge_story(row, [])
+            if pd.notna(player_id):
+                try:
+                    pid_int = int(player_id)
+                except Exception:
+                    pid_int = None
+                inserts = []
+                if pid_int is not None:
+                    rival = story_rivals_by_player.get(pid_int)
+                    if rival:
+                        inserts.append(_build_rival_story(rival, id_to_name))
+                    partner = story_partners_by_player.get(pid_int)
+                    if partner:
+                        inserts.append(_build_partner_story(partner, id_to_name))
+                if inserts:
+                    story_text = f\"{story_text} {' '.join(inserts)}\".strip()
             story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
             st.markdown(
                 f"""
