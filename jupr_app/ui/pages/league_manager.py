@@ -866,7 +866,17 @@ def render(ctx):
                     st.session_state.ladder_state = "SETUP"
                     st.rerun()
 
-                new_roster = st.session_state.get("ladder_next_roster_override") or base_next_roster
+                override = st.session_state.get("ladder_next_roster_override")
+                if override is None:
+                    new_roster = base_next_roster
+                else:
+                    if hasattr(override, "empty"):
+                        new_roster = override if not override.empty else base_next_roster
+                    else:
+                        try:
+                            new_roster = override if len(override) > 0 else base_next_roster
+                        except Exception:
+                            new_roster = override
                 new_court_sizes = st.session_state.get("ladder_next_court_sizes") or [
                     int(x) for x in new_roster["court"].value_counts().sort_index().tolist()
                 ]
