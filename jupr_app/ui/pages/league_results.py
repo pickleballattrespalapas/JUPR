@@ -364,8 +364,8 @@ def render(ctx):
         .lb-table-wrap {
             overflow-x: auto;
             border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.08);
-            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            background: var(--panel);
         }
         .lb-table {
             width: 100%;
@@ -376,20 +376,20 @@ def render(ctx):
         .lb-table td {
             padding: 10px 12px;
             text-align: left;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
+            border-bottom: 1px solid var(--border);
             font-size: 13px;
         }
         .lb-table th {
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            color: rgba(255,255,255,0.65);
-            background: rgba(255,255,255,0.03);
+            color: var(--text-muted);
+            background: var(--table-stripe);
             position: sticky;
             top: 0;
         }
         .lb-table tbody tr:hover {
-            background: rgba(255,255,255,0.04);
+            background: var(--accent-soft);
         }
         </style>
         """,

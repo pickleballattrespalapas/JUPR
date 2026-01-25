@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 MATCH_COLORS = {
-    "win": "#1F7A6D",
-    "loss": "#5E6F82",
-    "draw": "#B9A874",
-    "delta_pos": "#2FAE9A",
-    "delta_neg": "#7D8A97",
-    "delta_zero": "#B9A874",
-    "text_light": "#1E2933",
-    "text_dark": "#E6EEF3",
-    "hover_light": "#F3F7F9",
-    "hover_dark": "#1C232A",
-    "border": "#D5DEE5",
+    "win": "var(--result-win-bg)",
+    "loss": "var(--result-loss-bg)",
+    "draw": "var(--result-draw-bg)",
+    "delta_pos": "var(--delta-pos)",
+    "delta_neg": "var(--delta-neg)",
+    "delta_zero": "var(--delta-zero)",
+    "text_primary": "var(--text-primary)",
+    "text_inverse": "var(--text-inverse)",
+    "text_muted": "var(--text-muted)",
+    "hover": "var(--accent-soft)",
+    "border": "var(--border)",
 }
 
 
