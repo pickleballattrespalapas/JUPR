@@ -703,7 +703,7 @@ def render(ctx):
 
                         st.text(f"Effective round: {next_round}")
                         st.warning(
-                            f\"This will regenerate matchups for rounds {next_round}–{final_round}. Completed rounds will not change.\"
+                            f"This will regenerate matchups for rounds {next_round}–{final_round}. Completed rounds will not change."
                         )
                         confirm_sub = st.checkbox("I understand and want to apply this substitute.", key="ladder_sub_confirm")
 
@@ -776,7 +776,7 @@ def render(ctx):
 
                         st.text(f"Effective round: {next_round}")
                         st.warning(
-                            f\"This will regenerate matchups for rounds {next_round}–{final_round}. Completed rounds will not change.\"
+                            f"This will regenerate matchups for rounds {next_round}–{final_round}. Completed rounds will not change."
                         )
                         confirm_add = st.checkbox("I understand and want to add this player.", key="ladder_add_confirm")
 
