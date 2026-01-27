@@ -48,6 +48,8 @@ def test_profile_summary_locked_and_prestige():
     )
     summary = build_gamification_summary(7, df_badges, df_player_badges)
     assert summary["prestige_total"] == 15
+    assert summary["collected_unique_count"] == 1
+    assert summary["total_active_badge_types"] == 2
     assert summary["unlocked_badges"][0]["latest_tape_excerpt"]
     locked = summary["locked_badges"]
     assert locked and locked[0]["hint"]

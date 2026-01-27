@@ -1,3 +1,4 @@
+import html
 import logging
 
 import streamlit as st
@@ -5,6 +6,10 @@ import pandas as pd
 
 from jupr_app.ui.helpers import qp_get, build_match_explorer_link
 from jupr_app.ui.layout import page_shell
+from jupr_app.domain.gamification.profile import (
+    build_gamification_summary,
+    select_featured_badges,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +105,34 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
         return pd.DataFrame()
 
     return pb_df.merge(badges_df, on="badge_id", how="left")
+
+
+@st.cache_data(ttl=120)
+def fetch_badge_definitions(_supabase) -> pd.DataFrame:
+    try:
+        resp = _supabase.table("badges").select("*").execute()
+        return pd.DataFrame(resp.data or [])
+    except Exception:
+        logger.exception("Failed to load badge definitions")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def fetch_player_stories(_supabase, club_id: str, pid: int, limit: int = 6) -> pd.DataFrame:
+    try:
+        resp = (
+            _supabase.table("player_stories")
+            .select("story_type,context_id,created_at,title,body,importance,match_id")
+            .eq("club_id", str(club_id))
+            .eq("player_id", int(pid))
+            .order("created_at", desc=True)
+            .limit(int(limit) * 3)
+            .execute()
+        )
+        return pd.DataFrame(resp.data or [])
+    except Exception:
+        logger.exception("Failed to load player stories")
+        return pd.DataFrame()
 
 
 BADGE_ICONS = {
@@ -415,64 +448,132 @@ def render(ctx):
         st.caption("No league ratings table entries found for this player yet.")
 
     st.markdown("### Badges")
-    badges_df = pd.DataFrame()
-    if getattr(ctx, "df_player_badges", None) is not None and getattr(ctx, "df_badges", None) is not None:
-        pb_df = ctx.df_player_badges
-        b_df = ctx.df_badges
-        if isinstance(pb_df, pd.DataFrame) and isinstance(b_df, pd.DataFrame) and not pb_df.empty:
-            pb_df = pb_df[pb_df.get("player_id") == int(pid)].copy()
-            if not pb_df.empty and "badge_id" in pb_df.columns:
-                badges_df = pb_df.merge(b_df, on="badge_id", how="left")
+    badge_defs = getattr(ctx, "df_badges", None)
+    if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
+        badge_defs = fetch_badge_definitions(_supabase)
 
-    if badges_df.empty:
+    player_badges = getattr(ctx, "df_player_badges", None)
+    if player_badges is None or (isinstance(player_badges, pd.DataFrame) and player_badges.empty):
         try:
-            badges_df = fetch_player_badges(_supabase, club_id, pid)
+            player_badges = fetch_player_badges(_supabase, club_id, pid)
         except Exception:
             logger.exception("Failed to fetch badges for player view")
-            badges_df = pd.DataFrame()
+            player_badges = pd.DataFrame()
 
-    if badges_df.empty:
-        st.caption("No badges earned yet.")
+    summary = build_gamification_summary(pid, badge_defs, player_badges)
+    prestige_total = summary.get("prestige_total", 0)
+    collected_unique = summary.get("collected_unique_count", 0)
+    total_active = summary.get("total_active_badge_types", 0)
+
+    stat_cols = st.columns(2)
+    stat_cols[0].metric("Prestige", int(prestige_total))
+    stat_cols[1].metric("Collection", f"{collected_unique}/{total_active}")
+
+    unlocked_badges = summary.get("unlocked_badges", [])
+    locked_badges = summary.get("locked_badges", [])
+
+    if not unlocked_badges and not locked_badges:
+        st.caption("No badges available yet.")
     else:
-        badges_df["earned_at_dt"] = pd.to_datetime(badges_df.get("earned_at", None), utc=True, errors="coerce")
-        badges_df["prestige"] = pd.to_numeric(badges_df.get("prestige", 0), errors="coerce").fillna(0)
-        badges_df = badges_df.sort_values(["prestige", "earned_at_dt"], ascending=[False, False])
-
-        participation_order = ["lifetime_participant_200", "dedicated_participant_50", "participant"]
-        participation_df = badges_df[badges_df["badge_id"].isin(participation_order)].copy()
-        participation_badge = None
-        if not participation_df.empty:
-            participation_df["tier_rank"] = participation_df["badge_id"].map(
-                {badge_id: idx for idx, badge_id in enumerate(participation_order)}
-            )
-            participation_df = participation_df.sort_values(["tier_rank", "earned_at_dt"])
-            participation_badge = participation_df.iloc[0]
-
-        st.subheader("Participation")
-        if participation_badge is None:
-            st.caption("No participation badge earned yet.")
+        st.subheader("Featured Cuts")
+        featured = select_featured_badges(unlocked_badges, max_count=5, sort_mode="recent")
+        if not featured:
+            st.caption("The tape room is quiet—new reels arrive after the next run.")
         else:
-            icon = badge_icon(participation_badge.get("badge_id"), participation_badge.get("category"))
-            st.markdown(f"**{icon} {participation_badge.get('name', 'Badge')}**")
-            st.caption(f"Prestige {int(participation_badge.get('prestige', 0) or 0)}")
+            feat_cols = st.columns(min(len(featured), 5))
+            for idx, badge in enumerate(featured):
+                with feat_cols[idx]:
+                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
+                    stack = badge.get("stack_count", 1)
+                    stack_text = f" x{stack}" if stack and stack > 1 else ""
+                    st.markdown(f"**{icon} {badge.get('name', 'Badge')}{stack_text}**")
+                    st.caption(f"Prestige {int(badge.get('prestige', 0) or 0)}")
+                    excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
+                    if excerpt:
+                        st.caption(excerpt)
 
-        st.subheader("All badges")
-        top_badges = badges_df.head(3).copy()
-        cols = st.columns(len(top_badges))
-        for idx, (_, row) in enumerate(top_badges.iterrows()):
-            with cols[idx]:
-                icon = badge_icon(row.get("badge_id"), row.get("category"))
-                st.markdown(f"**{icon} {row.get('name', 'Badge')}**")
-                st.caption(f"Prestige {int(row.get('prestige', 0) or 0)}")
+        st.subheader("Cabinet by Category")
+        if not unlocked_badges:
+            st.caption("No cabinet reels yet. The shelf is waiting.")
+        else:
+            by_category: dict[str, list[dict]] = {}
+            for badge in unlocked_badges:
+                category = badge.get("category") or "Other"
+                by_category.setdefault(category, []).append(badge)
 
-        with st.expander("View all badges", expanded=False):
-            show_cols = ["name", "prestige", "category", "earned_at_dt"]
-            show_df = badges_df[show_cols].rename(
+            for category in sorted(by_category.keys()):
+                st.markdown(f"**{category}**")
+                row_badges = by_category[category]
+                row_cols = st.columns(min(len(row_badges), 4))
+                for idx, badge in enumerate(row_badges):
+                    with row_cols[idx % len(row_cols)]:
+                        icon = badge_icon(badge.get("badge_id"), badge.get("category"))
+                        stack = badge.get("stack_count", 1)
+                        stack_text = f" x{stack}" if stack and stack > 1 else ""
+                        st.markdown(f"{icon} {badge.get('name', 'Badge')}{stack_text}")
+                        excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
+                        if excerpt:
+                            st.caption(excerpt)
+
+        st.subheader("Missing Badges")
+        if not locked_badges:
+            st.caption("Cabinet complete. Every reel has a slot.")
+        else:
+            missing_cols = st.columns(min(len(locked_badges), 4))
+            for idx, badge in enumerate(locked_badges):
+                with missing_cols[idx % len(missing_cols)]:
+                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
+                    st.markdown(f"**{icon} {badge.get('name', 'Badge')}**")
+                    hint = html.escape(str(badge.get("hint") or "A reel still missing."))
+                    st.caption(hint)
+
+        st.subheader("Story Cards")
+        story_df = fetch_player_stories(_supabase, club_id, pid, limit=6)
+        if story_df.empty:
+            st.caption("No new stories in the tape room yet.")
+        else:
+            story_df = story_df.drop_duplicates(subset=["story_type", "context_id"], keep="first")
+            story_df = story_df.sort_values("created_at", ascending=False)
+            highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
+            foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
+            highlight_col, foreshadow_col = st.columns(2)
+            with highlight_col:
+                st.markdown("**Highlights**")
+                if highlights.empty:
+                    st.caption("No highlights yet.")
+                else:
+                    for _, row in highlights.iterrows():
+                        title = html.escape(str(row.get("title") or "Highlight"))
+                        body = html.escape(str(row.get("body") or ""))
+                        st.markdown(f"**{title}**")
+                        st.caption(body)
+            with foreshadow_col:
+                st.markdown("**Foreshadowing**")
+                if foreshadow.empty:
+                    st.caption("No foreshadowing yet.")
+                else:
+                    for _, row in foreshadow.iterrows():
+                        title = html.escape(str(row.get("title") or "Foreshadowing"))
+                        body = html.escape(str(row.get("body") or ""))
+                        st.markdown(f"**{title}**")
+                        st.caption(body)
+
+        st.subheader("View All Badges")
+        if unlocked_badges:
+            summary_df = pd.DataFrame(unlocked_badges)
+            summary_df["last_earned_at_dt"] = pd.to_datetime(
+                summary_df.get("last_earned_at", None), utc=True, errors="coerce"
+            )
+            summary_df = summary_df.sort_values(
+                ["last_earned_at_dt", "prestige"], ascending=[False, False]
+            )
+            show_df = summary_df[["name", "category", "prestige", "stack_count", "last_earned_at_dt"]].rename(
                 columns={
                     "name": "Badge",
-                    "prestige": "Prestige",
                     "category": "Category",
-                    "earned_at_dt": "Earned",
+                    "prestige": "Prestige",
+                    "stack_count": "Count",
+                    "last_earned_at_dt": "Last Earned",
                 }
             )
             st.dataframe(
@@ -481,9 +582,45 @@ def render(ctx):
                 hide_index=True,
                 column_config={
                     "Prestige": st.column_config.NumberColumn(format="%d"),
-                    "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                    "Last Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
                 },
             )
+
+            admin_debug = False
+            if bool(getattr(ctx, "admin_logged_in", False)):
+                admin_debug = st.toggle("Show debug columns", value=False)
+
+            if isinstance(player_badges, pd.DataFrame) and not player_badges.empty:
+                pb_df = player_badges.copy()
+                pb_df = pb_df[pb_df.get("player_id") == int(pid)].copy()
+                pb_df["earned_at_dt"] = pd.to_datetime(pb_df.get("earned_at", None), utc=True, errors="coerce")
+                for badge in summary_df.itertuples(index=False):
+                    badge_id = getattr(badge, "badge_id", "")
+                    badge_name = getattr(badge, "name", "Badge")
+                    stack = getattr(badge, "stack_count", 1)
+                    stack_text = f" x{stack}" if stack and stack > 1 else ""
+                    icon = badge_icon(badge_id, getattr(badge, "category", None))
+                    with st.expander(f"{icon} {badge_name}{stack_text}", expanded=False):
+                        rows = pb_df[pb_df.get("badge_id") == badge_id].copy()
+                        rows = rows.sort_values("earned_at_dt", ascending=False)
+                        cols = ["earned_at_dt", "match_id"]
+                        if admin_debug:
+                            cols.append("context_id")
+                        show_rows = rows[cols].rename(
+                            columns={
+                                "earned_at_dt": "Earned",
+                                "match_id": "Match",
+                                "context_id": "Context",
+                            }
+                        )
+                        st.dataframe(
+                            show_rows,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                            },
+                        )
 
     st.divider()
 

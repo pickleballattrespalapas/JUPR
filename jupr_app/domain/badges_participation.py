@@ -92,6 +92,7 @@ def ensure_participation_badges(ctx) -> None:
                 if key in existing:
                     continue
                 existing.add(key)
+                tape_excerpt = _participation_excerpt(badge_id, int(games))
                 rows.append(
                     {
                         "id": str(uuid4()),
@@ -102,6 +103,7 @@ def ensure_participation_badges(ctx) -> None:
                         "context_type": "overall",
                         "context_id": None,
                         "value_num": float(games),
+                        "value_json": {"tape_excerpt": tape_excerpt, "games": int(games)},
                     }
                 )
 
@@ -146,4 +148,21 @@ def _fetch_existing_badges(supabase, club_id: str, badge_ids: list[str]) -> set[
 def _insert_badges(supabase, rows: list[dict[str, Any]]) -> None:
     chunk = 200
     for i in range(0, len(rows), chunk):
-        supabase.table("player_badges").insert(rows[i : i + chunk]).execute()
+        supabase.table("player_badges").upsert(
+            rows[i : i + chunk],
+            on_conflict="club_id,player_id,badge_id,context_id",
+        ).execute()
+
+
+def _participation_excerpt(badge_id: str, games: int) -> str:
+    badge_line = {
+        "participant": "The first entries hit the logbook.",
+        "dedicated_participant_50": "The weekly reel keeps finding this name.",
+        "lifetime_participant_200": "The tape shelf keeps getting heavier.",
+    }.get(badge_id, "The tape room logged another chapter.")
+    return "\n".join(
+        [
+            badge_line,
+            f"{games} matches live in the archive.",
+        ]
+    )
