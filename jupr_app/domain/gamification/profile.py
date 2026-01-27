@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+def r(row: Any, field: str, default: Any = None) -> Any:
+    return getattr(row, field, default)
 
 
 def select_featured_badges(
@@ -45,6 +53,22 @@ def build_gamification_summary(
 ) -> dict[str, Any]:
     badge_defs = df_badges.copy() if df_badges is not None else pd.DataFrame()
     pb = df_player_badges.copy() if df_player_badges is not None else pd.DataFrame()
+
+    optional_columns = {
+        "lore": "",
+        "hint": "",
+        "rarity": None,
+        "icon_key": None,
+        "tier": None,
+        "scope": None,
+        "category": "",
+    }
+    for col, default in optional_columns.items():
+        if col not in badge_defs.columns:
+            badge_defs[col] = default
+
+    if __debug__:
+        logger.debug("badge_defs columns: %s", list(badge_defs.columns))
 
     badge_defs["badge_id"] = badge_defs.get("badge_id", "").astype(str)
     badge_defs["prestige"] = pd.to_numeric(badge_defs.get("prestige", 0), errors="coerce").fillna(0)
@@ -98,13 +122,13 @@ def build_gamification_summary(
                 {
                     "badge_id": badge_id,
                     "name": first.get("name"),
-                    "category": first.get("category"),
+                    "category": first.get("category", ""),
                     "rarity": _resolve_rarity(first.get("rarity"), first.get("prestige", 0)),
                     "prestige": int(first.get("prestige", 0) or 0),
-                    "lore": first.get("lore"),
-                    "icon_key": first.get("icon_key"),
-                    "tier": first.get("tier"),
-                    "scope": first.get("scope"),
+                    "lore": first.get("lore", ""),
+                    "icon_key": first.get("icon_key", None),
+                    "tier": first.get("tier", None),
+                    "scope": first.get("scope", None),
                     "stack_count": int(len(group_sorted)),
                     "first_earned_at": first.get("earned_at"),
                     "last_earned_at": last.get("earned_at"),
@@ -121,14 +145,14 @@ def build_gamification_summary(
             {
                 "badge_id": row.badge_id,
                 "name": row.name,
-                "category": row.category,
-                "rarity": _resolve_rarity(getattr(row, "rarity", None), getattr(row, "prestige", 0)),
-                "prestige": int(getattr(row, "prestige", 0) or 0),
-                "lore": row.lore,
-                "hint": row.hint,
-                "icon_key": getattr(row, "icon_key", None),
-                "tier": getattr(row, "tier", None),
-                "scope": getattr(row, "scope", None),
+                "category": r(row, "category", ""),
+                "rarity": _resolve_rarity(r(row, "rarity", None), r(row, "prestige", 0)),
+                "prestige": int(r(row, "prestige", 0) or 0),
+                "lore": r(row, "lore", ""),
+                "hint": r(row, "hint", ""),
+                "icon_key": r(row, "icon_key", None),
+                "tier": r(row, "tier", None),
+                "scope": r(row, "scope", None),
             }
         )
 
