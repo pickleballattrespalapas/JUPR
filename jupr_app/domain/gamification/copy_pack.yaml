@@ -1,894 +1,1595 @@
 style_guide:
-  banned_words:
-    - "requirement"
-    - "criteria"
-    - "unlock condition"
-    - "formula"
-    - "threshold"
-  tone_notes:
-    - "Sports documentary. Poetic, archival, tape-room cadence."
-    - "Confident, observational, never instructional."
-    - "Avoid explicit rules or checklists."
-    - "Hints are cryptic, lore is reflective, tape excerpts are short reels."
-    - "Foreshadowing implies proximity without commands."
+  voice: "sports_documentary"
+  notes:
+    - "Never say: requirement, criteria, unlock condition, formula."
+    - "Hints are cryptic; do not include explicit thresholds."
+    - "Tape excerpts may include numbers that happened (truth hidden in story)."
+    - "Foreshadowing implies proximity without checklists or commands."
+
 badges:
+
+  # ------------------------------------------------------------
+  # Participation Milestones (existing)
+  # ------------------------------------------------------------
+
   participant:
     name: "Participant"
-    lore: "The first log entries mark a new presence in the archive."
-    hint: "Every reel begins with a single frame."
+    lore: "Every career starts the same way: a name on the sheet and a moment on tape."
+    hint: "The archive doesn’t recognize potential. Only appearances."
     tape_excerpts:
-      - "The first entry hit the logbook.\nThe reel has a new name."
-      - "Opening tape, fresh ink.\nThe archive starts keeping score."
+      - |
+        The ledger opens with a simple entry.
+        No hype. No headlines.
+        Just proof you were here.
+      - |
+        First stamp in the file.
+        The season gets a little more real now.
+      - |
+        The tape room marks the beginning.
+        Everything after this is earned.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 A First Entry"
+        - "The File Opens"
+        - "First Stamp"
       bodies:
-        - "{tape_excerpt}\nThe record stamps {badge_name} into the archive."
-        - "{tape_excerpt}\nA new reel adds {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          It starts quietly.
+          One match, one entry, one line in the ledger.
+        - |
+          The archive has you now.
+          And it doesn’t forget.
+    foreshadow: null
+
   dedicated_participant_50:
     name: "Dedicated Participant"
-    lore: "Fifty clips deep, the routine has its own rhythm."
-    hint: "The schedule keeps circling back."
+    lore: "Fifty matches is where routine becomes identity."
+    hint: "The schedule is starting to recognize you."
     tape_excerpts:
-      - "The ledger flips to page fifty.\nConsistency leaves a trail."
-      - "Fifty matches in the archive.\nThe reel keeps calling."
+      - |
+        Fifty times on tape.
+        Not all of them pretty.
+        All of them yours.
+      - |
+        The ledger flips another page.
+        Your name is already printed on it.
+      - |
+        A quiet milestone.
+        The kind that only grinders ever reach.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Fifty Deep"
+        - "The Grind Shows"
+        - "Fifty Logged"
       bodies:
-        - "{tape_excerpt}\n{badge_name} stays on repeat."
-        - "{tape_excerpt}\nThe tape room files another {badge_name} moment."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          The camera kept rolling.
+          You kept showing up.
+        - |
+          Some players have highlights.
+          You have a body of work.
+    foreshadow:
+      titles:
+        - "The Counter’s Climbing"
+      bodies:
+        - |
+          The total keeps rising.
+          This isn’t a cameo anymore.
+
   lifetime_participant_200:
     name: "Lifetime Participant"
-    lore: "Two hundred chapters in, the archive knows the cadence."
-    hint: "The tape shelf keeps getting heavier."
+    lore: "Two hundred matches doesn’t happen by accident. It happens by refusing to disappear."
+    hint: "The archive is getting heavy."
     tape_excerpts:
-      - "Two hundred matches live on tape.\nThe archive remembers every frame."
-      - "The reel count hit 200.\nThe story keeps stacking."
+      - |
+        Two hundred matches in the file.
+        Not a flash.
+        A legacy-in-progress.
+      - |
+        The ledger doesn’t hand these out.
+        It records them.
+        You forced its hand.
+      - |
+        Two hundred times under pressure.
+        The tape room calls that a career.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 200 on Tape"
+        - "A Career on Tape"
+        - "Two Hundred"
       bodies:
-        - "{tape_excerpt}\n{badge_name} belongs to the long haul."
-        - "{tape_excerpt}\nA long-form reel earns {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          This isn’t a hot streak.
+          This is years of choosing the match.
+        - |
+          The archive is thick with your nights.
+          And it’s still recording.
+    foreshadow:
+      titles:
+        - "The File Gets Heavier"
+      bodies:
+        - |
+          You’re not far now.
+          The ledger is already making room.
+
+  # ------------------------------------------------------------
+  # Participation & Habit Loop (your edited set)
+  # ------------------------------------------------------------
+
   first_win:
     name: "First Win"
-    lore: "The first mark on the ledger. The tape starts rolling for real."
-    hint: "There is always a first frame on the reel."
+    lore: "The first win doesn’t crown you. It introduces you."
+    hint: "There’s an empty space in the win column with your name on it."
     tape_excerpts:
-      - "The first win hit the archive.\nThe film starts with a clean finish."
-      - "Opening night made the reel.\nThe ledger finally has a checkmark."
+      - |
+        The first W hits the ledger.
+        Small on paper.
+        Loud in the room.
+      - |
+        You didn’t just play.
+        You finished.
+        The archive noticed.
+      - |
+        One match, one turn of fate.
+        The tape room labels it: "Start."
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 First Win on Tape"
+        - "The First Mark"
+        - "It Counts Now"
       bodies:
-        - "{tape_excerpt}\nThe record adds {badge_name} to the reel."
-        - "{tape_excerpt}\nThe documentary notes {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: "first_win"
-    scope: "overall"
+        - |
+          The file changes the moment a win appears.
+          Everything after this has context.
+        - |
+          You can’t be “almost” anymore.
+          The tape has you closing.
+    foreshadow: null
+
   weekly_regular:
     name: "Weekly Regular"
-    lore: "The schedule starts to recognize the face. The weeks keep stacking."
-    hint: "The calendar keeps calling."
+    lore: "Championship stories start as routines nobody celebrates."
+    hint: "The schedule is starting to recognize a pattern."
     tape_excerpts:
-      - "Four straight weeks on tape.\nThe routine left a mark."
-      - "The weekly reel stayed full.\nThe calendar kept the rhythm."
+      - |
+        Four weeks in a row on tape.
+        The league stops calling it luck.
+      - |
+        Another week, another appearance.
+        The routine becomes a presence.
+      - |
+        The calendar tried to break the rhythm.
+        It failed.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Weekly Regular"
+        - "The Routine Becomes Real"
+        - "The Schedule Remembers"
       bodies:
-        - "{tape_excerpt}\n{badge_name} is now part of the schedule."
-        - "{tape_excerpt}\nThe archive files {badge_name}."
+        - |
+          Week after week, you were there.
+          That’s how stories start before they have names.
+        - |
+          Consistency isn’t loud.
+          Until it is.
     foreshadow:
       titles:
-        - "Foreshadowing \u2014 {badge_name}"
-        - "Foreshadowing \u2014 Weekly Rhythm"
+        - "The Pattern is Forming"
+        - "Three Weeks on Tape"
       bodies:
-        - "Three straight weeks on tape.\nThe calendar keeps circling."
-        - "The weeks are lining up.\nThe story is close to {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "weekly_regular"
-    scope: "league"
+        - |
+          The rhythm is undeniable now.
+          One more week and the archive stops asking questions.
+        - |
+          The league is starting to expect you.
+          Expectations are dangerous.
+
   iron_week:
     name: "Iron Week"
-    lore: "A week packed tight with tape. The grind leaves a signature."
-    hint: "Some weeks barely have room to breathe."
+    lore: "Some weeks are a single chapter. Some weeks are a series."
+    hint: "A week can hold more than one night of work."
     tape_excerpts:
-      - "The week ran long and the tape kept rolling.\nEvery day looked like game day."
-      - "A full week in the archive.\nNo idle frames."
+      - |
+        Three different days.
+        Same focus.
+        The week didn’t get easier—you got steadier.
+      - |
+        The tape room logs another date.
+        Then another.
+        Then another.
+      - |
+        A week with repeated footsteps.
+        The kind that builds a season.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Week Ran Hot"
+        - "Work Week"
+        - "Three Nights of Proof"
       bodies:
-        - "{tape_excerpt}\n{badge_name} lands on the reel."
-        - "{tape_excerpt}\nThe archive stamps {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: "iron_week"
-    scope: "week"
+        - |
+          You didn’t wait for momentum.
+          You scheduled it.
+        - |
+          The archive shows the same thing on different nights:
+          you showed up.
+    foreshadow:
+      titles:
+        - "The Week Has Pages Left"
+      bodies:
+        - |
+          You’ve started the run.
+          The tape room is watching for the third stamp.
+
   marathon_month:
     name: "Marathon Month"
-    lore: "A month that never slowed down. Every day kept its own clip."
-    hint: "The month is still writing."
+    lore: "Forty matches in a month is the kind of volume that reshapes a ranking table."
+    hint: "The month is getting heavy."
     tape_excerpts:
-      - "The month never slowed down.\nIt kept adding chapters to the reel."
-      - "Thirty-plus days of action.\nThe archive barely cooled."
+      - |
+        Forty matches.
+        The body learns the pace.
+        The mind learns the noise.
+      - |
+        The calendar ran out of excuses.
+        You ran out of off days.
+      - |
+        A month becomes a montage.
+        And you’re in every scene.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Marathon Month"
+        - "A Month on Repeat"
+        - "Volume"
       bodies:
-        - "{tape_excerpt}\n{badge_name} gets a full reel."
-        - "{tape_excerpt}\nThe month files {badge_name}."
+        - |
+          People talk about “putting in work.”
+          The tape room just shows the math.
+        - |
+          This wasn’t a week-long push.
+          This was a month-long decision.
     foreshadow:
       titles:
-        - "Foreshadowing \u2014 {badge_name}"
-        - "Foreshadowing \u2014 The Month Builds"
+        - "The Month Isn’t Finished"
       bodies:
-        - "Thirty matches already on tape.\nThe month is still writing."
-        - "The reel is heavy this month.\n{badge_name} feels close."
-    rarity: "rare"
-    tier: null
-    icon_key: "marathon_month"
-    scope: "month"
+        - |
+          The pace is real.
+          If it holds, the archive will have to rename the chapter.
+
+  # ------------------------------------------------------------
+  # Skill Growth & Momentum
+  # ------------------------------------------------------------
+
   level_up:
     name: "Level Up"
-    lore: "Another rung claimed. The league notices the climb."
-    hint: "A new number appears on the nameplate."
+    lore: "Every league has numbers that feel like doors. One of them just opened."
+    hint: "A number is waiting at the edge of the page."
     tape_excerpts:
-      - "A new rung lights up on the ladder.\nThe league keeps a close watch now."
-      - "A number clicked higher on the board.\nThe climb caught the lens."
+      - |
+        The rating crosses a line people whisper about.
+        Quietly.
+        Permanently.
+      - |
+        A milestone doesn’t cheer.
+        It just appears.
+        Tonight, it appeared for you.
+      - |
+        The ledger changes by one threshold.
+        The room changes by a little more.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Climb"
+        - "A Door Opens"
+        - "The Number Moves"
       bodies:
-        - "{tape_excerpt}\n{badge_name} lands on the reel."
-        - "{tape_excerpt}\nThe archive stamps {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "level_up"
-    scope: "league"
+        - |
+          It’s not just progress.
+          It’s a new neighborhood in the standings.
+        - |
+          The league will pretend it didn’t notice.
+          The tape won’t.
+    foreshadow:
+      titles:
+        - "Close to the Line"
+      bodies:
+        - |
+          You’re hovering near a number that changes conversations.
+          The next match could do it.
+
   rocket_start:
     name: "Rocket Start"
-    lore: "The opening run shook the scoreboard. The room leaned in early."
-    hint: "The first stretch left a streak on the floor."
+    lore: "Some starts are cautious. Some starts announce themselves."
+    hint: "The opening chapter is louder than expected."
     tape_excerpts:
-      - "The opening stretch shook the standings.\nThe room leaned in early."
-      - "A fast start lit up the reel.\nThe tape caught the spark."
+      - |
+        Early season, heavy movement.
+        The league looks up and realizes you’re already climbing.
+      - |
+        A fast start doesn’t promise a finish.
+        But it forces attention.
+      - |
+        The tape room labels the first stretch:
+        “Acceleration.”
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Fast Start"
+        - "A Fast Beginning"
+        - "The League Looks Up"
       bodies:
-        - "{tape_excerpt}\n{badge_name} hits the record."
-        - "{tape_excerpt}\nThe doc crew notes {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "rocket_start"
-    scope: "league"
+        - |
+          The standings weren’t ready for this pace.
+          You were.
+        - |
+          A start like this changes how opponents warm up.
+    foreshadow:
+      titles:
+        - "The Start is Heating Up"
+      bodies:
+        - |
+          The early results are stacking.
+          One more clean night and the story shifts.
+
   most_improved_monthly:
     name: "Most Improved"
-    lore: "A month where the climb couldn\u2019t be ignored."
-    hint: "One month tilted harder than the rest."
+    lore: "Improvement is hard to spot in a single match. It’s undeniable over a month."
+    hint: "The climb didn’t stop when the week ended."
     tape_excerpts:
-      - "The month tilted in one direction.\nThe climb made the reel."
-      - "One month swung the loudest.\nThe archive kept the proof."
+      - |
+        Month’s end.
+        Biggest rise.
+        The tape calls it persistence with direction.
+      - |
+        You gained ground while others held position.
+        The ledger doesn’t call it talent.
+        It calls it work.
+      - |
+        The month closes.
+        Your name is the one that moved the most.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Month Jumps"
+        - "The Biggest Climb"
+        - "A Month of Gain"
       bodies:
-        - "{tape_excerpt}\n{badge_name} captures the climb."
-        - "{tape_excerpt}\nThe tape files {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "most_improved"
-    scope: "month"
+        - |
+          This wasn’t a lucky weekend.
+          This was a month-long argument with gravity.
+        - |
+          The league has improvers.
+          And then it has you—this month.
+    foreshadow:
+      titles:
+        - "The Month is Tilting"
+      bodies:
+        - |
+          Your trend is hard to ignore.
+          If it holds, the archive writes your name at the top of the climb.
+
   mountain_climber:
     name: "Mountain Climber"
-    lore: "Ranks flipped. The ascent left landmarks."
-    hint: "The ladder looks different now."
+    lore: "Standings don’t care who you were. They only care where you are now."
+    hint: "The ladder can move faster than people expect."
     tape_excerpts:
-      - "Ranks flipped on the way up.\nThe climb left markers behind."
-      - "The ascent carved a new path.\nThe archive remembers the shift."
+      - |
+        You didn’t jump a step.
+        You cleared a section.
+        The table has to redraw itself.
+      - |
+        Places gained.
+        Noise made.
+        The climb looks different from up here.
+      - |
+        The ledger marks a rise in position.
+        The league marks a rise in concern.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Ascent"
+        - "The Table Shifts"
+        - "The Climb Shows"
       bodies:
-        - "{tape_excerpt}\n{badge_name} climbs onto the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "mountain_climber"
-    scope: "league"
+        - |
+          Rankings don’t move for speeches.
+          They move for results.
+        - |
+          The league is learning a new habit:
+          checking where you are.
+    foreshadow:
+      titles:
+        - "The Next Rung"
+      bodies:
+        - |
+          The climb has momentum.
+          One more push and the table has to make room again.
+
   hot_streak:
     name: "Hot Streak"
-    lore: "Wins blur together on the tape. The run keeps rolling."
-    hint: "The film strip barely cools off."
+    lore: "A streak is the sport’s oldest lie detector. It reveals who you are when it keeps working."
+    hint: "The tape keeps rolling. The wins keep stacking."
     tape_excerpts:
-      - "{streak} straight wins on the reel.\nThe heat stayed on."
-      - "The run kept rolling.\n{streak} frames burned bright."
+      - |
+        {streak} straight.
+        At some point it stops being a streak
+        and starts being a reputation.
+      - |
+        Another win, same calm.
+        The run has a shape now.
+        And it points at you.
+      - |
+        The archive stamps the sequence.
+        Match after match after match.
+        No breaks in the line.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Run"
+        - "The Run"
+        - "No Breaks in the Line"
       bodies:
-        - "{tape_excerpt}\n{badge_name} owns the reel."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
+        - |
+          People call it “hot.”
+          The tape calls it repeatable.
+        - |
+          A streak changes how opponents play.
+          And how you breathe.
     foreshadow:
       titles:
-        - "Foreshadowing \u2014 {badge_name}"
-        - "Foreshadowing \u2014 Heat Check"
+        - "The Next One Changes the Headline"
+        - "The Run is Alive"
       bodies:
-        - "{streak} straight wins on tape.\nThe next frame could tilt the season."
-        - "The reel is running hot.\n{badge_name} feels close."
-    rarity: "epic"
-    tier: null
-    icon_key: "hot_streak"
-    scope: "league"
+        - |
+          The sequence is still intact.
+          One more, and the tape room upgrades the label.
+        - |
+          The league is waiting for the slip.
+          The archive is waiting for history.
+
   bounce_back:
     name: "Bounce Back"
-    lore: "A stumble, then a reply. The echo lands clean."
-    hint: "The next frame told a different story."
+    lore: "The comeback isn’t the win. It’s the decision to keep filming."
+    hint: "The lowest point sets the stage."
     tape_excerpts:
-      - "A stumble, then a reply.\nThe next frame reset the tone."
-      - "The reel caught a quick answer.\nMomentum flipped back fast."
+      - |
+        Five losses behind you.
+        One win in front of you.
+        That’s how the turn begins.
+      - |
+        The tape shows the rough stretch.
+        Then it shows you refusing to stay there.
+      - |
+        A streak breaks.
+        Not the winning one—the losing one.
+        That’s the real headline.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Reply"
+        - "The Turn"
+        - "Refused to Stay Down"
       bodies:
-        - "{tape_excerpt}\n{badge_name} shows the response."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: "bounce_back"
-    scope: "match"
+        - |
+          The ledger looked ugly for a while.
+          Then you wrote over it.
+        - |
+          Some players spiral.
+          Some players pivot.
+    foreshadow: null
+
+  # ------------------------------------------------------------
+  # Clutch & Pressure
+  # ------------------------------------------------------------
+
   clutch_performer:
     name: "Clutch Performer"
-    lore: "Close frames keep leaning the same way."
-    hint: "The last points keep finding the same jersey."
+    lore: "Close games don’t reward talent. They reward nerve."
+    hint: "When the margin gets thin, someone has to blink."
     tape_excerpts:
-      - "The last points keep finding the same jersey.\nThe tape keeps the proof."
-      - "Close frames lean one way.\nThe reel shows the nerve."
+      - |
+        Tight scorelines.
+        Tight moments.
+        Your grip didn’t tighten with them.
+      - |
+        The match shrank to a handful of points.
+        You still found space.
+      - |
+        The tape room labels your finish:
+        “Composed.”
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Close-Frame Control"
+        - "In the Margins"
+        - "Composure Wins"
       bodies:
-        - "{tape_excerpt}\n{badge_name} stays calm on the reel."
-        - "{tape_excerpt}\nThe archive stamps {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "clutch_performer"
-    scope: "overall"
+        - |
+          The game got small.
+          You got sharper.
+        - |
+          When it was closest, you looked calmest.
+    foreshadow:
+      titles:
+        - "The Close Games Are Tilting"
+      bodies:
+        - |
+          The tight ones keep landing your way.
+          The archive is noticing a pattern.
+
   ice_in_veins:
     name: "Ice in Veins"
-    lore: "When the margin tightened, the answer didn\u2019t."
-    hint: "Cold hands don\u2019t shake the camera."
+    lore: "Some players feel pressure. Some players apply it."
+    hint: "The room gets loud. You get quiet."
     tape_excerpts:
-      - "The margin tightened, the answer didn\u2019t.\nThe tape stays calm under pressure."
-      - "A cold moment on tape.\nThe finish stayed steady."
+      - |
+        Close game after close game.
+        Same ending.
+        Your name in the win column.
+      - |
+        The tape shows the moment everyone tenses.
+        Then it shows you walking through it.
+      - |
+        The match tried to shake you.
+        It failed repeatedly.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Calm Under Lights"
+        - "Cold Under Heat"
+        - "Pressure Didn’t Land"
       bodies:
-        - "{tape_excerpt}\n{badge_name} writes the finish."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "ice_in_veins"
-    scope: "overall"
+        - |
+          There are players who survive tight games.
+          You control them.
+        - |
+          The margin begged for panic.
+          You didn’t answer.
+    foreshadow:
+      titles:
+        - "The Pressure Test"
+      bodies:
+        - |
+          The close ones keep coming.
+          And you keep looking built for them.
+
+  # ------------------------------------------------------------
+  # Dominance & Quality (your edited set)
+  # ------------------------------------------------------------
+
   pickle_perfection:
     name: "Pickle Perfection"
-    lore: "A shutout with no extra narration needed."
-    hint: "Sometimes the other side never shows up on the scoreboard."
+    lore: "A clean sheet is the loudest silence in the sport."
+    hint: "Somewhere, there’s a match where the other side never arrived on the scoreboard."
     tape_excerpts:
-      - "The board stayed blank on the other side.\nA quiet kind of dominance."
-      - "No numbers for the other side.\nThe tape stayed clean."
+      - |
+        {score_for}-{score_against}.
+        The second number stayed at zero.
+        The room didn’t.
+      - |
+        A perfect defense on tape.
+        No leaks.
+        No mercy.
+      - |
+        They had chances.
+        They had swings.
+        They didn’t have points.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Clean Sheet"
+        - "A Clean Sheet"
+        - "Zero"
       bodies:
-        - "{tape_excerpt}\n{badge_name} ends the reel."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "pickle_perfection"
-    scope: "match"
+        - |
+          Some wins are arguments.
+          This one was a verdict.
+        - |
+          The scoreboard never moved for them.
+          That’s rare. That’s real.
+    foreshadow: null
+
   blowout_artist:
     name: "Blowout Artist"
-    lore: "The gap grew and never closed."
-    hint: "The margin kept widening."
+    lore: "Not every win is a win. Some are a message."
+    hint: "Some scorelines become rumors before they become stats."
     tape_excerpts:
-      - "The gap opened and never closed.\nThe tape shows the distance."
-      - "A wide frame on tape.\nThe lead never blinked."
+      - |
+        {score_for}-{score_against}.
+        A margin that changes how people talk.
+      - |
+        The tape shows control from start to finish.
+        No swing. No doubt.
+      - |
+        A win with space to breathe.
+        Your opponents didn’t get any.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Wide Margin"
+        - "A Statement Scoreline"
+        - "No Doubt"
       bodies:
-        - "{tape_excerpt}\n{badge_name} hits the archive."
-        - "{tape_excerpt}\nThe reel keeps {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "blowout_artist"
-    scope: "match"
+        - |
+          The match didn’t stay close.
+          Not for long.
+        - |
+          It wasn’t just winning.
+          It was separating.
+    foreshadow: null
+
   untouchable:
     name: "Untouchable"
-    lore: "A run that didn\u2019t flinch. The tape shows no breaks."
-    hint: "The run feels unbroken."
+    lore: "Five matches can be coincidence. Five matches like this is a climate."
+    hint: "A run is hiding in the sequence."
     tape_excerpts:
-      - "{streak} straight frames without a crack.\nThe run kept the cameras up."
-      - "The reel stays unbroken.\n{streak} wins stayed stitched together."
+      - |
+        Five straight matches on tape.
+        The margins add up to something unfair.
+      - |
+        The archive doesn’t just see wins.
+        It sees domination in clusters.
+      - |
+        A stretch where opponents kept chasing the same outcome:
+        falling behind.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Unbroken Run"
+        - "A Stretch of Control"
+        - "The Sequence"
       bodies:
-        - "{tape_excerpt}\n{badge_name} keeps rolling."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "untouchable"
-    scope: "overall"
+        - |
+          Over several matches, the same truth kept appearing:
+          nobody stayed with you.
+        - |
+          The league doesn’t fear one great night.
+          It fears weeks like this.
+    foreshadow:
+      titles:
+        - "The Run is Building"
+      bodies:
+        - |
+          The recent tape is trending one direction.
+          If it holds, the archive will label it.
+
   clean_sweep_week:
     name: "Clean Sweep Week"
-    lore: "Every clip in the week ended the same way."
-    hint: "A week with no counterpunches."
+    lore: "A perfect week isn’t luck. It’s discipline in disguise."
+    hint: "A week can be spotless."
     tape_excerpts:
-      - "Every clip that week ended the same way.\nNo counterpunches on record."
-      - "The week stayed spotless on tape.\nNo rewrites needed."
+      - |
+        A week with no stumbles.
+        Match after match, the same ending.
+      - |
+        Five wins in one week.
+        No footnotes.
+        No exceptions.
+      - |
+        The archive shows a rare thing:
+        perfection across multiple nights.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Week on Clean Film"
+        - "No Stains"
+        - "A Perfect Week"
       bodies:
-        - "{tape_excerpt}\n{badge_name} seals the week."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "clean_sweep_week"
-    scope: "week"
+        - |
+          The week didn’t test you once.
+          It tested you repeatedly.
+          You answered every time.
+        - |
+          When the schedule got busy, you got cleaner.
+    foreshadow:
+      titles:
+        - "The Week is Still Clean"
+      bodies:
+        - |
+          The record is spotless so far.
+          The tape room is watching the ending.
+
   high_roller:
     name: "High Roller"
-    lore: "The pace stayed high and the points kept pouring."
-    hint: "The scoreboard got a workout."
+    lore: "Some matches change the scoreboard. This one changed the numbers behind it."
+    hint: "Big swings leave fingerprints."
     tape_excerpts:
-      - "The tempo stayed high and the points kept coming.\nThe reel moved fast."
-      - "Fast tape, loud numbers.\nThe pace never let up."
+      - |
+        The match ends.
+        The rating moves like it got shoved.
+      - |
+        A swing you can feel in the room.
+        Not just on the screen.
+      - |
+        {elo_delta} on the line.
+        The tape captures the moment it snapped one way.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 High Pace"
+        - "A Rating Swing"
+        - "The Stakes Were Real"
       bodies:
-        - "{tape_excerpt}\n{badge_name} lands on the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "high_roller"
-    scope: "match"
+        - |
+          This wasn’t just points.
+          This was consequence.
+        - |
+          When the numbers moved, everyone noticed.
+    foreshadow:
+      titles:
+        - "The Stakes Are Rising"
+      bodies:
+        - |
+          The matches are getting heavier.
+          The next one might move more than pride.
+
+  # ------------------------------------------------------------
+  # Social Graph & Versatility
+  # ------------------------------------------------------------
+
   social_butterfly:
     name: "Social Butterfly"
-    lore: "The partner list turned into a montage."
-    hint: "So many different pairings on the same reel."
+    lore: "Chemistry isn’t found. It’s collected."
+    hint: "New hands keep showing up beside you."
     tape_excerpts:
-      - "The partner list turned into a montage.\nSo many combinations on tape."
-      - "The reel kept swapping jerseys.\nThe archive caught every pairing."
+      - |
+        Another new partner on tape.
+        The archive counts a growing circle.
+      - |
+        {unique_partners} different teammates over time.
+        Same you. Different chemistry.
+      - |
+        The club feels smaller when you’ve played with everyone.
+        You’re getting there.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Partner Montage"
+        - "A Growing Circle"
+        - "Chemistry Collected"
       bodies:
-        - "{tape_excerpt}\n{badge_name} broadens the reel."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
+        - |
+          You’re not building one duo.
+          You’re building a network.
+        - |
+          Familiarity is a weapon.
+          You’re assembling it.
     foreshadow:
       titles:
-        - "Foreshadowing \u2014 {badge_name}"
-        - "Foreshadowing \u2014 Partner Reel"
+        - "New Faces, Same Game"
       bodies:
-        - "The partner reel is almost full.\nAnother pairing changes the story."
-        - "The montage keeps growing.\n{badge_name} feels close."
-    rarity: "rare"
-    tier: null
-    icon_key: "social_butterfly"
-    scope: "overall"
+        - |
+          The partner list is expanding.
+          The archive is starting to treat it as a story.
+
   network_builder:
     name: "Network Builder"
-    lore: "The web stretches across the club."
-    hint: "The partner map keeps expanding."
+    lore: "At a certain point, the club doesn’t ask who you play with. They ask who you haven’t."
+    hint: "Your circle is getting big."
     tape_excerpts:
-      - "The network stretched across the club.\nSo many reels, so many names."
-      - "The partner map kept growing.\nThe tape shows the reach."
+      - |
+        {unique_partners} partners across the file.
+        That’s not variety.
+        That’s presence.
+      - |
+        The archive flips through names.
+        Yours connects to too many to ignore.
+      - |
+        You’ve built a web of chemistry.
+        The club is inside it now.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Web Expands"
+        - "Everyone Knows the Name"
+        - "A Club-Wide Network"
       bodies:
-        - "{tape_excerpt}\n{badge_name} spans the reel."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "network_builder"
-    scope: "overall"
-  draft_master:
-    name: "Draft Master"
-    lore: "Different pairings, same result. The tape shows the range."
-    hint: "This month keeps swapping jerseys."
-    tape_excerpts:
-      - "Different jerseys, same ending.\nThe month kept changing partners."
-      - "The reel kept rotating partners.\nThe wins stayed steady."
-    highlight:
-      titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Draft Day"
-      bodies:
-        - "{tape_excerpt}\n{badge_name} lands on the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
+        - |
+          This isn’t just playing a season.
+          This is becoming part of the club’s ecosystem.
+        - |
+          The tape room stops calling it coincidence.
+          It calls it reach.
     foreshadow:
       titles:
-        - "Foreshadowing \u2014 {badge_name}"
-        - "Foreshadowing \u2014 Rotating Lineup"
+        - "The Circle Expands"
       bodies:
-        - "Three different winning pairings this month.\nThe tape hints at one more."
-        - "The lineup keeps shifting.\n{badge_name} feels close."
-    rarity: "rare"
-    tier: null
-    icon_key: "draft_master"
-    scope: "month"
+        - |
+          The connections keep forming.
+          Soon, the archive will have to label it.
+
+  draft_master:
+    name: "Draft Master"
+    lore: "Different partners. Same outcome. That’s not luck—that’s adaptability."
+    hint: "Chemistry follows you."
+    tape_excerpts:
+      - |
+        Five different partners.
+        Same calm.
+        The month didn’t care who stood beside you.
+      - |
+        The tape room highlights a pattern:
+        you win with whoever’s next to you.
+      - |
+        A month of rotating lineups.
+        And you still found the finish.
+    highlight:
+      titles:
+        - "Adaptable"
+        - "Chemistry Follows"
+      bodies:
+        - |
+          You didn’t need a perfect pairing.
+          You made the pairing work.
+        - |
+          Some players need comfort.
+          You needed a court.
+    foreshadow:
+      titles:
+        - "The Month is Collecting Names"
+      bodies:
+        - |
+          Different partners are starting to stack up.
+          If it continues, the archive will call it mastery.
+
   swiss_army_knife:
     name: "Swiss Army Knife"
-    lore: "Versatility on the record. Different stages, same sharp edge."
-    hint: "The season shows more than one role."
+    lore: "You don’t win with one style. You win with whatever the match demands."
+    hint: "You’re becoming the constant."
     tape_excerpts:
-      - "Multiple stages, one steady edge.\nThe season shows the range."
-      - "The reel cuts across leagues.\nVersatility leaves the mark."
+      - |
+        You won with a partner everyone underrates.
+        You won with one everyone fears.
+        Same ending.
+      - |
+        The archive shows the range.
+        Different teammates. Different looks.
+        Same result.
+      - |
+        A season of changing lineups.
+        And you stayed sharp in all of them.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Versatile Tape"
+        - "The Constant"
+        - "Wins in Every Form"
       bodies:
-        - "{tape_excerpt}\n{badge_name} earns a wide reel."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "swiss_army_knife"
-    scope: "season"
+        - |
+          It wasn’t the same teammate.
+          It wasn’t the same matchup.
+          It was the same you.
+        - |
+          The league can’t scout a single version of you anymore.
+    foreshadow:
+      titles:
+        - "Range on Tape"
+      bodies:
+        - |
+          The season is showing versatility.
+          One more chapter and the archive will stamp it.
+
+  # ------------------------------------------------------------
+  # Prestige / Rarity
+  # ------------------------------------------------------------
+
   giant_slayer:
     name: "Giant Slayer"
-    lore: "A giant hit the floor and the camera never blinked."
-    hint: "A higher shadow fell."
+    lore: "Every club has giants. Every giant has a night they wish wasn’t recorded."
+    hint: "The taller they stand, the harder the tape hits."
     tape_excerpts:
-      - "A taller shadow fell in this frame.\nThe tape keeps the proof."
-      - "The reel caught the giant stumble.\nThe lens never shook."
+      - |
+        A name with a high number next to it.
+        And then a loss beneath it.
+        You authored that.
+      - |
+        {opponent_name} came in towering.
+        The match ended smaller.
+      - |
+        The ledger underlines it:
+        you beat someone the room expected to win.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Giant on Tape"
+        - "A Giant Falls"
+        - "The Room Noticed"
       bodies:
-        - "{tape_excerpt}\n{badge_name} hits the archive."
-        - "{tape_excerpt}\nThe record stamps {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "giant_slayer"
-    scope: "match"
+        - |
+          Upsets happen.
+          This felt like a shift.
+        - |
+          The opponent had the rating.
+          You had the ending.
+    foreshadow:
+      titles:
+        - "The Giant Keeps Appearing"
+      bodies:
+        - |
+          The matchup is circling you.
+          The tape room loves a rewrite.
+
   david_vs_goliath:
     name: "David vs Goliath"
-    lore: "The mismatch didn\u2019t stay a mismatch."
-    hint: "The odds were heavy on one side."
+    lore: "The models had a favorite. The match had a different plan."
+    hint: "The numbers don’t like your chances. The tape might."
     tape_excerpts:
-      - "The mismatch didn\u2019t survive the tape.\nA different ending made the reel."
-      - "The odds leaned hard.\nThe tape flipped the script."
+      - |
+        The forecast said no.
+        The tape said yes.
+        {expected_prob} and you still finished it.
+      - |
+        The odds were a warning sign.
+        You treated them like background noise.
+      - |
+        A win the spreadsheet won’t understand
+        without watching the match.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Mismatch Flip"
+        - "Against the Forecast"
+        - "The Script Breaks"
       bodies:
-        - "{tape_excerpt}\n{badge_name} lands on the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "david_vs_goliath"
-    scope: "match"
+        - |
+          That wasn’t supposed to happen.
+          Then it did.
+        - |
+          The league loves ratings.
+          The tape loves endings.
+    foreshadow:
+      titles:
+        - "A Rewrite is Possible"
+      bodies:
+        - |
+          The matchup looks steep on paper.
+          The tape room doesn’t trust paper.
+
   upset_champion:
     name: "Upset Champion"
-    lore: "The month\u2019s biggest swing stayed on the reel."
-    hint: "One month holds the loudest turn."
+    lore: "Once in a while, a league gets reminded that order is optional."
+    hint: "There’s always one match nobody can explain."
     tape_excerpts:
-      - "The month\u2019s loudest swing stayed on tape.\nThe record keeps the surprise."
-      - "One month flipped the reel.\nThe tape keeps the shock."
+      - |
+        Biggest upset of the month in {league}.
+        The tape room filed it under: “Uncomfortable Truth.”
+      - |
+        The league will talk about this one for weeks.
+        Not because it was loud—
+        because it was undeniable.
+      - |
+        A monthly moment.
+        The kind that bends the room’s expectations.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Month of Upset"
+        - "The Month’s Shockwave"
+        - "The League Remembers This"
       bodies:
-        - "{tape_excerpt}\n{badge_name} anchors the month."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "upset_champion"
-    scope: "month"
+        - |
+          Every month has a match that breaks the pattern.
+          This month, you were the match.
+        - |
+          The archive stamped it.
+          The league replayed it.
+    foreshadow:
+      titles:
+        - "The Month Still Has One More Twist"
+      bodies:
+        - |
+          The league thinks it understands the month.
+          The tape room disagrees.
+
   hall_of_fame_night:
     name: "Hall of Fame Night"
-    lore: "A night that pulled the cameras in closer."
-    hint: "Some nights feel larger than the rest."
+    lore: "A stacked room. A real match. The kind that feels heavier than usual."
+    hint: "Some nights feel like witnesses were present."
     tape_excerpts:
-      - "A night that pulled the cameras closer.\nThe league will replay this one."
-      - "The reel has a favorite night.\nThe archive won\u2019t forget it."
+      - |
+        A lobby built like a final.
+        You treated it like a job.
+      - |
+        The room was loaded.
+        The tape was ready.
+        You delivered a finish worth filing.
+      - |
+        Not every win belongs in history.
+        This one asked for a folder.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Hall of Fame Night"
+        - "A Heavy Night"
+        - "Final-Level Air"
       bodies:
-        - "{tape_excerpt}\n{badge_name} stays in the spotlight."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "hall_of_fame_night"
-    scope: "match"
+        - |
+          The level of the room was obvious.
+          Your composure was clearer.
+        - |
+          This didn’t feel like a casual match.
+          It felt like a chapter.
+    foreshadow:
+      titles:
+        - "The Rooms Are Getting Stronger"
+      bodies:
+        - |
+          The match quality is rising.
+          The archive likes what that means for your story.
+
   legendary_upset:
     name: "Legendary Upset"
-    lore: "The tape caught a moment nobody predicted."
-    hint: "The odds looked impossible on this frame."
+    lore: "Some upsets are surprises. Some are events."
+    hint: "There’s a match people replay without being asked."
     tape_excerpts:
-      - "The tape caught a moment nobody predicted.\nThe room won\u2019t forget this frame."
-      - "The reel locked a stunner.\nThe archive keeps the shock."
+      - |
+        {expected_prob} and still a win.
+        Not close. Not lucky.
+        A clean rewrite.
+      - |
+        The league had a favorite.
+        The match had a moment.
+        You were the moment.
+      - |
+        An upset with a margin.
+        That’s how legends get filed.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Legendary Upset"
+        - "The Tape Everyone Will See"
+        - "A Rewrite With Teeth"
       bodies:
-        - "{tape_excerpt}\n{badge_name} seals the moment."
-        - "{tape_excerpt}\nThe archive tags {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "legendary_upset"
-    scope: "match"
+        - |
+          The surprise wasn’t the win.
+          It was how clear it looked.
+        - |
+          People will reference this match.
+          Like a timestamp.
+    foreshadow:
+      titles:
+        - "A Big Rewrite is Brewing"
+      bodies:
+        - |
+          The odds look wrong for you.
+          That’s usually when the tape gets interesting.
+
+  # ------------------------------------------------------------
+  # Rivalry & Nemesis
+  # ------------------------------------------------------------
+
   nemesis_found:
     name: "Nemesis Found"
-    lore: "A name keeps showing up across the net."
-    hint: "The same opponent keeps reappearing."
+    lore: "Every great run finds a problem it can’t solve quickly."
+    hint: "One name keeps showing up in the margins."
     tape_excerpts:
-      - "A familiar face keeps appearing across the net.\nThe rivalry has a name now."
-      - "The reel keeps replaying one matchup.\nThe story has a foil."
+      - |
+        The archive circles the same opponent again.
+        Not fear.
+        Just inevitability.
+      - |
+        {opponent_name} appears too often to ignore.
+        The tape room calls it a rivalry in the making.
+      - |
+        Some opponents are matchups.
+        Some are chapters.
+        This one is the latter.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 A Name Returns"
+        - "A Name Repeats"
+        - "The Rival Emerges"
       bodies:
-        - "{tape_excerpt}\n{badge_name} marks the rivalry."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "nemesis_found"
-    scope: "opponent"
+        - |
+          The tape keeps returning to the same matchup.
+          That’s never accidental for long.
+        - |
+          Every champion story needs friction.
+          The archive just found yours.
+    foreshadow:
+      titles:
+        - "The Chapter Keeps Coming Back"
+      bodies:
+        - |
+          The matchup isn’t going away.
+          Neither is the opportunity.
+
   rivalry_win:
     name: "Rivalry Win"
-    lore: "The rivalry leaned your way on this frame."
-    hint: "One chapter shifted the rivalry."
+    lore: "The ledger leaned their way—until it didn’t."
+    hint: "Beat the one you ‘don’t beat.’"
     tape_excerpts:
-      - "The rivalry leaned your way on this frame.\nThe tape caught the shift."
-      - "A key frame swung the rivalry.\nThe reel keeps the proof."
+      - |
+        You came in behind in the series.
+        You left with the moment.
+      - |
+        The record said one thing.
+        Tonight’s tape says another.
+      - |
+        A win that changes the tone of a rivalry.
+        That’s rare.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Rivalry Swing"
+        - "The Rivalry Tilts"
+        - "A Different Ending"
       bodies:
-        - "{tape_excerpt}\n{badge_name} changes the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "rivalry_win"
-    scope: "match"
+        - |
+          It wasn’t just a win.
+          It was a statement inside a long conversation.
+        - |
+          The ledger had a favorite.
+          You disagreed—on camera.
+    foreshadow:
+      titles:
+        - "The Rivalry is Within Reach"
+      bodies:
+        - |
+          The record is close enough to touch.
+          One clean finish changes the story.
+
   rivalry_streak:
     name: "Rivalry Streak"
-    lore: "The rivalry kept tilting, frame after frame."
-    hint: "The rivalry reel runs long."
+    lore: "A rivalry turns slowly—then all at once."
+    hint: "Streaks change relationships."
     tape_excerpts:
-      - "The rivalry reel leaned your way.\nThe streak kept the pressure up."
-      - "Frame after frame, the rivalry tilted.\nThe tape shows the run."
+      - |
+        Three straight against the same name.
+        The rivalry didn’t end.
+        It shifted.
+      - |
+        The archive shows a run inside the matchup.
+        Not a fluke.
+        A trend.
+      - |
+        The same opponent.
+        The same result.
+        Over and over.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Rivalry Run"
+        - "Momentum in the Matchup"
+        - "The Rivalry Shifts"
       bodies:
-        - "{tape_excerpt}\n{badge_name} stretches the rivalry."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "rivalry_streak"
-    scope: "opponent"
+        - |
+          Rivalries are built on repetition.
+          So are takeovers.
+        - |
+          The matchup used to feel fixed.
+          It doesn’t anymore.
+    foreshadow:
+      titles:
+        - "The Matchup is Turning"
+      bodies:
+        - |
+          The last meetings have leaned your way.
+          If it continues, the archive will rename the chapter.
+
   settled_the_score:
     name: "Settled the Score"
-    lore: "The ledger finally balanced, the tape agreed."
-    hint: "A long account just evened out."
+    lore: "Some nights don’t win trophies. They reset the balance."
+    hint: "Bring the ledger back to level."
     tape_excerpts:
-      - "The ledger finally balanced.\nThe tape called it even."
-      - "The rivalry ledger closed a chapter.\nThe reel kept the proof."
+      - |
+        The record was against you.
+        Now it isn’t.
+        The rivalry feels different already.
+      - |
+        The archive marks the moment the ledger stops leaning their way.
+      - |
+        A match that doesn’t just win points—
+        it changes the math between two names.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Ledger Balances"
+        - "Balance Restored"
+        - "The Ledger Levels"
       bodies:
-        - "{tape_excerpt}\n{badge_name} caps the rivalry."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "settled_the_score"
-    scope: "opponent"
+        - |
+          It wasn’t about the single match.
+          It was about the whole story before it.
+        - |
+          The rivalry just got a reset button.
+          You pressed it.
+    foreshadow:
+      titles:
+        - "One Match From Even"
+      bodies:
+        - |
+          The ledger is close to flipping.
+          The tape room loves turning points.
+
+  # ------------------------------------------------------------
+  # Consistency & Reliability
+  # ------------------------------------------------------------
+
   steady_hand:
     name: "Steady Hand"
-    lore: "The season stayed smooth, even when the lights changed."
-    hint: "The season never wandered far."
+    lore: "Not flashy. Not fragile. Just there—every time the match asks."
+    hint: "Some players swing. Some players hold."
     tape_excerpts:
-      - "The season stayed steady on the reel.\nNo wild swings, just control."
-      - "A calm season on tape.\nThe archive stayed level."
+      - |
+        Night after night, the same composure.
+        The archive calls it dependable.
+      - |
+        The tape room notices what doesn’t change:
+        your level.
+      - |
+        While the room swings high and low,
+        you stayed on your line.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Steady Season"
+        - "Same Level, Different Nights"
+        - "Dependable"
       bodies:
-        - "{tape_excerpt}\n{badge_name} stays locked in."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "steady_hand"
-    scope: "season"
+        - |
+          The league can’t scout volatility out of you.
+          There isn’t much to find.
+        - |
+          Consistency isn’t a highlight.
+          It’s a threat.
+    foreshadow:
+      titles:
+        - "The Pattern is Holding"
+      bodies:
+        - |
+          Your recent tape keeps telling the same story.
+          That’s how reliability gets stamped.
+
   mr_reliable:
     name: "Mr. Reliable"
-    lore: "Week after week, the reel looks the same."
-    hint: "Reliable tape needs reliable history."
+    lore: "A season of steadiness is harder than a week of greatness."
+    hint: "Stability can be its own dominance."
     tape_excerpts:
-      - "Week after week, the reel looks the same.\nReliability makes a pattern."
-      - "The archive trusts the steady tape.\nReliability stays on repeat."
+      - |
+        The season ends and the tape looks the same:
+        steady, controlled, repeatable.
+      - |
+        You didn’t spike.
+        You didn’t crash.
+        You just stayed dangerous.
+      - |
+        A long stretch without drift.
+        The archive calls it rare discipline.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Always There"
+        - "Season-Long Stability"
+        - "No Drift"
       bodies:
-        - "{tape_excerpt}\n{badge_name} sits in the archive."
-        - "{tape_excerpt}\nThe reel logs {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "mr_reliable"
-    scope: "season"
+        - |
+          The hardest thing in a season is staying yourself.
+          You did.
+        - |
+          It wasn’t a moment.
+          It was the whole year holding steady.
+    foreshadow:
+      titles:
+        - "A Stable Season is Forming"
+      bodies:
+        - |
+          The longer this stays true, the rarer it becomes.
+          The archive is watching.
+
+  # ------------------------------------------------------------
+  # End-of-Season Prestige (seed inactive if season infra missing)
+  # ------------------------------------------------------------
+
   league_champion:
     name: "League Champion"
-    lore: "A season ends with your name at the top."
-    hint: "The final table has a single line above the rest."
+    lore: "Some seasons end quietly. Others end with a name at the top."
+    hint: "Finish it. Don’t just play it."
     tape_excerpts:
-      - "The season closed with your name on top.\nThe archive keeps the final frame."
-      - "The top line belongs to you.\nThe tape seals the season."
+      - |
+        Season ends.
+        The league has a champion.
+        The tape has receipts.
+      - |
+        First place isn’t a feeling.
+        It’s a fact.
+        And it’s yours.
+      - |
+        The archive stamps the season’s final frame:
+        your name on top.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Season Crown"
+        - "Champion"
+        - "The Top Line"
       bodies:
-        - "{tape_excerpt}\n{badge_name} closes the season."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "league_champion"
-    scope: "season"
+        - |
+          This wasn’t one match.
+          This was a season of answers.
+        - |
+          The league has a winner.
+          The archive has the whole story.
+    foreshadow:
+      titles:
+        - "The Summit is Close"
+      bodies:
+        - |
+          The standings are tightening.
+          The next chapter might decide everything.
+
   podium:
     name: "Podium"
-    lore: "A season ends with your name on the stage."
-    hint: "The podium holds only a few."
+    lore: "Top three means your season gets remembered even by people who weren’t there."
+    hint: "The medal table is closer than it looks."
     tape_excerpts:
-      - "The season ended on the stage.\nThe archive keeps the podium frame."
-      - "A podium finish hits the tape.\nThe reel shows the stage."
+      - |
+        Podium finish.
+        The season ends with your name near the top where it belongs.
+      - |
+        The archive labels the season:
+        “contender.”
+      - |
+        The league closes its book.
+        You’re in the front pages.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Podium Frame"
+        - "On the Podium"
+        - "A Contender’s Season"
       bodies:
-        - "{tape_excerpt}\n{badge_name} takes the stage."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "legendary"
-    tier: null
-    icon_key: "podium"
-    scope: "season"
+        - |
+          Not everyone gets a season worth replaying.
+          This one was.
+        - |
+          The table has three spots that matter.
+          You took one.
+    foreshadow:
+      titles:
+        - "The Podium is in Sight"
+      bodies:
+        - |
+          The standings are close enough to feel.
+          One more push changes the ending.
+
+  # ------------------------------------------------------------
+  # Community / Sportsmanship (seed inactive until data exists)
+  # ------------------------------------------------------------
+
   good_sport:
     name: "Good Sport"
-    lore: "The tape shows respect running both ways."
-    hint: "Sportsmanship leaves quieter fingerprints."
+    lore: "No asterisks. No chaos. Just clean competition."
+    hint: "Win without leaving debris behind."
     tape_excerpts:
-      - "Respect showed on tape.\nThe reel kept the tone."
-      - "A quiet moment of class.\nThe archive remembers it."
+      - |
+        A season without controversy.
+        The tape room calls it rare professionalism.
+      - |
+        Clean matches.
+        Clean ledger.
+        Clean reputation.
+      - |
+        You competed hard without dragging the room into noise.
+        That matters.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Quiet Class"
+        - "No Asterisks"
+        - "Clean Season"
       bodies:
-        - "{tape_excerpt}\n{badge_name} holds the tone."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "rare"
-    tier: null
-    icon_key: "good_sport"
-    scope: "overall"
+        - |
+          The best stories don’t need drama to feel real.
+        - |
+          Respect travels faster than highlights.
+    foreshadow:
+      titles:
+        - "A Clean Run"
+      bodies:
+        - |
+          The season has stayed clean so far.
+          Keep it that way and the archive will stamp it.
+
   community_builder:
     name: "Community Builder"
-    lore: "The club grew around the moments you hosted."
-    hint: "Some stories start before the match."
+    lore: "Clubs aren’t built by standings. They’re built by people who make matches happen."
+    hint: "The matches don’t schedule themselves."
     tape_excerpts:
-      - "The club grew around your moments.\nThe archive credits the spark."
-      - "Community scenes made the reel.\nThe tape remembers the gathering."
+      - |
+        You didn’t just play in the club.
+        You helped it breathe.
+      - |
+        Nights exist because someone makes them.
+        The archive has your fingerprints.
+      - |
+        The season’s match list is longer because you made it so.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Community Frame"
+        - "Built the Room"
+        - "Made the Night Happen"
       bodies:
-        - "{tape_excerpt}\n{badge_name} holds the room."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "community_builder"
-    scope: "overall"
+        - |
+          The club doesn’t run on talent alone.
+          It runs on people who create opportunity.
+        - |
+          Everyone plays.
+          Not everyone builds.
+    foreshadow:
+      titles:
+        - "The Club Notices Builders"
+      bodies:
+        - |
+          The more you create, the bigger your imprint becomes.
+          The archive is tracking it.
+
   mentor:
     name: "Mentor"
-    lore: "The tape shows the lesson without saying a word."
-    hint: "The gap was wide, the guidance wider."
+    lore: "You didn’t carry them. You taught them what pace feels like."
+    hint: "Play down. Win right. Leave something behind."
     tape_excerpts:
-      - "The lesson showed on tape.\nThe archive kept the quiet moment."
-      - "A guiding frame made the reel.\nThe tape kept the lesson."
+      - |
+        Different teammates, different levels.
+        You stayed patient and still finished.
+      - |
+        The archive marks the quiet kind of leadership:
+        making someone else better on the same court.
+      - |
+        You shared the court and shared the standard.
+        That’s mentorship, whether you call it that or not.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 The Lesson"
+        - "Shared the Standard"
+        - "Raised the Floor"
       bodies:
-        - "{tape_excerpt}\n{badge_name} keeps the tone."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "epic"
-    tier: null
-    icon_key: "mentor"
-    scope: "match"
+        - |
+          Some players win and move on.
+          You win and leave something behind.
+        - |
+          The match had two results:
+          the score—and the lesson.
+    foreshadow:
+      titles:
+        - "A Mentor’s Chapter"
+      bodies:
+        - |
+          The tape is starting to show you lifting others into your pace.
+          Keep writing that story.
+
+  # ------------------------------------------------------------
+  # Legacy / Existing Performance Badges (optional to keep; copy provided)
+  # ------------------------------------------------------------
+
   breakthrough:
     name: "Breakthrough"
-    lore: "A sudden step forward caught the lens."
-    hint: "One day the tape just looks different."
+    lore: "Some players improve. Some players arrive."
+    hint: "The top table has an empty chair."
     tape_excerpts:
-      - "A sudden step forward caught the lens.\nThe reel felt different."
-      - "The tape turned a page.\nThe archive kept the breakthrough."
+      - |
+        The league starts saying your name out loud.
+        That’s what a breakthrough looks like.
+      - |
+        You didn’t just climb.
+        You entered a conversation.
+      - |
+        The archive stamps a new label on your file:
+        “contender.”
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Breakthrough Frame"
+        - "Arrival"
+        - "Entered the Conversation"
       bodies:
-        - "{tape_excerpt}\n{badge_name} changes the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          People noticed the trend.
+          Then they noticed you.
+        - |
+          A breakthrough doesn’t feel like fireworks.
+          It feels like attention.
+    foreshadow:
+      titles:
+        - "Close to the Table"
+      bodies:
+        - |
+          You’re hovering near the kind of rank that changes introductions.
+          The next result could do it.
+
   above_expectations:
     name: "Above Expectations"
-    lore: "The film shows a stretch beyond the usual script."
-    hint: "The reel leans higher than it used to."
+    lore: "The forecast was wrong. The tape has proof."
+    hint: "The predictions are getting nervous."
     tape_excerpts:
-      - "The reel leaned higher than usual.\nThe archive kept the proof."
-      - "A stretch beyond the script.\nThe tape stayed surprised."
+      - |
+        The expected story didn’t happen.
+        Yours did.
+      - |
+        You won more than the room predicted.
+        And you did it repeatedly.
+      - |
+        The tape room flags the season:
+        “outperformed.”
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Above the Script"
+        - "Outplayed the Forecast"
+        - "Predictions Missed"
       bodies:
-        - "{tape_excerpt}\n{badge_name} lifts the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          On paper, you were supposed to settle.
+          On tape, you didn’t.
+        - |
+          The numbers expected one arc.
+          The match delivered another.
+    foreshadow:
+      titles:
+        - "The Forecast is Slipping"
+      bodies:
+        - |
+          The results are starting to outrun the model.
+          The archive is watching for the stamp.
+
   dominant_run:
     name: "Dominant Run"
-    lore: "A stretch of tape with no soft frames."
-    hint: "The reel keeps leaning one way."
+    lore: "Sometimes the scoreboard doesn’t just show wins. It shows separation."
+    hint: "A run is hiding in your recent tape."
     tape_excerpts:
-      - "A stretch of tape with no soft frames.\nThe run kept control."
-      - "The reel leaned one way for a while.\nDominance made the cut."
+      - |
+        A stretch where opponents couldn’t breathe.
+        The tape room called it control.
+      - |
+        Match after match, the margins kept stacking.
+        That’s not a night—that’s a run.
+      - |
+        The archive highlights a window of dominance.
+        It looks unfair in sequence.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Commanding Run"
+        - "A Run of Control"
+        - "Separation"
       bodies:
-        - "{tape_excerpt}\n{badge_name} owns the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          One big win is noise.
+          Repeated big wins are signal.
+        - |
+          The league doesn’t fear a good match.
+          It fears a run.
+    foreshadow:
+      titles:
+        - "The Run is Building"
+      bodies:
+        - |
+          The margins are stacking lately.
+          If it continues, the archive will name it.
+
   high_output:
     name: "High Output"
-    lore: "The points kept pouring into the reel."
-    hint: "The scoreboard got busy."
+    lore: "Points came fast. The match didn’t."
+    hint: "Some nights you can’t be slowed down."
     tape_excerpts:
-      - "The points kept pouring into the reel.\nThe archive barely kept up."
-      - "A high-output frame on tape.\nThe score kept climbing."
+      - |
+        A burst of scoring across multiple matches.
+        The tape room filed it under: “unstoppable pace.”
+      - |
+        The points kept coming.
+        Like the opponent couldn’t find a brake.
+      - |
+        A stretch of production.
+        The kind that turns games into sprints.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Scoreboard Surge"
+        - "Points on Repeat"
+        - "Unstoppable Pace"
       bodies:
-        - "{tape_excerpt}\n{badge_name} lights up the reel."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          The match couldn’t slow you down.
+          It could only end.
+        - |
+          Some players win quietly.
+          You scored loudly.
+    foreshadow:
+      titles:
+        - "The Pace is Rising"
+      bodies:
+        - |
+          The recent tape looks faster than usual.
+          The archive likes where this goes.
+
   battle_tested:
     name: "Battle Tested"
-    lore: "The tape shows hard frames and steady answers."
-    hint: "The reel holds pressure and poise."
+    lore: "The easy matches don’t make legends. The deep water does."
+    hint: "The average opponent is climbing."
     tape_excerpts:
-      - "Hard frames, steady answers.\nThe tape keeps the grit."
-      - "The archive captured the grind.\nThe reel stayed composed."
+      - |
+        Night after night against strong rooms.
+        You stayed in it.
+        That’s battle-tested.
+      - |
+        The tape room flags your schedule:
+        heavy opponents, repeated pressure.
+      - |
+        You didn’t pad stats.
+        You played uphill.
+        The archive respects that.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Tested on Tape"
+        - "Deep Water"
+        - "Uphill Schedule"
       bodies:
-        - "{tape_excerpt}\n{badge_name} earns its place."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
+        - |
+          You’ve been living in tough matchups.
+          That changes a player.
+        - |
+          Not everyone chooses hard rooms.
+          You keep finding them.
+    foreshadow:
+      titles:
+        - "The Rooms Are Getting Stronger"
+      bodies:
+        - |
+          The opponent level keeps rising.
+          That’s where real stories get made.
+
   consistency:
     name: "Consistency"
-    lore: "The reel keeps the same steady rhythm."
-    hint: "The tape keeps finding the same pulse."
+    lore: "Volatility gets attention. Consistency wins seasons."
+    hint: "The tape doesn’t show swings. It shows steadiness."
     tape_excerpts:
-      - "The reel kept the same steady rhythm.\nThe archive knows the pace."
-      - "No wild swings on tape.\nThe rhythm stayed even."
+      - |
+        The numbers didn’t spike.
+        They didn’t crash.
+        They just held.
+      - |
+        The tape room notes the same level repeating.
+        That’s not boring—that’s dangerous.
+      - |
+        A steady hand over many matches.
+        The archive stamps it quietly.
     highlight:
       titles:
-        - "Highlight \u2014 {badge_name}"
-        - "Highlight \u2014 Steady Rhythm"
+        - "Steady"
+        - "Repeatable"
       bodies:
-        - "{tape_excerpt}\n{badge_name} stays even."
-        - "{tape_excerpt}\nThe archive logs {badge_name}."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
-  signature_win:
-    name: "Signature Win"
-    lore: ""
-    hint: ""
-    tape_excerpts:
+        - |
+          The league can’t wait you out if you stay the same threat.
+        - |
+          Consistency doesn’t trend.
+          It accumulates.
+    foreshadow:
+      titles:
+        - "The Level is Holding"
+      bodies:
+        - |
+          Your recent tape looks stable.
+          If it stays that way, the archive will stamp it.
 
-    highlight:
-      titles:
-        - "Highlight \u2014 Signature Win"
-        - "Highlight \u2014 A Signature Frame"
-      bodies:
-        - "The tape shows a win nobody penciled in.\nThe league is starting to notice the pattern."
-        - "A signature frame made the reel.\nThe archive keeps the surprise."
-    rarity: "common"
-    tier: null
-    icon_key: null
-    scope: "overall"
