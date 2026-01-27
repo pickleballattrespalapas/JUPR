@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
-from typing import Any, Iterable
+import os
+from typing import Any
 from uuid import uuid4
 
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
+from jupr_app.domain.gamification.copy_pack import (
+    get_badge_copy,
+    load_copy_pack,
+    pick_variant,
+    render_template,
+)
 from jupr_app.domain.gamification.story_engine import ensure_player_stories
 from jupr_app.domain.match_filters import apply_match_filters, normalize_player_id, normalize_score
 
@@ -57,6 +64,7 @@ def compute_badge_awards(
 
     awards: list[BadgeAward] = []
     now = datetime.now(timezone.utc)
+    badge_name_map = {b.badge_id: b.name for b in BADGE_DEFINITIONS}
 
     def add_badge(
         player_id: int,
@@ -72,6 +80,19 @@ def compute_badge_awards(
         if key in existing:
             return
         existing.add(key)
+        badge_name = badge_name_map.get(badge_id, badge_id)
+        data = dict(value_json or {})
+        data.setdefault("badge_name", badge_name)
+        data.setdefault("badge_id", badge_id)
+        seed = f"{player_id}:{badge_id}:{context_id}"
+        if not data.get("tape_excerpt"):
+            excerpt = _build_tape_excerpt(badge_id, seed, data)
+            if excerpt:
+                data["tape_excerpt"] = excerpt
+        if not data.get("tape_title"):
+            title = _build_tape_title(badge_id, seed, data)
+            if title:
+                data["tape_title"] = title
         awards.append(
             BadgeAward(
                 player_id=int(player_id),
@@ -80,7 +101,7 @@ def compute_badge_awards(
                 context_id=context_id,
                 match_id=match_id,
                 value_num=value_num,
-                value_json=value_json,
+                value_json=data,
             )
         )
 
@@ -216,6 +237,16 @@ def build_player_match_facts(ctx) -> pd.DataFrame:
 
 
 def _seed_badges(supabase) -> None:
+    force_backfill = str(os.getenv("FORCE_COPY_BACKFILL", "") or "").lower() in {"1", "true", "yes"}
+    copy_pack = {b.badge_id: get_badge_copy(b.badge_id) for b in BADGE_DEFINITIONS}
+    existing_by_id = {}
+    if not force_backfill:
+        try:
+            resp = supabase.table("badges").select("badge_id,lore,hint").execute()
+            existing_by_id = {str(row.get("badge_id")): row for row in resp.data or []}
+        except Exception:
+            logger.exception("Failed to fetch badges for copy backfill")
+
     payload = [
         {
             "badge_id": b.badge_id,
@@ -227,14 +258,33 @@ def _seed_badges(supabase) -> None:
             "rarity": b.rarity,
             "tier": b.tier,
             "icon_key": b.icon_key,
-            "lore": b.lore,
-            "hint": b.hint,
+            "lore": _resolve_copy_text(
+                b.badge_id,
+                "lore",
+                copy_pack.get(b.badge_id, {}),
+                b.lore,
+                existing_by_id.get(b.badge_id, {}),
+                force_backfill,
+            ),
+            "hint": _resolve_copy_text(
+                b.badge_id,
+                "hint",
+                copy_pack.get(b.badge_id, {}),
+                b.hint,
+                existing_by_id.get(b.badge_id, {}),
+                force_backfill,
+            ),
             "scope": b.scope,
         }
         for b in BADGE_DEFINITIONS
     ]
     try:
         supabase.table("badges").upsert(payload, on_conflict="badge_id").execute()
+        _backfill_copy_pack_badges(
+            supabase,
+            force_backfill=force_backfill,
+            existing_by_id=existing_by_id,
+        )
     except Exception:
         logger.exception("Failed to seed badges table")
 
@@ -294,20 +344,13 @@ def _award_first_win(facts: pd.DataFrame, add_badge, now: datetime) -> None:
         return
     first = wins.sort_values(["date_dt", "match_id"]).groupby("player_id", as_index=False).first()
     for row in first.itertuples(index=False):
-        tape = _tape_excerpt(
-            "first_win",
-            lines=[
-                "The first win hit the archive.",
-                "The film starts with a clean finish.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "first_win",
             context_type="overall",
             context_id="first_win",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id)},
         )
 
 
@@ -324,19 +367,12 @@ def _award_weekly_regular(facts: pd.DataFrame, add_badge) -> None:
         streak = _max_consecutive_weeks(weeks)
         if streak >= 4:
             year = weeks[-1].split("-W")[0]
-            tape = _tape_excerpt(
-                "weekly_regular",
-                lines=[
-                    "Four straight weeks on tape.",
-                    "The schedule stopped calling it luck.",
-                ],
-            )
             add_badge(
                 int(row.player_id),
                 "weekly_regular",
                 context_type="league",
                 context_id=f"{row.league}:{year}",
-                value_json={"tape_excerpt": tape},
+                value_json={"league": row.league, "year": year},
             )
 
 
@@ -348,19 +384,12 @@ def _award_iron_week(facts: pd.DataFrame, add_badge) -> None:
     )
     for row in counts.itertuples(index=False):
         if int(row.matches) >= 5:
-            tape = _tape_excerpt(
-                "iron_week",
-                lines=[
-                    "The week ran long and the tape kept rolling.",
-                    "Every day looked like game day.",
-                ],
-            )
             add_badge(
                 int(row.player_id),
                 "iron_week",
                 context_type="week",
                 context_id=f"{row.league}:{row.week_key}",
-                value_json={"tape_excerpt": tape},
+                value_json={"league": row.league, "week": row.week_key, "matches": int(row.matches)},
             )
 
 
@@ -372,19 +401,12 @@ def _award_marathon_month(facts: pd.DataFrame, add_badge) -> None:
     )
     for row in counts.itertuples(index=False):
         if int(row.matches) >= 40:
-            tape = _tape_excerpt(
-                "marathon_month",
-                lines=[
-                    "The month never slowed down.",
-                    "It kept adding chapters to the reel.",
-                ],
-            )
             add_badge(
                 int(row.player_id),
                 "marathon_month",
                 context_type="month",
                 context_id=f"{row.league}:{row.month_key}",
-                value_json={"tape_excerpt": tape},
+                value_json={"league": row.league, "month": row.month_key, "matches": int(row.matches)},
             )
 
 
@@ -403,19 +425,12 @@ def _award_level_up(ctx, add_badge) -> None:
             continue
         for milestone in milestones:
             if float(row.rating) >= milestone:
-                tape = _tape_excerpt(
-                    "level_up",
-                    lines=[
-                        "A new rung lights up on the ladder.",
-                        "The league keeps a close watch now.",
-                    ],
-                )
                 add_badge(
                     int(row.player_id),
                     "level_up",
                     context_type="league",
                     context_id=f"{row.league_name}:milestone:{milestone}",
-                    value_json={"tape_excerpt": tape, "milestone": milestone},
+                    value_json={"league": row.league_name, "milestone": milestone},
                 )
 
 
@@ -427,19 +442,12 @@ def _award_rocket_start(facts: pd.DataFrame, add_badge) -> None:
             continue
         wins = int(head["win"].sum())
         if wins >= 4:
-            tape = _tape_excerpt(
-                "rocket_start",
-                lines=[
-                    "The opening stretch shook the standings.",
-                    "The room leaned in early.",
-                ],
-            )
             add_badge(
                 int(player_id),
                 "rocket_start",
                 context_type="league",
                 context_id=f"{league}:rocket_start",
-                value_json={"tape_excerpt": tape},
+                value_json={"league": league},
             )
 
 
@@ -458,20 +466,13 @@ def _award_most_improved(facts: pd.DataFrame, add_badge) -> None:
         top = group.iloc[0]
         if pd.isna(top["elo_delta_signed"]) or float(top["elo_delta_signed"]) <= 0:
             continue
-        tape = _tape_excerpt(
-            "most_improved_monthly",
-            lines=[
-                "The month tilted in one direction.",
-                "The climb made the reel.",
-            ],
-        )
         add_badge(
             int(top["player_id"]),
             "most_improved_monthly",
             context_type="month",
             context_id=f"{league}:month:{month_key}",
             value_num=float(top["elo_delta_signed"]),
-            value_json={"tape_excerpt": tape},
+            value_json={"league": league, "month": month_key},
         )
 
 
@@ -499,20 +500,13 @@ def _award_mountain_climber(ctx, add_badge) -> None:
             rank_delta = int(row["start_rank"] - row["current_rank"])
             for tier in (5, 10, 20):
                 if rank_delta >= tier:
-                    tape = _tape_excerpt(
-                        "mountain_climber",
-                        lines=[
-                            "Ranks flipped on the way up.",
-                            "The climb left markers behind.",
-                        ],
-                    )
                     add_badge(
                         int(row["player_id"]),
                         "mountain_climber",
                         context_type="league",
                         context_id=f"{league_name}:tier:{tier}",
                         value_num=float(rank_delta),
-                        value_json={"tape_excerpt": tape, "tier": tier},
+                        value_json={"league": league_name, "tier": tier, "rank_delta": rank_delta},
                     )
 
 
@@ -525,13 +519,6 @@ def _award_hot_streaks(facts: pd.DataFrame, add_badge) -> None:
                 streak += 1
                 for tier in (5, 10, 20):
                     if streak == tier:
-                        tape = _tape_excerpt(
-                            "hot_streak",
-                            lines=[
-                                f"{tier} straight wins on the reel.",
-                                "The heat stayed on.",
-                            ],
-                        )
                         add_badge(
                             int(player_id),
                             "hot_streak",
@@ -539,7 +526,7 @@ def _award_hot_streaks(facts: pd.DataFrame, add_badge) -> None:
                             context_id=f"{league}:streak:{tier}:{row.match_id}",
                             match_id=str(row.match_id),
                             value_num=float(streak),
-                            value_json={"tape_excerpt": tape, "tier": tier},
+                            value_json={"league": league, "streak": streak, "tier": tier},
                         )
             else:
                 streak = 0
@@ -551,20 +538,13 @@ def _award_bounce_back(facts: pd.DataFrame, add_badge) -> None:
         prev_win = None
         for row in group.itertuples(index=False):
             if prev_win is False and row.win:
-                tape = _tape_excerpt(
-                    "bounce_back",
-                    lines=[
-                        "A stumble, then a reply.",
-                        "The next frame reset the tone.",
-                    ],
-                )
                 add_badge(
                     int(player_id),
                     "bounce_back",
                     context_type="match",
                     context_id=f"{row.match_id}:bounce_back",
                     match_id=str(row.match_id),
-                    value_json={"tape_excerpt": tape},
+                    value_json={"match_id": str(row.match_id)},
                 )
             prev_win = bool(row.win)
 
@@ -576,60 +556,39 @@ def _award_ice_in_veins(facts: pd.DataFrame, add_badge) -> None:
         return
     first = clutch.sort_values(["date_dt", "match_id"]).groupby("player_id", as_index=False).first()
     for row in first.itertuples(index=False):
-        tape = _tape_excerpt(
-            "ice_in_veins",
-            lines=[
-                "The margin tightened, the answer didn’t.",
-                "The tape stays calm under pressure.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "ice_in_veins",
             context_type="overall",
             context_id="ice_in_veins",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id)},
         )
 
 
 def _award_pickle_perfection(facts: pd.DataFrame, add_badge) -> None:
     shutouts = facts[(facts["win"] == True) & (facts["points_against"] == 0)]
     for row in shutouts.itertuples(index=False):
-        tape = _tape_excerpt(
-            "pickle_perfection",
-            lines=[
-                "The board stayed blank on the other side.",
-                "A quiet kind of dominance.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "pickle_perfection",
             context_type="match",
             context_id=f"{row.match_id}:pickle_perfection",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id), "score_against": int(row.points_against)},
         )
 
 
 def _award_blowout_artist(facts: pd.DataFrame, add_badge) -> None:
     blowouts = facts[(facts["win"] == True) & (facts["margin"] >= 8)]
     for row in blowouts.itertuples(index=False):
-        tape = _tape_excerpt(
-            "blowout_artist",
-            lines=[
-                "The gap opened and never closed.",
-                "The tape shows the distance.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "blowout_artist",
             context_type="match",
             context_id=f"{row.match_id}:blowout",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id), "margin": int(row.margin)},
         )
 
 
@@ -641,20 +600,13 @@ def _award_untouchable(facts: pd.DataFrame, add_badge) -> None:
             if row.win:
                 streak += 1
                 if streak >= 8:
-                    tape = _tape_excerpt(
-                        "untouchable",
-                        lines=[
-                            f"{streak} straight frames without a crack.",
-                            "The run kept the cameras up.",
-                        ],
-                    )
                     add_badge(
                         int(player_id),
                         "untouchable",
                         context_type="overall",
                         context_id=f"window_end:{row.match_id}:streak:{streak}",
                         match_id=str(row.match_id),
-                        value_json={"tape_excerpt": tape, "streak": streak},
+                        value_json={"streak": streak, "match_id": str(row.match_id)},
                     )
             else:
                 streak = 0
@@ -666,39 +618,25 @@ def _award_clean_sweep_week(facts: pd.DataFrame, add_badge) -> None:
         if len(group) < 3:
             continue
         if group["win"].all():
-            tape = _tape_excerpt(
-                "clean_sweep_week",
-                lines=[
-                    "Every clip that week ended the same way.",
-                    "No counterpunches on record.",
-                ],
-            )
             add_badge(
                 int(player_id),
                 "clean_sweep_week",
                 context_type="week",
                 context_id=f"{league}:{week_key}",
-                value_json={"tape_excerpt": tape},
+                value_json={"league": league, "week": week_key},
             )
 
 
 def _award_high_roller(facts: pd.DataFrame, add_badge) -> None:
     high = facts[(facts["win"] == True) & (facts["points_for"] >= 15) & (facts["margin"] >= 6)]
     for row in high.itertuples(index=False):
-        tape = _tape_excerpt(
-            "high_roller",
-            lines=[
-                "The tempo stayed high and the points kept coming.",
-                "The reel moved fast.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "high_roller",
             context_type="match",
             context_id=f"{row.match_id}:high_roller",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id), "points_for": int(row.points_for)},
         )
 
 
@@ -706,34 +644,20 @@ def _award_social_graph(facts: pd.DataFrame, add_badge) -> None:
     partners = facts.dropna(subset=["partner_id"]).groupby("player_id")["partner_id"].nunique()
     for player_id, count in partners.items():
         if count >= 20:
-            tape = _tape_excerpt(
-                "social_butterfly",
-                lines=[
-                    "The partner list turned into a montage.",
-                    "So many combinations on tape.",
-                ],
-            )
             add_badge(
                 int(player_id),
                 "social_butterfly",
                 context_type="overall",
                 context_id="milestone:20_partners",
-                value_json={"tape_excerpt": tape, "partners": int(count)},
+                value_json={"partners": int(count)},
             )
         if count >= 50:
-            tape = _tape_excerpt(
-                "network_builder",
-                lines=[
-                    "The network stretched across the club.",
-                    "So many reels, so many names.",
-                ],
-            )
             add_badge(
                 int(player_id),
                 "network_builder",
                 context_type="overall",
                 context_id="milestone:50_partners",
-                value_json={"tape_excerpt": tape, "partners": int(count)},
+                value_json={"partners": int(count)},
             )
 
 
@@ -742,19 +666,12 @@ def _award_draft_master(facts: pd.DataFrame, add_badge) -> None:
     grouped = wins.groupby(["player_id", "month_key"])["partner_id"].nunique().reset_index()
     for row in grouped.itertuples(index=False):
         if int(row.partner_id) >= 5:
-            tape = _tape_excerpt(
-                "draft_master",
-                lines=[
-                    "Different jerseys, same ending.",
-                    "The month kept changing partners.",
-                ],
-            )
             add_badge(
                 int(row.player_id),
                 "draft_master",
                 context_type="month",
                 context_id=f"{row.month_key}",
-                value_json={"tape_excerpt": tape, "partners": int(row.partner_id)},
+                value_json={"month": row.month_key, "partners": int(row.partner_id)},
             )
 
 
@@ -763,19 +680,12 @@ def _award_swiss_army_knife(facts: pd.DataFrame, add_badge) -> None:
     grouped = wins.groupby(["player_id", "season_key"])["league"].nunique().reset_index()
     for row in grouped.itertuples(index=False):
         if int(row.league) >= 3:
-            tape = _tape_excerpt(
-                "swiss_army_knife",
-                lines=[
-                    "Multiple stages, one steady edge.",
-                    "The season shows the range.",
-                ],
-            )
             add_badge(
                 int(row.player_id),
                 "swiss_army_knife",
                 context_type="season",
                 context_id=str(row.season_key),
-                value_json={"tape_excerpt": tape, "leagues": int(row.league)},
+                value_json={"season": str(row.season_key), "leagues": int(row.league)},
             )
 
 
@@ -785,40 +695,26 @@ def _award_giant_slayer(facts: pd.DataFrame, add_badge) -> None:
     for row in wins.itertuples(index=False):
         for tier in tiers:
             if float(row.opp_max_rating) >= tier:
-                tape = _tape_excerpt(
-                    "giant_slayer",
-                    lines=[
-                        "A taller shadow fell in this frame.",
-                        "The tape keeps the proof.",
-                    ],
-                )
                 add_badge(
                     int(row.player_id),
                     "giant_slayer",
                     context_type="match",
                     context_id=f"{row.match_id}:tier:{tier}",
                     match_id=str(row.match_id),
-                    value_json={"tape_excerpt": tape, "tier": tier},
+                    value_json={"match_id": str(row.match_id), "tier": tier},
                 )
 
 
 def _award_david_vs_goliath(facts: pd.DataFrame, add_badge) -> None:
     wins = facts[(facts["win"] == True) & (facts["expected_win_prob"] <= 0.25)]
     for row in wins.itertuples(index=False):
-        tape = _tape_excerpt(
-            "david_vs_goliath",
-            lines=[
-                "The mismatch didn’t survive the tape.",
-                "A different ending made the reel.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "david_vs_goliath",
             context_type="match",
             context_id=f"{row.match_id}:david_vs_goliath",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id), "expected_prob": float(row.expected_win_prob)},
         )
 
 
@@ -834,13 +730,6 @@ def _award_upset_champion(facts: pd.DataFrame, add_badge) -> None:
     match_stats = match_stats.sort_values(["league", "month_key", "expected_win_prob"])
     for (league, month_key), group in match_stats.groupby(["league", "month_key"]):
         top = group.iloc[0]
-        tape = _tape_excerpt(
-            "upset_champion",
-            lines=[
-                "The month’s loudest swing stayed on tape.",
-                "The record keeps the surprise.",
-            ],
-        )
         for pid in top.player_ids:
             add_badge(
                 int(pid),
@@ -849,27 +738,24 @@ def _award_upset_champion(facts: pd.DataFrame, add_badge) -> None:
                 context_id=f"{league}:month:{month_key}:match:{top.match_id}",
                 match_id=str(top.match_id),
                 value_num=float(top.expected_win_prob),
-                value_json={"tape_excerpt": tape, "league": league},
+                value_json={
+                    "league": league,
+                    "month": month_key,
+                    "expected_prob": float(top.expected_win_prob),
+                },
             )
 
 
 def _award_legendary_upset(facts: pd.DataFrame, add_badge) -> None:
     wins = facts[(facts["win"] == True) & (facts["expected_win_prob"] <= 0.15)]
     for row in wins.itertuples(index=False):
-        tape = _tape_excerpt(
-            "legendary_upset",
-            lines=[
-                "The tape caught a moment nobody predicted.",
-                "The room won’t forget this frame.",
-            ],
-        )
         add_badge(
             int(row.player_id),
             "legendary_upset",
             context_type="match",
             context_id=f"{row.match_id}:legendary_upset",
             match_id=str(row.match_id),
-            value_json={"tape_excerpt": tape},
+            value_json={"match_id": str(row.match_id), "expected_prob": float(row.expected_win_prob)},
         )
 
 
@@ -897,19 +783,12 @@ def _award_rivalries(facts: pd.DataFrame, add_badge) -> None:
         win_pct = wins / float(games) if games else 0.0
         if games >= 6 and win_pct <= 0.4:
             nemesis_map.add((player_id, opponent_id))
-            tape = _tape_excerpt(
-                "nemesis_found",
-                lines=[
-                    "A familiar face keeps appearing across the net.",
-                    "The rivalry has a name now.",
-                ],
-            )
             add_badge(
                 int(player_id),
                 "nemesis_found",
                 context_type="opponent",
                 context_id=f"opponent:{opponent_id}",
-                value_json={"tape_excerpt": tape, "opponent_id": opponent_id},
+                value_json={"opponent_id": opponent_id, "games": games},
             )
 
         streak = 0
@@ -920,38 +799,24 @@ def _award_rivalries(facts: pd.DataFrame, add_badge) -> None:
                 streak += 1
                 for tier in (3,):
                     if streak == tier:
-                        tape = _tape_excerpt(
-                            "rivalry_streak",
-                            lines=[
-                                "The rivalry reel leaned your way.",
-                                "The streak kept the pressure up.",
-                            ],
-                        )
                         add_badge(
                             int(player_id),
                             "rivalry_streak",
                             context_type="opponent",
                             context_id=f"{opponent_id}:streak:{row.match_id}",
                             match_id=str(row.match_id),
-                            value_json={"tape_excerpt": tape},
+                            value_json={"opponent_id": opponent_id, "streak": streak},
                         )
             else:
                 streak = 0
             if prev_losses > prev_wins and row.win and prev_wins + 1 == prev_losses:
-                tape = _tape_excerpt(
-                    "settled_the_score",
-                    lines=[
-                        "The ledger finally balanced.",
-                        "The tape called it even.",
-                    ],
-                )
                 add_badge(
                     int(player_id),
                     "settled_the_score",
                     context_type="opponent",
                     context_id=f"{opponent_id}:settled:{row.match_id}",
                     match_id=str(row.match_id),
-                    value_json={"tape_excerpt": tape},
+                    value_json={"opponent_id": opponent_id},
                 )
             prev_wins += 1 if row.win else 0
             prev_losses += 0 if row.win else 1
@@ -959,20 +824,13 @@ def _award_rivalries(facts: pd.DataFrame, add_badge) -> None:
     if nemesis_map:
         for row in opp_df.itertuples(index=False):
             if (int(row.player_id), int(row.opponent_id)) in nemesis_map and row.win:
-                tape = _tape_excerpt(
-                    "rivalry_win",
-                    lines=[
-                        "The rivalry leaned your way on this frame.",
-                        "The tape caught the shift.",
-                    ],
-                )
                 add_badge(
                     int(row.player_id),
                     "rivalry_win",
                     context_type="match",
                     context_id=f"{row.match_id}:rivalry_win",
                     match_id=str(row.match_id),
-                    value_json={"tape_excerpt": tape},
+                    value_json={"opponent_id": int(row.opponent_id)},
                 )
 
 
@@ -984,19 +842,12 @@ def _award_steady_hand(facts: pd.DataFrame, add_badge) -> None:
             continue
         win_pct = float(group["win"].mean())
         if win_pct >= 0.6:
-            tape = _tape_excerpt(
-                "steady_hand",
-                lines=[
-                    "The season stayed steady on the reel.",
-                    "No wild swings, just control.",
-                ],
-            )
             add_badge(
                 int(player_id),
                 "steady_hand",
                 context_type="season",
                 context_id=str(season_key),
-                value_json={"tape_excerpt": tape, "win_pct": win_pct},
+                value_json={"season": str(season_key), "win_pct": win_pct},
             )
 
 
@@ -1010,26 +861,79 @@ def _award_hall_of_fame_night(facts: pd.DataFrame, add_badge) -> None:
         threshold = values.quantile(0.95)
         for row in group.itertuples(index=False):
             if row.win and row.abs_elo_delta is not None and float(row.abs_elo_delta) >= float(threshold):
-                tape = _tape_excerpt(
-                    "hall_of_fame_night",
-                    lines=[
-                        "A night that pulled the cameras closer.",
-                        "The league will replay this one.",
-                    ],
-                )
                 add_badge(
                     int(row.player_id),
                     "hall_of_fame_night",
                     context_type="match",
                     context_id=f"{row.match_id}:hall_of_fame",
                     match_id=str(row.match_id),
-                    value_json={"tape_excerpt": tape},
+                    value_json={"match_id": str(row.match_id), "elo_delta": float(row.abs_elo_delta)},
                 )
 
+def _build_tape_excerpt(badge_id: str, seed: str, data: dict[str, Any]) -> str:
+    copy = get_badge_copy(badge_id)
+    excerpts = copy.get("tape_excerpts", []) if isinstance(copy, dict) else []
+    template = pick_variant(excerpts, seed)
+    rendered = render_template(template, data)
+    lines = [line.strip() for line in rendered.splitlines() if line.strip()]
+    return "\n".join(lines[:4])
 
-def _tape_excerpt(badge_id: str, lines: Iterable[str]) -> str:
-    excerpt_lines = [line.strip() for line in lines if line and line.strip()]
-    return "\n".join(excerpt_lines[:4])
+
+def _build_tape_title(badge_id: str, seed: str, data: dict[str, Any]) -> str:
+    copy = get_badge_copy(badge_id)
+    highlight = copy.get("highlight", {}) if isinstance(copy, dict) else {}
+    titles = highlight.get("titles", []) if isinstance(highlight, dict) else []
+    template = pick_variant(titles, f"{seed}:title")
+    rendered = render_template(template, data)
+    return rendered or str(data.get("badge_name") or badge_id)
+
+
+def _resolve_copy_text(
+    badge_id: str,
+    field: str,
+    copy_pack: dict[str, Any],
+    fallback: str,
+    existing: dict[str, Any],
+    force_backfill: bool,
+) -> str:
+    existing_text = str(existing.get(field) or "").strip()
+    if existing_text and not force_backfill:
+        return existing_text
+    candidate = str(copy_pack.get(field) or "").strip()
+    if candidate:
+        return candidate
+    return fallback
+
+
+def _backfill_copy_pack_badges(
+    supabase,
+    *,
+    force_backfill: bool,
+    existing_by_id: dict[str, Any],
+) -> None:
+    pack = load_copy_pack()
+    badges = pack.get("badges", {}) if isinstance(pack, dict) else {}
+    if not isinstance(badges, dict):
+        return
+    defined_ids = {b.badge_id for b in BADGE_DEFINITIONS}
+    for badge_id, entry in badges.items():
+        if badge_id in defined_ids:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        existing = existing_by_id.get(str(badge_id), {})
+        if not existing and not force_backfill:
+            continue
+        lore = _resolve_copy_text(badge_id, "lore", entry, "", existing, force_backfill)
+        hint = _resolve_copy_text(badge_id, "hint", entry, "", existing, force_backfill)
+        if not lore and not hint:
+            continue
+        if not force_backfill and existing and (existing.get("lore") or existing.get("hint")):
+            continue
+        try:
+            supabase.table("badges").update({"lore": lore, "hint": hint}).eq("badge_id", badge_id).execute()
+        except Exception:
+            logger.exception("Failed to backfill badge copy", extra={"badge_id": badge_id})
 
 
 def _avg(values: Iterable[float | None]) -> float | None:

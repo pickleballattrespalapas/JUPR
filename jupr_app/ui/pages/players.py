@@ -488,6 +488,9 @@ def render(ctx):
                     stack_text = f" x{stack}" if stack and stack > 1 else ""
                     st.markdown(f"**{icon} {badge.get('name', 'Badge')}{stack_text}**")
                     st.caption(f"Prestige {int(badge.get('prestige', 0) or 0)}")
+                    lore = html.escape(str(badge.get("lore") or ""))
+                    if lore:
+                        st.caption(lore)
                     excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
                     if excerpt:
                         st.caption(excerpt)
@@ -511,6 +514,9 @@ def render(ctx):
                         stack = badge.get("stack_count", 1)
                         stack_text = f" x{stack}" if stack and stack > 1 else ""
                         st.markdown(f"{icon} {badge.get('name', 'Badge')}{stack_text}")
+                        lore = html.escape(str(badge.get("lore") or ""))
+                        if lore:
+                            st.caption(lore)
                         excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
                         if excerpt:
                             st.caption(excerpt)
@@ -524,6 +530,9 @@ def render(ctx):
                 with missing_cols[idx % len(missing_cols)]:
                     icon = badge_icon(badge.get("badge_id"), badge.get("category"))
                     st.markdown(f"**{icon} {badge.get('name', 'Badge')}**")
+                    lore = html.escape(str(badge.get("lore") or ""))
+                    if lore:
+                        st.caption(lore)
                     hint = html.escape(str(badge.get("hint") or "A reel still missing."))
                     st.caption(hint)
 

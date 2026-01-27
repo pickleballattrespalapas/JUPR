@@ -62,6 +62,7 @@ def build_gamification_summary(
         "tier": None,
         "scope": None,
         "category": "",
+        "is_stackable": False,
     }
     for col, default in optional_columns.items():
         if col not in badge_defs.columns:
@@ -126,6 +127,7 @@ def build_gamification_summary(
                     "rarity": _resolve_rarity(first.get("rarity"), first.get("prestige", 0)),
                     "prestige": int(first.get("prestige", 0) or 0),
                     "lore": first.get("lore", ""),
+                    "is_stackable": bool(first.get("is_stackable", False)),
                     "icon_key": first.get("icon_key", None),
                     "tier": first.get("tier", None),
                     "scope": first.get("scope", None),
@@ -150,6 +152,7 @@ def build_gamification_summary(
                 "prestige": int(r(row, "prestige", 0) or 0),
                 "lore": r(row, "lore", ""),
                 "hint": r(row, "hint", ""),
+                "is_stackable": bool(r(row, "is_stackable", False)),
                 "icon_key": r(row, "icon_key", None),
                 "tier": r(row, "tier", None),
                 "scope": r(row, "scope", None),
