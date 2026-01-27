@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pandas as pd
+
+
+def build_gamification_summary(
+    player_id: int,
+    df_badges: pd.DataFrame,
+    df_player_badges: pd.DataFrame,
+) -> dict[str, Any]:
+    badge_defs = df_badges.copy() if df_badges is not None else pd.DataFrame()
+    pb = df_player_badges.copy() if df_player_badges is not None else pd.DataFrame()
+
+    badge_defs["badge_id"] = badge_defs.get("badge_id", "").astype(str)
+    pb = pb[pb.get("player_id") == int(player_id)].copy() if not pb.empty else pd.DataFrame()
+    if pb.empty or badge_defs.empty:
+        unlocked = []
+    else:
+        merged = pb.merge(badge_defs, on="badge_id", how="left")
+        merged["earned_at_dt"] = pd.to_datetime(merged.get("earned_at", None), utc=True, errors="coerce")
+        merged["prestige"] = pd.to_numeric(merged.get("prestige", 0), errors="coerce").fillna(0)
+
+        unlocked = []
+        for badge_id, group in merged.groupby("badge_id"):
+            group_sorted = group.sort_values("earned_at_dt")
+            first = group_sorted.iloc[0]
+            last = group_sorted.iloc[-1]
+            latest_excerpt = ""
+            try:
+                value_json = last.get("value_json") or {}
+                latest_excerpt = str(value_json.get("tape_excerpt") or "")
+            except Exception:
+                latest_excerpt = ""
+
+            unlocked.append(
+                {
+                    "badge_id": badge_id,
+                    "name": first.get("name"),
+                    "category": first.get("category"),
+                    "rarity": first.get("rarity"),
+                    "prestige": int(first.get("prestige", 0) or 0),
+                    "lore": first.get("lore"),
+                    "icon_key": first.get("icon_key"),
+                    "tier": first.get("tier"),
+                    "scope": first.get("scope"),
+                    "stack_count": int(len(group_sorted)),
+                    "first_earned_at": first.get("earned_at"),
+                    "last_earned_at": last.get("earned_at"),
+                    "latest_tape_excerpt": latest_excerpt,
+                }
+            )
+
+    unlocked_ids = {u["badge_id"] for u in unlocked}
+    locked = []
+    for row in badge_defs.itertuples(index=False):
+        if str(row.badge_id) in unlocked_ids:
+            continue
+        locked.append(
+            {
+                "badge_id": row.badge_id,
+                "name": row.name,
+                "category": row.category,
+                "rarity": row.rarity,
+                "prestige": int(getattr(row, "prestige", 0) or 0),
+                "lore": row.lore,
+                "hint": row.hint,
+                "icon_key": row.icon_key,
+                "tier": row.tier,
+                "scope": row.scope,
+            }
+        )
+
+    prestige_total = int(sum(u.get("prestige", 0) * u.get("stack_count", 1) for u in unlocked))
+    collected_by_category: dict[str, int] = {}
+    for badge in unlocked:
+        category = badge.get("category") or "Other"
+        collected_by_category[category] = collected_by_category.get(category, 0) + badge.get("stack_count", 1)
+
+    summary = {
+        "prestige_total": prestige_total,
+        "unlocked_badges": unlocked,
+        "locked_badges": locked,
+        "collection_stats": {
+            "collected_count": len(unlocked),
+            "total_count": int(len(badge_defs)),
+            "collected_by_category": collected_by_category,
+        },
+    }
+    return summary
