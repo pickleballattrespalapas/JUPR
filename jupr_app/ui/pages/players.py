@@ -382,6 +382,8 @@ def render(ctx):
     pid = int(pick_id)
     row = players_df[players_df["id"] == pid].iloc[0]
     pick_name = str(row["name"])
+    _supabase = ctx.supabase
+    club_id = ctx.club_id
 
     try:
         current_overall_elo = float(row.get("rating", 1200.0) or 1200.0)
@@ -633,8 +635,6 @@ def render(ctx):
 
     st.divider()
 
-    _supabase = ctx.supabase
-    club_id = ctx.club_id
     matches = fetch_player_matches(_supabase, club_id, pid, limit=600)
 
     if matches.empty:
