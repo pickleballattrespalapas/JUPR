@@ -43,5 +43,5 @@ def test_build_badge_story_no_badges_active():
     story = build_badge_story(row, [])
     assert (
         story
-        == "Active this season with 12 games logged—badges will start appearing as milestones unlock."
+        == "Active this season with 12 games logged—badges will start appearing as the reel fills."
     )

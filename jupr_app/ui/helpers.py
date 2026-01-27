@@ -113,7 +113,7 @@ def build_badge_story(player_row: dict | pd.Series, earned_badges: list[dict]) -
             return "New to the leaderboard—log a few matches to start earning badges."
         return (
             f"Active this season with {games} games logged—"
-            "badges will start appearing as milestones unlock."
+            "badges will start appearing as the reel fills."
         )
 
     badge_sentence = _build_badge_sentence(name, headline_badges)

@@ -255,9 +255,9 @@ def _seed_badges(supabase) -> None:
             "category": b.category,
             "is_stackable": b.is_stackable,
             "is_active": b.is_active,
-            "rarity": b.rarity,
-            "tier": b.tier,
-            "icon_key": b.icon_key,
+            "rarity": copy_pack.get(b.badge_id, {}).get("rarity", b.rarity),
+            "tier": copy_pack.get(b.badge_id, {}).get("tier", b.tier),
+            "icon_key": copy_pack.get(b.badge_id, {}).get("icon_key", b.icon_key),
             "lore": _resolve_copy_text(
                 b.badge_id,
                 "lore",
@@ -274,7 +274,7 @@ def _seed_badges(supabase) -> None:
                 existing_by_id.get(b.badge_id, {}),
                 force_backfill,
             ),
-            "scope": b.scope,
+            "scope": copy_pack.get(b.badge_id, {}).get("scope", b.scope),
         }
         for b in BADGE_DEFINITIONS
     ]

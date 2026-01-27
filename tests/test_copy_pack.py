@@ -1,4 +1,10 @@
-from jupr_app.domain.gamification.copy_pack import get_badge_copy, load_copy_pack, pick_variant, render_template
+from jupr_app.domain.gamification.copy_pack import (
+    assert_no_banned_words,
+    get_badge_copy,
+    load_copy_pack,
+    pick_variant,
+    render_template,
+)
 
 
 def test_copy_pack_has_required_badges():
@@ -70,8 +76,9 @@ def test_render_template_removes_missing_placeholders():
 
 
 def test_copy_pack_player_facing_words_clean():
-    forbidden = ["requirement", "criteria", "unlock condition", "formula", "threshold"]
     pack = load_copy_pack()
+    style = pack.get("style_guide", {}) if isinstance(pack, dict) else {}
+    forbidden = style.get("banned_words", [])
     for badge_id, entry in pack.get("badges", {}).items():
         if not isinstance(entry, dict):
             continue
@@ -86,6 +93,8 @@ def test_copy_pack_player_facing_words_clean():
         texts.extend(highlight.get("bodies", []) or [])
         texts.extend(foreshadow.get("titles", []) or [])
         texts.extend(foreshadow.get("bodies", []) or [])
-        joined = " ".join(str(t) for t in texts).lower()
-        for word in forbidden:
-            assert word not in joined, f"{badge_id} includes forbidden word: {word}"
+        joined = " ".join(str(t) for t in texts)
+        assert_no_banned_words(joined)
+        if forbidden:
+            for word in forbidden:
+                assert str(word).lower() not in joined.lower(), f"{badge_id} includes forbidden word: {word}"
