@@ -45,6 +45,13 @@ def test_build_player_activity_update_reactivates_and_sets_last_game_at():
     assert payload["last_game_at"] == match_time.isoformat()
 
 
+def test_build_player_activity_update_uses_latest_match_time():
+    existing = "2024-01-12T00:00:00+00:00"
+    match_time = datetime(2024, 1, 10, 12, 0, tzinfo=timezone.utc)
+    payload = build_player_activity_update(existing, match_time)
+    assert payload["last_game_at"] == "2024-01-12T00:00:00+00:00"
+
+
 def test_select_leaderboard_players_respects_toggle():
     df_all = pd.DataFrame({"id": [1, 2, 3]})
     df_active = df_all[df_all["id"] != 3].copy()

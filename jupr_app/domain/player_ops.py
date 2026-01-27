@@ -38,6 +38,8 @@ def safe_add_player(
         "losses": 0,
         "matches_played": 0,
         "active": True,
+        "last_game_at": None,
+        "inactive_at": None,
     }
 
     try:

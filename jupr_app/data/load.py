@@ -31,7 +31,9 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_players_all = add_activity_columns(df_players_all)
 
             # Active players (inactive_at is authoritative when present)
-            if not df_players_all.empty and "active" in df_players_all.columns:
+            if not df_players_all.empty and "inactive_at" in df_players_all.columns:
+                df_players_active = df_players_all[df_players_all["inactive_at"].isna()].copy()
+            elif not df_players_all.empty and "active" in df_players_all.columns:
                 df_players_active = df_players_all[df_players_all["active"] == True].copy()
             else:
                 df_players_active = df_players_all.copy()

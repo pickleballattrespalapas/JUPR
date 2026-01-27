@@ -298,7 +298,9 @@ def render(ctx):
         return
 
     players_df = df_players_all.copy()
-    if "active" in players_df.columns:
+    if "inactive_at" in players_df.columns:
+        players_df = players_df[players_df["inactive_at"].isna()].copy()
+    elif "active" in players_df.columns:
         players_df = players_df[players_df["active"] == True].copy()
 
     if players_df.empty:
