@@ -5,6 +5,39 @@ from typing import Any
 import pandas as pd
 
 
+def select_featured_badges(
+    unlocked_badges: list[dict[str, Any]],
+    *,
+    max_count: int = 5,
+    sort_mode: str = "recent",
+) -> list[dict[str, Any]]:
+    if not unlocked_badges:
+        return []
+
+    def sort_key(badge: dict[str, Any]) -> tuple:
+        last_earned = pd.to_datetime(badge.get("last_earned_at"), utc=True, errors="coerce")
+        prestige = _coerce_int(badge.get("prestige"), 0)
+        if sort_mode == "prestige":
+            return (-prestige, last_earned if pd.notna(last_earned) else pd.Timestamp.min)
+        return (
+            -(last_earned.timestamp() if pd.notna(last_earned) else 0.0),
+            -prestige,
+        )
+
+    ordered = sorted(unlocked_badges, key=sort_key)
+    seen: set[str] = set()
+    featured: list[dict[str, Any]] = []
+    for badge in ordered:
+        badge_id = str(badge.get("badge_id"))
+        if badge_id in seen:
+            continue
+        seen.add(badge_id)
+        featured.append(badge)
+        if len(featured) >= max_count:
+            break
+    return featured
+
+
 def build_gamification_summary(
     player_id: int,
     df_badges: pd.DataFrame,
@@ -14,11 +47,16 @@ def build_gamification_summary(
     pb = df_player_badges.copy() if df_player_badges is not None else pd.DataFrame()
 
     badge_defs["badge_id"] = badge_defs.get("badge_id", "").astype(str)
+    if "is_active" not in badge_defs.columns:
+        badge_defs["is_active"] = True
+    badge_defs["is_active"] = badge_defs["is_active"].fillna(True)
+    active_badges = badge_defs[badge_defs["is_active"] != False].copy()
+
     pb = pb[pb.get("player_id") == int(player_id)].copy() if not pb.empty else pd.DataFrame()
-    if pb.empty or badge_defs.empty:
+    if pb.empty or active_badges.empty:
         unlocked = []
     else:
-        merged = pb.merge(badge_defs, on="badge_id", how="left")
+        merged = pb.merge(active_badges, on="badge_id", how="left")
         merged["earned_at_dt"] = pd.to_datetime(merged.get("earned_at", None), utc=True, errors="coerce")
         merged["prestige"] = pd.to_numeric(merged.get("prestige", 0), errors="coerce").fillna(0)
 
@@ -33,6 +71,11 @@ def build_gamification_summary(
                 latest_excerpt = str(value_json.get("tape_excerpt") or "")
             except Exception:
                 latest_excerpt = ""
+            if not latest_excerpt.strip():
+                latest_excerpt = _fallback_tape_excerpt(
+                    str(first.get("name") or "Badge"),
+                    str(first.get("category") or "season"),
+                )
 
             unlocked.append(
                 {
@@ -54,7 +97,7 @@ def build_gamification_summary(
 
     unlocked_ids = {u["badge_id"] for u in unlocked}
     locked = []
-    for row in badge_defs.itertuples(index=False):
+    for row in active_badges.itertuples(index=False):
         if str(row.badge_id) in unlocked_ids:
             continue
         locked.append(
@@ -66,13 +109,15 @@ def build_gamification_summary(
                 "prestige": int(getattr(row, "prestige", 0) or 0),
                 "lore": row.lore,
                 "hint": row.hint,
-                "icon_key": row.icon_key,
-                "tier": row.tier,
-                "scope": row.scope,
+                "icon_key": getattr(row, "icon_key", None),
+                "tier": getattr(row, "tier", None),
+                "scope": getattr(row, "scope", None),
             }
         )
 
     prestige_total = int(sum(u.get("prestige", 0) * u.get("stack_count", 1) for u in unlocked))
+    collected_unique_count = len(unlocked)
+    total_active_badge_types = int(len(active_badges))
     collected_by_category: dict[str, int] = {}
     for badge in unlocked:
         category = badge.get("category") or "Other"
@@ -80,12 +125,33 @@ def build_gamification_summary(
 
     summary = {
         "prestige_total": prestige_total,
+        "collected_unique_count": collected_unique_count,
+        "total_active_badge_types": total_active_badge_types,
         "unlocked_badges": unlocked,
         "locked_badges": locked,
         "collection_stats": {
-            "collected_count": len(unlocked),
-            "total_count": int(len(badge_defs)),
+            "collected_count": collected_unique_count,
+            "total_count": total_active_badge_types,
             "collected_by_category": collected_by_category,
         },
     }
     return summary
+
+
+def _fallback_tape_excerpt(name: str, category: str) -> str:
+    safe_name = name.strip() or "The badge"
+    safe_category = category.strip() or "season"
+    lines = [
+        f"{safe_name} lives in the tape room archives.",
+        f"The {safe_category.lower()} reel keeps the moment on loop.",
+    ]
+    return "\n".join(lines)
+
+
+def _coerce_int(value: Any, fallback: int) -> int:
+    try:
+        if value is None:
+            return fallback
+        return int(value)
+    except Exception:
+        return fallback

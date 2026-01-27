@@ -26,6 +26,21 @@ class FakeTable:
         self.storage.setdefault(self.name, []).extend(rows)
         return self
 
+    def upsert(self, rows, on_conflict=None):
+        existing = self.storage.setdefault(self.name, [])
+        if not on_conflict:
+            existing.extend(rows)
+            return self
+        keys = [c.strip() for c in str(on_conflict).split(",") if c.strip()]
+        existing_keys = {tuple(row.get(k) for k in keys) for row in existing}
+        for row in rows:
+            key = tuple(row.get(k) for k in keys)
+            if key in existing_keys:
+                continue
+            existing.append(row)
+            existing_keys.add(key)
+        return self
+
     def execute(self):
         data = list(self.storage.get(self.name, []))
         for op, column, value in self.filters:
