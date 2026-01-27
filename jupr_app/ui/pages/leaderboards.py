@@ -621,7 +621,6 @@ def render(ctx):
 
     st.session_state.setdefault("lb_league", available_leagues[default_idx])
     st.session_state.setdefault("lb_view_mode", "Story View")
-    st.session_state.setdefault("lb_show_inactive", False)
     target_league = st.session_state.get("lb_league", available_leagues[default_idx])
     if target_league not in available_leagues:
         target_league = available_leagues[default_idx]
@@ -636,10 +635,10 @@ def render(ctx):
     if qp_player and not st.session_state.get("lb_search"):
         st.session_state["lb_search"] = qp_player
 
-    show_inactive = False
-    if target_league != "OVERALL":
-        if not PUBLIC_MODE:
-            show_inactive = bool(st.session_state.get("lb_show_inactive", False))
+    active_ids = None
+    if getattr(ctx, "df_players_active", None) is not None and not ctx.df_players_active.empty:
+        if "id" in ctx.df_players_active.columns:
+            active_ids = set(ctx.df_players_active["id"].astype(int).tolist())
 
     # Keep URL in sync
     try:
@@ -725,8 +724,13 @@ def render(ctx):
                     inactive_hidden = int((display_df["is_active"] == False).sum())
                 except Exception:
                     inactive_hidden = 0
-                if PUBLIC_MODE or (not show_inactive):
+                if PUBLIC_MODE:
                     display_df = display_df[display_df["is_active"] == True].copy()
+
+            if view_choice == "Active" and active_ids is not None and "player_id" in display_df.columns:
+                before = len(display_df)
+                display_df = display_df[display_df["player_id"].astype(int).isin(active_ids)].copy()
+                inactive_hidden += max(0, before - len(display_df))
 
             if "name" not in display_df.columns:
                 display_df["name"] = display_df["player_id"].map(id_to_name)
@@ -856,9 +860,6 @@ def render(ctx):
             )
     with control_cols[2]:
         st.text_input("Find player", key="lb_search")
-    if target_league != "OVERALL" and not PUBLIC_MODE:
-        st.checkbox("Show inactive", key="lb_show_inactive", value=False)
-
     # -------------------------
     # Share link + open button (ADMIN ONLY)
     # -------------------------
