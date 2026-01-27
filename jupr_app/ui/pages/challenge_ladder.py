@@ -136,6 +136,10 @@ def render(ctx):
 
     settings = ladder_fetch_settings(ctx.supabase, ctx.club_id)
     df_roster, df_flags, df_ch, df_pass = ladder_load_core(ctx.supabase, ctx.club_id)
+    active_ids = None
+    if getattr(ctx, "df_players_active", None) is not None and not ctx.df_players_active.empty:
+        if "id" in ctx.df_players_active.columns:
+            active_ids = set(ctx.df_players_active["id"].astype(int).tolist())
 
     tab_ladder, tab_active, tab_quick = st.tabs(["🪜 Ladder", "⚔️ Active Challenges", "📘 Quick Rules"])
 
@@ -163,6 +167,8 @@ def render(ctx):
                     sub = df_roster.copy()
                     if "is_active" in sub.columns:
                         sub = sub[sub["is_active"] == True]
+                    if active_ids is not None and "player_id" in sub.columns:
+                        sub = sub[sub["player_id"].astype(int).isin(active_ids)]
                     if "tier_id" in sub.columns:
                         sub = sub[sub["tier_id"].astype(str) == str(tid)]
                     else:

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
+from jupr_app.domain.player_activity import (
+    build_player_activity_update,
+    coerce_utc_datetime,
+    max_activity_time,
+)
 
 
 def process_matches(
@@ -40,6 +45,7 @@ def process_matches(
     db_matches: list[dict[str, Any]] = []
     overall_updates: dict[int, dict[str, Any]] = {}   # pid -> {"r","w","l","mp"}
     island_updates: dict[tuple[int, str], dict[str, Any]] = {}  # (pid, league) -> {"r","start","w","l","mp"}
+    last_game_updates: dict[int, datetime] = {}
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -178,15 +184,10 @@ def process_matches(
         is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
 
         dt_val = m.get("date", None)
-        try:
-            if dt_val is None:
-                dt_val = datetime.now().isoformat()
-            elif hasattr(dt_val, "isoformat"):
-                dt_val = dt_val.isoformat()
-            else:
-                dt_val = str(dt_val)
-        except Exception:
-            dt_val = str(dt_val) if dt_val is not None else str(datetime.now())
+        match_dt = coerce_utc_datetime(dt_val)
+        if match_dt is None:
+            match_dt = datetime.now(timezone.utc)
+        dt_val = match_dt.isoformat()
 
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
 
@@ -231,6 +232,9 @@ def process_matches(
         end_r3 = apply_updates(p3, do2, di2, t2_outcome, is_popup, league_name)
         end_r4 = apply_updates(p4, do2, di2, t2_outcome, is_popup, league_name)
 
+        for pid in (p1, p2, p3, p4):
+            last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
+
         stored_elo_delta = abs(do1) if (t1_outcome is True) else abs(do2)
 
         db_matches.append(
@@ -270,7 +274,7 @@ def process_matches(
     # -------------------------
     # Update overall player rows
     # -------------------------
-    def update_player_row(row):
+    def update_player_row(row, activity_update: dict):
         pid = int(row["id"])
         payload = {
             "rating": float(row["rating"]),
@@ -278,6 +282,8 @@ def process_matches(
             "losses": int(row["losses"]),
             "matches_played": int(row["matches_played"]),
         }
+        if activity_update:
+            payload.update(activity_update)
         res = supabase.table("players").update(payload).eq("club_id", club_id).eq("id", pid).execute()
         if not res.data:
             payload_ins = {"club_id": club_id, "id": pid, **payload}
@@ -291,7 +297,13 @@ def process_matches(
             "losses": int(stats["l"]),
             "matches_played": int(stats["mp"]),
         }
-        sb_retry(lambda row=row: update_player_row(row))
+        existing_last_game_at = None
+        pr = get_player_row(int(pid))
+        if pr is not None:
+            existing_last_game_at = pr.get("last_game_at")
+        latest_match_at = last_game_updates.get(int(pid))
+        activity_update = build_player_activity_update(existing_last_game_at, latest_match_at)
+        sb_retry(lambda row=row, activity_update=activity_update: update_player_row(row, activity_update))
 
     # -------------------------
     # Update league ratings

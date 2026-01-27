@@ -101,6 +101,16 @@ def _build_player_link(pid, name, public_mode, ctx):
     return f'<a href="{url}" target="_self" class="lb-link">{safe_name}</a>'
 
 
+def select_leaderboard_players(
+    df_players_active: pd.DataFrame | None,
+    df_players_all: pd.DataFrame | None,
+    view_option: str,
+) -> pd.DataFrame | None:
+    if view_option == "See all":
+        return df_players_all
+    return df_players_active
+
+
 def _fetch_story_badges(ctx, player_ids):
     if not player_ids:
         return pd.DataFrame()
@@ -354,7 +364,6 @@ def render_top_performers_cards(
 
 def render(ctx):
     # Always use 4-space indentation in this file.
-    df_players = ctx.df_players_active
     df_players_all = ctx.df_players_all
     df_leagues = ctx.df_leagues
     df_meta = ctx.df_meta
@@ -369,6 +378,10 @@ def render(ctx):
 
     mode_label = "Public" if PUBLIC_MODE else "Admin"
     page_shell("Leaderboards", "Standings and standout moments by league.", mode_label=mode_label)
+
+    view_choice = st.radio("Show", ["Active", "See all"], index=0, horizontal=True)
+
+    df_players = select_leaderboard_players(ctx.df_players_active, df_players_all, view_choice)
     st.markdown(
         """
         <style>
