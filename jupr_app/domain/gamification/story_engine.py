@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import calendar
 import logging
 from typing import Any
 from uuid import uuid4
@@ -163,6 +164,7 @@ def _foreshadow_weekly_regular(facts: pd.DataFrame, add_story) -> list[dict[str,
             continue
         streak, end_week = _current_week_streak(weeks)
         if streak == 3:
+            expires_at = _week_end(end_week)
             title, body = _build_foreshadow_copy(
                 "weekly_regular",
                 int(row.player_id),
@@ -177,6 +179,7 @@ def _foreshadow_weekly_regular(facts: pd.DataFrame, add_story) -> list[dict[str,
                 title,
                 body,
                 importance=60,
+                expires_at=expires_at,
             )
     return rows
 
@@ -190,6 +193,7 @@ def _foreshadow_hot_streak(facts: pd.DataFrame, add_story) -> list[dict[str, Any
             if row.win:
                 streak += 1
                 if streak in {4, 9, 19}:
+                    expires_at = datetime.now(timezone.utc) + timedelta(days=14)
                     title, body = _build_foreshadow_copy(
                         "hot_streak",
                         int(player_id),
@@ -205,6 +209,7 @@ def _foreshadow_hot_streak(facts: pd.DataFrame, add_story) -> list[dict[str, Any
                         body,
                         match_id=str(row.match_id),
                         importance=65,
+                        expires_at=expires_at,
                     )
             else:
                 streak = 0
@@ -220,6 +225,7 @@ def _foreshadow_marathon_month(facts: pd.DataFrame, now: datetime, add_story) ->
     counts = current.groupby(["player_id", "month_key"]).size().reset_index(name="matches")
     for row in counts.itertuples(index=False):
         if int(row.matches) >= 30:
+            expires_at = _month_end(str(row.month_key))
             title, body = _build_foreshadow_copy(
                 "marathon_month",
                 int(row.player_id),
@@ -234,6 +240,7 @@ def _foreshadow_marathon_month(facts: pd.DataFrame, now: datetime, add_story) ->
                 title,
                 body,
                 importance=60,
+                expires_at=expires_at,
             )
     return rows
 
@@ -385,3 +392,25 @@ def _build_foreshadow_copy(
     if not body:
         body = "The reel is leaning close.\nThe next frame could change the story."
     return title, body
+
+
+def _week_end(week_key: str) -> datetime | None:
+    try:
+        year_str, week_str = week_key.split("-W")
+        year = int(year_str)
+        week = int(week_str)
+        end_date = datetime.fromisocalendar(year, week, 7)
+        return end_date.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _month_end(month_key: str) -> datetime | None:
+    try:
+        year_str, month_str = month_key.split("-")
+        year = int(year_str)
+        month = int(month_str)
+        last_day = calendar.monthrange(year, month)[1]
+        return datetime(year, month, last_day, 23, 59, 59, tzinfo=timezone.utc)
+    except Exception:
+        return None

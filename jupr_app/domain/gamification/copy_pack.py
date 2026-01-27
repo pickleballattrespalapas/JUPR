@@ -1,822 +1,104 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 import re
 from typing import Any
 
-COPY_PACK: dict[str, Any] = {
-    "style_guide": {
-        "voice": "Sports documentary. Poetic, archival, tape-room cadence.",
-        "tone": "Confident, observational, never instructional.",
-        "notes": [
-            "Avoid explicit rules or checklists.",
-            "Hints are cryptic, lore is reflective, tape excerpts are short reels.",
-            "Foreshadowing implies proximity without commands.",
-        ],
-    },
-    "badges": {
-        "participant": {
-            "name": "Participant",
-            "lore": "The first log entries mark a new presence in the archive.",
-            "hint": "Every reel begins with a single frame.",
-            "tape_excerpts": [
-                "The first entry hit the logbook.\nThe reel has a new name.",
-                "Opening tape, fresh ink.\nThe archive starts keeping score.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — A First Entry"],
-                "bodies": [
-                    "{tape_excerpt}\nThe record stamps {badge_name} into the archive.",
-                    "{tape_excerpt}\nA new reel adds {badge_name}.",
-                ],
-            },
-        },
-        "dedicated_participant_50": {
-            "name": "Dedicated Participant",
-            "lore": "Fifty clips deep, the routine has its own rhythm.",
-            "hint": "The schedule keeps circling back.",
-            "tape_excerpts": [
-                "The ledger flips to page fifty.\nConsistency leaves a trail.",
-                "Fifty matches in the archive.\nThe reel keeps calling.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Fifty Deep"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} stays on repeat.",
-                    "{tape_excerpt}\nThe tape room files another {badge_name} moment.",
-                ],
-            },
-        },
-        "lifetime_participant_200": {
-            "name": "Lifetime Participant",
-            "lore": "Two hundred chapters in, the archive knows the cadence.",
-            "hint": "The tape shelf keeps getting heavier.",
-            "tape_excerpts": [
-                "Two hundred matches live on tape.\nThe archive remembers every frame.",
-                "The reel count hit 200.\nThe story keeps stacking.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — 200 on Tape"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} belongs to the long haul.",
-                    "{tape_excerpt}\nA long-form reel earns {badge_name}.",
-                ],
-            },
-        },
-        "first_win": {
-            "name": "First Win",
-            "lore": "The first mark on the ledger. The tape starts rolling for real.",
-            "hint": "There is always a first frame on the reel.",
-            "tape_excerpts": [
-                "The first win hit the archive.\nThe film starts with a clean finish.",
-                "Opening night made the reel.\nThe ledger finally has a checkmark.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — First Win on Tape"],
-                "bodies": [
-                    "{tape_excerpt}\nThe record adds {badge_name} to the reel.",
-                    "{tape_excerpt}\nThe documentary notes {badge_name}.",
-                ],
-            },
-        },
-        "weekly_regular": {
-            "name": "Weekly Regular",
-            "lore": "The schedule starts to recognize the face. The weeks keep stacking.",
-            "hint": "The calendar keeps calling.",
-            "tape_excerpts": [
-                "Four straight weeks on tape.\nThe routine left a mark.",
-                "The weekly reel stayed full.\nThe calendar kept the rhythm.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Weekly Regular"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} is now part of the schedule.",
-                    "{tape_excerpt}\nThe archive files {badge_name}.",
-                ],
-            },
-            "foreshadow": {
-                "titles": ["Foreshadowing — {badge_name}", "Foreshadowing — Weekly Rhythm"],
-                "bodies": [
-                    "Three straight weeks on tape.\nThe calendar keeps circling.",
-                    "The weeks are lining up.\nThe story is close to {badge_name}.",
-                ],
-            },
-        },
-        "iron_week": {
-            "name": "Iron Week",
-            "lore": "A week packed tight with tape. The grind leaves a signature.",
-            "hint": "Some weeks barely have room to breathe.",
-            "tape_excerpts": [
-                "The week ran long and the tape kept rolling.\nEvery day looked like game day.",
-                "A full week in the archive.\nNo idle frames.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Week Ran Hot"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lands on the reel.",
-                    "{tape_excerpt}\nThe archive stamps {badge_name}.",
-                ],
-            },
-        },
-        "marathon_month": {
-            "name": "Marathon Month",
-            "lore": "A month that never slowed down. Every day kept its own clip.",
-            "hint": "The month is still writing.",
-            "tape_excerpts": [
-                "The month never slowed down.\nIt kept adding chapters to the reel.",
-                "Thirty-plus days of action.\nThe archive barely cooled.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Marathon Month"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} gets a full reel.",
-                    "{tape_excerpt}\nThe month files {badge_name}.",
-                ],
-            },
-            "foreshadow": {
-                "titles": ["Foreshadowing — {badge_name}", "Foreshadowing — The Month Builds"],
-                "bodies": [
-                    "Thirty matches already on tape.\nThe month is still writing.",
-                    "The reel is heavy this month.\n{badge_name} feels close.",
-                ],
-            },
-        },
-        "level_up": {
-            "name": "Level Up",
-            "lore": "Another rung claimed. The league notices the climb.",
-            "hint": "A new number appears on the nameplate.",
-            "tape_excerpts": [
-                "A new rung lights up on the ladder.\nThe league keeps a close watch now.",
-                "A number clicked higher on the board.\nThe climb caught the lens.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Climb"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lands on the reel.",
-                    "{tape_excerpt}\nThe archive stamps {badge_name}.",
-                ],
-            },
-        },
-        "rocket_start": {
-            "name": "Rocket Start",
-            "lore": "The opening run shook the scoreboard. The room leaned in early.",
-            "hint": "The first stretch left a streak on the floor.",
-            "tape_excerpts": [
-                "The opening stretch shook the standings.\nThe room leaned in early.",
-                "A fast start lit up the reel.\nThe tape caught the spark.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Fast Start"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} hits the record.",
-                    "{tape_excerpt}\nThe doc crew notes {badge_name}.",
-                ],
-            },
-        },
-        "most_improved_monthly": {
-            "name": "Most Improved",
-            "lore": "A month where the climb couldn’t be ignored.",
-            "hint": "One month tilted harder than the rest.",
-            "tape_excerpts": [
-                "The month tilted in one direction.\nThe climb made the reel.",
-                "One month swung the loudest.\nThe archive kept the proof.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Month Jumps"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} captures the climb.",
-                    "{tape_excerpt}\nThe tape files {badge_name}.",
-                ],
-            },
-        },
-        "mountain_climber": {
-            "name": "Mountain Climber",
-            "lore": "Ranks flipped. The ascent left landmarks.",
-            "hint": "The ladder looks different now.",
-            "tape_excerpts": [
-                "Ranks flipped on the way up.\nThe climb left markers behind.",
-                "The ascent carved a new path.\nThe archive remembers the shift.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Ascent"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} climbs onto the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "hot_streak": {
-            "name": "Hot Streak",
-            "lore": "Wins blur together on the tape. The run keeps rolling.",
-            "hint": "The film strip barely cools off.",
-            "tape_excerpts": [
-                "{streak} straight wins on the reel.\nThe heat stayed on.",
-                "The run kept rolling.\n{streak} frames burned bright.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Run"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} owns the reel.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-            "foreshadow": {
-                "titles": ["Foreshadowing — {badge_name}", "Foreshadowing — Heat Check"],
-                "bodies": [
-                    "{streak} straight wins on tape.\nThe next frame could tilt the season.",
-                    "The reel is running hot.\n{badge_name} feels close.",
-                ],
-            },
-        },
-        "bounce_back": {
-            "name": "Bounce Back",
-            "lore": "A stumble, then a reply. The echo lands clean.",
-            "hint": "The next frame told a different story.",
-            "tape_excerpts": [
-                "A stumble, then a reply.\nThe next frame reset the tone.",
-                "The reel caught a quick answer.\nMomentum flipped back fast.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Reply"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} shows the response.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "clutch_performer": {
-            "name": "Clutch Performer",
-            "lore": "Close frames keep leaning the same way.",
-            "hint": "The last points keep finding the same jersey.",
-            "tape_excerpts": [
-                "The last points keep finding the same jersey.\nThe tape keeps the proof.",
-                "Close frames lean one way.\nThe reel shows the nerve.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Close-Frame Control"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} stays calm on the reel.",
-                    "{tape_excerpt}\nThe archive stamps {badge_name}.",
-                ],
-            },
-        },
-        "ice_in_veins": {
-            "name": "Ice in Veins",
-            "lore": "When the margin tightened, the answer didn’t.",
-            "hint": "Cold hands don’t shake the camera.",
-            "tape_excerpts": [
-                "The margin tightened, the answer didn’t.\nThe tape stays calm under pressure.",
-                "A cold moment on tape.\nThe finish stayed steady.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Calm Under Lights"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} writes the finish.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "pickle_perfection": {
-            "name": "Pickle Perfection",
-            "lore": "A shutout with no extra narration needed.",
-            "hint": "Sometimes the other side never shows up on the scoreboard.",
-            "tape_excerpts": [
-                "The board stayed blank on the other side.\nA quiet kind of dominance.",
-                "No numbers for the other side.\nThe tape stayed clean.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Clean Sheet"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} ends the reel.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-        },
-        "blowout_artist": {
-            "name": "Blowout Artist",
-            "lore": "The gap grew and never closed.",
-            "hint": "The margin kept widening.",
-            "tape_excerpts": [
-                "The gap opened and never closed.\nThe tape shows the distance.",
-                "A wide frame on tape.\nThe lead never blinked.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Wide Margin"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} hits the archive.",
-                    "{tape_excerpt}\nThe reel keeps {badge_name}.",
-                ],
-            },
-        },
-        "untouchable": {
-            "name": "Untouchable",
-            "lore": "A run that didn’t flinch. The tape shows no breaks.",
-            "hint": "The run feels unbroken.",
-            "tape_excerpts": [
-                "{streak} straight frames without a crack.\nThe run kept the cameras up.",
-                "The reel stays unbroken.\n{streak} wins stayed stitched together.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Unbroken Run"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} keeps rolling.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "clean_sweep_week": {
-            "name": "Clean Sweep Week",
-            "lore": "Every clip in the week ended the same way.",
-            "hint": "A week with no counterpunches.",
-            "tape_excerpts": [
-                "Every clip that week ended the same way.\nNo counterpunches on record.",
-                "The week stayed spotless on tape.\nNo rewrites needed.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Week on Clean Film"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} seals the week.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-        },
-        "high_roller": {
-            "name": "High Roller",
-            "lore": "The pace stayed high and the points kept pouring.",
-            "hint": "The scoreboard got a workout.",
-            "tape_excerpts": [
-                "The tempo stayed high and the points kept coming.\nThe reel moved fast.",
-                "Fast tape, loud numbers.\nThe pace never let up.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — High Pace"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lands on the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "social_butterfly": {
-            "name": "Social Butterfly",
-            "lore": "The partner list turned into a montage.",
-            "hint": "So many different pairings on the same reel.",
-            "tape_excerpts": [
-                "The partner list turned into a montage.\nSo many combinations on tape.",
-                "The reel kept swapping jerseys.\nThe archive caught every pairing.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Partner Montage"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} broadens the reel.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-            "foreshadow": {
-                "titles": ["Foreshadowing — {badge_name}", "Foreshadowing — Partner Reel"],
-                "bodies": [
-                    "The partner reel is almost full.\nAnother pairing changes the story.",
-                    "The montage keeps growing.\n{badge_name} feels close.",
-                ],
-            },
-        },
-        "network_builder": {
-            "name": "Network Builder",
-            "lore": "The web stretches across the club.",
-            "hint": "The partner map keeps expanding.",
-            "tape_excerpts": [
-                "The network stretched across the club.\nSo many reels, so many names.",
-                "The partner map kept growing.\nThe tape shows the reach.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Web Expands"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} spans the reel.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-        },
-        "draft_master": {
-            "name": "Draft Master",
-            "lore": "Different pairings, same result. The tape shows the range.",
-            "hint": "This month keeps swapping jerseys.",
-            "tape_excerpts": [
-                "Different jerseys, same ending.\nThe month kept changing partners.",
-                "The reel kept rotating partners.\nThe wins stayed steady.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Draft Day"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lands on the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-            "foreshadow": {
-                "titles": ["Foreshadowing — {badge_name}", "Foreshadowing — Rotating Lineup"],
-                "bodies": [
-                    "Three different winning pairings this month.\nThe tape hints at one more.",
-                    "The lineup keeps shifting.\n{badge_name} feels close.",
-                ],
-            },
-        },
-        "swiss_army_knife": {
-            "name": "Swiss Army Knife",
-            "lore": "Versatility on the record. Different stages, same sharp edge.",
-            "hint": "The season shows more than one role.",
-            "tape_excerpts": [
-                "Multiple stages, one steady edge.\nThe season shows the range.",
-                "The reel cuts across leagues.\nVersatility leaves the mark.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Versatile Tape"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} earns a wide reel.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-        },
-        "giant_slayer": {
-            "name": "Giant Slayer",
-            "lore": "A giant hit the floor and the camera never blinked.",
-            "hint": "A higher shadow fell.",
-            "tape_excerpts": [
-                "A taller shadow fell in this frame.\nThe tape keeps the proof.",
-                "The reel caught the giant stumble.\nThe lens never shook.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Giant on Tape"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} hits the archive.",
-                    "{tape_excerpt}\nThe record stamps {badge_name}.",
-                ],
-            },
-        },
-        "david_vs_goliath": {
-            "name": "David vs Goliath",
-            "lore": "The mismatch didn’t stay a mismatch.",
-            "hint": "The odds were heavy on one side.",
-            "tape_excerpts": [
-                "The mismatch didn’t survive the tape.\nA different ending made the reel.",
-                "The odds leaned hard.\nThe tape flipped the script.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Mismatch Flip"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lands on the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "upset_champion": {
-            "name": "Upset Champion",
-            "lore": "The month’s biggest swing stayed on the reel.",
-            "hint": "One month holds the loudest turn.",
-            "tape_excerpts": [
-                "The month’s loudest swing stayed on tape.\nThe record keeps the surprise.",
-                "One month flipped the reel.\nThe tape keeps the shock.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Month of Upset"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} anchors the month.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-        },
-        "hall_of_fame_night": {
-            "name": "Hall of Fame Night",
-            "lore": "A night that pulled the cameras in closer.",
-            "hint": "Some nights feel larger than the rest.",
-            "tape_excerpts": [
-                "A night that pulled the cameras closer.\nThe league will replay this one.",
-                "The reel has a favorite night.\nThe archive won’t forget it.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Hall of Fame Night"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} stays in the spotlight.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "legendary_upset": {
-            "name": "Legendary Upset",
-            "lore": "The tape caught a moment nobody predicted.",
-            "hint": "The odds looked impossible on this frame.",
-            "tape_excerpts": [
-                "The tape caught a moment nobody predicted.\nThe room won’t forget this frame.",
-                "The reel locked a stunner.\nThe archive keeps the shock.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Legendary Upset"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} seals the moment.",
-                    "{tape_excerpt}\nThe archive tags {badge_name}.",
-                ],
-            },
-        },
-        "nemesis_found": {
-            "name": "Nemesis Found",
-            "lore": "A name keeps showing up across the net.",
-            "hint": "The same opponent keeps reappearing.",
-            "tape_excerpts": [
-                "A familiar face keeps appearing across the net.\nThe rivalry has a name now.",
-                "The reel keeps replaying one matchup.\nThe story has a foil.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — A Name Returns"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} marks the rivalry.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "rivalry_win": {
-            "name": "Rivalry Win",
-            "lore": "The rivalry leaned your way on this frame.",
-            "hint": "One chapter shifted the rivalry.",
-            "tape_excerpts": [
-                "The rivalry leaned your way on this frame.\nThe tape caught the shift.",
-                "A key frame swung the rivalry.\nThe reel keeps the proof.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Rivalry Swing"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} changes the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "rivalry_streak": {
-            "name": "Rivalry Streak",
-            "lore": "The rivalry kept tilting, frame after frame.",
-            "hint": "The rivalry reel runs long.",
-            "tape_excerpts": [
-                "The rivalry reel leaned your way.\nThe streak kept the pressure up.",
-                "Frame after frame, the rivalry tilted.\nThe tape shows the run.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Rivalry Run"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} stretches the rivalry.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "settled_the_score": {
-            "name": "Settled the Score",
-            "lore": "The ledger finally balanced, the tape agreed.",
-            "hint": "A long account just evened out.",
-            "tape_excerpts": [
-                "The ledger finally balanced.\nThe tape called it even.",
-                "The rivalry ledger closed a chapter.\nThe reel kept the proof.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Ledger Balances"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} caps the rivalry.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "steady_hand": {
-            "name": "Steady Hand",
-            "lore": "The season stayed smooth, even when the lights changed.",
-            "hint": "The season never wandered far.",
-            "tape_excerpts": [
-                "The season stayed steady on the reel.\nNo wild swings, just control.",
-                "A calm season on tape.\nThe archive stayed level.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Steady Season"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} stays locked in.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "mr_reliable": {
-            "name": "Mr. Reliable",
-            "lore": "Week after week, the reel looks the same.",
-            "hint": "Reliable tape needs reliable history.",
-            "tape_excerpts": [
-                "Week after week, the reel looks the same.\nReliability makes a pattern.",
-                "The archive trusts the steady tape.\nReliability stays on repeat.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Always There"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} sits in the archive.",
-                    "{tape_excerpt}\nThe reel logs {badge_name}.",
-                ],
-            },
-        },
-        "league_champion": {
-            "name": "League Champion",
-            "lore": "A season ends with your name at the top.",
-            "hint": "The final table has a single line above the rest.",
-            "tape_excerpts": [
-                "The season closed with your name on top.\nThe archive keeps the final frame.",
-                "The top line belongs to you.\nThe tape seals the season.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Season Crown"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} closes the season.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "podium": {
-            "name": "Podium",
-            "lore": "A season ends with your name on the stage.",
-            "hint": "The podium holds only a few.",
-            "tape_excerpts": [
-                "The season ended on the stage.\nThe archive keeps the podium frame.",
-                "A podium finish hits the tape.\nThe reel shows the stage.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Podium Frame"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} takes the stage.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "good_sport": {
-            "name": "Good Sport",
-            "lore": "The tape shows respect running both ways.",
-            "hint": "Sportsmanship leaves quieter fingerprints.",
-            "tape_excerpts": [
-                "Respect showed on tape.\nThe reel kept the tone.",
-                "A quiet moment of class.\nThe archive remembers it.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Quiet Class"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} holds the tone.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "community_builder": {
-            "name": "Community Builder",
-            "lore": "The club grew around the moments you hosted.",
-            "hint": "Some stories start before the match.",
-            "tape_excerpts": [
-                "The club grew around your moments.\nThe archive credits the spark.",
-                "Community scenes made the reel.\nThe tape remembers the gathering.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Community Frame"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} holds the room.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "mentor": {
-            "name": "Mentor",
-            "lore": "The tape shows the lesson without saying a word.",
-            "hint": "The gap was wide, the guidance wider.",
-            "tape_excerpts": [
-                "The lesson showed on tape.\nThe archive kept the quiet moment.",
-                "A guiding frame made the reel.\nThe tape kept the lesson.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — The Lesson"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} keeps the tone.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "breakthrough": {
-            "name": "Breakthrough",
-            "lore": "A sudden step forward caught the lens.",
-            "hint": "One day the tape just looks different.",
-            "tape_excerpts": [
-                "A sudden step forward caught the lens.\nThe reel felt different.",
-                "The tape turned a page.\nThe archive kept the breakthrough.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Breakthrough Frame"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} changes the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "above_expectations": {
-            "name": "Above Expectations",
-            "lore": "The film shows a stretch beyond the usual script.",
-            "hint": "The reel leans higher than it used to.",
-            "tape_excerpts": [
-                "The reel leaned higher than usual.\nThe archive kept the proof.",
-                "A stretch beyond the script.\nThe tape stayed surprised.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Above the Script"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lifts the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "dominant_run": {
-            "name": "Dominant Run",
-            "lore": "A stretch of tape with no soft frames.",
-            "hint": "The reel keeps leaning one way.",
-            "tape_excerpts": [
-                "A stretch of tape with no soft frames.\nThe run kept control.",
-                "The reel leaned one way for a while.\nDominance made the cut.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Commanding Run"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} owns the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "high_output": {
-            "name": "High Output",
-            "lore": "The points kept pouring into the reel.",
-            "hint": "The scoreboard got busy.",
-            "tape_excerpts": [
-                "The points kept pouring into the reel.\nThe archive barely kept up.",
-                "A high-output frame on tape.\nThe score kept climbing.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Scoreboard Surge"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} lights up the reel.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "battle_tested": {
-            "name": "Battle Tested",
-            "lore": "The tape shows hard frames and steady answers.",
-            "hint": "The reel holds pressure and poise.",
-            "tape_excerpts": [
-                "Hard frames, steady answers.\nThe tape keeps the grit.",
-                "The archive captured the grind.\nThe reel stayed composed.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Tested on Tape"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} earns its place.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "consistency": {
-            "name": "Consistency",
-            "lore": "The reel keeps the same steady rhythm.",
-            "hint": "The tape keeps finding the same pulse.",
-            "tape_excerpts": [
-                "The reel kept the same steady rhythm.\nThe archive knows the pace.",
-                "No wild swings on tape.\nThe rhythm stayed even.",
-            ],
-            "highlight": {
-                "titles": ["Highlight — {badge_name}", "Highlight — Steady Rhythm"],
-                "bodies": [
-                    "{tape_excerpt}\n{badge_name} stays even.",
-                    "{tape_excerpt}\nThe archive logs {badge_name}.",
-                ],
-            },
-        },
-        "signature_win": {
-            "name": "Signature Win",
-            "lore": "",
-            "hint": "",
-            "tape_excerpts": [],
-            "highlight": {
-                "titles": ["Highlight — Signature Win", "Highlight — A Signature Frame"],
-                "bodies": [
-                    "The tape shows a win nobody penciled in.\nThe league is starting to notice the pattern.",
-                    "A signature frame made the reel.\nThe archive keeps the surprise.",
-                ],
-            },
-        },
-    },
-}
+
+_COPY_PACK_CACHE: dict[str, Any] | None = None
+_TEMPLATE_RE = re.compile(r"{([^{}]+)}")
 
 
 def load_copy_pack() -> dict[str, Any]:
-    return COPY_PACK
+    global _COPY_PACK_CACHE
+    if _COPY_PACK_CACHE is not None:
+        return _COPY_PACK_CACHE
+
+    path = Path(__file__).with_name("copy_pack.yaml")
+    if not path.exists():
+        _COPY_PACK_CACHE = {"style_guide": {}, "badges": {}}
+        return _COPY_PACK_CACHE
+
+    with path.open("r", encoding="utf-8") as handle:
+        raw = handle.read()
+    data = _parse_simple_yaml(raw)
+    if not isinstance(data, dict):
+        data = {"style_guide": {}, "badges": {}}
+    _COPY_PACK_CACHE = data
+    return data
 
 
-def pick_variant(options: list[str], seed_str: str) -> str:
-    if not options:
+def _parse_simple_yaml(raw: str) -> dict[str, Any]:
+    lines = [line.rstrip("\n") for line in raw.splitlines() if line.strip() != ""]
+    root: dict[str, Any] = {}
+    stack: list[tuple[int, Any]] = [(-1, root)]
+
+    def _parse_value(value: str) -> Any:
+        value = value.strip()
+        if value == "":
+            return None
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+
+    for idx, line in enumerate(lines):
+        indent = len(line) - len(line.lstrip(" "))
+        content = line.strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+
+        if content.startswith("- "):
+            if not isinstance(parent, list):
+                new_list: list[Any] = []
+                if isinstance(parent, dict):
+                    raise ValueError("Malformed YAML: list without key")
+                parent = new_list
+            item_value = content[2:].strip()
+            if item_value == "":
+                new_item: dict[str, Any] = {}
+                parent.append(new_item)
+                stack.append((indent, new_item))
+            else:
+                parent.append(_parse_value(item_value))
+            continue
+
+        if ":" in content:
+            key, remainder = content.split(":", 1)
+            key = key.strip()
+            value = remainder.strip()
+            if value == "":
+                container: Any = {}
+                if idx + 1 < len(lines):
+                    next_line = lines[idx + 1]
+                    next_indent = len(next_line) - len(next_line.lstrip(" "))
+                    if next_line.strip().startswith("- ") and next_indent > indent:
+                        container = []
+                if isinstance(parent, dict):
+                    parent[key] = container
+                else:
+                    raise ValueError("Malformed YAML: mapping entry in list")
+                stack.append((indent, container))
+            else:
+                if isinstance(parent, dict):
+                    parent[key] = _parse_value(value)
+                else:
+                    raise ValueError("Malformed YAML: mapping entry in list")
+            continue
+
+    return root
+
+
+def pick_variant(variants: list[str], seed_str: str) -> str:
+    if not variants:
         return ""
     seed = seed_str or ""
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    idx = int(digest, 16) % len(options)
-    return str(options[idx])
-
-
-_TEMPLATE_RE = re.compile(r"{([^{}]+)}")
+    idx = int(digest, 16) % len(variants)
+    return str(variants[idx])
 
 
 def render_template(text: str, data: dict[str, Any]) -> str:
@@ -827,9 +109,10 @@ def render_template(text: str, data: dict[str, Any]) -> str:
         if value is None:
             return ""
         if isinstance(value, float):
-            rendered = f"{value:.2f}"
-            rendered = rendered.rstrip("0").rstrip(".")
+            rendered = f"{value:.2f}".rstrip("0").rstrip(".")
             return rendered
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)
         return str(value)
 
     def _replace(match: re.Match) -> str:
@@ -839,23 +122,40 @@ def render_template(text: str, data: dict[str, Any]) -> str:
         return _format_value(data.get(key))
 
     rendered = _TEMPLATE_RE.sub(_replace, text)
-    lines = []
+    cleaned_lines = []
     for line in rendered.splitlines():
         cleaned = " ".join(line.split())
         if cleaned:
-            lines.append(cleaned)
-    return "\n".join(lines)
+            cleaned_lines.append(cleaned)
+    return "\n".join(cleaned_lines)
 
 
 def get_badge_copy(badge_id: str) -> dict[str, Any]:
     pack = load_copy_pack()
-    badges = pack.get("badges", {})
+    badges = pack.get("badges", {}) if isinstance(pack, dict) else {}
     badge_copy = badges.get(str(badge_id), {}) if isinstance(badges, dict) else {}
     return {
         "name": badge_copy.get("name", ""),
         "lore": badge_copy.get("lore", ""),
         "hint": badge_copy.get("hint", ""),
+        "rarity": badge_copy.get("rarity", "common"),
+        "tier": badge_copy.get("tier", None),
+        "icon_key": badge_copy.get("icon_key", None),
+        "scope": badge_copy.get("scope", "overall"),
         "tape_excerpts": list(badge_copy.get("tape_excerpts", []) or []),
         "highlight": badge_copy.get("highlight", {}) or {},
         "foreshadow": badge_copy.get("foreshadow", {}) or {},
     }
+
+
+def assert_no_banned_words(text: str) -> None:
+    pack = load_copy_pack()
+    style = pack.get("style_guide", {}) if isinstance(pack, dict) else {}
+    banned_words = style.get("banned_words", []) if isinstance(style, dict) else []
+    if not banned_words:
+        return
+    joined = (text or "").lower()
+    for word in banned_words:
+        if not word:
+            continue
+        assert str(word).lower() not in joined, f"forbidden word found: {word}"

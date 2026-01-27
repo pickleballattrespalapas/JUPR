@@ -94,7 +94,12 @@ def ensure_participation_badges(ctx) -> None:
                 if key in existing:
                     continue
                 existing.add(key)
-                tape_excerpt = _participation_excerpt(badge_id, int(games))
+                seed = f"{player_id}:{badge_id}:"
+                tape_excerpt = _participation_excerpt(badge_id, int(games), seed)
+                tape_title = _participation_title(badge_id, seed, {"games": int(games)})
+                value_json = {"tape_excerpt": tape_excerpt, "games": int(games)}
+                if tape_title:
+                    value_json["tape_title"] = tape_title
                 rows.append(
                     {
                         "id": str(uuid4()),
@@ -105,7 +110,7 @@ def ensure_participation_badges(ctx) -> None:
                         "context_type": "overall",
                         "context_id": None,
                         "value_num": float(games),
-                        "value_json": {"tape_excerpt": tape_excerpt, "games": int(games)},
+                        "value_json": value_json,
                     }
                 )
 
@@ -156,9 +161,9 @@ def _insert_badges(supabase, rows: list[dict[str, Any]]) -> None:
         ).execute()
 
 
-def _participation_excerpt(badge_id: str, games: int) -> str:
+def _participation_excerpt(badge_id: str, games: int, seed: str) -> str:
     copy = get_badge_copy(badge_id)
-    template = pick_variant(copy.get("tape_excerpts", []), f"{badge_id}:{games}")
+    template = pick_variant(copy.get("tape_excerpts", []), seed)
     rendered = render_template(template, {"games": games, "badge_name": copy.get("name", badge_id)})
     lines = [line.strip() for line in rendered.splitlines() if line.strip()]
     if lines:
@@ -169,3 +174,12 @@ def _participation_excerpt(badge_id: str, games: int) -> str:
             f"{games} matches live in the archive.",
         ]
     )
+
+
+def _participation_title(badge_id: str, seed: str, data: dict[str, Any]) -> str:
+    copy = get_badge_copy(badge_id)
+    highlight = copy.get("highlight", {}) if isinstance(copy, dict) else {}
+    titles = highlight.get("titles", []) if isinstance(highlight, dict) else []
+    template = pick_variant(titles, f"{seed}:title")
+    rendered = render_template(template, data | {"badge_name": copy.get("name", badge_id)})
+    return rendered
