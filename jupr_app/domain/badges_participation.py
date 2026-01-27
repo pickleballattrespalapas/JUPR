@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import pandas as pd
 
+from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant, render_template
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,14 +157,15 @@ def _insert_badges(supabase, rows: list[dict[str, Any]]) -> None:
 
 
 def _participation_excerpt(badge_id: str, games: int) -> str:
-    badge_line = {
-        "participant": "The first entries hit the logbook.",
-        "dedicated_participant_50": "The weekly reel keeps finding this name.",
-        "lifetime_participant_200": "The tape shelf keeps getting heavier.",
-    }.get(badge_id, "The tape room logged another chapter.")
+    copy = get_badge_copy(badge_id)
+    template = pick_variant(copy.get("tape_excerpts", []), f"{badge_id}:{games}")
+    rendered = render_template(template, {"games": games, "badge_name": copy.get("name", badge_id)})
+    lines = [line.strip() for line in rendered.splitlines() if line.strip()]
+    if lines:
+        return "\n".join(lines[:4])
     return "\n".join(
         [
-            badge_line,
+            "The tape room logged another chapter.",
             f"{games} matches live in the archive.",
         ]
     )

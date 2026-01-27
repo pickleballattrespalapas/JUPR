@@ -3,6 +3,7 @@
 from . import leaderboards
 from . import match_explorer
 from . import players
+from . import badge_codex
 from . import match_uploader
 from . import challenge_ladder
 from . import challenge_ladder_admin
@@ -22,6 +23,7 @@ __all__ = [
     "leaderboards",
     "match_explorer",
     "players",
+    "badge_codex",
     "match_uploader",
     "challenge_ladder",
     "challenge_ladder_admin",

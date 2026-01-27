@@ -34,6 +34,8 @@ def test_first_win_idempotent():
     awards, _ = compute_badge_awards(ctx, existing=set())
     first_win = [a for a in awards if a.badge_id == "first_win"]
     assert len(first_win) == 1
+    assert first_win[0].value_json
+    assert first_win[0].value_json.get("tape_excerpt")
 
     existing = {(str(a.player_id), a.badge_id, a.context_id) for a in awards}
     awards_again, _ = compute_badge_awards(ctx, existing=existing)

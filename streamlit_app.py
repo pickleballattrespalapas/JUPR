@@ -311,6 +311,7 @@ def main():
             match_explorer,
             faqs,
             players,
+            badge_codex,
             challenge_ladder,
             challenge_ladder_admin,
             match_uploader,
@@ -329,6 +330,7 @@ def main():
             "📊 League Results": league_results,
             "🎯 Match Explorer": match_explorer,
             "🔍 Player Search": players,
+            "📼 Badge Codex": badge_codex,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
 
@@ -349,6 +351,7 @@ def main():
             "league_results": "📊 League Results",
             "match_explorer": "🎯 Match Explorer",
             "players": "🔍 Player Search",
+            "badge_codex": "📼 Badge Codex",
             "challenge_ladder": "🪜 Challenge Ladder",
             "faqs": "❓ FAQs",
 
@@ -385,7 +388,15 @@ def main():
             visible_labels = all_labels
 
         # Public nav order (old UX)
-        PUBLIC_NAV_KEYS = ["leaderboards", "league_results", "match_explorer", "players", "challenge_ladder", "faqs"]
+        PUBLIC_NAV_KEYS = [
+            "leaderboards",
+            "league_results",
+            "match_explorer",
+            "players",
+            "badge_codex",
+            "challenge_ladder",
+            "faqs",
+        ]
         public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
 
         # -------------------------

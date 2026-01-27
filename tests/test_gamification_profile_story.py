@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.domain.gamification.profile import build_gamification_summary
+from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant, render_template
 from jupr_app.domain.gamification.story_engine import compute_story_cards
 from jupr_app.domain.gamification.badge_rules import BadgeAward
 
@@ -138,5 +139,14 @@ def test_story_generation_highlight_and_foreshadow_dedupe():
     ctx = SimpleNamespace(club_id="club")
     stories = compute_story_cards(ctx, facts, awards)
     story_types = {(s["story_type"], s["context_id"]) for s in stories}
-    assert any(st[0] == "highlight.badge" for st in story_types)
+    assert any(st[0].startswith("highlight.badge.") for st in story_types)
     assert any(st[0].startswith("foreshadow.") for st in story_types)
+
+    highlight = next(story for story in stories if story["story_type"].startswith("highlight.badge."))
+    badge_copy = get_badge_copy("first_win")
+    seed = "1:first_win:first_win:highlight"
+    expected_title = render_template(
+        pick_variant(badge_copy["highlight"]["titles"], f"{seed}:title"),
+        {"badge_name": "First Win", "tape_excerpt": "The first win hit the archive."},
+    ) or "Highlight — First Win"
+    assert highlight["title"] == expected_title
