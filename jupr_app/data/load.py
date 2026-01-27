@@ -1,6 +1,8 @@
 import time
 import pandas as pd
 
+from jupr_app.domain.player_activity import add_activity_columns
+
 
 def load_data(supabase, club_id: str, match_limit: int = 5000):
     """
@@ -26,7 +28,9 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             )
             df_players_all = pd.DataFrame(p_resp.data or [])
 
-            # Active players
+            df_players_all = add_activity_columns(df_players_all)
+
+            # Active players (inactive_at is authoritative when present)
             if not df_players_all.empty and "active" in df_players_all.columns:
                 df_players_active = df_players_all[df_players_all["active"] == True].copy()
             else:
@@ -91,7 +95,17 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             else:
                 id_to_name, name_to_id = {}, {}
                 df_players_all = pd.DataFrame(
-                    columns=["id", "name", "rating", "wins", "losses", "matches_played", "active"]
+                    columns=[
+                        "id",
+                        "name",
+                        "rating",
+                        "wins",
+                        "losses",
+                        "matches_played",
+                        "active",
+                        "last_game_at",
+                        "inactive_at",
+                    ]
                 )
                 df_players_active = df_players_all.copy()
 

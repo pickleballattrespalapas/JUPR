@@ -215,6 +215,10 @@ def _summarize_player_stats(df: pd.DataFrame, group_cols: list[str]) -> pd.DataF
 def _build_league_standings(ctx, league_name: str) -> pd.DataFrame:
     df_leagues = getattr(ctx, "df_leagues", None)
     id_to_name = getattr(ctx, "id_to_name", {})
+    active_ids = None
+    df_players_active = getattr(ctx, "df_players_active", None)
+    if df_players_active is not None and not df_players_active.empty and "id" in df_players_active.columns:
+        active_ids = set(df_players_active["id"].astype(int).tolist())
     if df_leagues is None or df_leagues.empty or "league_name" not in df_leagues.columns:
         return pd.DataFrame()
 
@@ -225,6 +229,10 @@ def _build_league_standings(ctx, league_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     league_df["player_id"] = league_df["player_id"].astype(int)
+    if active_ids is not None:
+        league_df = league_df[league_df["player_id"].isin(active_ids)].copy()
+        if league_df.empty:
+            return pd.DataFrame()
     league_df["name"] = league_df["player_id"].map(id_to_name)
     league_df["rating"] = pd.to_numeric(league_df.get("rating", 0), errors="coerce").fillna(0.0)
     league_df["starting_rating"] = pd.to_numeric(
@@ -467,6 +475,7 @@ def render(ctx):
     df_matches = getattr(ctx, "df_matches", None)
     df_meta = getattr(ctx, "df_meta", None)
     df_players_all = getattr(ctx, "df_players_all", None)
+    df_players_active = getattr(ctx, "df_players_active", None)
 
     if df_matches is None or df_matches.empty:
         st.info("No matches loaded.")
@@ -489,6 +498,13 @@ def render(ctx):
     if player_frame.empty:
         st.info("No player results found in this league.")
         return
+
+    if df_players_active is not None and not df_players_active.empty and "id" in df_players_active.columns:
+        active_ids = set(df_players_active["id"].astype(int).tolist())
+        player_frame = player_frame[player_frame["player_id"].astype(int).isin(active_ids)].copy()
+        if player_frame.empty:
+            st.info("No active players found for this league.")
+            return
 
     overall_stats = _summarize_player_stats(player_frame, ["player_id", "player_name"])
     weekly_stats = _summarize_player_stats(player_frame, ["player_id", "player_name", "week_num"]) if not player_frame.empty else pd.DataFrame()

@@ -36,6 +36,7 @@ def render(ctx):
                     "losses": 0,
                     "matches_played": 0,
                     "active": True,
+                    "inactive_at": None,
                 }
                 supabase.table("players").insert(payload).execute()
                 st.success("Added. Use Refresh in sidebar to reload cached data.")
@@ -144,13 +145,29 @@ def render(ctx):
     st.caption("Rewires Source → Target in matches + league_ratings. After merge: run Admin Tools → Replay History → ALL.")
 
     # Load all players live
-    allp = supabase.table("players").select("id,name,active").eq("club_id", club_id).order("name", desc=False).execute().data or []
+    allp = (
+        supabase.table("players")
+        .select("id,name,active,inactive_at")
+        .eq("club_id", club_id)
+        .order("name", desc=False)
+        .execute()
+        .data
+        or []
+    )
     dfp = pd.DataFrame(allp)
     if dfp.empty:
         st.info("No players found.")
         return
 
-    dfp["label"] = dfp.apply(lambda r: f"{r['name']} (#{int(r['id'])})" + ("" if bool(r.get("active", True)) else " [inactive]"), axis=1)
+    def _is_active(row) -> bool:
+        if "inactive_at" in row and pd.notna(row.get("inactive_at")):
+            return False
+        return bool(row.get("active", True))
+
+    dfp["label"] = dfp.apply(
+        lambda r: f"{r['name']} (#{int(r['id'])})" + ("" if _is_active(r) else " [inactive]"),
+        axis=1,
+    )
     label_to_id = dict(zip(dfp["label"], dfp["id"]))
 
     cA, cB = st.columns(2)
@@ -190,7 +207,14 @@ def render(ctx):
         dst_p = supabase.table("players").select("name").eq("club_id", club_id).eq("id", int(dst_id)).limit(1).execute().data
         src_name = str(src_p[0]["name"]) if src_p else f"#{src_id}"
         dst_name = str(dst_p[0]["name"]) if dst_p else f"#{dst_id}"
-        supabase.table("players").update({"active": False, "name": f"{src_name} (MERGED into {dst_name} #{dst_id})"}).eq("club_id", club_id).eq("id", int(src_id)).execute()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        supabase.table("players").update(
+            {
+                "active": False,
+                "inactive_at": now_iso,
+                "name": f"{src_name} (MERGED into {dst_name} #{dst_id})",
+            }
+        ).eq("club_id", club_id).eq("id", int(src_id)).execute()
 
         st.success("Merge completed. Now run Admin Tools → Replay History → ALL.")
         time.sleep(0.4)
