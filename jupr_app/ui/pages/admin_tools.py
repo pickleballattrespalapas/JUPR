@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
+from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.ui.layout import page_shell
 
 def render(ctx):
@@ -276,3 +278,53 @@ def render(ctx):
                 file_name=f"{report_league}_report_{datetime.now(timezone.utc).date().isoformat()}.csv",
                 mime="text/csv",
             )
+
+    st.divider()
+
+    # -------------------------
+    # Badge Backfill
+    # -------------------------
+    st.subheader("🎖️ Badge Backfill")
+    st.caption("Compute badge candidates and write any missing awards for this club.")
+
+    league_options = ["All leagues"]
+    if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+        league_options += sorted(df_meta["league_name"].dropna().astype(str).unique().tolist())
+
+    league_choice = st.selectbox("League scope", league_options, key="badge_backfill_league")
+    use_as_of = st.checkbox("Run as-of date", value=False, key="badge_backfill_asof")
+    as_of_date = None
+    if use_as_of:
+        as_of_date = st.date_input("As-of date", value=datetime.now(timezone.utc).date(), key="badge_backfill_date")
+
+    if st.button("Run Badge Backfill", key="badge_backfill_run"):
+        with st.spinner("Computing badge candidates..."):
+            league_id = None if league_choice == "All leagues" else str(league_choice).strip()
+            as_of_dt = None
+            if as_of_date is not None:
+                as_of_dt = datetime.combine(as_of_date, datetime.min.time(), tzinfo=timezone.utc)
+
+            candidates = list(
+                compute_candidates_for_club(
+                    club_id=club_id,
+                    league_id=league_id,
+                    as_of=as_of_dt,
+                    ctx=ctx,
+                )
+            )
+            if not candidates:
+                st.info("No badge candidates found.")
+            else:
+                created = upsert_player_badges(supabase, club_id, candidates)
+                if not created:
+                    st.success("No new badges to award.")
+                else:
+                    summary = (
+                        pd.Series([c.badge_id for c in created], name="badge_id")
+                        .value_counts()
+                        .reset_index(name="new_awards")
+                        .sort_values("new_awards", ascending=False)
+                    )
+                    st.success(f"Awarded {len(created)} new badges.")
+                    st.caption("Developer summary: new awards by badge ID.")
+                    st.dataframe(summary, use_container_width=True, hide_index=True)

@@ -44,7 +44,27 @@ def _parse_simple_yaml(raw: str) -> dict[str, Any]:
         except Exception:
             return value
 
-    for idx, line in enumerate(lines):
+    def _collect_block(start_index: int, base_indent: int) -> tuple[str, int]:
+        block_lines: list[str] = []
+        idx = start_index + 1
+        min_indent = None
+        while idx < len(lines):
+            next_line = lines[idx]
+            next_indent = len(next_line) - len(next_line.lstrip(" "))
+            if next_indent <= base_indent:
+                break
+            if min_indent is None or next_indent < min_indent:
+                min_indent = next_indent
+            block_lines.append(next_line)
+            idx += 1
+        if min_indent is None:
+            return "", idx - 1
+        cleaned = [line[min_indent:] if len(line) >= min_indent else "" for line in block_lines]
+        return "\n".join(cleaned), idx - 1
+
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
         indent = len(line) - len(line.lstrip(" "))
         content = line.strip()
         while stack and indent <= stack[-1][0]:
@@ -58,18 +78,30 @@ def _parse_simple_yaml(raw: str) -> dict[str, Any]:
                     raise ValueError("Malformed YAML: list without key")
                 parent = new_list
             item_value = content[2:].strip()
-            if item_value == "":
+            if item_value in {"|", ">"}:
+                block, idx = _collect_block(idx, indent)
+                parent.append(block)
+            elif item_value == "":
                 new_item: dict[str, Any] = {}
                 parent.append(new_item)
                 stack.append((indent, new_item))
             else:
                 parent.append(_parse_value(item_value))
+            idx += 1
             continue
 
         if ":" in content:
             key, remainder = content.split(":", 1)
             key = key.strip()
             value = remainder.strip()
+            if value in {"|", ">"}:
+                block, idx = _collect_block(idx, indent)
+                if isinstance(parent, dict):
+                    parent[key] = block
+                else:
+                    raise ValueError("Malformed YAML: mapping entry in list")
+                idx += 1
+                continue
             if value == "":
                 container: Any = {}
                 if idx + 1 < len(lines):
@@ -87,7 +119,10 @@ def _parse_simple_yaml(raw: str) -> dict[str, Any]:
                     parent[key] = _parse_value(value)
                 else:
                     raise ValueError("Malformed YAML: mapping entry in list")
+            idx += 1
             continue
+
+        idx += 1
 
     return root
 
