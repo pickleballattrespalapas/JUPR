@@ -47,9 +47,26 @@ def build_gamification_summary(
     pb = df_player_badges.copy() if df_player_badges is not None else pd.DataFrame()
 
     badge_defs["badge_id"] = badge_defs.get("badge_id", "").astype(str)
+    badge_defs["prestige"] = pd.to_numeric(badge_defs.get("prestige", 0), errors="coerce").fillna(0)
     if "is_active" not in badge_defs.columns:
         badge_defs["is_active"] = True
     badge_defs["is_active"] = badge_defs["is_active"].fillna(True)
+    rarity_fallback = False
+    if "rarity" not in badge_defs.columns:
+        rarity_fallback = True
+        badge_defs["rarity"] = badge_defs["prestige"].apply(rarity_from_prestige)
+    else:
+        missing_rarity = badge_defs["rarity"].isna() | (
+            badge_defs["rarity"].astype(str).str.strip() == ""
+        )
+        if missing_rarity.any():
+            rarity_fallback = True
+            badge_defs.loc[missing_rarity, "rarity"] = badge_defs.loc[
+                missing_rarity, "prestige"
+            ].apply(rarity_from_prestige)
+
+    if __debug__:
+        assert "rarity" in badge_defs.columns or rarity_fallback
     active_badges = badge_defs[badge_defs["is_active"] != False].copy()
 
     pb = pb[pb.get("player_id") == int(player_id)].copy() if not pb.empty else pd.DataFrame()
@@ -82,7 +99,7 @@ def build_gamification_summary(
                     "badge_id": badge_id,
                     "name": first.get("name"),
                     "category": first.get("category"),
-                    "rarity": first.get("rarity"),
+                    "rarity": _resolve_rarity(first.get("rarity"), first.get("prestige", 0)),
                     "prestige": int(first.get("prestige", 0) or 0),
                     "lore": first.get("lore"),
                     "icon_key": first.get("icon_key"),
@@ -105,7 +122,7 @@ def build_gamification_summary(
                 "badge_id": row.badge_id,
                 "name": row.name,
                 "category": row.category,
-                "rarity": row.rarity,
+                "rarity": _resolve_rarity(getattr(row, "rarity", None), getattr(row, "prestige", 0)),
                 "prestige": int(getattr(row, "prestige", 0) or 0),
                 "lore": row.lore,
                 "hint": row.hint,
@@ -146,6 +163,33 @@ def _fallback_tape_excerpt(name: str, category: str) -> str:
         f"The {safe_category.lower()} reel keeps the moment on loop.",
     ]
     return "\n".join(lines)
+
+
+def rarity_from_prestige(prestige: float | int) -> str:
+    try:
+        prestige_value = float(prestige)
+    except (TypeError, ValueError):
+        prestige_value = 0.0
+
+    if prestige_value >= 90:
+        return "legendary"
+    if prestige_value >= 70:
+        return "epic"
+    if prestige_value >= 50:
+        return "rare"
+    if prestige_value >= 30:
+        return "uncommon"
+    return "common"
+
+
+def _resolve_rarity(value: Any, prestige: Any) -> str:
+    if value is None:
+        return rarity_from_prestige(prestige)
+    if isinstance(value, float) and pd.isna(value):
+        return rarity_from_prestige(prestige)
+    if isinstance(value, str) and not value.strip():
+        return rarity_from_prestige(prestige)
+    return str(value)
 
 
 def _coerce_int(value: Any, fallback: int) -> int:
