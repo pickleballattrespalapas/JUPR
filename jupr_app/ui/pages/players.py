@@ -97,7 +97,7 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     try:
         b_resp = (
             _supabase.table("badges")
-            .select("badge_id,name,prestige,category")
+            .select("badge_id,badge_name,name,title,prestige,category,icon")
             .in_("badge_id", badge_ids)
             .execute()
         )
@@ -405,6 +405,17 @@ def _format_earned_at(value: object | None) -> str:
     if pd.isna(earned_at_dt):
         return ""
     return earned_at_dt.date().isoformat()
+
+
+def _trophy_display_name(row: pd.Series) -> str:
+    for key in ["badge_name", "name", "title"]:
+        value = row.get(key)
+        if value is None:
+            continue
+        cleaned = str(value).strip()
+        if cleaned:
+            return cleaned
+    return "Trophy"
 
 
 def _decorate_trophies_with_leagues(
@@ -1001,9 +1012,8 @@ def render(ctx):
                         pid,
                     )
                     continue
-                badge_id = str(row.get("badge_id") or "")
-                icon = badge_icon(badge_id, row.get("category"))
-                trophy_title = str(row.get("name") or "Trophy")
+                icon = "🏆"
+                trophy_title = _trophy_display_name(row)
                 league_label = str(row.get("league_label") or "League")
                 earned_at_label = _format_earned_at(row.get("earned_at"))
                 card = f"""
@@ -1028,81 +1038,6 @@ def render(ctx):
                     "No trophies yet. Win podium finishes in completed leagues to earn trophies.",
                     label="trophies.case.empty",
                 )
-
-        badge_markdown("#### All Trophies", label="trophies.all.header")
-        filter_options = ["All completed leagues"] + league_options
-        selected_league = st.selectbox(
-            "Filter by completed league (optional)",
-            options=filter_options,
-            format_func=lambda x: league_labels.get(x, x),
-            key=f"trophy_completed_league_{pid}",
-        )
-        selected_league_id = None if selected_league == "All completed leagues" else selected_league
-        all_trophies = get_player_trophies(
-            player_badges,
-            pid,
-            completed_league_ids,
-            league_id=selected_league_id,
-            completed_only=True,
-        )
-        all_trophies = _decorate_trophies_with_leagues(all_trophies, league_labels)
-        if all_trophies.empty:
-            if selected_league_id:
-                badge_caption("No trophies earned in this league.", label="trophies.all.empty.league")
-            else:
-                badge_caption(
-                    "No trophies yet. Win podium finishes in completed leagues to earn trophies.",
-                    label="trophies.all.empty",
-                )
-        else:
-            trophy_items = []
-            for _, row in all_trophies.iterrows():
-                row_player_id = row.get("player_id")
-                if row_player_id is not None and int(row_player_id) != int(pid):
-                    logger.warning(
-                        "Skipping trophy for non-owner player_id=%s on player_id=%s view",
-                        row_player_id,
-                        pid,
-                    )
-                    continue
-                badge_id = str(row.get("badge_id") or "")
-                icon = badge_icon(badge_id, row.get("category"))
-                trophy_title = str(row.get("name") or "Trophy")
-                league_label = str(row.get("league_label") or "League")
-                earned_at_label = _format_earned_at(row.get("earned_at"))
-                detail_parts = [league_label]
-                if earned_at_label:
-                    detail_parts.append(f"Earned {earned_at_label}")
-                body = " • ".join(detail_parts)
-                trophy_items.append(
-                    "<span class='trophy-chip'>"
-                    f"<span>{html.escape(icon)}</span>"
-                    "<span class='trophy-text'>"
-                    f"<span class='trophy-title'>{html.escape(trophy_title)}</span>"
-                    f"<span class='trophy-body'>{html.escape(body)}</span>"
-                    "</span>"
-                    "</span>"
-                )
-            if trophy_items:
-                trophy_html = f"""
-                <div class="trophy-section">
-                    <div class="trophy-label">All Trophies</div>
-                    <div class="trophy-chip-row">{''.join(trophy_items)}</div>
-                </div>
-                """
-                render_badge_html(
-                    trophy_html,
-                    label="trophies.earned",
-                    height=150 + len(trophy_items) * 35,
-                )
-            else:
-                if selected_league_id:
-                    badge_caption("No trophies earned in this league.", label="trophies.all.empty.league")
-                else:
-                    badge_caption(
-                        "No trophies yet. Win podium finishes in completed leagues to earn trophies.",
-                        label="trophies.all.empty",
-                    )
 
         top_prestige_key = f"top_prestige_{pid}"
         if top_prestige_key in st.session_state:
