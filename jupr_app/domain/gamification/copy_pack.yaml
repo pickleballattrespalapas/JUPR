@@ -1255,6 +1255,60 @@ badges:
           The standings are tightening.
           The next chapter might decide everything.
 
+  league_runner_up:
+    name: "League Runner-Up"
+    lore: "Second place still leaves a mark on the league."
+    hint: "Hold the line just below the top."
+    tape_excerpts:
+      - |
+        The season closes with your name just shy of the summit.
+        The league remembers second.
+      - |
+        Close enough to feel the title.
+        Strong enough to keep it honest.
+    highlight:
+      titles:
+        - "Runner-Up"
+        - "Second Line"
+      bodies:
+        - |
+          The season stayed within reach.
+          The league felt the pressure.
+    foreshadow:
+      titles:
+        - "One Step Higher"
+      bodies:
+        - |
+          The top line is within reach.
+          One more push changes the order.
+
+  league_third_place:
+    name: "League Third Place"
+    lore: "The podium holds you when the season ends."
+    hint: "Stay in the top three when the league closes."
+    tape_excerpts:
+      - |
+        The season ends.
+        The podium still has your name.
+      - |
+        The league keeps a short list.
+        You’re on it.
+    highlight:
+      titles:
+        - "Third Place"
+        - "Podium Finish"
+      bodies:
+        - |
+          The table has three spots that matter.
+          You claimed one.
+    foreshadow:
+      titles:
+        - "The Podium is Close"
+      bodies:
+        - |
+          The standings are close enough to feel.
+          Hold your ground.
+
   podium:
     name: "Podium"
     lore: "Top three means your season gets remembered even by people who weren’t there."
@@ -1592,4 +1646,3 @@ badges:
         - |
           Your recent tape looks stable.
           If it stays that way, the archive will stamp it.
-
