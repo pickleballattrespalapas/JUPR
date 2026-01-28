@@ -323,6 +323,7 @@ def main():
             moneyball,
             theme_gallery,
             tournaments,
+            tournament_manager,
         )
 
         # ---- Router ----
@@ -346,6 +347,7 @@ def main():
             "💰 Moneyball": moneyball,
             "🎨 Theme QA": theme_gallery,
             "🏆 Tournaments": tournaments,
+            "🏆 Tournament Manager": tournament_manager,
         }
 
         PAGE_KEY_TO_LABEL = {
@@ -368,6 +370,7 @@ def main():
             "moneyball": "💰 Moneyball",
             "theme_qa": "🎨 Theme QA",
             "tournaments": "🏆 Tournaments",
+            "tournament_manager": "🏆 Tournament Manager",
         }
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
@@ -382,6 +385,7 @@ def main():
             "💰 Moneyball",
             "🎨 Theme QA",
             "🏆 Tournaments",
+            "🏆 Tournament Manager",
         }
 
         # Visible labels based on auth
