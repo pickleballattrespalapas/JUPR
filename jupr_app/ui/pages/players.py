@@ -1,4 +1,5 @@
 import html
+import json
 import logging
 import math
 import re
@@ -13,6 +14,7 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
 )
+from jupr_app.domain.gamification.podium_awards import award_league_podium_badges
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,10 @@ BADGE_ICONS = {
     "consistency": "🎯",
     "giant_slayer": "🗡️",
     "upset_champion": "👑",
+    "league_champion": "🥇",
+    "league_runner_up": "🥈",
+    "league_third_place": "🥉",
+    "podium": "🏅",
 }
 
 
@@ -322,81 +328,55 @@ def _filter_league_matches(df_matches: pd.DataFrame, league_name: str) -> pd.Dat
     return df
 
 
-def build_completed_league_podium(
-    df_matches: pd.DataFrame | None,
-    df_leagues: pd.DataFrame | None,
-    id_to_name: dict[int, str],
-    league_name: str,
-) -> pd.DataFrame:
-    if df_matches is None or df_matches.empty:
-        return pd.DataFrame()
-
-    league_matches = _filter_league_matches(df_matches, league_name)
-    if league_matches.empty:
-        return pd.DataFrame()
-
-    max_week = league_matches["week_num"].dropna().max()
-    if pd.notna(max_week):
-        league_matches = league_matches[league_matches["week_num"].fillna(max_week) <= max_week].copy()
-
-    rows: list[dict] = []
-    for _, match in league_matches.iterrows():
+def _parse_value_json(raw: object) -> dict:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
         try:
-            p1 = int(match.get("t1_p1"))
-            p2 = int(match.get("t1_p2"))
-            p3 = int(match.get("t2_p1"))
-            p4 = int(match.get("t2_p2"))
-            s1 = int(match.get("score_t1", 0) or 0)
-            s2 = int(match.get("score_t2", 0) or 0)
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
         except Exception:
-            continue
-        if (s1 + s2) <= 0:
-            continue
-        t1_win = s1 > s2
-        t2_win = s2 > s1
-        for pid, team in [(p1, 1), (p2, 1), (p3, 2), (p4, 2)]:
-            win = 1 if (t1_win and team == 1) or (t2_win and team == 2) else 0
-            loss = 1 if (t1_win and team == 2) or (t2_win and team == 1) else 0
-            rows.append(
-                {
-                    "player_id": int(pid),
-                    "name": id_to_name.get(int(pid), f"#{int(pid)}"),
-                    "games": 1,
-                    "wins": int(win),
-                    "losses": int(loss),
-                }
-            )
+            return {}
+    return {}
 
-    if not rows:
+
+def filter_player_league_trophies(
+    player_badges: pd.DataFrame | None,
+    player_id: int,
+    league_id: str,
+) -> pd.DataFrame:
+    if player_badges is None or player_badges.empty:
         return pd.DataFrame()
 
-    stats = (
-        pd.DataFrame(rows)
-        .groupby(["player_id", "name"], as_index=False)
-        .agg(games=("games", "sum"), wins=("wins", "sum"), losses=("losses", "sum"))
-    )
-    stats["win_pct"] = stats.apply(
-        lambda r: (float(r["wins"]) / float(r["games"])) if int(r["games"]) > 0 else 0.0, axis=1
-    )
+    league_key = str(league_id).strip()
+    df = player_badges.copy()
+    if "player_id" in df.columns:
+        df = df[pd.to_numeric(df["player_id"], errors="coerce").fillna(-1).astype(int) == int(player_id)].copy()
+    if df.empty:
+        return pd.DataFrame()
 
-    rating_map = {}
-    if df_leagues is not None and not df_leagues.empty and "league_name" in df_leagues.columns:
-        league_rows = df_leagues.copy()
-        league_rows["league_name"] = league_rows["league_name"].astype(str).str.strip()
-        league_rows = league_rows[league_rows["league_name"] == str(league_name).strip()].copy()
-        if not league_rows.empty and "player_id" in league_rows.columns:
-            league_rows["player_id"] = pd.to_numeric(league_rows["player_id"], errors="coerce").fillna(-1).astype(int)
-            league_rows["rating"] = pd.to_numeric(league_rows.get("rating", 0), errors="coerce").fillna(0.0)
-            rating_map = dict(zip(league_rows["player_id"], league_rows["rating"]))
+    def _match_league(row: pd.Series) -> bool:
+        value_json = _parse_value_json(row.get("value_json"))
+        league_val = value_json.get("league_id") or value_json.get("league")
+        if league_val is not None and str(league_val).strip() == league_key:
+            return True
+        context_type = str(row.get("context_type", "")).strip()
+        context_id = str(row.get("context_id", "")).strip()
+        if context_type == "league" and context_id:
+            if context_id == league_key:
+                return True
+            if context_id.startswith(f"{league_key}:"):
+                return True
+        return False
 
-    stats["rating"] = stats["player_id"].map(rating_map).fillna(0.0)
-    stats = stats.sort_values(
-        ["wins", "win_pct", "rating", "games"],
-        ascending=[False, False, False, False],
-        kind="mergesort",
-    ).reset_index(drop=True)
-    stats["rank"] = range(1, len(stats) + 1)
-    return stats.head(3)
+    df = df[df.apply(_match_league, axis=1)].copy()
+    if "earned_at" in df.columns:
+        df["earned_at_dt"] = pd.to_datetime(df.get("earned_at"), utc=True, errors="coerce")
+        df = df.sort_values(["earned_at_dt"], ascending=False, na_position="last")
+    return df
 
 
 @st.cache_data(ttl=300)
@@ -880,47 +860,58 @@ def render(ctx):
                 selected_league = league_options[0]
 
             league_label = league_labels.get(selected_league, selected_league)
-            podium_df = build_completed_league_podium(
-                df_matches,
-                df_leagues,
-                getattr(ctx, "id_to_name", {}),
-                selected_league,
-            )
-            if podium_df.empty:
-                badge_caption("No completed leagues yet.", label="trophies.empty")
+            award_league_podium_badges(ctx, selected_league)
+            league_trophies = filter_player_league_trophies(player_badges, pid, selected_league)
+            if league_trophies.empty:
+                badge_caption("No trophies earned for this league (yet).", label="trophies.empty")
             else:
-                icon_map = {1: "🥇", 2: "🥈", 3: "🥉"}
                 trophy_items = []
-                for _, row in podium_df.iterrows():
-                    rank = int(row.get("rank", 0) or 0)
-                    icon = icon_map.get(rank, "🏆")
-                    games = int(row.get("games", 0) or 0)
-                    win_pct = float(row.get("win_pct", 0) or 0)
-                    rating_val = float(row.get("rating", 0) or 0)
-                    rating_text = f"{rating_val:.0f}" if rating_val else "—"
-                    subtitle = f"{rank}. {row.get('name', 'Player')}"
-                    body = f"{games} games • {win_pct:.0%} win rate • Final JUPR {rating_text}"
+                for _, row in league_trophies.iterrows():
+                    row_player_id = row.get("player_id")
+                    if row_player_id is not None and int(row_player_id) != int(pid):
+                        logger.warning(
+                            "Skipping trophy for non-owner player_id=%s on player_id=%s view",
+                            row_player_id,
+                            pid,
+                        )
+                        continue
+                    badge_id = str(row.get("badge_id") or "")
+                    icon = badge_icon(badge_id, row.get("category"))
+                    trophy_title = str(row.get("name") or "Trophy")
+                    value_json = _parse_value_json(row.get("value_json"))
+                    rank = value_json.get("rank")
+                    earned_at = row.get("earned_at")
+                    earned_at_dt = pd.to_datetime(earned_at, utc=True, errors="coerce")
+                    detail_parts = []
+                    if rank:
+                        detail_parts.append(f"Rank {rank}")
+                    if pd.notna(earned_at_dt):
+                        detail_parts.append(f"Earned {earned_at_dt.date().isoformat()}")
+                    body = " • ".join(detail_parts) if detail_parts else "League trophy"
                     trophy_items.append(
                         "<span class='trophy-chip'>"
                         f"<span>{html.escape(icon)}</span>"
                         "<span class='trophy-text'>"
-                        f"<span class='trophy-title'>{html.escape(subtitle)}</span>"
+                        f"<span class='trophy-title'>{html.escape(trophy_title)}</span>"
                         f"<span class='trophy-body'>{html.escape(body)}</span>"
                         "</span>"
                         "</span>"
                     )
-                trophy_html = f"""
-                <div class="trophy-section">
-                    <div class="trophy-label">Top Performers (Completed League)</div>
-                    <div class="trophy-league">{html.escape(league_label)}</div>
-                    <div class="trophy-chip-row">{''.join(trophy_items)}</div>
-                </div>
-                """
-                render_badge_html(
-                    trophy_html,
-                    label="trophies.top_performers",
-                    height=150 + len(trophy_items) * 35,
-                )
+                if trophy_items:
+                    trophy_html = f"""
+                    <div class="trophy-section">
+                        <div class="trophy-label">Trophies Earned (Completed League)</div>
+                        <div class="trophy-league">{html.escape(league_label)}</div>
+                        <div class="trophy-chip-row">{''.join(trophy_items)}</div>
+                    </div>
+                    """
+                    render_badge_html(
+                        trophy_html,
+                        label="trophies.earned",
+                        height=150 + len(trophy_items) * 35,
+                    )
+                else:
+                    badge_caption("No trophies earned for this league (yet).", label="trophies.empty")
 
         top_prestige_key = f"top_prestige_{pid}"
         if top_prestige_key in st.session_state:

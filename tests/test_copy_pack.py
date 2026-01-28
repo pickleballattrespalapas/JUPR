@@ -45,6 +45,8 @@ def test_copy_pack_has_required_badges():
         "steady_hand",
         "mr_reliable",
         "league_champion",
+        "league_runner_up",
+        "league_third_place",
         "podium",
         "good_sport",
         "community_builder",

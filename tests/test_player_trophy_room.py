@@ -1,6 +1,53 @@
+from types import SimpleNamespace
+
 import pandas as pd
 
-from jupr_app.ui.pages.players import build_completed_league_podium, build_inactive_league_options
+from jupr_app.domain.gamification.podium_awards import award_league_podium_badges
+from jupr_app.ui.pages.players import build_inactive_league_options, filter_player_league_trophies
+
+
+class FakeTable:
+    def __init__(self, storage, name):
+        self.storage = storage
+        self.name = name
+        self.filters = []
+
+    def select(self, _cols):
+        return self
+
+    def eq(self, column, value):
+        self.filters.append(("eq", column, value))
+        return self
+
+    def upsert(self, rows, on_conflict=None):
+        existing = self.storage.setdefault(self.name, [])
+        if not on_conflict:
+            existing.extend(rows)
+            return self
+        keys = [c.strip() for c in str(on_conflict).split(",") if c.strip()]
+        existing_keys = {tuple(row.get(k) for k in keys) for row in existing}
+        for row in rows:
+            key = tuple(row.get(k) for k in keys)
+            if key in existing_keys:
+                continue
+            existing.append(row)
+            existing_keys.add(key)
+        return self
+
+    def execute(self):
+        data = list(self.storage.get(self.name, []))
+        for op, column, value in self.filters:
+            if op == "eq":
+                data = [row for row in data if str(row.get(column)) == str(value)]
+        return SimpleNamespace(data=data)
+
+
+class FakeSupabase:
+    def __init__(self, storage=None):
+        self.storage = storage or {}
+
+    def table(self, name):
+        return FakeTable(self.storage, name)
 
 
 def test_build_inactive_league_options_prefers_completed():
@@ -33,57 +80,64 @@ def test_build_inactive_league_options_prefers_completed():
     assert options["league_name"].tolist() == ["Summer 2024 Ladder", "Spring 2024 Ladder"]
 
 
-def test_build_completed_league_podium_orders_by_wins_and_rating():
-    df_matches = pd.DataFrame(
+def test_filter_player_league_trophies_scoped_to_player_and_league():
+    df = pd.DataFrame(
         [
             {
-                "league": "Spring 2024 Ladder",
-                "t1_p1": 1,
-                "t1_p2": 2,
-                "t2_p1": 3,
-                "t2_p2": 4,
-                "score_t1": 11,
-                "score_t2": 5,
-                "week_tag": "Week 1",
+                "player_id": 1,
+                "badge_id": "league_champion",
+                "context_type": "league",
+                "context_id": "Spring 2024 Ladder:podium:1",
+                "value_json": {"league_id": "Spring 2024 Ladder", "rank": 1},
             },
             {
-                "league": "Spring 2024 Ladder",
-                "t1_p1": 1,
-                "t1_p2": 3,
-                "t2_p1": 2,
-                "t2_p2": 4,
-                "score_t1": 8,
-                "score_t2": 11,
-                "week_tag": "Week 2",
+                "player_id": 2,
+                "badge_id": "league_champion",
+                "context_type": "league",
+                "context_id": "Spring 2024 Ladder:podium:1",
+                "value_json": {"league_id": "Spring 2024 Ladder", "rank": 1},
             },
             {
-                "league": "Spring 2024 Ladder",
-                "t1_p1": 1,
-                "t1_p2": 4,
-                "t2_p1": 2,
-                "t2_p2": 3,
-                "score_t1": 11,
-                "score_t2": 9,
-                "week_tag": "Week 3",
+                "player_id": 1,
+                "badge_id": "league_runner_up",
+                "context_type": "league",
+                "context_id": "Fall 2024 Ladder:podium:2",
+                "value_json": {"league_id": "Fall 2024 Ladder", "rank": 2},
             },
         ]
     )
+
+    filtered = filter_player_league_trophies(df, 1, "Spring 2024 Ladder")
+
+    assert filtered["player_id"].tolist() == [1]
+    assert filtered["badge_id"].tolist() == ["league_champion"]
+
+
+def test_award_league_podium_badges_is_idempotent():
     df_leagues = pd.DataFrame(
         [
-            {"league_name": "Spring 2024 Ladder", "player_id": 1, "rating": 1500},
-            {"league_name": "Spring 2024 Ladder", "player_id": 2, "rating": 1400},
-            {"league_name": "Spring 2024 Ladder", "player_id": 3, "rating": 1300},
-            {"league_name": "Spring 2024 Ladder", "player_id": 4, "rating": 1200},
+            {"league_name": "Spring 2024 Ladder", "player_id": 1, "rating": 1500, "matches_played": 10},
+            {"league_name": "Spring 2024 Ladder", "player_id": 2, "rating": 1400, "matches_played": 9},
+            {"league_name": "Spring 2024 Ladder", "player_id": 3, "rating": 1300, "matches_played": 8},
         ]
     )
-    id_to_name = {1: "Alice", 2: "Ben", 3: "Cory", 4: "Dia"}
-
-    podium = build_completed_league_podium(
-        df_matches,
-        df_leagues,
-        id_to_name,
-        "Spring 2024 Ladder",
+    storage = {"player_badges": []}
+    supabase = FakeSupabase(storage)
+    ctx = SimpleNamespace(
+        df_leagues=df_leagues,
+        club_id="club",
+        supabase=supabase,
+        public_mode=False,
     )
 
-    assert podium["player_id"].tolist() == [1, 2, 4]
-    assert podium["rank"].tolist() == [1, 2, 3]
+    award_league_podium_badges(ctx, "Spring 2024 Ladder")
+    award_league_podium_badges(ctx, "Spring 2024 Ladder")
+
+    inserted = storage["player_badges"]
+    assert len(inserted) == 3
+    badge_map = {(row["player_id"], row["badge_id"]) for row in inserted}
+    assert badge_map == {
+        (1, "league_champion"),
+        (2, "league_runner_up"),
+        (3, "league_third_place"),
+    }
