@@ -375,6 +375,75 @@ def compute_round_robin_standings(
     return results
 
 
+def compute_podium_from_rr(
+    teams: list[dict[str, Any]],
+    games: list[dict[str, Any]],
+    *,
+    max_placements: int = 3,
+) -> list[dict[str, Any]]:
+    standings = compute_round_robin_standings(teams, games)
+    placements: list[dict[str, Any]] = []
+    for idx, row in enumerate(standings[: max(0, max_placements)], start=1):
+        placements.append({"placement": idx, "team_id": row["team_id"], "seed": row.get("seed")})
+    return placements
+
+
+def compute_podium_from_playoffs(games: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    final_game = next((g for g in games if g.get("playoff_round") == "Final"), None)
+    bronze_game = next((g for g in games if g.get("playoff_round") == "Bronze"), None)
+    if not final_game or not bronze_game:
+        return None
+    if not final_game.get("finalized_at") or not bronze_game.get("finalized_at"):
+        return None
+    if not final_game.get("winner_team_id") or not final_game.get("loser_team_id"):
+        return None
+    if not bronze_game.get("winner_team_id"):
+        return None
+    return [
+        {"placement": 1, "team_id": final_game["winner_team_id"]},
+        {"placement": 2, "team_id": final_game["loser_team_id"]},
+        {"placement": 3, "team_id": bronze_game["winner_team_id"]},
+    ]
+
+
+def validate_podium_placements(
+    placements: list[dict[str, Any]],
+    *,
+    max_placements: int = 3,
+) -> None:
+    seen_team_ids: set[str] = set()
+    for placement in placements:
+        place = int(placement.get("placement", 0) or 0)
+        if place < 1 or place > max_placements:
+            raise ValueError("Podium placement must be between 1 and 3.")
+        team_id = placement.get("team_id")
+        if not team_id:
+            raise ValueError("Podium placement requires a team.")
+        if team_id in seen_team_ids:
+            raise ValueError("Podium placements must use distinct teams.")
+        seen_team_ids.add(team_id)
+
+
+def build_podium_payload(
+    tournament_id: str,
+    placements: list[dict[str, Any]],
+    source: str,
+) -> list[dict[str, Any]]:
+    ordered = sorted(placements, key=lambda row: int(row.get("placement", 0) or 0))
+    validate_podium_placements(ordered, max_placements=3)
+    payload = []
+    for row in ordered:
+        payload.append(
+            {
+                "tournament_id": tournament_id,
+                "placement": int(row["placement"]),
+                "team_id": row["team_id"],
+                "source": source,
+            }
+        )
+    return payload
+
+
 def _head_to_head_winner(team_a_id: str, team_b_id: str, games: list[dict[str, Any]]) -> str | None:
     for game in games:
         if {

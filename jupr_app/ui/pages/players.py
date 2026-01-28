@@ -168,6 +168,9 @@ BADGE_ICONS = {
     "league_champion": "🥇",
     "league_runner_up": "🥈",
     "league_third_place": "🥉",
+    "tournament_champion": "🥇",
+    "tournament_runner_up": "🥈",
+    "tournament_third_place": "🥉",
     "podium": "🏅",
 }
 
@@ -409,6 +412,14 @@ def _extract_league_id(row: pd.Series) -> str | None:
     return None
 
 
+def _extract_tournament_label(row: pd.Series) -> str | None:
+    value_json = _parse_value_json(row.get("value_json"))
+    tournament_val = value_json.get("tournament_name") or value_json.get("tournament_id")
+    if tournament_val is not None:
+        return _normalize_league_id(tournament_val)
+    return None
+
+
 def _format_earned_at(value: object | None) -> str:
     if value is None:
         return ""
@@ -474,7 +485,11 @@ def _decorate_trophies_with_leagues(
     if "league_id" not in df.columns:
         df["league_id"] = pd.NA
     df["league_id"] = df.apply(_extract_league_id, axis=1).fillna(df["league_id"])
-    df["league_label"] = df["league_id"].map(league_labels).fillna(df["league_id"]).fillna("League")
+    df["league_label"] = df["league_id"].map(league_labels).fillna(df["league_id"])
+    if "context_type" in df.columns:
+        tournament_labels = df.apply(_extract_tournament_label, axis=1)
+        df.loc[df["context_type"].astype(str).str.strip() == "tournament", "league_label"] = tournament_labels
+    df["league_label"] = df["league_label"].fillna("League")
     if "earned_at" not in df.columns:
         df["earned_at"] = pd.NaT
     df["earned_at_dt"] = pd.to_datetime(df["earned_at"], utc=True, errors="coerce")
@@ -506,7 +521,13 @@ def get_player_trophies(
         return pd.DataFrame()
     df = _decorate_trophies_with_leagues(df, {})
     if completed_only:
-        df = df[df["league_id"].isin(completed_league_ids)].copy()
+        if "context_type" in df.columns:
+            df = df[
+                df["league_id"].isin(completed_league_ids)
+                | (df["context_type"].astype(str).str.strip() == "tournament")
+            ].copy()
+        else:
+            df = df[df["league_id"].isin(completed_league_ids)].copy()
     if league_id:
         league_key = str(league_id).strip()
         df = df[df["league_id"] == league_key].copy()
