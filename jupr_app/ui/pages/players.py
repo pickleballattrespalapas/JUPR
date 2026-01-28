@@ -411,13 +411,32 @@ def _decorate_trophies_with_leagues(
     trophies: pd.DataFrame,
     league_labels: dict[str, str],
 ) -> pd.DataFrame:
-    if trophies.empty:
-        return trophies
-    df = trophies.copy()
-    df["league_id"] = df.apply(_extract_league_id, axis=1)
+    df = trophies if isinstance(trophies, pd.DataFrame) else pd.DataFrame(trophies)
+    if df.empty:
+        if "prestige_num" not in df.columns:
+            df["prestige_num"] = pd.Series(dtype="int64")
+        if "league_name" not in df.columns:
+            df["league_name"] = pd.Series(dtype="object")
+        if "earned_at_display" not in df.columns:
+            df["earned_at_display"] = pd.Series(dtype="object")
+        return df
+    df = df.copy()
+    if "league_id" not in df.columns:
+        df["league_id"] = pd.NA
+    df["league_id"] = df.apply(_extract_league_id, axis=1).fillna(df["league_id"])
     df["league_label"] = df["league_id"].map(league_labels).fillna(df["league_id"]).fillna("League")
-    df["earned_at_dt"] = pd.to_datetime(df.get("earned_at"), utc=True, errors="coerce")
-    df["prestige_num"] = pd.to_numeric(df.get("prestige", 0), errors="coerce").fillna(0).astype(int)
+    if "earned_at" not in df.columns:
+        df["earned_at"] = pd.NaT
+    df["earned_at_dt"] = pd.to_datetime(df["earned_at"], utc=True, errors="coerce")
+    if "prestige" in df.columns:
+        prestige_series = df["prestige"]
+    else:
+        prestige_series = pd.Series([0] * len(df), index=df.index)
+    df["prestige_num"] = (
+        pd.to_numeric(prestige_series, errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
     return df
 
 
