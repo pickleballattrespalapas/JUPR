@@ -398,90 +398,39 @@ def render(ctx):
     c1.metric("Player", pick_name)
     c2.metric("Overall JUPR", f"{current_jupr:.3f}")
 
-    # -------------------------
-    # Restore: Ratings by active league (table)
-    # -------------------------
-    st.markdown("### Ratings by active league")
+    tape_tab, ratings_tab = st.tabs(["Tape Room", "Ratings"])
 
-    active_leagues = []
-    if df_meta is not None and isinstance(df_meta, pd.DataFrame) and not df_meta.empty:
-        if "is_active" in df_meta.columns and "league_name" in df_meta.columns:
-            active_leagues = (
-                df_meta[df_meta["is_active"] == True]["league_name"]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .tolist()
-            )
+    with tape_tab:
+        debug_render = False
+        if bool(getattr(ctx, "admin_logged_in", False)):
+            debug_render = st.toggle("Debug badge render", value=False)
 
-    lr_rows = pd.DataFrame()
-    if df_leagues is not None and isinstance(df_leagues, pd.DataFrame) and not df_leagues.empty:
-        if "player_id" in df_leagues.columns:
-            lr_rows = df_leagues[df_leagues["player_id"].astype(int) == int(pid)].copy()
+        def _debug_html_warning(label: str, fn_name: str, text: str) -> None:
+            if not debug_render:
+                return
+            if "<div" in text or "badge-card" in text:
+                snippet = textwrap.shorten(text.replace("\n", " "), width=140, placeholder="…")
+                st.warning(f"Badge render debug ({label}) via {fn_name}: {snippet}")
 
-    if not lr_rows.empty:
-        if "league_name" in lr_rows.columns:
-            lr_rows["league_name"] = lr_rows["league_name"].astype(str).str.strip()
+        def badge_markdown(text: str, *, label: str) -> None:
+            _debug_html_warning(label, "markdown", text)
+            st.markdown(text)
 
-        if active_leagues and "league_name" in lr_rows.columns:
-            lr_rows = lr_rows[lr_rows["league_name"].isin(active_leagues)].copy()
+        def badge_write(text: str, *, label: str) -> None:
+            _debug_html_warning(label, "write", text)
+            st.write(text)
 
-        if "is_active" in lr_rows.columns:
-            lr_rows = lr_rows[lr_rows["is_active"] == True].copy()
+        def badge_caption(text: str, *, label: str) -> None:
+            _debug_html_warning(label, "caption", text)
+            st.caption(text)
 
-        if lr_rows.empty:
-            st.caption("No active league ratings found for this player.")
-        else:
-            if "rating" in lr_rows.columns:
-                lr_rows["League JUPR"] = lr_rows["rating"].astype(float) / 400.0
+        def badge_code(text: str, *, label: str) -> None:
+            _debug_html_warning(label, "code", text)
+            st.code(text)
 
-            cols = ["league_name", "League JUPR", "wins", "losses", "matches_played"]
-            cols = [c for c in cols if c in lr_rows.columns]
+        badge_markdown("### Badges", label="badges.header")
 
-            if "League JUPR" in lr_rows.columns:
-                lr_rows = lr_rows.sort_values("League JUPR", ascending=False)
-
-            st.dataframe(
-                lr_rows[cols].rename(
-                    columns={"league_name": "League", "wins": "W", "losses": "L", "matches_played": "MP"}
-                ),
-                use_container_width=True,
-                hide_index=True,
-                column_config={"League JUPR": st.column_config.NumberColumn(format="%.3f")},
-            )
-    else:
-        st.caption("No league ratings table entries found for this player yet.")
-
-    debug_render = False
-    if bool(getattr(ctx, "admin_logged_in", False)):
-        debug_render = st.toggle("Debug badge render", value=False)
-
-    def _debug_html_warning(label: str, fn_name: str, text: str) -> None:
-        if not debug_render:
-            return
-        if "<div" in text or "badge-card" in text:
-            snippet = textwrap.shorten(text.replace("\n", " "), width=140, placeholder="…")
-            st.warning(f"Badge render debug ({label}) via {fn_name}: {snippet}")
-
-    def badge_markdown(text: str, *, label: str) -> None:
-        _debug_html_warning(label, "markdown", text)
-        st.markdown(text)
-
-    def badge_write(text: str, *, label: str) -> None:
-        _debug_html_warning(label, "write", text)
-        st.write(text)
-
-    def badge_caption(text: str, *, label: str) -> None:
-        _debug_html_warning(label, "caption", text)
-        st.caption(text)
-
-    def badge_code(text: str, *, label: str) -> None:
-        _debug_html_warning(label, "code", text)
-        st.code(text)
-
-    badge_markdown("### Badges", label="badges.header")
-
-    badge_css = """
+        badge_css = """
         .badge-summary {
             display: flex;
             flex-wrap: wrap;
@@ -578,18 +527,18 @@ def render(ctx):
         }
     """
 
-    def _estimate_badge_height(cleaned: str) -> int:
-        card_count = cleaned.count("badge-card")
-        if card_count <= 0:
-            return 180
-        cards_per_row = 3 if "featured-grid" in cleaned else 4
-        rows = max(1, math.ceil(card_count / cards_per_row))
-        return 160 + rows * 170
+        def _estimate_badge_height(cleaned: str) -> int:
+            card_count = cleaned.count("badge-card")
+            if card_count <= 0:
+                return 180
+            cards_per_row = 3 if "featured-grid" in cleaned else 4
+            rows = max(1, math.ceil(card_count / cards_per_row))
+            return 160 + rows * 170
 
-    def render_badge_html(html_block: str, *, label: str, height: int | None = None) -> None:
-        cleaned = textwrap.dedent(html_block).strip()
-        _debug_html_warning(label, "st_html", cleaned)
-        doc = f"""<!doctype html>
+        def render_badge_html(html_block: str, *, label: str, height: int | None = None) -> None:
+            cleaned = textwrap.dedent(html_block).strip()
+            _debug_html_warning(label, "st_html", cleaned)
+            doc = f"""<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -597,54 +546,54 @@ def render(ctx):
   </head>
   <body>{cleaned}</body>
 </html>"""
-        resolved_height = height if height is not None else _estimate_badge_height(cleaned)
-        st_html(doc, height=resolved_height, scrolling=False)
-    badge_defs = getattr(ctx, "df_badges", None)
-    if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
-        badge_defs = fetch_badge_definitions(_supabase)
+            resolved_height = height if height is not None else _estimate_badge_height(cleaned)
+            st_html(doc, height=resolved_height, scrolling=False)
+        badge_defs = getattr(ctx, "df_badges", None)
+        if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
+            badge_defs = fetch_badge_definitions(_supabase)
 
-    player_badges = getattr(ctx, "df_player_badges", None)
-    if player_badges is None or (isinstance(player_badges, pd.DataFrame) and player_badges.empty):
-        try:
-            player_badges = fetch_player_badges(_supabase, club_id, pid)
-        except Exception:
-            logger.exception("Failed to fetch badges for player view")
-            player_badges = pd.DataFrame()
+        player_badges = getattr(ctx, "df_player_badges", None)
+        if player_badges is None or (isinstance(player_badges, pd.DataFrame) and player_badges.empty):
+            try:
+                player_badges = fetch_player_badges(_supabase, club_id, pid)
+            except Exception:
+                logger.exception("Failed to fetch badges for player view")
+                player_badges = pd.DataFrame()
 
-    summary = build_gamification_summary(pid, badge_defs, player_badges)
-    prestige_total = summary.get("prestige_total", 0)
-    collected_unique = summary.get("collected_unique_count", 0)
-    total_active = summary.get("total_active_badge_types", 0)
+        summary = build_gamification_summary(pid, badge_defs, player_badges)
+        prestige_total = summary.get("prestige_total", 0)
+        collected_unique = summary.get("collected_unique_count", 0)
+        total_active = summary.get("total_active_badge_types", 0)
 
-    unlocked_badges = summary.get("unlocked_badges", [])
-    locked_badges = summary.get("locked_badges", [])
+        unlocked_badges = summary.get("unlocked_badges", [])
+        locked_badges = summary.get("locked_badges", [])
 
-    top_prestige_key = f"top_prestige_{pid}"
-    if top_prestige_key in st.session_state:
-        top_prestige = st.session_state[top_prestige_key]
-    else:
-        prestige_sorted = sorted(
-            unlocked_badges,
-            key=lambda b: (
-                int(b.get("prestige", 0) or 0),
-                pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce"),
-            ),
-            reverse=True,
-        )
-        top_prestige = prestige_sorted[:5]
-        st.session_state[top_prestige_key] = top_prestige
+        top_prestige_key = f"top_prestige_{pid}"
+        if top_prestige_key in st.session_state:
+            top_prestige = st.session_state[top_prestige_key]
+        else:
+            prestige_sorted = sorted(
+                unlocked_badges,
+                key=lambda b: (
+                    int(b.get("prestige", 0) or 0),
+                    pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce"),
+                ),
+                reverse=True,
+            )
+            top_prestige = prestige_sorted[:5]
+            st.session_state[top_prestige_key] = top_prestige
 
-    chip_items = []
-    for badge in top_prestige:
-        icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-        stack = badge.get("stack_count", 1)
-        stack_text = f" ×{stack}" if stack and stack > 1 else ""
-        chip_items.append(
-            f"<span class='badge-chip'><span>{html.escape(icon)}</span>"
-            f"<span class='truncate-1'>{html.escape(str(badge.get('name', 'Badge')))}{stack_text}</span></span>"
-        )
+        chip_items = []
+        for badge in top_prestige:
+            icon = badge_icon(badge.get("badge_id"), badge.get("category"))
+            stack = badge.get("stack_count", 1)
+            stack_text = f" ×{stack}" if stack and stack > 1 else ""
+            chip_items.append(
+                f"<span class='badge-chip'><span>{html.escape(icon)}</span>"
+                f"<span class='truncate-1'>{html.escape(str(badge.get('name', 'Badge')))}{stack_text}</span></span>"
+            )
 
-    summary_html = f"""
+        summary_html = f"""
         <div class="badge-summary">
             <div class="badge-stat">
                 <div class="badge-stat-label">Prestige</div>
@@ -660,27 +609,27 @@ def render(ctx):
             </div>
         </div>
     """
-    render_badge_html(summary_html, label="badges.summary")
+        render_badge_html(summary_html, label="badges.summary")
 
-    if not unlocked_badges and not locked_badges:
-        badge_caption("No badges available yet.", label="badges.empty")
-    else:
-        st.subheader("Featured Cuts")
-        featured = select_featured_badges(unlocked_badges, max_count=3, sort_mode="recent")
-        if not featured:
-            badge_caption(
-                "The tape room is quiet—new reels arrive after the next run.",
-                label="badges.featured.empty",
-            )
+        if not unlocked_badges and not locked_badges:
+            badge_caption("No badges available yet.", label="badges.empty")
         else:
-            featured_cards = []
-            for badge in featured:
-                icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-                stack = badge.get("stack_count", 1)
-                stack_text = f" ×{stack}" if stack and stack > 1 else ""
-                excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
-                featured_cards.append(
-                    f"""
+            st.subheader("Featured Cuts")
+            featured = select_featured_badges(unlocked_badges, max_count=3, sort_mode="recent")
+            if not featured:
+                badge_caption(
+                    "The tape room is quiet—new reels arrive after the next run.",
+                    label="badges.featured.empty",
+                )
+            else:
+                featured_cards = []
+                for badge in featured:
+                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
+                    stack = badge.get("stack_count", 1)
+                    stack_text = f" ×{stack}" if stack and stack > 1 else ""
+                    excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
+                    featured_cards.append(
+                        f"""
                     <div class="badge-card">
                         <div class="badge-card-header">
                             <span>{html.escape(icon)}</span>
@@ -690,78 +639,78 @@ def render(ctx):
                         <div class="badge-subtext truncate-1">{excerpt}</div>
                     </div>
                     """
+                    )
+                render_badge_html(
+                    f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>",
+                    label="badges.featured.grid",
                 )
-            render_badge_html(
-                f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>",
-                label="badges.featured.grid",
-            )
 
-        if "badge_cabinet_is_open" not in st.session_state:
-            st.session_state["badge_cabinet_is_open"] = False
+            if "badge_cabinet_is_open" not in st.session_state:
+                st.session_state["badge_cabinet_is_open"] = False
 
-        if st.button("See more cuts", key="badge_cabinet_open_btn"):
-            st.session_state["badge_cabinet_is_open"] = True
+            if st.button("See more cuts", key="badge_cabinet_open_btn"):
+                st.session_state["badge_cabinet_is_open"] = True
 
-        cabinet_open = st.session_state.get("badge_cabinet_is_open", False)
-        with st.expander("Open Cabinet", expanded=cabinet_open):
-            filter_cols = st.columns(2)
-            show_unlocked = filter_cols[0].checkbox("Unlocked", value=True, key="badge_filter_unlocked")
-            show_locked = filter_cols[0].checkbox("Locked", value=True, key="badge_filter_locked")
+            cabinet_open = st.session_state.get("badge_cabinet_is_open", False)
+            with st.expander("Open Cabinet", expanded=cabinet_open):
+                filter_cols = st.columns(2)
+                show_unlocked = filter_cols[0].checkbox("Unlocked", value=True, key="badge_filter_unlocked")
+                show_locked = filter_cols[0].checkbox("Locked", value=True, key="badge_filter_locked")
 
-            all_badges = []
-            for badge in unlocked_badges:
-                badge_copy = dict(badge)
-                badge_copy["status"] = "unlocked"
-                all_badges.append(badge_copy)
-            for badge in locked_badges:
-                badge_copy = dict(badge)
-                badge_copy["status"] = "locked"
-                all_badges.append(badge_copy)
+                all_badges = []
+                for badge in unlocked_badges:
+                    badge_copy = dict(badge)
+                    badge_copy["status"] = "unlocked"
+                    all_badges.append(badge_copy)
+                for badge in locked_badges:
+                    badge_copy = dict(badge)
+                    badge_copy["status"] = "locked"
+                    all_badges.append(badge_copy)
 
-            categories = sorted({b.get("category") or "Other" for b in all_badges})
-            rarities = sorted({b.get("rarity") or "common" for b in all_badges})
-            selected_categories = filter_cols[1].multiselect(
-                "Category",
-                categories,
-                default=categories,
-                key="badge_filter_categories",
-            )
-            selected_rarities = filter_cols[1].multiselect(
-                "Rarity",
-                rarities,
-                default=rarities,
-                key="badge_filter_rarities",
-            )
+                categories = sorted({b.get("category") or "Other" for b in all_badges})
+                rarities = sorted({b.get("rarity") or "common" for b in all_badges})
+                selected_categories = filter_cols[1].multiselect(
+                    "Category",
+                    categories,
+                    default=categories,
+                    key="badge_filter_categories",
+                )
+                selected_rarities = filter_cols[1].multiselect(
+                    "Rarity",
+                    rarities,
+                    default=rarities,
+                    key="badge_filter_rarities",
+                )
 
-            def _visible(badge: dict) -> bool:
-                category = badge.get("category") or "Other"
-                rarity = badge.get("rarity") or "common"
-                if badge.get("status") == "unlocked" and not show_unlocked:
-                    return False
-                if badge.get("status") == "locked" and not show_locked:
-                    return False
-                if category not in selected_categories:
-                    return False
-                if rarity not in selected_rarities:
-                    return False
-                return True
+                def _visible(badge: dict) -> bool:
+                    category = badge.get("category") or "Other"
+                    rarity = badge.get("rarity") or "common"
+                    if badge.get("status") == "unlocked" and not show_unlocked:
+                        return False
+                    if badge.get("status") == "locked" and not show_locked:
+                        return False
+                    if category not in selected_categories:
+                        return False
+                    if rarity not in selected_rarities:
+                        return False
+                    return True
 
-            visible_badges = [b for b in all_badges if _visible(b)]
-            if not visible_badges:
-                badge_caption("No badges match the filters.", label="badges.filters.empty")
-            else:
-                card_items = []
-                for badge in visible_badges:
-                    status = badge.get("status")
-                    name = html.escape(str(badge.get("name", "Badge")))
-                    prestige = int(badge.get("prestige", 0) or 0)
-                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-                    stack = badge.get("stack_count", 1)
-                    stack_text = f" ×{stack}" if stack and stack > 1 else ""
-                    if status == "locked":
-                        hint = html.escape(str(badge.get("hint") or "A reel still missing."))
-                        card_items.append(
-                            f"""
+                visible_badges = [b for b in all_badges if _visible(b)]
+                if not visible_badges:
+                    badge_caption("No badges match the filters.", label="badges.filters.empty")
+                else:
+                    card_items = []
+                    for badge in visible_badges:
+                        status = badge.get("status")
+                        name = html.escape(str(badge.get("name", "Badge")))
+                        prestige = int(badge.get("prestige", 0) or 0)
+                        icon = badge_icon(badge.get("badge_id"), badge.get("category"))
+                        stack = badge.get("stack_count", 1)
+                        stack_text = f" ×{stack}" if stack and stack > 1 else ""
+                        if status == "locked":
+                            hint = html.escape(str(badge.get("hint") or "A reel still missing."))
+                            card_items.append(
+                                f"""
                             <div class="badge-card silhouette">
                                 <div class="badge-card-header">
                                     <span>⬛</span>
@@ -771,11 +720,11 @@ def render(ctx):
                                 <div class="badge-subtext truncate-2">{hint}</div>
                             </div>
                             """
-                        )
-                    else:
-                        excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
-                        card_items.append(
-                            f"""
+                            )
+                        else:
+                            excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
+                            card_items.append(
+                                f"""
                             <div class="badge-card">
                                 <div class="badge-card-header">
                                     <span>{html.escape(icon)}</span>
@@ -785,450 +734,510 @@ def render(ctx):
                                 <div class="badge-subtext truncate-2">{excerpt}</div>
                             </div>
                             """
+                            )
+                    render_badge_html(
+                        f"<div class='badge-grid'>{''.join(card_items)}</div>",
+                        label="badges.cabinet.grid",
+                    )
+
+                details_view = st.toggle("Details view", value=False, key="badge_details_view")
+                if details_view and unlocked_badges:
+                    summary_df = pd.DataFrame(unlocked_badges)
+                    summary_df["last_earned_at_dt"] = pd.to_datetime(
+                        summary_df.get("last_earned_at", None), utc=True, errors="coerce"
+                    )
+                    summary_df = summary_df.sort_values(
+                        ["last_earned_at_dt", "prestige"], ascending=[False, False]
+                    )
+                    show_df = summary_df[
+                        ["name", "category", "prestige", "stack_count", "last_earned_at_dt"]
+                    ].rename(
+                        columns={
+                            "name": "Badge",
+                            "category": "Category",
+                            "prestige": "Prestige",
+                            "stack_count": "Count",
+                            "last_earned_at_dt": "Last Earned",
+                        }
+                    )
+                    st.dataframe(
+                        show_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Prestige": st.column_config.NumberColumn(format="%d"),
+                            "Last Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                        },
+                    )
+
+                    admin_debug = False
+                    if bool(getattr(ctx, "admin_logged_in", False)):
+                        admin_debug = st.toggle("Show debug columns", value=False, key="badge_debug_columns")
+
+                    if isinstance(player_badges, pd.DataFrame) and not player_badges.empty:
+                        pb_df = player_badges.copy()
+                        pb_df = pb_df[pb_df.get("player_id") == int(pid)].copy()
+                        pb_df["earned_at_dt"] = pd.to_datetime(
+                            pb_df.get("earned_at", None), utc=True, errors="coerce"
                         )
-                render_badge_html(
-                    f"<div class='badge-grid'>{''.join(card_items)}</div>",
-                    label="badges.cabinet.grid",
+                        for badge in summary_df.itertuples(index=False):
+                            badge_id = getattr(badge, "badge_id", "")
+                            badge_name = getattr(badge, "name", "Badge")
+                            stack = getattr(badge, "stack_count", 1)
+                            stack_text = f" x{stack}" if stack and stack > 1 else ""
+                            icon = badge_icon(badge_id, getattr(badge, "category", None))
+                            with st.expander(f"{icon} {badge_name}{stack_text}", expanded=False):
+                                rows = pb_df[pb_df.get("badge_id") == badge_id].copy()
+                                rows = rows.sort_values("earned_at_dt", ascending=False)
+                                cols = ["earned_at_dt", "match_id"]
+                                if admin_debug:
+                                    cols.append("context_id")
+                                show_rows = rows[cols].rename(
+                                    columns={
+                                        "earned_at_dt": "Earned",
+                                        "match_id": "Match",
+                                        "context_id": "Context",
+                                    }
+                                )
+                                st.dataframe(
+                                    show_rows,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+                                    },
+                                )
+            st.subheader("Story Cards")
+            story_df = fetch_player_stories(_supabase, club_id, pid, limit=6)
+            if story_df.empty:
+                st.caption("No new stories in the tape room yet.")
+            else:
+                story_df = story_df.drop_duplicates(subset=["story_type", "context_id"], keep="first")
+                story_df = story_df.sort_values("created_at", ascending=False)
+                highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
+                foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
+                highlight_col, foreshadow_col = st.columns(2)
+                with highlight_col:
+                    st.markdown("**Highlights**")
+                    if highlights.empty:
+                        st.caption("No highlights yet.")
+                    else:
+                        for _, row in highlights.iterrows():
+                            title = html.escape(str(row.get("title") or "Highlight"))
+                            body = html.escape(str(row.get("body") or ""))
+                            st.markdown(f"**{title}**")
+                            st.caption(body)
+                with foreshadow_col:
+                    st.markdown("**Foreshadowing**")
+                    if foreshadow.empty:
+                        st.caption("No foreshadowing yet.")
+                    else:
+                        for _, row in foreshadow.iterrows():
+                            title = html.escape(str(row.get("title") or "Foreshadowing"))
+                            body = html.escape(str(row.get("body") or ""))
+                            st.markdown(f"**{title}**")
+                            st.caption(body)
+
+    def render_ratings_tab():
+        # -------------------------
+        # Restore: Ratings by active league (table)
+        # -------------------------
+        st.markdown("### Ratings by active league")
+
+        active_leagues = []
+        if df_meta is not None and isinstance(df_meta, pd.DataFrame) and not df_meta.empty:
+            if "is_active" in df_meta.columns and "league_name" in df_meta.columns:
+                active_leagues = (
+                    df_meta[df_meta["is_active"] == True]["league_name"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .tolist()
                 )
 
-            details_view = st.toggle("Details view", value=False, key="badge_details_view")
-            if details_view and unlocked_badges:
-                summary_df = pd.DataFrame(unlocked_badges)
-                summary_df["last_earned_at_dt"] = pd.to_datetime(
-                    summary_df.get("last_earned_at", None), utc=True, errors="coerce"
-                )
-                summary_df = summary_df.sort_values(
-                    ["last_earned_at_dt", "prestige"], ascending=[False, False]
-                )
-                show_df = summary_df[
-                    ["name", "category", "prestige", "stack_count", "last_earned_at_dt"]
-                ].rename(
-                    columns={
-                        "name": "Badge",
-                        "category": "Category",
-                        "prestige": "Prestige",
-                        "stack_count": "Count",
-                        "last_earned_at_dt": "Last Earned",
-                    }
-                )
+        lr_rows = pd.DataFrame()
+        if df_leagues is not None and isinstance(df_leagues, pd.DataFrame) and not df_leagues.empty:
+            if "player_id" in df_leagues.columns:
+                lr_rows = df_leagues[df_leagues["player_id"].astype(int) == int(pid)].copy()
+
+        if not lr_rows.empty:
+            if "league_name" in lr_rows.columns:
+                lr_rows["league_name"] = lr_rows["league_name"].astype(str).str.strip()
+
+            if active_leagues and "league_name" in lr_rows.columns:
+                lr_rows = lr_rows[lr_rows["league_name"].isin(active_leagues)].copy()
+
+            if "is_active" in lr_rows.columns:
+                lr_rows = lr_rows[lr_rows["is_active"] == True].copy()
+
+            if lr_rows.empty:
+                st.caption("No active league ratings found for this player.")
+            else:
+                if "rating" in lr_rows.columns:
+                    lr_rows["League JUPR"] = lr_rows["rating"].astype(float) / 400.0
+
+                cols = ["league_name", "League JUPR", "wins", "losses", "matches_played"]
+                cols = [c for c in cols if c in lr_rows.columns]
+
+                if "League JUPR" in lr_rows.columns:
+                    lr_rows = lr_rows.sort_values("League JUPR", ascending=False)
+
                 st.dataframe(
-                    show_df,
+                    lr_rows[cols].rename(
+                        columns={"league_name": "League", "wins": "W", "losses": "L", "matches_played": "MP"}
+                    ),
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "Prestige": st.column_config.NumberColumn(format="%d"),
-                        "Last Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                    },
+                    column_config={"League JUPR": st.column_config.NumberColumn(format="%.3f")},
                 )
-
-                admin_debug = False
-                if bool(getattr(ctx, "admin_logged_in", False)):
-                    admin_debug = st.toggle("Show debug columns", value=False, key="badge_debug_columns")
-
-                if isinstance(player_badges, pd.DataFrame) and not player_badges.empty:
-                    pb_df = player_badges.copy()
-                    pb_df = pb_df[pb_df.get("player_id") == int(pid)].copy()
-                    pb_df["earned_at_dt"] = pd.to_datetime(pb_df.get("earned_at", None), utc=True, errors="coerce")
-                    for badge in summary_df.itertuples(index=False):
-                        badge_id = getattr(badge, "badge_id", "")
-                        badge_name = getattr(badge, "name", "Badge")
-                        stack = getattr(badge, "stack_count", 1)
-                        stack_text = f" x{stack}" if stack and stack > 1 else ""
-                        icon = badge_icon(badge_id, getattr(badge, "category", None))
-                        with st.expander(f"{icon} {badge_name}{stack_text}", expanded=False):
-                            rows = pb_df[pb_df.get("badge_id") == badge_id].copy()
-                            rows = rows.sort_values("earned_at_dt", ascending=False)
-                            cols = ["earned_at_dt", "match_id"]
-                            if admin_debug:
-                                cols.append("context_id")
-                            show_rows = rows[cols].rename(
-                                columns={
-                                    "earned_at_dt": "Earned",
-                                    "match_id": "Match",
-                                    "context_id": "Context",
-                                }
-                            )
-                            st.dataframe(
-                                show_rows,
-                                use_container_width=True,
-                                hide_index=True,
-                                column_config={
-                                    "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                                },
-                            )
-        st.subheader("Story Cards")
-        story_df = fetch_player_stories(_supabase, club_id, pid, limit=6)
-        if story_df.empty:
-            st.caption("No new stories in the tape room yet.")
         else:
-            story_df = story_df.drop_duplicates(subset=["story_type", "context_id"], keep="first")
-            story_df = story_df.sort_values("created_at", ascending=False)
-            highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
-            foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
-            highlight_col, foreshadow_col = st.columns(2)
-            with highlight_col:
-                st.markdown("**Highlights**")
-                if highlights.empty:
-                    st.caption("No highlights yet.")
-                else:
-                    for _, row in highlights.iterrows():
-                        title = html.escape(str(row.get("title") or "Highlight"))
-                        body = html.escape(str(row.get("body") or ""))
-                        st.markdown(f"**{title}**")
-                        st.caption(body)
-            with foreshadow_col:
-                st.markdown("**Foreshadowing**")
-                if foreshadow.empty:
-                    st.caption("No foreshadowing yet.")
-                else:
-                    for _, row in foreshadow.iterrows():
-                        title = html.escape(str(row.get("title") or "Foreshadowing"))
-                        body = html.escape(str(row.get("body") or ""))
-                        st.markdown(f"**{title}**")
-                        st.caption(body)
+            st.caption("No league ratings table entries found for this player yet.")
 
+        st.divider()
 
-    st.divider()
+        matches = fetch_player_matches(_supabase, club_id, pid, limit=600)
 
-    matches = fetch_player_matches(_supabase, club_id, pid, limit=600)
+        if matches.empty:
+            st.info("No matches recorded for this player.")
+            return
 
-    if matches.empty:
-        st.info("No matches recorded for this player.")
-        return
-
-    def _safe_int(x, default=None):
-        try:
-            if x is None or str(x).strip() == "":
+        def _safe_int(x, default=None):
+            try:
+                if x is None or str(x).strip() == "":
+                    return default
+                return int(x)
+            except Exception:
                 return default
-            return int(x)
-        except Exception:
-            return default
 
-    def _safe_float(x, default=None):
-        try:
-            if x is None or str(x).strip() == "":
+        def _safe_float(x, default=None):
+            try:
+                if x is None or str(x).strip() == "":
+                    return default
+                return float(x)
+            except Exception:
                 return default
-            return float(x)
-        except Exception:
-            return default
 
-    def score_for_player(r):
-        try:
-            t1p1 = _safe_int(r.get("t1_p1"))
-            t1p2 = _safe_int(r.get("t1_p2"))
-            s1 = _safe_int(r.get("score_t1"), 0) or 0
-            s2 = _safe_int(r.get("score_t2"), 0) or 0
-        except Exception:
-            return ""
-        if t1p1 == pid or t1p2 == pid:
-            return f"{s1}-{s2}"
-        return f"{s2}-{s1}"
+        def score_for_player(r):
+            try:
+                t1p1 = _safe_int(r.get("t1_p1"))
+                t1p2 = _safe_int(r.get("t1_p2"))
+                s1 = _safe_int(r.get("score_t1"), 0) or 0
+                s2 = _safe_int(r.get("score_t2"), 0) or 0
+            except Exception:
+                return ""
+            if t1p1 == pid or t1p2 == pid:
+                return f"{s1}-{s2}"
+            return f"{s2}-{s1}"
 
-    def result_for_player(r):
-        try:
-            t1p1 = _safe_int(r.get("t1_p1"))
-            t1p2 = _safe_int(r.get("t1_p2"))
-            s1 = _safe_int(r.get("score_t1"), 0) or 0
-            s2 = _safe_int(r.get("score_t2"), 0) or 0
-        except Exception:
-            return ""
+        def result_for_player(r):
+            try:
+                t1p1 = _safe_int(r.get("t1_p1"))
+                t1p2 = _safe_int(r.get("t1_p2"))
+                s1 = _safe_int(r.get("score_t1"), 0) or 0
+                s2 = _safe_int(r.get("score_t2"), 0) or 0
+            except Exception:
+                return ""
 
-        if s1 == s2:
-            return "DRAW"
-        on_t1 = pid in {t1p1, t1p2}
-        winner = "WIN" if s1 > s2 else "LOSS"
-        if not on_t1:
-            winner = "WIN" if s2 > s1 else "LOSS"
-        return winner
+            if s1 == s2:
+                return "DRAW"
+            on_t1 = pid in {t1p1, t1p2}
+            winner = "WIN" if s1 > s2 else "LOSS"
+            if not on_t1:
+                winner = "WIN" if s2 > s1 else "LOSS"
+            return winner
 
-    def explain_link(r):
-        try:
+        def explain_link(r):
+            try:
+                t1p1 = _safe_int(r.get("t1_p1"))
+                t1p2 = _safe_int(r.get("t1_p2"))
+                t2p1 = _safe_int(r.get("t2_p1"))
+                t2p2 = _safe_int(r.get("t2_p2"))
+                s1 = _safe_int(r.get("score_t1"), 0) or 0
+                s2 = _safe_int(r.get("score_t2"), 0) or 0
+            except Exception:
+                return ""
+
+            if t1p1 == pid or t1p2 == pid:
+                partner = t1p1 if t1p2 == pid else t1p2
+                opp1, opp2 = t2p1, t2p2
+                sy, so = s1, s2
+            elif t2p1 == pid or t2p2 == pid:
+                partner = t2p1 if t2p2 == pid else t2p2
+                opp1, opp2 = t1p1, t1p2
+                sy, so = s2, s1
+            else:
+                return ""
+
+            return build_match_explorer_link(
+                ctx="OVERALL",
+                me=int(pid),
+                partner=int(partner),
+                opp1=int(opp1),
+                opp2=int(opp2),
+                sy=int(sy),
+                so=int(so),
+                public=bool(ctx.public_mode),
+            )
+
+        def get_overall_snap(r: dict, pid_: int):
+            pid_ = int(pid_)
             t1p1 = _safe_int(r.get("t1_p1"))
             t1p2 = _safe_int(r.get("t1_p2"))
             t2p1 = _safe_int(r.get("t2_p1"))
             t2p2 = _safe_int(r.get("t2_p2"))
+
+            if t1p1 == pid_:
+                return _safe_float(r.get("t1_p1_r")), _safe_float(r.get("t1_p1_r_end"))
+            if t1p2 == pid_:
+                return _safe_float(r.get("t1_p2_r")), _safe_float(r.get("t1_p2_r_end"))
+            if t2p1 == pid_:
+                return _safe_float(r.get("t2_p1_r")), _safe_float(r.get("t2_p1_r_end"))
+            if t2p2 == pid_:
+                return _safe_float(r.get("t2_p2_r")), _safe_float(r.get("t2_p2_r_end"))
+            return None, None
+
+        def signed_delta_from_elo_delta(r: dict, pid_: int):
+            pid_ = int(pid_)
+            raw = _safe_float(r.get("elo_delta"), None)
+            if raw is None:
+                return None
+
             s1 = _safe_int(r.get("score_t1"), 0) or 0
             s2 = _safe_int(r.get("score_t2"), 0) or 0
-        except Exception:
-            return ""
+            if s1 == s2:
+                return 0.0
 
-        if t1p1 == pid or t1p2 == pid:
-            partner = t1p1 if t1p2 == pid else t1p2
-            opp1, opp2 = t2p1, t2p2
-            sy, so = s1, s2
-        elif t2p1 == pid or t2p2 == pid:
-            partner = t2p1 if t2p2 == pid else t2p2
-            opp1, opp2 = t1p1, t1p2
-            sy, so = s2, s1
+            t1 = {_safe_int(r.get("t1_p1")), _safe_int(r.get("t1_p2"))}
+            t2 = {_safe_int(r.get("t2_p1")), _safe_int(r.get("t2_p2"))}
+            on_t1 = pid_ in t1
+            on_t2 = pid_ in t2
+            if not on_t1 and not on_t2:
+                return None
+
+            winner_team = 1 if s1 > s2 else 2
+            my_team = 1 if on_t1 else 2
+            return abs(float(raw)) if winner_team == my_team else -abs(float(raw))
+
+        # Normalize date + league strings
+        matches = matches.copy()
+        matches["date_dt"] = pd.to_datetime(matches.get("date", None), errors="coerce", utc=True)
+        matches = matches.dropna(subset=["date_dt"]).copy()
+        matches["league"] = matches.get("league", "").fillna("").astype(str).str.strip()
+        matches["match_type"] = matches.get("match_type", "").fillna("").astype(str).str.strip()
+
+        # Build overall series rows
+        processed = []
+        for _, r0 in matches.iterrows():
+            r = dict(r0)
+
+            start_elo, end_elo = get_overall_snap(r, pid)
+            after_jupr = None
+            delta_jupr = None
+
+            if start_elo is not None and end_elo is not None:
+                try:
+                    delta_jupr = (float(end_elo) - float(start_elo)) / 400.0
+                    after_jupr = float(end_elo) / 400.0
+                except Exception:
+                    pass
+            else:
+                d_elo = signed_delta_from_elo_delta(r, pid)
+                if d_elo is not None:
+                    delta_jupr = float(d_elo) / 400.0
+
+            processed.append(
+                {
+                    "id": _safe_int(r.get("id")),
+                    "Date": r.get("date_dt"),
+                    "League": str(r.get("league", "") or "").strip(),
+                    "match_type": str(r.get("match_type", "") or "").strip(),
+                    "Score": score_for_player(r),
+                    "Result": result_for_player(r),
+                    "Overall Δ": delta_jupr,
+                    "Overall After": after_jupr,
+                    "Explain": explain_link(r),
+                }
+            )
+
+        df = pd.DataFrame(processed)
+        if df.empty:
+            st.info("No matches available.")
+            return
+
+        df = df.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
+        df["Overall Δ"] = pd.to_numeric(df["Overall Δ"], errors="coerce")
+        df["Overall After"] = pd.to_numeric(df["Overall After"], errors="coerce")
+
+        # Backfill overall-after if needed
+        if df["Overall After"].notna().any():
+            for i in range(len(df)):
+                if pd.isna(df.loc[i, "Overall After"]):
+                    if i > 0 and pd.notna(df.loc[i - 1, "Overall After"]) and pd.notna(df.loc[i, "Overall Δ"]):
+                        df.loc[i, "Overall After"] = float(df.loc[i - 1, "Overall After"]) + float(df.loc[i, "Overall Δ"])
+            for i in range(len(df) - 2, -1, -1):
+                if pd.isna(df.loc[i, "Overall After"]):
+                    if pd.notna(df.loc[i + 1, "Overall After"]) and pd.notna(df.loc[i + 1, "Overall Δ"]):
+                        df.loc[i, "Overall After"] = float(df.loc[i + 1, "Overall After"]) - float(df.loc[i + 1, "Overall Δ"])
         else:
-            return ""
+            df_rev = df.sort_values(["Date", "id"], ascending=[False, False]).reset_index(drop=True)
+            running = 0.0
+            after_vals = []
+            for i in range(len(df_rev)):
+                after_vals.append(float(current_jupr) - float(running))
+                d = df_rev.loc[i, "Overall Δ"]
+                if pd.notna(d):
+                    running += float(d)
+            df_rev["Overall After"] = after_vals
+            df = df_rev.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
 
-        return build_match_explorer_link(
-            ctx="OVERALL",
-            me=int(pid),
-            partner=int(partner),
-            opp1=int(opp1),
-            opp2=int(opp2),
-            sy=int(sy),
-            so=int(so),
-            public=bool(ctx.public_mode),
+        # -------------------------
+        # Restore: tabs for Overall + each league
+        # -------------------------
+        leagues_in_matches = sorted(
+            [x for x in df["League"].fillna("").astype(str).str.strip().unique().tolist() if x and x.upper() != "OVERALL"]
         )
+        tab_labels = ["Overall"] + [f"League: {lg}" for lg in leagues_in_matches]
+        tabs = st.tabs(tab_labels)
 
-    def get_overall_snap(r: dict, pid_: int):
-        pid_ = int(pid_)
-        t1p1 = _safe_int(r.get("t1_p1"))
-        t1p2 = _safe_int(r.get("t1_p2"))
-        t2p1 = _safe_int(r.get("t2_p1"))
-        t2p2 = _safe_int(r.get("t2_p2"))
+        def render_chart_and_table(view_df: pd.DataFrame, title_prefix: str, *, league_trend: bool = False, league_name: str = ""):
+            st.subheader(f"{title_prefix} JUPR Trend")
 
-        if t1p1 == pid_:
-            return _safe_float(r.get("t1_p1_r")), _safe_float(r.get("t1_p1_r_end"))
-        if t1p2 == pid_:
-            return _safe_float(r.get("t1_p2_r")), _safe_float(r.get("t1_p2_r_end"))
-        if t2p1 == pid_:
-            return _safe_float(r.get("t2_p1_r")), _safe_float(r.get("t2_p1_r_end"))
-        if t2p2 == pid_:
-            return _safe_float(r.get("t2_p2_r")), _safe_float(r.get("t2_p2_r_end"))
-        return None, None
+            chart_df = view_df.copy().dropna(subset=["Overall After"]).sort_values(["Date", "id"]).reset_index(drop=True)
+            if chart_df.empty:
+                st.info("No chartable rating data in this view.")
+            else:
+                chart_df["Match #"] = range(1, len(chart_df) + 1)
+                chart_df["DateStr"] = pd.to_datetime(chart_df["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
+                chart_df["DeltaStr"] = chart_df["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
+                chart_df["AfterStr"] = chart_df["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
 
-    def signed_delta_from_elo_delta(r: dict, pid_: int):
-        pid_ = int(pid_)
-        raw = _safe_float(r.get("elo_delta"), None)
-        if raw is None:
-            return None
+                tail = chart_df.tail(60).copy()
 
-        s1 = _safe_int(r.get("score_t1"), 0) or 0
-        s2 = _safe_int(r.get("score_t2"), 0) or 0
-        if s1 == s2:
-            return 0.0
+                # Optional full restore: show league replay trend (if available)
+                if league_trend and league_name and _LEAGUE_REPLAY_AVAILABLE:
+                    snap_map = build_league_snapshot_map(_supabase, club_id, league_name, df_meta, df_players_all)
+                    if snap_map:
+                        # Build a league-after series from snap_map for this player
+                        tmp = view_df.copy()
+                        tmp["League After"] = pd.NA
+                        tmp["League Δ"] = pd.NA
+                        for i in range(len(tmp)):
+                            mid = tmp.iloc[i].get("id", None)
+                            if mid is None:
+                                continue
+                            hit = snap_map.get(int(mid), {}).get(int(pid), None)
+                            if hit:
+                                ls, le = hit
+                                tmp.at[tmp.index[i], "League Δ"] = (float(le) - float(ls)) / 400.0
+                                tmp.at[tmp.index[i], "League After"] = float(le) / 400.0
 
-        t1 = {_safe_int(r.get("t1_p1")), _safe_int(r.get("t1_p2"))}
-        t2 = {_safe_int(r.get("t2_p1")), _safe_int(r.get("t2_p2"))}
-        on_t1 = pid_ in t1
-        on_t2 = pid_ in t2
-        if not on_t1 and not on_t2:
-            return None
-
-        winner_team = 1 if s1 > s2 else 2
-        my_team = 1 if on_t1 else 2
-        return abs(float(raw)) if winner_team == my_team else -abs(float(raw))
-
-    # Normalize date + league strings
-    matches = matches.copy()
-    matches["date_dt"] = pd.to_datetime(matches.get("date", None), errors="coerce", utc=True)
-    matches = matches.dropna(subset=["date_dt"]).copy()
-    matches["league"] = matches.get("league", "").fillna("").astype(str).str.strip()
-    matches["match_type"] = matches.get("match_type", "").fillna("").astype(str).str.strip()
-
-    # Build overall series rows
-    processed = []
-    for _, r0 in matches.iterrows():
-        r = dict(r0)
-
-        start_elo, end_elo = get_overall_snap(r, pid)
-        after_jupr = None
-        delta_jupr = None
-
-        if start_elo is not None and end_elo is not None:
-            try:
-                delta_jupr = (float(end_elo) - float(start_elo)) / 400.0
-                after_jupr = float(end_elo) / 400.0
-            except Exception:
-                pass
-        else:
-            d_elo = signed_delta_from_elo_delta(r, pid)
-            if d_elo is not None:
-                delta_jupr = float(d_elo) / 400.0
-
-        processed.append(
-            {
-                "id": _safe_int(r.get("id")),
-                "Date": r.get("date_dt"),
-                "League": str(r.get("league", "") or "").strip(),
-                "match_type": str(r.get("match_type", "") or "").strip(),
-                "Score": score_for_player(r),
-                "Result": result_for_player(r),
-                "Overall Δ": delta_jupr,
-                "Overall After": after_jupr,
-                "Explain": explain_link(r),
-            }
-        )
-
-    df = pd.DataFrame(processed)
-    if df.empty:
-        st.info("No matches available.")
-        return
-
-    df = df.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
-    df["Overall Δ"] = pd.to_numeric(df["Overall Δ"], errors="coerce")
-    df["Overall After"] = pd.to_numeric(df["Overall After"], errors="coerce")
-
-    # Backfill overall-after if needed
-    if df["Overall After"].notna().any():
-        for i in range(len(df)):
-            if pd.isna(df.loc[i, "Overall After"]):
-                if i > 0 and pd.notna(df.loc[i - 1, "Overall After"]) and pd.notna(df.loc[i, "Overall Δ"]):
-                    df.loc[i, "Overall After"] = float(df.loc[i - 1, "Overall After"]) + float(df.loc[i, "Overall Δ"])
-        for i in range(len(df) - 2, -1, -1):
-            if pd.isna(df.loc[i, "Overall After"]):
-                if pd.notna(df.loc[i + 1, "Overall After"]) and pd.notna(df.loc[i + 1, "Overall Δ"]):
-                    df.loc[i, "Overall After"] = float(df.loc[i + 1, "Overall After"]) - float(df.loc[i + 1, "Overall Δ"])
-    else:
-        df_rev = df.sort_values(["Date", "id"], ascending=[False, False]).reset_index(drop=True)
-        running = 0.0
-        after_vals = []
-        for i in range(len(df_rev)):
-            after_vals.append(float(current_jupr) - float(running))
-            d = df_rev.loc[i, "Overall Δ"]
-            if pd.notna(d):
-                running += float(d)
-        df_rev["Overall After"] = after_vals
-        df = df_rev.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
-
-    # -------------------------
-    # Restore: tabs for Overall + each league
-    # -------------------------
-    leagues_in_matches = sorted(
-        [x for x in df["League"].fillna("").astype(str).str.strip().unique().tolist() if x and x.upper() != "OVERALL"]
-    )
-    tab_labels = ["Overall"] + [f"League: {lg}" for lg in leagues_in_matches]
-    tabs = st.tabs(tab_labels)
-
-    def render_chart_and_table(view_df: pd.DataFrame, title_prefix: str, *, league_trend: bool = False, league_name: str = ""):
-        st.subheader(f"{title_prefix} JUPR Trend")
-
-        chart_df = view_df.copy().dropna(subset=["Overall After"]).sort_values(["Date", "id"]).reset_index(drop=True)
-        if chart_df.empty:
-            st.info("No chartable rating data in this view.")
-        else:
-            chart_df["Match #"] = range(1, len(chart_df) + 1)
-            chart_df["DateStr"] = pd.to_datetime(chart_df["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-            chart_df["DeltaStr"] = chart_df["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
-            chart_df["AfterStr"] = chart_df["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-
-            tail = chart_df.tail(60).copy()
-
-            # Optional full restore: show league replay trend (if available)
-            if league_trend and league_name and _LEAGUE_REPLAY_AVAILABLE:
-                snap_map = build_league_snapshot_map(_supabase, club_id, league_name, df_meta, df_players_all)
-                if snap_map:
-                    # Build a league-after series from snap_map for this player
-                    tmp = view_df.copy()
-                    tmp["League After"] = pd.NA
-                    tmp["League Δ"] = pd.NA
-                    for i in range(len(tmp)):
-                        mid = tmp.iloc[i].get("id", None)
-                        if mid is None:
-                            continue
-                        hit = snap_map.get(int(mid), {}).get(int(pid), None)
-                        if hit:
-                            ls, le = hit
-                            tmp.at[tmp.index[i], "League Δ"] = (float(le) - float(ls)) / 400.0
-                            tmp.at[tmp.index[i], "League After"] = float(le) / 400.0
-
-                    tmp2 = tmp.dropna(subset=["League After"]).sort_values(["Date", "id"]).reset_index(drop=True)
-                    if not tmp2.empty:
-                        tmp2["Match #"] = range(1, len(tmp2) + 1)
-                        tmp2["DateStr"] = pd.to_datetime(tmp2["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-                        tmp2["DeltaStr"] = tmp2["League Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
-                        tmp2["AfterStr"] = tmp2["League After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-                        tail = tmp2.tail(60).copy()
-                        y_col = "League After"
-                        y_title = "League JUPR After Match"
+                        tmp2 = tmp.dropna(subset=["League After"]).sort_values(["Date", "id"]).reset_index(drop=True)
+                        if not tmp2.empty:
+                            tmp2["Match #"] = range(1, len(tmp2) + 1)
+                            tmp2["DateStr"] = pd.to_datetime(tmp2["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
+                            tmp2["DeltaStr"] = tmp2["League Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
+                            tmp2["AfterStr"] = tmp2["League After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
+                            tail = tmp2.tail(60).copy()
+                            y_col = "League After"
+                            y_title = "League JUPR After Match"
+                        else:
+                            y_col = "Overall After"
+                            y_title = "JUPR After Match (Overall)"
                     else:
                         y_col = "Overall After"
                         y_title = "JUPR After Match (Overall)"
                 else:
                     y_col = "Overall After"
                     y_title = "JUPR After Match (Overall)"
-            else:
-                y_col = "Overall After"
-                y_title = "JUPR After Match (Overall)"
 
-            if alt is not None:
-                line = (
-                    alt.Chart(tail)
-                    .mark_line(point=True)
-                    .encode(
-                        x=alt.X("Match #:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                        y=alt.Y(
-                            f"{y_col}:Q",
-                            axis=alt.Axis(format=".3f"),
-                            title=y_title,
-                            scale=alt.Scale(zero=False),
-                        ),
-                        tooltip=[
-                            alt.Tooltip("DateStr:N", title="Date"),
-                            alt.Tooltip("League:N", title="League"),
-                            alt.Tooltip("Score:N", title="Score"),
-                            alt.Tooltip("AfterStr:N", title="After"),
-                            alt.Tooltip("DeltaStr:N", title="Δ"),
-                        ],
+                if alt is not None:
+                    line = (
+                        alt.Chart(tail)
+                        .mark_line(point=True)
+                        .encode(
+                            x=alt.X("Match #:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
+                            y=alt.Y(
+                                f"{y_col}:Q",
+                                axis=alt.Axis(format=".3f"),
+                                title=y_title,
+                                scale=alt.Scale(zero=False),
+                            ),
+                            tooltip=[
+                                alt.Tooltip("DateStr:N", title="Date"),
+                                alt.Tooltip("League:N", title="League"),
+                                alt.Tooltip("Score:N", title="Score"),
+                                alt.Tooltip("AfterStr:N", title="After"),
+                                alt.Tooltip("DeltaStr:N", title="Δ"),
+                            ],
+                        )
+                        .interactive()
                     )
-                    .interactive()
-                )
-                st.altair_chart(line, use_container_width=True)
-            else:
-                st.line_chart(tail.set_index("Match #")[y_col])
+                    st.altair_chart(line, use_container_width=True)
+                else:
+                    st.line_chart(tail.set_index("Match #")[y_col])
 
-        st.divider()
-        st.subheader(f"{title_prefix} Match History")
+            st.divider()
+            st.subheader(f"{title_prefix} Match History")
 
-        show = view_df.sort_values(["Date", "id"], ascending=[False, False]).copy()
-        show["date"] = pd.to_datetime(show["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-        show["delta_raw"] = pd.to_numeric(show["Overall Δ"], errors="coerce")
-        show["Overall Δ"] = show["delta_raw"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
-        show["Overall After"] = show["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
+            show = view_df.sort_values(["Date", "id"], ascending=[False, False]).copy()
+            show["date"] = pd.to_datetime(show["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
+            show["delta_raw"] = pd.to_numeric(show["Overall Δ"], errors="coerce")
+            show["Overall Δ"] = show["delta_raw"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
+            show["Overall After"] = show["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
 
-        def result_badge(result: str) -> str:
-            label = str(result or "").strip().upper() or "—"
-            normalized = label.upper()
-            if normalized in {"W", "WIN", "WON"}:
-                variant = "win"
-            elif normalized in {"L", "LOSS", "LOST"}:
-                variant = "loss"
-            else:
-                variant = "draw"
-            return f"<span class='jupr-result-badge {variant}'>{label}</span>"
+            def result_badge(result: str) -> str:
+                label = str(result or "").strip().upper() or "—"
+                normalized = label.upper()
+                if normalized in {"W", "WIN", "WON"}:
+                    variant = "win"
+                elif normalized in {"L", "LOSS", "LOST"}:
+                    variant = "loss"
+                else:
+                    variant = "draw"
+                return f"<span class='jupr-result-badge {variant}'>{label}</span>"
 
-        def delta_span(delta_str: str, delta_raw: float | None) -> str:
-            if not delta_str:
-                return ""
-            kind = "zero"
-            try:
-                delta_val = float(delta_raw)
-            except (TypeError, ValueError):
-                delta_val = 0.0
-            if delta_val > 0:
-                kind = "pos"
-            elif delta_val < 0:
-                kind = "neg"
-            return f"<span class='jupr-delta {kind}'>{delta_str}</span>"
+            def delta_span(delta_str: str, delta_raw: float | None) -> str:
+                if not delta_str:
+                    return ""
+                kind = "zero"
+                try:
+                    delta_val = float(delta_raw)
+                except (TypeError, ValueError):
+                    delta_val = 0.0
+                if delta_val > 0:
+                    kind = "pos"
+                elif delta_val < 0:
+                    kind = "neg"
+                return f"<span class='jupr-delta {kind}'>{delta_str}</span>"
 
-        show["Result"] = show["Result"].map(result_badge)
-        show["Overall Δ"] = show.apply(lambda row: delta_span(row["Overall Δ"], row["delta_raw"]), axis=1)
-        show["Explain"] = show["Explain"].map(
-            lambda url: f"<a href='{url}' target='_self'>Explain</a>" if url else ""
-        )
+            show["Result"] = show["Result"].map(result_badge)
+            show["Overall Δ"] = show.apply(lambda row: delta_span(row["Overall Δ"], row["delta_raw"]), axis=1)
+            show["Explain"] = show["Explain"].map(
+                lambda url: f"<a href='{url}' target='_self'>Explain</a>" if url else ""
+            )
 
-        show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "Explain"]]
+            show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "Explain"]]
 
-        html_table = show.to_html(index=False, escape=False)
+            html_table = show.to_html(index=False, escape=False)
 
-        st.markdown(
-            f"""
-            <div class="match-history-table">
-              {html_table}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            st.markdown(
+                f"""
+                <div class="match-history-table">
+                  {html_table}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    with tabs[0]:
-        render_chart_and_table(df, "Overall", league_trend=False)
+        with tabs[0]:
+            render_chart_and_table(df, "Overall", league_trend=False)
 
-    for i, lg in enumerate(leagues_in_matches, start=1):
-        with tabs[i]:
-            df_lg = df[df["League"].astype(str).str.strip() == lg].copy()
-            # Show league replay trend if available; otherwise overall trend filtered to that league’s matches.
-            render_chart_and_table(df_lg, f"League: {lg}", league_trend=True, league_name=lg)
+        for i, lg in enumerate(leagues_in_matches, start=1):
+            with tabs[i]:
+                df_lg = df[df["League"].astype(str).str.strip() == lg].copy()
+                # Show league replay trend if available; otherwise overall trend filtered to that league’s matches.
+                render_chart_and_table(df_lg, f"League: {lg}", league_trend=True, league_name=lg)
+
+    with ratings_tab:
+        render_ratings_tab()
+
