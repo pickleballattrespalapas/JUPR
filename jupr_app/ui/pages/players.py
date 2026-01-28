@@ -15,6 +15,7 @@ from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
 )
 from jupr_app.domain.gamification.podium_awards import ensure_podium_awards_exist
+from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
 from jupr_app.domain.gamification.top_performer_awards import ensure_league_top_performer_awards
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,11 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
         return pd.DataFrame()
 
     return pb_df.merge(badges_df, on="badge_id", how="left")
+
+
+@st.cache_data(ttl=60)
+def fetch_player_tournament_trophies(_supabase, club_id: str, pid: int) -> list[dict]:
+    return get_player_tournament_trophies(_supabase, club_id, pid)
 
 
 @st.cache_data(ttl=120)
@@ -1116,6 +1122,65 @@ def render(ctx):
                     "No trophies yet. Win podium finishes or top performer awards in completed leagues.",
                     label="trophies.case.empty",
                 )
+
+        tournament_trophies = fetch_player_tournament_trophies(_supabase, club_id, pid)
+        if debug_render:
+            badge_code(
+                f"Tournament podium badge rows: {len(tournament_trophies)}",
+                label="trophies.tournaments.debug",
+            )
+
+        st.subheader("🏆 Tournament Trophies")
+        if not tournament_trophies:
+            badge_caption("No tournament trophies yet.", label="trophies.tournaments.empty")
+        else:
+            podium_labels = {
+                1: "🥇 Champion",
+                2: "🥈 Runner-up",
+                3: "🥉 Bronze",
+            }
+            trophy_cards = []
+            for trophy in tournament_trophies:
+                placement = trophy.get("placement")
+                medal_label = podium_labels.get(placement, "🏅 Podium")
+                tournament_name = trophy.get("tournament_name")
+                if not tournament_name:
+                    tournament_id = trophy.get("tournament_id")
+                    if tournament_id:
+                        tournament_name = f"Tournament {str(tournament_id)[:8]}"
+                    else:
+                        tournament_name = "Tournament"
+                teammate_line = trophy.get("teammate_names")
+                earned_at_label = _format_earned_at(trophy.get("earned_at"))
+                earned_at_label = f"Awarded {earned_at_label}" if earned_at_label else ""
+                teammate_html = (
+                    f"<div class=\"trophy-body truncate-1\">{html.escape(str(teammate_line))}</div>"
+                    if teammate_line
+                    else ""
+                )
+                earned_html = (
+                    f"<div class=\"trophy-body\">{html.escape(earned_at_label)}</div>"
+                    if earned_at_label
+                    else ""
+                )
+                card = f"""
+                <div class="trophy-chip">
+                    <span>{html.escape(medal_label)}</span>
+                    <div class="trophy-text">
+                        <div class="trophy-title truncate-1">{html.escape(str(tournament_name))}</div>
+                        {teammate_html}
+                        {earned_html}
+                    </div>
+                </div>
+                """
+                trophy_cards.append(card)
+
+            height = 130 + math.ceil(len(trophy_cards) / 2) * 90
+            render_badge_html(
+                f"<div class='trophy-chip-row'>{''.join(trophy_cards)}</div>",
+                label="trophies.tournaments.grid",
+                height=height,
+            )
 
         top_prestige_key = f"top_prestige_{pid}"
         if top_prestige_key in st.session_state:
