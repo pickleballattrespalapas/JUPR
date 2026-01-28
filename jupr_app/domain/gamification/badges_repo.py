@@ -11,6 +11,8 @@ from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant,
 
 logger = logging.getLogger(__name__)
 
+PLAYER_BADGES_ON_CONFLICT = "club_id,player_id,badge_id,context_id"
+
 
 def upsert_player_badges(
     supabase: Any,
@@ -57,11 +59,22 @@ def upsert_player_badges(
     if not rows:
         return []
 
+    if logger.isEnabledFor(logging.INFO):
+        sample_rows = [_redact_badge_row(row) for row in rows[:3]]
+        logger.info(
+            "player_badges upsert batch prepared",
+            extra={
+                "on_conflict": PLAYER_BADGES_ON_CONFLICT,
+                "sample_rows": sample_rows,
+                "total_rows": len(rows),
+            },
+        )
+
     chunk = 200
     for i in range(0, len(rows), chunk):
         supabase.table("player_badges").upsert(
             rows[i : i + chunk],
-            on_conflict="club_id,player_id,badge_id,context_id",
+            on_conflict=PLAYER_BADGES_ON_CONFLICT,
         ).execute()
     return created
 
@@ -105,3 +118,12 @@ def _build_tape_excerpt(candidate: BadgeCandidate, data: dict[str, Any]) -> str:
     if lines:
         return "\n".join(lines[:4])
     return ""
+
+
+def _redact_badge_row(row: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(row)
+    if "value_json" in redacted:
+        value_json = redacted.get("value_json") or {}
+        if isinstance(value_json, dict):
+            redacted["value_json"] = {"keys": sorted(value_json.keys())}
+    return redacted
