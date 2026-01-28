@@ -226,6 +226,8 @@ def render_top_performers_cards(
     qualified_df=None,
     title="Top Performers (Min 6 Games)",
     compact_view=False,
+    public_mode=False,
+    ctx=None,
 ):
     if top_perf_dict is None:
         if qualified_df is None or qualified_df.empty:
@@ -235,10 +237,18 @@ def render_top_performers_cards(
             top = df.sort_values(sort_key, ascending=False).head(5)
             entries = []
             for _, r in top.iterrows():
+                name = r.get("name", "")
+                pid = r.get("_pid")
+                name_html = (
+                    _build_player_link(pid, name, public_mode, ctx)
+                    if ctx is not None
+                    else html.escape(str(name))
+                )
                 entries.append(
                     {
                         "value": value_fn(r),
-                        "name": str(r.get("name", "")),
+                        "name": str(name),
+                        "name_html": name_html,
                     }
                 )
             return entries
@@ -347,14 +357,14 @@ def render_top_performers_cards(
         secondary = entries[1:5]
         list_items = "".join(
             f'<div class="tp-list-item"><span class="tp-list-value">{html.escape(entry["value"])}</span>'
-            f'<span class="tp-list-name">{html.escape(entry["name"])}</span></div>'
+            f'<span class="tp-list-name">{entry.get("name_html", html.escape(entry["name"]))}</span></div>'
             for entry in secondary
         )
         card_html = f"""
         <div class="tp-card" style="--tp-accent: {accent};">
             <div class="tp-label">{html.escape(str(card.get("label", "")))}</div>
             <div class="tp-value">{html.escape(primary["value"])}</div>
-            <div class="tp-name">{html.escape(primary["name"])}</div>
+            <div class="tp-name">{primary.get("name_html", html.escape(primary["name"]))}</div>
             <div class="tp-list">{list_items}</div>
         </div>
         """
@@ -997,6 +1007,39 @@ def render(ctx):
             standings["Qualified"] = False
     if "Qualified" in standings.columns:
         standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
+
+    for col, default in {
+        "wins": 0,
+        "losses": 0,
+        "matches_played": 0,
+        "rating_gain": 0.0,
+        "JUPR": 0.0,
+        "Win %": pd.NA,
+    }.items():
+        if col not in standings.columns:
+            standings[col] = default
+
+    min_games_for_awards = 0
+    if target_league != "OVERALL":
+        min_games_for_awards = int(min_games_req or 0)
+    if min_games_for_awards > 0:
+        qualified_df = standings[standings["matches_played"] >= min_games_for_awards].copy()
+    else:
+        qualified_df = standings.copy()
+
+    top_perf_title = "Top Performers"
+    if target_league != "OVERALL" and min_games_for_awards > 0:
+        top_perf_title = f"Top Performers (Min {min_games_for_awards} Games)"
+    if qualified_df.empty:
+        st.markdown(f"### {top_perf_title}")
+        st.caption("Not enough games recorded yet for awards.")
+    else:
+        render_top_performers_cards(
+            qualified_df=qualified_df,
+            title=top_perf_title,
+            public_mode=PUBLIC_MODE,
+            ctx=ctx,
+        )
 
     if view_mode == "Stats View":
         st.markdown("#### Standings Table")
