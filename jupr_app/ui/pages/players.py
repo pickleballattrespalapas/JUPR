@@ -696,10 +696,13 @@ def render(ctx):
                 label="badges.featured.grid",
             )
 
-        if st.button("See more cuts", key="badge_cabinet_open"):
-            st.session_state["badge_cabinet_open"] = True
+        if "badge_cabinet_is_open" not in st.session_state:
+            st.session_state["badge_cabinet_is_open"] = False
 
-        cabinet_open = st.session_state.get("badge_cabinet_open", False)
+        if st.button("See more cuts", key="badge_cabinet_open_btn"):
+            st.session_state["badge_cabinet_is_open"] = True
+
+        cabinet_open = st.session_state.get("badge_cabinet_is_open", False)
         with st.expander("Open Cabinet", expanded=cabinet_open):
             filter_cols = st.columns(2)
             show_unlocked = filter_cols[0].checkbox("Unlocked", value=True, key="badge_filter_unlocked")
