@@ -259,6 +259,10 @@ def process_matches(
                 "t1_p2_r_end": float(end_r2),
                 "t2_p1_r_end": float(end_r3),
                 "t2_p2_r_end": float(end_r4),
+                "context_type": m.get("context_type"),
+                "context_id": m.get("context_id"),
+                "tournament_id": m.get("tournament_id"),
+                "tournament_game_id": m.get("tournament_game_id"),
             }
         )
 

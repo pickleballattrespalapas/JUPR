@@ -18,6 +18,7 @@ from . import admin_guide
 from . import moneyball
 from . import league_results
 from . import theme_gallery
+from . import tournaments
 
 __all__ = [
     "leaderboards",
@@ -36,4 +37,5 @@ __all__ = [
     "moneyball",
     "league_results",
     "theme_gallery",
+    "tournaments",
 ]
