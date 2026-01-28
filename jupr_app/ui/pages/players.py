@@ -1,9 +1,11 @@
 import html
 import logging
+import math
 import textwrap
 
 import streamlit as st
 import pandas as pd
+from streamlit.components.v1 import html as st_html
 
 from jupr_app.ui.helpers import qp_get, build_match_explorer_link
 from jupr_app.ui.layout import page_shell
@@ -450,22 +452,36 @@ def render(ctx):
     else:
         st.caption("No league ratings table entries found for this player yet.")
 
-    st.markdown("### Badges")
+    debug_render = False
+    if bool(getattr(ctx, "admin_logged_in", False)):
+        debug_render = st.toggle("Debug badge render", value=False)
 
-    def assert_no_html_leak(label: str, s: str | None) -> None:
-        if not s:
+    def _debug_html_warning(label: str, fn_name: str, text: str) -> None:
+        if not debug_render:
             return
-        if "<div" in s or "badge-card" in s:
-            raise AssertionError(f"HTML leak detected in {label}: {s[:120]}")
+        if "<div" in text or "badge-card" in text:
+            snippet = textwrap.shorten(text.replace("\n", " "), width=140, placeholder="…")
+            st.warning(f"Badge render debug ({label}) via {fn_name}: {snippet}")
 
-    def render_badge_html(html_block: str) -> None:
-        cleaned = textwrap.dedent(html_block).strip()
-        st.markdown(cleaned, unsafe_allow_html=True)
+    def badge_markdown(text: str, *, label: str) -> None:
+        _debug_html_warning(label, "markdown", text)
+        st.markdown(text)
 
+    def badge_write(text: str, *, label: str) -> None:
+        _debug_html_warning(label, "write", text)
+        st.write(text)
 
-    render_badge_html(
-        """
-        <style>
+    def badge_caption(text: str, *, label: str) -> None:
+        _debug_html_warning(label, "caption", text)
+        st.caption(text)
+
+    def badge_code(text: str, *, label: str) -> None:
+        _debug_html_warning(label, "code", text)
+        st.code(text)
+
+    badge_markdown("### Badges", label="badges.header")
+
+    badge_css = """
         .badge-summary {
             display: flex;
             flex-wrap: wrap;
@@ -560,9 +576,29 @@ def render(ctx):
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
-        </style>
-        """
-    )
+    """
+
+    def _estimate_badge_height(cleaned: str) -> int:
+        card_count = cleaned.count("badge-card")
+        if card_count <= 0:
+            return 180
+        cards_per_row = 3 if "featured-grid" in cleaned else 4
+        rows = max(1, math.ceil(card_count / cards_per_row))
+        return 160 + rows * 170
+
+    def render_badge_html(html_block: str, *, label: str, height: int | None = None) -> None:
+        cleaned = textwrap.dedent(html_block).strip()
+        _debug_html_warning(label, "st_html", cleaned)
+        doc = f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>{badge_css}</style>
+  </head>
+  <body>{cleaned}</body>
+</html>"""
+        resolved_height = height if height is not None else _estimate_badge_height(cleaned)
+        st_html(doc, height=resolved_height, scrolling=False)
     badge_defs = getattr(ctx, "df_badges", None)
     if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
         badge_defs = fetch_badge_definitions(_supabase)
@@ -624,17 +660,18 @@ def render(ctx):
             </div>
         </div>
     """
-    render_badge_html(summary_html)
+    render_badge_html(summary_html, label="badges.summary")
 
     if not unlocked_badges and not locked_badges:
-        assert_no_html_leak("badges.empty", "No badges available yet.")
-        st.caption("No badges available yet.")
+        badge_caption("No badges available yet.", label="badges.empty")
     else:
         st.subheader("Featured Cuts")
         featured = select_featured_badges(unlocked_badges, max_count=3, sort_mode="recent")
         if not featured:
-            assert_no_html_leak("badges.featured.empty", "The tape room is quiet—new reels arrive after the next run.")
-            st.caption("The tape room is quiet—new reels arrive after the next run.")
+            badge_caption(
+                "The tape room is quiet—new reels arrive after the next run.",
+                label="badges.featured.empty",
+            )
         else:
             featured_cards = []
             for badge in featured:
@@ -654,7 +691,10 @@ def render(ctx):
                     </div>
                     """
                 )
-            render_badge_html(f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>")
+            render_badge_html(
+                f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>",
+                label="badges.featured.grid",
+            )
 
         if st.button("See more cuts", key="badge_cabinet_open"):
             st.session_state["badge_cabinet_open"] = True
@@ -705,8 +745,7 @@ def render(ctx):
 
             visible_badges = [b for b in all_badges if _visible(b)]
             if not visible_badges:
-                assert_no_html_leak("badges.filters.empty", "No badges match the filters.")
-                st.caption("No badges match the filters.")
+                badge_caption("No badges match the filters.", label="badges.filters.empty")
             else:
                 card_items = []
                 for badge in visible_badges:
@@ -744,7 +783,10 @@ def render(ctx):
                             </div>
                             """
                         )
-                render_badge_html(f"<div class='badge-grid'>{''.join(card_items)}</div>")
+                render_badge_html(
+                    f"<div class='badge-grid'>{''.join(card_items)}</div>",
+                    label="badges.cabinet.grid",
+                )
 
             details_view = st.toggle("Details view", value=False, key="badge_details_view")
             if details_view and unlocked_badges:
