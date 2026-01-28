@@ -25,6 +25,15 @@ def apply_match_filters(df_matches: pd.DataFrame, context_filters: dict | None) 
     if "is_valid" in df.columns:
         df = df[df["is_valid"].fillna(True).astype(bool)].copy()
 
+    if "context_type" in df.columns:
+        df = df[df["context_type"].fillna("").astype(str).str.upper() != "TOURNAMENT"].copy()
+
+    if "tournament_id" in df.columns:
+        df = df[df["tournament_id"].isna()].copy()
+
+    if "match_type" in df.columns:
+        df = df[df["match_type"].fillna("").astype(str) != "Tournament"].copy()
+
     for col in [
         "is_void",
         "voided",
