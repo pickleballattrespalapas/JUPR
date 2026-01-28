@@ -177,101 +177,226 @@ def _season_sort_key(league_name: str) -> tuple[int, int] | None:
     return (year or 0, season_rank or 0)
 
 
-def compute_top_finisher_trophies(pid: int, df_leagues: pd.DataFrame | None, df_meta: pd.DataFrame | None) -> list[dict]:
-    if df_leagues is None or df_leagues.empty:
-        return []
+def _parse_week_num(week_tag: str | None) -> int | None:
+    if week_tag is None:
+        return None
+    match = re.search(r"(\d+)", str(week_tag))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
 
-    leagues_df = df_leagues.copy()
-    league_col = "league_name" if "league_name" in leagues_df.columns else "league" if "league" in leagues_df.columns else None
-    if not league_col or "player_id" not in leagues_df.columns:
-        return []
 
-    leagues_df[league_col] = leagues_df[league_col].astype(str).str.strip()
-    leagues_df["player_id"] = pd.to_numeric(leagues_df["player_id"], errors="coerce").fillna(-1).astype(int)
+def _build_league_display_label(league_name: str, season_label: str | None) -> str:
+    league_name = str(league_name or "").strip()
+    season_label = str(season_label or "").strip()
+    if not season_label:
+        return league_name
+    if season_label.lower() in league_name.lower():
+        return league_name
+    return f"{league_name} • {season_label}"
 
-    ended_leagues: list[str] = []
+
+def _inactive_league_frame(
+    df_meta: pd.DataFrame | None,
+    df_leagues: pd.DataFrame | None,
+    df_matches: pd.DataFrame | None,
+) -> pd.DataFrame:
+    now = pd.Timestamp.now(tz="UTC")
+    inactive_df = pd.DataFrame()
     if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
-        if "is_active" in df_meta.columns:
-            meta = df_meta.copy()
-            meta["league_name"] = meta["league_name"].astype(str).str.strip()
-            meta["is_active"] = meta["is_active"].fillna(False).astype(bool)
-            ended_leagues = meta[meta["is_active"] != True]["league_name"].dropna().unique().tolist()
-
-    if not ended_leagues:
-        season_pattern = r"\b(?:fall|spring|summer|winter)\b|\b(?:19|20)\d{2}\b"
-        season_mask = leagues_df[league_col].str.contains(season_pattern, case=False, regex=True, na=False)
-        ended_leagues = leagues_df.loc[season_mask, league_col].dropna().unique().tolist()
-
-    if not ended_leagues:
-        ended_leagues = leagues_df[league_col].dropna().unique().tolist()
-
-    trophies: list[dict] = []
-    icon_map = {1: "🥇", 2: "🥈", 3: "🥉"}
-    for league in ended_leagues:
-        league_rows = leagues_df[leagues_df[league_col] == league].copy()
-        if league_rows.empty:
-            continue
-
-        league_rows["wins_calc"] = pd.to_numeric(league_rows.get("wins", 0), errors="coerce").fillna(0)
-        league_rows["losses_calc"] = pd.to_numeric(league_rows.get("losses", 0), errors="coerce").fillna(0)
-        league_rows["matches_calc"] = pd.to_numeric(
-            league_rows.get("matches_played", league_rows["wins_calc"] + league_rows["losses_calc"]),
-            errors="coerce",
-        ).fillna(league_rows["wins_calc"] + league_rows["losses_calc"])
-        if "win_pct" in league_rows.columns:
-            league_rows["win_pct_calc"] = pd.to_numeric(league_rows.get("win_pct", 0), errors="coerce").fillna(0)
-        else:
-            total_matches = league_rows["wins_calc"] + league_rows["losses_calc"]
-            league_rows["win_pct_calc"] = league_rows["wins_calc"] / total_matches.where(total_matches > 0, 1)
-        league_rows["rating_calc"] = pd.to_numeric(league_rows.get("rating", 0), errors="coerce").fillna(0)
-
-        league_rows = league_rows.sort_values(
-            ["wins_calc", "win_pct_calc", "rating_calc", "matches_calc"],
-            ascending=[False, False, False, False],
-        ).reset_index(drop=True)
-
-        player_rows = league_rows[league_rows["player_id"] == int(pid)]
-        if player_rows.empty:
-            continue
-        place = int(player_rows.index[0]) + 1
-        if place > 3:
-            continue
-        player_row = player_rows.iloc[0]
-        wins = int(player_row.get("wins_calc", 0))
-        losses = int(player_row.get("losses_calc", 0))
-        matches = int(player_row.get("matches_calc", wins + losses))
-        win_pct = float(player_row.get("win_pct_calc", 0)) if matches else 0.0
-        rating_val = player_row.get("rating_calc", 0)
-        rating_text = f"{float(rating_val):.0f}" if rating_val else "—"
-        subtitle = f"{place} place in {league}"
-        body = f"Record {wins}-{losses} • {win_pct:.0%} win rate • League JUPR {rating_text}"
-        trophies.append(
-            {
-                "league_name": league,
-                "place": place,
-                "icon": icon_map.get(place, "🏆"),
-                "title": "Top Finisher",
-                "subtitle": subtitle,
-                "body": body,
-                "_season_sort": _season_sort_key(league),
-            }
+        meta = df_meta.copy()
+        meta["league_name"] = meta["league_name"].astype(str).str.strip()
+        inactive_mask = pd.Series(False, index=meta.index)
+        if "is_active" in meta.columns:
+            inactive_mask |= meta["is_active"].fillna(False) == False
+        if "status" in meta.columns:
+            inactive_mask |= (
+                meta["status"]
+                .fillna("")
+                .astype(str)
+                .str.lower()
+                .isin({"archived", "completed", "complete", "done"})
+            )
+        end_col = next(
+            (col for col in ["end_date", "ended_at", "end_at", "season_end", "final_date"] if col in meta.columns),
+            None,
         )
+        if end_col:
+            end_dates = pd.to_datetime(meta[end_col], errors="coerce", utc=True)
+            inactive_mask |= end_dates < now
+            meta["sort_date"] = end_dates
+        else:
+            meta["sort_date"] = pd.NaT
 
-    if not trophies:
-        return []
+        inactive_df = meta.loc[inactive_mask].copy()
+        if not inactive_df.empty:
+            season_col = next(
+                (col for col in ["season_label", "season", "season_name"] if col in inactive_df.columns),
+                None,
+            )
+            inactive_df["season_label"] = (
+                inactive_df[season_col].fillna("").astype(str).str.strip() if season_col else ""
+            )
+            inactive_df = inactive_df[["league_name", "season_label", "sort_date"]]
 
-    seasonal = [t for t in trophies if t.get("_season_sort") is not None]
-    non_seasonal = [t for t in trophies if t.get("_season_sort") is None]
-    seasonal_sorted = sorted(
-        seasonal,
-        key=lambda t: (t["_season_sort"][0], t["_season_sort"][1], -t["place"]),
-        reverse=True,
+    if inactive_df.empty and df_leagues is not None and not df_leagues.empty and "league_name" in df_leagues.columns:
+        leagues = df_leagues.copy()
+        leagues["league_name"] = leagues["league_name"].astype(str).str.strip()
+        if "is_active" in leagues.columns:
+            league_active = leagues.groupby("league_name")["is_active"].apply(lambda s: bool(s.fillna(False).any()))
+            inactive_names = league_active[league_active == False].index.tolist()
+        else:
+            inactive_names = []
+        if inactive_names:
+            inactive_df = pd.DataFrame({"league_name": inactive_names})
+        else:
+            inactive_df = pd.DataFrame()
+        inactive_df["season_label"] = ""
+        inactive_df["sort_date"] = pd.NaT
+
+    if inactive_df.empty:
+        return inactive_df
+
+    inactive_df = inactive_df[inactive_df["league_name"].str.upper() != "OVERALL"].copy()
+
+    if (
+        df_matches is not None
+        and not df_matches.empty
+        and "league" in df_matches.columns
+        and "date" in df_matches.columns
+    ):
+        match_df = df_matches.copy()
+        match_df["league"] = match_df["league"].fillna("").astype(str).str.strip()
+        match_df["date_dt"] = pd.to_datetime(match_df["date"], errors="coerce", utc=True)
+        last_dates = match_df.dropna(subset=["date_dt"]).groupby("league")["date_dt"].max()
+        inactive_df["match_date"] = inactive_df["league_name"].map(last_dates)
+        inactive_df["sort_date"] = inactive_df["sort_date"].combine_first(inactive_df["match_date"])
+
+    inactive_df["season_sort"] = inactive_df["league_name"].map(_season_sort_key)
+    inactive_df["display_label"] = inactive_df.apply(
+        lambda r: _build_league_display_label(r["league_name"], r.get("season_label", "")), axis=1
     )
-    non_seasonal_sorted = sorted(non_seasonal, key=lambda t: t["place"])
-    ordered = seasonal_sorted + non_seasonal_sorted
-    for trophy in ordered:
-        trophy.pop("_season_sort", None)
-    return ordered[:3]
+    return inactive_df
+
+
+def build_inactive_league_options(
+    df_meta: pd.DataFrame | None,
+    df_leagues: pd.DataFrame | None,
+    df_matches: pd.DataFrame | None,
+) -> pd.DataFrame:
+    inactive_df = _inactive_league_frame(df_meta, df_leagues, df_matches)
+    if inactive_df.empty:
+        return inactive_df
+
+    with_dates = inactive_df[inactive_df["sort_date"].notna()].copy()
+    without_dates = inactive_df[inactive_df["sort_date"].isna()].copy()
+    if not with_dates.empty:
+        with_dates = with_dates.sort_values("sort_date", ascending=False)
+    if not without_dates.empty:
+        without_dates = without_dates.sort_values(
+            by="season_sort",
+            key=lambda s: s.apply(lambda v: v if v is not None else (0, 0)),
+            ascending=False,
+        )
+    return pd.concat([with_dates, without_dates], ignore_index=True)
+
+
+def _filter_league_matches(df_matches: pd.DataFrame, league_name: str) -> pd.DataFrame:
+    df = df_matches.copy()
+    df["league"] = df.get("league", "").fillna("").astype(str).str.strip()
+    df = df[df["league"] == str(league_name).strip()].copy()
+    if "match_type" in df.columns:
+        df["match_type"] = df.get("match_type", "").fillna("").astype(str).str.strip()
+        df = df[df["match_type"] != "PopUp"].copy()
+    df["score_t1"] = pd.to_numeric(df.get("score_t1", 0), errors="coerce").fillna(0).astype(int)
+    df["score_t2"] = pd.to_numeric(df.get("score_t2", 0), errors="coerce").fillna(0).astype(int)
+    df = df[(df["score_t1"] + df["score_t2"]) > 0].copy()
+    week_src = df.get("week_num")
+    if week_src is not None:
+        df["week_num"] = pd.to_numeric(week_src, errors="coerce")
+    else:
+        df["week_num"] = df.get("week_tag", "").map(_parse_week_num)
+    return df
+
+
+def build_completed_league_podium(
+    df_matches: pd.DataFrame | None,
+    df_leagues: pd.DataFrame | None,
+    id_to_name: dict[int, str],
+    league_name: str,
+) -> pd.DataFrame:
+    if df_matches is None or df_matches.empty:
+        return pd.DataFrame()
+
+    league_matches = _filter_league_matches(df_matches, league_name)
+    if league_matches.empty:
+        return pd.DataFrame()
+
+    max_week = league_matches["week_num"].dropna().max()
+    if pd.notna(max_week):
+        league_matches = league_matches[league_matches["week_num"].fillna(max_week) <= max_week].copy()
+
+    rows: list[dict] = []
+    for _, match in league_matches.iterrows():
+        try:
+            p1 = int(match.get("t1_p1"))
+            p2 = int(match.get("t1_p2"))
+            p3 = int(match.get("t2_p1"))
+            p4 = int(match.get("t2_p2"))
+            s1 = int(match.get("score_t1", 0) or 0)
+            s2 = int(match.get("score_t2", 0) or 0)
+        except Exception:
+            continue
+        if (s1 + s2) <= 0:
+            continue
+        t1_win = s1 > s2
+        t2_win = s2 > s1
+        for pid, team in [(p1, 1), (p2, 1), (p3, 2), (p4, 2)]:
+            win = 1 if (t1_win and team == 1) or (t2_win and team == 2) else 0
+            loss = 1 if (t1_win and team == 2) or (t2_win and team == 1) else 0
+            rows.append(
+                {
+                    "player_id": int(pid),
+                    "name": id_to_name.get(int(pid), f"#{int(pid)}"),
+                    "games": 1,
+                    "wins": int(win),
+                    "losses": int(loss),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame()
+
+    stats = (
+        pd.DataFrame(rows)
+        .groupby(["player_id", "name"], as_index=False)
+        .agg(games=("games", "sum"), wins=("wins", "sum"), losses=("losses", "sum"))
+    )
+    stats["win_pct"] = stats.apply(
+        lambda r: (float(r["wins"]) / float(r["games"])) if int(r["games"]) > 0 else 0.0, axis=1
+    )
+
+    rating_map = {}
+    if df_leagues is not None and not df_leagues.empty and "league_name" in df_leagues.columns:
+        league_rows = df_leagues.copy()
+        league_rows["league_name"] = league_rows["league_name"].astype(str).str.strip()
+        league_rows = league_rows[league_rows["league_name"] == str(league_name).strip()].copy()
+        if not league_rows.empty and "player_id" in league_rows.columns:
+            league_rows["player_id"] = pd.to_numeric(league_rows["player_id"], errors="coerce").fillna(-1).astype(int)
+            league_rows["rating"] = pd.to_numeric(league_rows.get("rating", 0), errors="coerce").fillna(0.0)
+            rating_map = dict(zip(league_rows["player_id"], league_rows["rating"]))
+
+    stats["rating"] = stats["player_id"].map(rating_map).fillna(0.0)
+    stats = stats.sort_values(
+        ["wins", "win_pct", "rating", "games"],
+        ascending=[False, False, False, False],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    stats["rank"] = range(1, len(stats) + 1)
+    return stats.head(3)
 
 
 @st.cache_data(ttl=300)
@@ -608,6 +733,10 @@ def render(ctx):
             gap: 0.5rem;
             align-items: stretch;
         }
+        .trophy-league {
+            font-size: 0.78rem;
+            color: var(--text-muted, rgba(255,255,255,0.65));
+        }
         .trophy-chip {
             display: inline-flex;
             gap: 0.45rem;
@@ -733,26 +862,65 @@ def render(ctx):
         unlocked_badges = summary.get("unlocked_badges", [])
         locked_badges = summary.get("locked_badges", [])
 
-        trophies = compute_top_finisher_trophies(pid, df_leagues, df_meta)
-        if trophies:
-            trophy_items = []
-            for trophy in trophies:
-                trophy_items.append(
-                    "<span class='trophy-chip'>"
-                    f"<span>{html.escape(trophy.get('icon', '🏆'))}</span>"
-                    "<span class='trophy-text'>"
-                    f"<span class='trophy-title'>{html.escape(trophy.get('subtitle', 'Top Finisher'))}</span>"
-                    f"<span class='trophy-body'>{html.escape(trophy.get('body', ''))}</span>"
-                    "</span>"
-                    "</span>"
+        df_matches = getattr(ctx, "df_matches", None)
+        inactive_leagues = build_inactive_league_options(df_meta, df_leagues, df_matches)
+        if inactive_leagues.empty:
+            badge_caption("No completed leagues yet.", label="trophies.empty")
+        else:
+            league_options = inactive_leagues["league_name"].tolist()
+            league_labels = dict(zip(inactive_leagues["league_name"], inactive_leagues["display_label"]))
+            if len(league_options) > 1:
+                selected_league = st.selectbox(
+                    "Completed league:",
+                    options=league_options,
+                    format_func=lambda x: league_labels.get(x, x),
+                    key=f"trophy_completed_league_{pid}",
                 )
-            trophy_html = f"""
-            <div class="trophy-section">
-                <div class="trophy-label">Top Finisher</div>
-                <div class="trophy-chip-row">{''.join(trophy_items)}</div>
-            </div>
-            """
-            render_badge_html(trophy_html, label="trophies.top_finisher", height=120 + len(trophies) * 35)
+            else:
+                selected_league = league_options[0]
+
+            league_label = league_labels.get(selected_league, selected_league)
+            podium_df = build_completed_league_podium(
+                df_matches,
+                df_leagues,
+                getattr(ctx, "id_to_name", {}),
+                selected_league,
+            )
+            if podium_df.empty:
+                badge_caption("No completed leagues yet.", label="trophies.empty")
+            else:
+                icon_map = {1: "🥇", 2: "🥈", 3: "🥉"}
+                trophy_items = []
+                for _, row in podium_df.iterrows():
+                    rank = int(row.get("rank", 0) or 0)
+                    icon = icon_map.get(rank, "🏆")
+                    games = int(row.get("games", 0) or 0)
+                    win_pct = float(row.get("win_pct", 0) or 0)
+                    rating_val = float(row.get("rating", 0) or 0)
+                    rating_text = f"{rating_val:.0f}" if rating_val else "—"
+                    subtitle = f"{rank}. {row.get('name', 'Player')}"
+                    body = f"{games} games • {win_pct:.0%} win rate • Final JUPR {rating_text}"
+                    trophy_items.append(
+                        "<span class='trophy-chip'>"
+                        f"<span>{html.escape(icon)}</span>"
+                        "<span class='trophy-text'>"
+                        f"<span class='trophy-title'>{html.escape(subtitle)}</span>"
+                        f"<span class='trophy-body'>{html.escape(body)}</span>"
+                        "</span>"
+                        "</span>"
+                    )
+                trophy_html = f"""
+                <div class="trophy-section">
+                    <div class="trophy-label">Top Performers (Completed League)</div>
+                    <div class="trophy-league">{html.escape(league_label)}</div>
+                    <div class="trophy-chip-row">{''.join(trophy_items)}</div>
+                </div>
+                """
+                render_badge_html(
+                    trophy_html,
+                    label="trophies.top_performers",
+                    height=150 + len(trophy_items) * 35,
+                )
 
         top_prestige_key = f"top_prestige_{pid}"
         if top_prestige_key in st.session_state:
