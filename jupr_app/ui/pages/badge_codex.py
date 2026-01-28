@@ -12,6 +12,16 @@ from jupr_app.ui.pages.players import badge_icon
 logger = logging.getLogger(__name__)
 
 
+def _hint_text(value: object | None) -> str:
+    text = str(value or "").strip()
+    return text if text else "No hint yet."
+
+
+def _lore_text(value: object | None) -> str:
+    text = str(value or "").strip()
+    return text if text else "No story yet."
+
+
 def _player_options(df_players: pd.DataFrame) -> list[tuple[str, int]]:
     if df_players is None or df_players.empty:
         return []
@@ -112,13 +122,9 @@ def render(ctx) -> None:
                 icon = badge_icon(badge.get("badge_id"), badge.get("category"))
             st.markdown(f"**{icon} {name}**")
             st.caption(f"Prestige {prestige}")
-            lore = html.escape(str(badge.get("lore") or ""))
+            lore = html.escape(_lore_text(badge.get("lore")))
             if lore:
                 st.caption(lore)
             if status == "locked":
-                hint = html.escape(str(badge.get("hint") or "A reel still missing."))
+                hint = html.escape(_hint_text(badge.get("hint")))
                 st.caption(hint)
-            else:
-                excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
-                if excerpt:
-                    st.caption(excerpt)
