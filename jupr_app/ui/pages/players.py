@@ -12,7 +12,6 @@ from jupr_app.ui.helpers import qp_get, build_match_explorer_link
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
-    select_featured_badges,
 )
 
 logger = logging.getLogger(__name__)
@@ -555,17 +554,19 @@ def render(ctx):
             margin-bottom: 0.75rem;
         }
         .badge-stat {
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: var(--panel);
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
             border-radius: 0.75rem;
             padding: 0.75rem 0.9rem;
             min-width: 120px;
+            color: var(--text-primary);
         }
         .badge-stat-label {
             font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: rgba(255, 255, 255, 0.6);
+            color: var(--text-secondary);
         }
         .badge-stat-value {
             font-size: 1.6rem;
@@ -583,10 +584,11 @@ def render(ctx):
             align-items: center;
             padding: 0.25rem 0.5rem;
             border-radius: 999px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+            background: var(--pill-bg);
             font-size: 0.8rem;
             max-width: 180px;
+            color: var(--text-primary);
         }
         .trophy-section {
             display: flex;
@@ -598,7 +600,7 @@ def render(ctx):
             font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: rgba(255, 255, 255, 0.6);
+            color: var(--text-secondary);
         }
         .trophy-chip-row {
             display: flex;
@@ -612,10 +614,12 @@ def render(ctx):
             align-items: flex-start;
             padding: 0.35rem 0.6rem;
             border-radius: 0.75rem;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+            background: var(--panel);
+            box-shadow: var(--shadow);
             font-size: 0.8rem;
             max-width: 320px;
+            color: var(--text-primary);
         }
         .trophy-text {
             display: flex;
@@ -629,7 +633,7 @@ def render(ctx):
         }
         .trophy-body {
             font-size: 0.7rem;
-            color: rgba(255, 255, 255, 0.65);
+            color: var(--text-muted);
         }
         .badge-grid {
             display: grid;
@@ -651,15 +655,17 @@ def render(ctx):
         }
         .badge-card {
             border-radius: 0.8rem;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            background: var(--panel);
+            box-shadow: var(--shadow);
             padding: 0.7rem 0.8rem;
             display: flex;
             flex-direction: column;
             gap: 0.35rem;
+            color: var(--text-primary);
         }
         .badge-card.silhouette {
-            background: rgba(255, 255, 255, 0.02);
+            background: var(--panel);
             opacity: 0.7;
         }
         .badge-card-header {
@@ -670,7 +676,7 @@ def render(ctx):
         }
         .badge-subtext {
             font-size: 0.75rem;
-            color: rgba(255, 255, 255, 0.65);
+            color: var(--text-muted);
         }
         .truncate-1 {
             display: -webkit-box;
@@ -795,7 +801,25 @@ def render(ctx):
             badge_caption("No badges available yet.", label="badges.empty")
         else:
             badge_markdown("#### Featured Cuts", label="badges.featured.header")
-            featured = select_featured_badges(unlocked_badges, max_count=3, sort_mode="recent")
+            prestige_sorted = sorted(
+                unlocked_badges,
+                key=lambda b: (
+                    int(b.get("prestige", 0) or 0),
+                    pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce"),
+                ),
+                reverse=True,
+            )
+            non_participant = [b for b in prestige_sorted if b.get("badge_id") != "participant"]
+            if len(non_participant) >= 3:
+                featured = non_participant[:3]
+            else:
+                featured = non_participant[:]
+                remaining_slots = 3 - len(featured)
+                if remaining_slots > 0:
+                    participant_badges = [
+                        b for b in prestige_sorted if b.get("badge_id") == "participant"
+                    ]
+                    featured.extend(participant_badges[:remaining_slots])
             if not featured:
                 badge_caption(
                     "The trophy room is quiet—new reels arrive after the next run.",
@@ -825,14 +849,7 @@ def render(ctx):
                     label="badges.featured.grid",
                 )
 
-            if "badge_cabinet_is_open" not in st.session_state:
-                st.session_state["badge_cabinet_is_open"] = False
-
-            if st.button("See more cuts", key="badge_cabinet_open_btn"):
-                st.session_state["badge_cabinet_is_open"] = True
-
-            cabinet_open = st.session_state.get("badge_cabinet_is_open", False)
-            with st.expander("Open Cabinet", expanded=cabinet_open):
+            with st.expander("Open Cabinet", expanded=False):
                 filter_cols = st.columns(2)
                 show_unlocked = filter_cols[0].checkbox("Unlocked", value=True, key="badge_filter_unlocked")
                 show_locked = filter_cols[0].checkbox("Locked", value=True, key="badge_filter_locked")
