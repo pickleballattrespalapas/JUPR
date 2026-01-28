@@ -1022,24 +1022,20 @@ def render(ctx):
     min_games_for_awards = 0
     if target_league != "OVERALL":
         min_games_for_awards = int(min_games_req or 0)
-    if min_games_for_awards > 0:
-        qualified_df = standings[standings["matches_played"] >= min_games_for_awards].copy()
-    else:
-        qualified_df = standings.copy()
 
-    top_perf_title = "Top Performers"
     if target_league != "OVERALL" and min_games_for_awards > 0:
+        qualified_df = standings[standings["matches_played"] >= min_games_for_awards].copy()
         top_perf_title = f"Top Performers (Min {min_games_for_awards} Games)"
-    if qualified_df.empty:
-        st.markdown(f"### {top_perf_title}")
-        st.caption("Not enough games recorded yet for awards.")
-    else:
-        render_top_performers_cards(
-            qualified_df=qualified_df,
-            title=top_perf_title,
-            public_mode=PUBLIC_MODE,
-            ctx=ctx,
-        )
+        if qualified_df.empty:
+            st.markdown(f"### {top_perf_title}")
+            st.caption("Not enough games recorded yet for awards.")
+        else:
+            render_top_performers_cards(
+                qualified_df=qualified_df,
+                title=top_perf_title,
+                public_mode=PUBLIC_MODE,
+                ctx=ctx,
+            )
 
     if view_mode == "Stats View":
         st.markdown("#### Standings Table")
