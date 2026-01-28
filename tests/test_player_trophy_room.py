@@ -197,6 +197,32 @@ def test_get_player_trophy_case_scopes_and_orders():
     ]
 
 
+def test_get_player_trophy_case_filters_other_players():
+    df = pd.DataFrame(
+        [
+            {
+                "player_id": 1,
+                "badge_id": "top_performer_most_wins",
+                "prestige": 120,
+                "earned_at": "2024-08-10T10:00:00Z",
+                "value_json": {"league_id": "Summer 2024 Ladder"},
+            },
+            {
+                "player_id": 2,
+                "badge_id": "top_performer_most_wins",
+                "prestige": 120,
+                "earned_at": "2024-08-11T10:00:00Z",
+                "value_json": {"league_id": "Summer 2024 Ladder"},
+            },
+        ]
+    )
+    completed = {"Summer 2024 Ladder"}
+
+    trophy_case = get_player_trophy_case(df, 1, completed, limit=8)
+
+    assert trophy_case["player_id"].tolist() == [1]
+
+
 def test_decorate_trophies_handles_missing_prestige_column():
     df = pd.DataFrame(
         [

@@ -15,6 +15,7 @@ from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
 )
 from jupr_app.domain.gamification.podium_awards import ensure_podium_awards_exist
+from jupr_app.domain.gamification.top_performer_awards import ensure_league_top_performer_awards
 
 logger = logging.getLogger(__name__)
 
@@ -405,6 +406,24 @@ def _format_earned_at(value: object | None) -> str:
     if pd.isna(earned_at_dt):
         return ""
     return earned_at_dt.date().isoformat()
+
+
+def _format_top_performer_metric(category_key: str | None, metric_value: object | None) -> str:
+    if metric_value is None:
+        return ""
+    try:
+        value = float(metric_value)
+    except Exception:
+        return str(metric_value)
+    if category_key == "highest_rating":
+        return f"{value:.3f}"
+    if category_key == "most_improved":
+        return f"{value:+.3f}"
+    if category_key == "best_win_pct":
+        return f"{value:.1f}%"
+    if category_key == "most_wins":
+        return f"{int(round(value))}"
+    return str(metric_value)
 
 
 def _trophy_display_name(row: pd.Series) -> str:
@@ -992,13 +1011,14 @@ def render(ctx):
         completed_league_ids = set(league_options)
         for league_id in completed_league_ids:
             ensure_podium_awards_exist(ctx, league_id)
+            ensure_league_top_performer_awards(ctx, league_id)
 
         badge_markdown("#### Career Trophy Case", label="trophies.case.header")
         trophy_case = get_player_trophy_case(player_badges, pid, completed_league_ids, limit=8)
         trophy_case = _decorate_trophies_with_leagues(trophy_case, league_labels)
         if trophy_case.empty:
             badge_caption(
-                "No trophies yet. Win podium finishes in completed leagues to earn trophies.",
+                "No trophies yet. Win podium finishes or top performer awards in completed leagues.",
                 label="trophies.case.empty",
             )
         else:
@@ -1013,15 +1033,32 @@ def render(ctx):
                     )
                     continue
                 icon = "🏆"
-                trophy_title = _trophy_display_name(row)
+                value_json = _parse_value_json(row.get("value_json"))
+                category_label = value_json.get("category_label")
+                trophy_title = category_label or _trophy_display_name(row)
+                metric_display = value_json.get("metric_display")
+                if not metric_display:
+                    metric_display = _format_top_performer_metric(
+                        value_json.get("category_key"),
+                        value_json.get("metric_value"),
+                    )
+                if not metric_display and value_json.get("rank") is not None:
+                    metric_display = f"Rank {value_json.get('rank')}"
                 league_label = str(row.get("league_label") or "League")
                 earned_at_label = _format_earned_at(row.get("earned_at"))
+                earned_at_label = f"Earned {earned_at_label}" if earned_at_label else ""
+                metric_line = (
+                    f"<div class=\"trophy-case-meta truncate-1\">{html.escape(metric_display)}</div>"
+                    if metric_display
+                    else ""
+                )
                 card = f"""
                 <div class="trophy-case-card">
                     <div class="trophy-case-header">
                         <span>{html.escape(icon)}</span>
                         <span class="truncate-1">{html.escape(trophy_title)}</span>
                     </div>
+                    {metric_line}
                     <div class="trophy-case-meta truncate-1">{html.escape(league_label)}</div>
                     <div class="trophy-case-meta">{html.escape(earned_at_label)}</div>
                 </div>
@@ -1035,7 +1072,7 @@ def render(ctx):
                 )
             else:
                 badge_caption(
-                    "No trophies yet. Win podium finishes in completed leagues to earn trophies.",
+                    "No trophies yet. Win podium finishes or top performer awards in completed leagues.",
                     label="trophies.case.empty",
                 )
 
