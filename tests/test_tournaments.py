@@ -2,8 +2,10 @@ import pytest
 
 from jupr_app.domain.tournaments import (
     build_round_robin_games,
+    compute_podium_from_rr,
     compute_round_robin_standings,
     resolve_playoff_dependencies,
+    validate_podium_placements,
 )
 
 
@@ -45,6 +47,33 @@ def test_round_robin_standings_head_to_head():
 
     assert seeds["t1"] == 1
     assert seeds["t2"] == 2
+
+
+def test_round_robin_podium_from_standings():
+    teams = [
+        {"id": "t1", "team_number": 1},
+        {"id": "t2", "team_number": 2},
+        {"id": "t3", "team_number": 3},
+    ]
+    games = [
+        {"team_a_id": "t1", "team_b_id": "t2", "score_a": 11, "score_b": 7},
+        {"team_a_id": "t1", "team_b_id": "t3", "score_a": 11, "score_b": 6},
+        {"team_a_id": "t2", "team_b_id": "t3", "score_a": 11, "score_b": 4},
+    ]
+
+    podium = compute_podium_from_rr(teams, games)
+
+    assert [row["team_id"] for row in podium] == ["t1", "t2", "t3"]
+
+
+def test_validate_podium_rejects_duplicate_teams():
+    placements = [
+        {"placement": 1, "team_id": "t1"},
+        {"placement": 2, "team_id": "t1"},
+    ]
+
+    with pytest.raises(ValueError):
+        validate_podium_placements(placements)
 
 
 def test_resolve_playoff_dependencies():
