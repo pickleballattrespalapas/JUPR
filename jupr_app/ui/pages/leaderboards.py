@@ -138,7 +138,7 @@ def _fetch_story_badges(ctx, player_ids):
             ctx.supabase.table("player_badges")
             .select(
                 "player_id,badge_id,earned_at,created_at,"
-                "badges:badges(badge_id,name,prestige,category,icon,code)"
+                "badges:badges(badge_id,name,prestige,category,icon_key,rarity)"
             )
             .eq("club_id", str(ctx.club_id))
             .in_("player_id", player_ids)
@@ -158,8 +158,8 @@ def _fetch_story_badges(ctx, player_ids):
         "badges.name": "name",
         "badges.prestige": "prestige",
         "badges.category": "category",
-        "badges.icon": "icon",
-        "badges.code": "code",
+        "badges.icon_key": "icon_key",
+        "badges.rarity": "rarity",
     }
     return story_df.rename(columns=column_map)
 
@@ -198,8 +198,8 @@ def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[dict]]:
                 "name": row.get("name", "Badge"),
                 "prestige": int(row.get("prestige", 0) or 0),
                 "category": row.get("category"),
-                "code": row.get("code"),
-                "icon": row.get("icon"),
+                "icon_key": row.get("icon_key"),
+                "rarity": row.get("rarity"),
                 "earned_at_dt": row.get("earned_at_dt"),
             }
         )
@@ -1237,9 +1237,7 @@ def render(ctx):
             if story_badges:
                 badge_parts = []
                 for badge in story_badges[:MAX_STORY_BADGES]:
-                    icon = badge.get("icon") or badge_icon(
-                        badge.get("badge_id"), badge.get("category")
-                    )
+                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
                     name = badge.get("name", "Badge")
                     prestige = badge.get("prestige", 0)
                     category = badge.get("category")

@@ -41,3 +41,37 @@ context object with `supabase`, `club_id`, and match dataframes.
 2. Implement award logic in `badge_rules.py`, returning a stable `context_id`.
 3. Add a tape excerpt in the award rule and, if needed, a highlight in `story_engine.py`.
 4. Update tests to cover the new behavior.
+
+## Verification Checklist (Production)
+### SQL sanity checks
+- Confirm the catalog seed count (should be 52 rows):
+  ```sql
+  select count(*) as badge_count from badges;
+  ```
+- Confirm active badge count (if using `is_active` gating in UI):
+  ```sql
+  select count(*) as active_badge_count from badges where is_active is true;
+  ```
+- Confirm player badge volume and recent awards:
+  ```sql
+  select count(*) as player_badge_count from player_badges;
+  select pb.player_id, pb.badge_id, b.name, pb.earned_at
+  from player_badges pb
+  join badges b on b.badge_id = pb.badge_id
+  order by pb.earned_at desc
+  limit 10;
+  ```
+- Spot missing copy (should be empty if v1 copy complete):
+  ```sql
+  select badge_id, name
+  from badges
+  where coalesce(nullif(trim(hint), ''), '') = ''
+     or coalesce(nullif(trim(lore), ''), '') = '';
+  ```
+
+### In-app checks
+- Player Trophy Room:
+  - Total badge count matches the catalog (52 definitions; active count will differ if `is_active` is used to hide badges).
+  - Collection count increments when unlocking a new badge.
+  - Top Prestige chips render with names and icons.
+  - Locked badges show hint text; unlocked badges show lore.

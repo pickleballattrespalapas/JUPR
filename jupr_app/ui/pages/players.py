@@ -98,7 +98,10 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     try:
         b_resp = (
             _supabase.table("badges")
-            .select("badge_id,badge_name,name,title,prestige,category,icon")
+            .select(
+                "badge_id,name,prestige,category,is_stackable,is_active,rarity,tier,"
+                "icon_key,lore,hint,scope"
+            )
             .in_("badge_id", badge_ids)
             .execute()
         )
@@ -424,6 +427,16 @@ def _format_top_performer_metric(category_key: str | None, metric_value: object 
     if category_key == "most_wins":
         return f"{int(round(value))}"
     return str(metric_value)
+
+
+def _badge_hint_text(value: object | None) -> str:
+    text = str(value or "").strip()
+    return text if text else "No hint yet."
+
+
+def _badge_lore_text(value: object | None) -> str:
+    text = str(value or "").strip()
+    return text if text else "No story yet."
 
 
 def _trophy_display_name(row: pd.Series) -> str:
@@ -1153,7 +1166,7 @@ def render(ctx):
                     icon = badge_icon(badge.get("badge_id"), badge.get("category"))
                     stack = badge.get("stack_count", 1)
                     stack_text = f" ×{stack}" if stack and stack > 1 else ""
-                    excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
+                    lore = html.escape(_badge_lore_text(badge.get("lore")))
                     featured_cards.append(
                         f"""
                     <div class="badge-card">
@@ -1162,7 +1175,7 @@ def render(ctx):
                             <span class="truncate-1">{html.escape(str(badge.get('name', 'Badge')))}{stack_text}</span>
                         </div>
                         <div class="badge-subtext">Prestige {int(badge.get('prestige', 0) or 0)}</div>
-                        <div class="badge-subtext truncate-1">{excerpt}</div>
+                        <div class="badge-subtext truncate-1">{lore}</div>
                     </div>
                     """
                     )
@@ -1227,7 +1240,7 @@ def render(ctx):
                         stack = badge.get("stack_count", 1)
                         stack_text = f" ×{stack}" if stack and stack > 1 else ""
                         if status == "locked":
-                            hint = html.escape(str(badge.get("hint") or "A reel still missing."))
+                            hint = html.escape(_badge_hint_text(badge.get("hint")))
                             card_items.append(
                                 f"""
                             <div class="badge-card silhouette">
@@ -1241,7 +1254,7 @@ def render(ctx):
                             """
                             )
                         else:
-                            excerpt = html.escape(str(badge.get("latest_tape_excerpt") or ""))
+                            lore = html.escape(_badge_lore_text(badge.get("lore")))
                             card_items.append(
                                 f"""
                             <div class="badge-card">
@@ -1250,7 +1263,7 @@ def render(ctx):
                                     <span class="truncate-1">{name}{stack_text}</span>
                                 </div>
                                 <div class="badge-subtext">Prestige {prestige}</div>
-                                <div class="badge-subtext truncate-2">{excerpt}</div>
+                                <div class="badge-subtext truncate-2">{lore}</div>
                             </div>
                             """
                             )
