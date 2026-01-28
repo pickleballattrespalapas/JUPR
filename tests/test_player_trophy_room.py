@@ -3,7 +3,11 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.domain.gamification.podium_awards import award_league_podium_badges
-from jupr_app.ui.pages.players import build_inactive_league_options, filter_player_league_trophies
+from jupr_app.ui.pages.players import (
+    build_inactive_league_options,
+    filter_player_league_trophies,
+    get_player_trophy_case,
+)
 
 
 class FakeTable:
@@ -141,3 +145,52 @@ def test_award_league_podium_badges_is_idempotent():
         (2, "league_runner_up"),
         (3, "league_third_place"),
     }
+
+
+def test_get_player_trophy_case_scopes_and_orders():
+    df = pd.DataFrame(
+        [
+            {
+                "player_id": 1,
+                "badge_id": "league_champion",
+                "prestige": 90,
+                "earned_at": "2024-08-10T10:00:00Z",
+                "value_json": {"league_id": "Summer 2024 Ladder"},
+            },
+            {
+                "player_id": 1,
+                "badge_id": "league_runner_up",
+                "prestige": 80,
+                "earned_at": "2024-07-10T10:00:00Z",
+                "value_json": {"league_id": "Spring 2024 Ladder"},
+            },
+            {
+                "player_id": 1,
+                "badge_id": "league_runner_up",
+                "prestige": 80,
+                "earned_at": "2024-08-11T10:00:00Z",
+                "value_json": {"league_id": "Summer 2024 Ladder"},
+            },
+            {
+                "player_id": 2,
+                "badge_id": "league_champion",
+                "prestige": 99,
+                "earned_at": "2024-09-10T10:00:00Z",
+                "value_json": {"league_id": "Summer 2024 Ladder"},
+            },
+        ]
+    )
+    completed = {"Spring 2024 Ladder", "Summer 2024 Ladder"}
+    trophy_case = get_player_trophy_case(df, 1, completed, limit=8)
+
+    assert trophy_case["player_id"].tolist() == [1, 1, 1]
+    assert trophy_case["badge_id"].tolist() == [
+        "league_champion",
+        "league_runner_up",
+        "league_runner_up",
+    ]
+    assert trophy_case["earned_at"].tolist() == [
+        "2024-08-10T10:00:00Z",
+        "2024-08-11T10:00:00Z",
+        "2024-07-10T10:00:00Z",
+    ]

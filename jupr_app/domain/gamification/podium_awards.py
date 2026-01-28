@@ -30,6 +30,10 @@ def _build_league_standings(df_leagues: pd.DataFrame, league_id: str) -> pd.Data
     return df
 
 
+def ensure_podium_awards_exist(ctx, league_id: str) -> None:
+    award_league_podium_badges(ctx, league_id)
+
+
 def award_league_podium_badges(ctx, league_id: str) -> None:
     if bool(getattr(ctx, "public_mode", False)):
         return
