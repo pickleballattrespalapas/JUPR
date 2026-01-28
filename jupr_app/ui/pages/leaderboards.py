@@ -5,6 +5,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
+from jupr_app.domain.awards import build_top_performer_entries
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
@@ -230,65 +231,33 @@ def render_top_performers_cards(
     ctx=None,
 ):
     if top_perf_dict is None:
-        if qualified_df is None or qualified_df.empty:
+        entries = build_top_performer_entries(qualified_df, limit=5)
+        if not entries:
             return
-
-        def _build_entries(df, sort_key, value_fn):
-            top = df.sort_values(sort_key, ascending=False).head(5)
-            entries = []
-            for _, r in top.iterrows():
-                name = r.get("name", "")
-                pid = r.get("_pid")
+        top_perf_dict = []
+        for category in entries:
+            rows = []
+            for entry in category.get("entries", []):
+                name = entry.get("name", "")
+                pid = entry.get("player_id")
                 name_html = (
                     _build_player_link(pid, name, public_mode, ctx)
                     if ctx is not None
                     else html.escape(str(name))
                 )
-                entries.append(
+                rows.append(
                     {
-                        "value": value_fn(r),
+                        "value": entry.get("metric_display", "—"),
                         "name": str(name),
                         "name_html": name_html,
                     }
                 )
-            return entries
-
-        top_perf_dict = [
-            {
-                "label": "Highest Rating",
-                "entries": _build_entries(
-                    qualified_df,
-                    "rating",
-                    lambda r: f"{float(r['JUPR']):.3f}",
-                ),
-            },
-            {
-                "label": "Most Improved",
-                "entries": _build_entries(
-                    qualified_df,
-                    "rating_gain",
-                    lambda r: f"{(float(r['rating_gain'])/400.0):+.3f}",
-                ),
-            },
-            {
-                "label": "Best Win %",
-                "entries": _build_entries(
-                    qualified_df,
-                    "Win %",
-                    lambda r: f"{float(r['Win %']):.1f}%"
-                    if pd.notna(r["Win %"])
-                    else "—",
-                ),
-            },
-            {
-                "label": "Most Wins",
-                "entries": _build_entries(
-                    qualified_df,
-                    "wins",
-                    lambda r: f"{int(r['wins'])}",
-                ),
-            },
-        ]
+            top_perf_dict.append(
+                {
+                    "label": category.get("label"),
+                    "entries": rows,
+                }
+            )
 
     if not top_perf_dict:
         return
