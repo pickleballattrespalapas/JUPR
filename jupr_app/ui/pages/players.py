@@ -457,9 +457,12 @@ def render(ctx):
         if "<div" in s or "badge-card" in s:
             raise AssertionError(f"HTML leak detected in {label}: {s[:120]}")
 
+    import textwrap
+
     def render_badge_html(html_block: str) -> None:
-        """Render badge HTML with safe Streamlit settings to avoid raw tag output."""
-        st.markdown(html_block, unsafe_allow_html=True)
+        cleaned = textwrap.dedent(html_block).strip()
+        st.markdown(cleaned, unsafe_allow_html=True)
+
 
     render_badge_html(
         """
