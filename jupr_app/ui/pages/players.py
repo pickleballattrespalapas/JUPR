@@ -1,6 +1,7 @@
 import html
 import logging
 import math
+import re
 import textwrap
 
 import streamlit as st
@@ -157,6 +158,121 @@ BADGE_ICONS = {
 
 def badge_icon(badge_id: str, category: str | None = None) -> str:
     return BADGE_ICONS.get(str(badge_id), "🏆")
+
+
+def _season_sort_key(league_name: str) -> tuple[int, int] | None:
+    name = str(league_name or "").strip()
+    if not name:
+        return None
+    lowered = name.lower()
+    season_order = {"winter": 1, "spring": 2, "summer": 3, "fall": 4}
+    season_rank = None
+    for season, rank in season_order.items():
+        if season in lowered:
+            season_rank = rank
+            break
+    years = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", lowered)]
+    year = max(years) if years else None
+    if year is None and season_rank is None:
+        return None
+    return (year or 0, season_rank or 0)
+
+
+def compute_top_finisher_trophies(pid: int, df_leagues: pd.DataFrame | None, df_meta: pd.DataFrame | None) -> list[dict]:
+    if df_leagues is None or df_leagues.empty:
+        return []
+
+    leagues_df = df_leagues.copy()
+    league_col = "league_name" if "league_name" in leagues_df.columns else "league" if "league" in leagues_df.columns else None
+    if not league_col or "player_id" not in leagues_df.columns:
+        return []
+
+    leagues_df[league_col] = leagues_df[league_col].astype(str).str.strip()
+    leagues_df["player_id"] = pd.to_numeric(leagues_df["player_id"], errors="coerce").fillna(-1).astype(int)
+
+    ended_leagues: list[str] = []
+    if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+        if "is_active" in df_meta.columns:
+            meta = df_meta.copy()
+            meta["league_name"] = meta["league_name"].astype(str).str.strip()
+            meta["is_active"] = meta["is_active"].fillna(False).astype(bool)
+            ended_leagues = meta[meta["is_active"] != True]["league_name"].dropna().unique().tolist()
+
+    if not ended_leagues:
+        season_pattern = r"\b(?:fall|spring|summer|winter)\b|\b(?:19|20)\d{2}\b"
+        season_mask = leagues_df[league_col].str.contains(season_pattern, case=False, regex=True, na=False)
+        ended_leagues = leagues_df.loc[season_mask, league_col].dropna().unique().tolist()
+
+    if not ended_leagues:
+        ended_leagues = leagues_df[league_col].dropna().unique().tolist()
+
+    trophies: list[dict] = []
+    icon_map = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for league in ended_leagues:
+        league_rows = leagues_df[leagues_df[league_col] == league].copy()
+        if league_rows.empty:
+            continue
+
+        league_rows["wins_calc"] = pd.to_numeric(league_rows.get("wins", 0), errors="coerce").fillna(0)
+        league_rows["losses_calc"] = pd.to_numeric(league_rows.get("losses", 0), errors="coerce").fillna(0)
+        league_rows["matches_calc"] = pd.to_numeric(
+            league_rows.get("matches_played", league_rows["wins_calc"] + league_rows["losses_calc"]),
+            errors="coerce",
+        ).fillna(league_rows["wins_calc"] + league_rows["losses_calc"])
+        if "win_pct" in league_rows.columns:
+            league_rows["win_pct_calc"] = pd.to_numeric(league_rows.get("win_pct", 0), errors="coerce").fillna(0)
+        else:
+            total_matches = league_rows["wins_calc"] + league_rows["losses_calc"]
+            league_rows["win_pct_calc"] = league_rows["wins_calc"] / total_matches.where(total_matches > 0, 1)
+        league_rows["rating_calc"] = pd.to_numeric(league_rows.get("rating", 0), errors="coerce").fillna(0)
+
+        league_rows = league_rows.sort_values(
+            ["wins_calc", "win_pct_calc", "rating_calc", "matches_calc"],
+            ascending=[False, False, False, False],
+        ).reset_index(drop=True)
+
+        player_rows = league_rows[league_rows["player_id"] == int(pid)]
+        if player_rows.empty:
+            continue
+        place = int(player_rows.index[0]) + 1
+        if place > 3:
+            continue
+        player_row = player_rows.iloc[0]
+        wins = int(player_row.get("wins_calc", 0))
+        losses = int(player_row.get("losses_calc", 0))
+        matches = int(player_row.get("matches_calc", wins + losses))
+        win_pct = float(player_row.get("win_pct_calc", 0)) if matches else 0.0
+        rating_val = player_row.get("rating_calc", 0)
+        rating_text = f"{float(rating_val):.0f}" if rating_val else "—"
+        subtitle = f"{place} place in {league}"
+        body = f"Record {wins}-{losses} • {win_pct:.0%} win rate • League JUPR {rating_text}"
+        trophies.append(
+            {
+                "league_name": league,
+                "place": place,
+                "icon": icon_map.get(place, "🏆"),
+                "title": "Top Finisher",
+                "subtitle": subtitle,
+                "body": body,
+                "_season_sort": _season_sort_key(league),
+            }
+        )
+
+    if not trophies:
+        return []
+
+    seasonal = [t for t in trophies if t.get("_season_sort") is not None]
+    non_seasonal = [t for t in trophies if t.get("_season_sort") is None]
+    seasonal_sorted = sorted(
+        seasonal,
+        key=lambda t: (t["_season_sort"][0], t["_season_sort"][1], -t["place"]),
+        reverse=True,
+    )
+    non_seasonal_sorted = sorted(non_seasonal, key=lambda t: t["place"])
+    ordered = seasonal_sorted + non_seasonal_sorted
+    for trophy in ordered:
+        trophy.pop("_season_sort", None)
+    return ordered[:3]
 
 
 @st.cache_data(ttl=300)
@@ -398,7 +514,7 @@ def render(ctx):
     c1.metric("Player", pick_name)
     c2.metric("Overall JUPR", f"{current_jupr:.3f}")
 
-    tape_tab, ratings_tab = st.tabs(["Tape Room", "Ratings"])
+    tape_tab, ratings_tab = st.tabs(["Trophy Room", "Ratings"])
 
     with tape_tab:
         debug_render = False
@@ -428,7 +544,7 @@ def render(ctx):
             _debug_html_warning(label, "code", text)
             st.code(text)
 
-        badge_markdown("### Badges", label="badges.header")
+        badge_markdown("### Badges & Trophies", label="badges.header")
 
         badge_css = """
         .badge-summary {
@@ -471,6 +587,49 @@ def render(ctx):
             background: rgba(255, 255, 255, 0.04);
             font-size: 0.8rem;
             max-width: 180px;
+        }
+        .trophy-section {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            margin-bottom: 0.6rem;
+        }
+        .trophy-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .trophy-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: stretch;
+        }
+        .trophy-chip {
+            display: inline-flex;
+            gap: 0.45rem;
+            align-items: flex-start;
+            padding: 0.35rem 0.6rem;
+            border-radius: 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.04);
+            font-size: 0.8rem;
+            max-width: 320px;
+        }
+        .trophy-text {
+            display: flex;
+            flex-direction: column;
+            gap: 0.1rem;
+            min-width: 0;
+        }
+        .trophy-title {
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        .trophy-body {
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.65);
         }
         .badge-grid {
             display: grid;
@@ -530,10 +689,10 @@ def render(ctx):
         def _estimate_badge_height(cleaned: str) -> int:
             card_count = cleaned.count("badge-card")
             if card_count <= 0:
-                return 180
+                return 120
             cards_per_row = 3 if "featured-grid" in cleaned else 4
             rows = max(1, math.ceil(card_count / cards_per_row))
-            return 160 + rows * 170
+            return 110 + rows * 150
 
         def render_badge_html(html_block: str, *, label: str, height: int | None = None) -> None:
             cleaned = textwrap.dedent(html_block).strip()
@@ -567,6 +726,27 @@ def render(ctx):
 
         unlocked_badges = summary.get("unlocked_badges", [])
         locked_badges = summary.get("locked_badges", [])
+
+        trophies = compute_top_finisher_trophies(pid, df_leagues, df_meta)
+        if trophies:
+            trophy_items = []
+            for trophy in trophies:
+                trophy_items.append(
+                    "<span class='trophy-chip'>"
+                    f"<span>{html.escape(trophy.get('icon', '🏆'))}</span>"
+                    "<span class='trophy-text'>"
+                    f"<span class='trophy-title'>{html.escape(trophy.get('subtitle', 'Top Finisher'))}</span>"
+                    f"<span class='trophy-body'>{html.escape(trophy.get('body', ''))}</span>"
+                    "</span>"
+                    "</span>"
+                )
+            trophy_html = f"""
+            <div class="trophy-section">
+                <div class="trophy-label">Top Finisher</div>
+                <div class="trophy-chip-row">{''.join(trophy_items)}</div>
+            </div>
+            """
+            render_badge_html(trophy_html, label="trophies.top_finisher", height=120 + len(trophies) * 35)
 
         top_prestige_key = f"top_prestige_{pid}"
         if top_prestige_key in st.session_state:
@@ -614,11 +794,11 @@ def render(ctx):
         if not unlocked_badges and not locked_badges:
             badge_caption("No badges available yet.", label="badges.empty")
         else:
-            st.subheader("Featured Cuts")
+            badge_markdown("#### Featured Cuts", label="badges.featured.header")
             featured = select_featured_badges(unlocked_badges, max_count=3, sort_mode="recent")
             if not featured:
                 badge_caption(
-                    "The tape room is quiet—new reels arrive after the next run.",
+                    "The trophy room is quiet—new reels arrive after the next run.",
                     label="badges.featured.empty",
                 )
             else:
@@ -1240,4 +1420,3 @@ def render(ctx):
 
     with ratings_tab:
         render_ratings_tab()
-
