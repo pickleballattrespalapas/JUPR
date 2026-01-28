@@ -1,5 +1,6 @@
 import html
 import logging
+import textwrap
 
 import streamlit as st
 import pandas as pd
@@ -72,7 +73,7 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     try:
         resp = (
             _supabase.table("player_badges")
-            .select("badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
+            .select("player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json")
             .eq("club_id", str(club_id))
             .eq("player_id", int(pid))
             .execute()
@@ -456,8 +457,6 @@ def render(ctx):
             return
         if "<div" in s or "badge-card" in s:
             raise AssertionError(f"HTML leak detected in {label}: {s[:120]}")
-
-    import textwrap
 
     def render_badge_html(html_block: str) -> None:
         cleaned = textwrap.dedent(html_block).strip()
