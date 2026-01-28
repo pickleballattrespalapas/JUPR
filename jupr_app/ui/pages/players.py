@@ -450,7 +450,12 @@ def render(ctx):
         st.caption("No league ratings table entries found for this player yet.")
 
     st.markdown("### Badges")
-    st.markdown(
+
+    def render_badge_html(html_block: str) -> None:
+        """Render badge HTML with safe Streamlit settings to avoid raw tag output."""
+        st.markdown(html_block, unsafe_allow_html=True)
+
+    render_badge_html(
         """
         <style>
         .badge-summary {
@@ -548,8 +553,7 @@ def render(ctx):
             overflow: hidden;
         }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """
     )
     badge_defs = getattr(ctx, "df_badges", None)
     if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
@@ -612,7 +616,7 @@ def render(ctx):
             </div>
         </div>
     """
-    st.markdown(summary_html, unsafe_allow_html=True)
+    render_badge_html(summary_html)
 
     if not unlocked_badges and not locked_badges:
         st.caption("No badges available yet.")
@@ -640,10 +644,7 @@ def render(ctx):
                     </div>
                     """
                 )
-            st.markdown(
-                f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>",
-                unsafe_allow_html=True,
-            )
+            render_badge_html(f"<div class='badge-grid featured-grid'>{''.join(featured_cards)}</div>")
 
         if st.button("See more cuts", key="badge_cabinet_open"):
             st.session_state["badge_cabinet_open"] = True
@@ -732,7 +733,7 @@ def render(ctx):
                             </div>
                             """
                         )
-                st.markdown(f"<div class='badge-grid'>{''.join(card_items)}</div>", unsafe_allow_html=True)
+                render_badge_html(f"<div class='badge-grid'>{''.join(card_items)}</div>")
 
             details_view = st.toggle("Details view", value=False, key="badge_details_view")
             if details_view and unlocked_badges:
