@@ -119,7 +119,14 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
 @st.cache_data(ttl=120)
 def fetch_badge_definitions(_supabase) -> pd.DataFrame:
     try:
-        resp = _supabase.table("badges").select("*").execute()
+        resp = (
+            _supabase.table("badges")
+            .select(
+                "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                "tier,icon_key,lore,hint,scope,created_at"
+            )
+            .execute()
+        )
         return pd.DataFrame(resp.data or [])
     except Exception:
         logger.exception("Failed to load badge definitions")

@@ -69,13 +69,23 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_meta = pd.DataFrame(meta_resp.data or [])
 
             # Badges (global definitions)
-            badges_resp = supabase.table("badges").select("*").execute()
+            badges_resp = (
+                supabase.table("badges")
+                .select(
+                    "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                    "tier,icon_key,lore,hint,scope,created_at"
+                )
+                .execute()
+            )
             df_badges = pd.DataFrame(badges_resp.data or [])
 
             # Player badges (club-scoped)
             pb_resp = (
                 supabase.table("player_badges")
-                .select("*")
+                .select(
+                    "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
+                    "match_id,value_num,value_json"
+                )
                 .eq("club_id", club_id)
                 .execute()
             )

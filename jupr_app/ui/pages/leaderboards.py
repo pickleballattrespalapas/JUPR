@@ -137,7 +137,7 @@ def _fetch_story_badges(ctx, player_ids):
         resp = (
             ctx.supabase.table("player_badges")
             .select(
-                "player_id,badge_id,earned_at,created_at,"
+                "player_id,badge_id,earned_at,"
                 "badges:badges(badge_id,name,prestige,category,icon_key,rarity)"
             )
             .eq("club_id", str(ctx.club_id))
