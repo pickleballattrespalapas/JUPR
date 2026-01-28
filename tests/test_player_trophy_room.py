@@ -4,6 +4,7 @@ import pandas as pd
 
 from jupr_app.domain.gamification.podium_awards import award_league_podium_badges
 from jupr_app.ui.pages.players import (
+    _decorate_trophies_with_leagues,
     build_inactive_league_options,
     filter_player_league_trophies,
     get_player_trophy_case,
@@ -194,3 +195,24 @@ def test_get_player_trophy_case_scopes_and_orders():
         "2024-08-11T10:00:00Z",
         "2024-07-10T10:00:00Z",
     ]
+
+
+def test_decorate_trophies_handles_missing_prestige_column():
+    df = pd.DataFrame(
+        [
+            {
+                "player_id": 1,
+                "badge_id": "league_champion",
+                "value_json": {"league_id": "Summer 2024 Ladder"},
+            },
+            {
+                "player_id": 2,
+                "badge_id": "league_runner_up",
+                "value_json": {"league_id": "Spring 2024 Ladder"},
+            },
+        ]
+    )
+
+    decorated = _decorate_trophies_with_leagues(df, {})
+
+    assert decorated["prestige_num"].tolist() == [0, 0]
