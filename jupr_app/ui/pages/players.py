@@ -451,6 +451,12 @@ def render(ctx):
 
     st.markdown("### Badges")
 
+    def assert_no_html_leak(label: str, s: str | None) -> None:
+        if not s:
+            return
+        if "<div" in s or "badge-card" in s:
+            raise AssertionError(f"HTML leak detected in {label}: {s[:120]}")
+
     def render_badge_html(html_block: str) -> None:
         """Render badge HTML with safe Streamlit settings to avoid raw tag output."""
         st.markdown(html_block, unsafe_allow_html=True)
@@ -619,11 +625,13 @@ def render(ctx):
     render_badge_html(summary_html)
 
     if not unlocked_badges and not locked_badges:
+        assert_no_html_leak("badges.empty", "No badges available yet.")
         st.caption("No badges available yet.")
     else:
         st.subheader("Featured Cuts")
         featured = select_featured_badges(unlocked_badges, max_count=3, sort_mode="recent")
         if not featured:
+            assert_no_html_leak("badges.featured.empty", "The tape room is quiet—new reels arrive after the next run.")
             st.caption("The tape room is quiet—new reels arrive after the next run.")
         else:
             featured_cards = []
@@ -695,6 +703,7 @@ def render(ctx):
 
             visible_badges = [b for b in all_badges if _visible(b)]
             if not visible_badges:
+                assert_no_html_leak("badges.filters.empty", "No badges match the filters.")
                 st.caption("No badges match the filters.")
             else:
                 card_items = []
