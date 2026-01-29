@@ -5,6 +5,8 @@ from jupr_app.domain.dupes import canonical_dup_key
 from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
 from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 from jupr_app.ui.layout import page_shell
+from jupr_app.domain.replay_history import replay_history
+
 
 
 def render(ctx):
@@ -431,6 +433,34 @@ def render(ctx):
 
         except Exception as exc:
             st.error(f"Unable to apply bulk edits: {exc}")
+
+
+        st.subheader("🔄 Quick Replay (Easy Button)")
+        st.caption("Runs the same Replay History as Admin Tools. Use ALL after moving matches between leagues.")
+    
+        df_meta = getattr(ctx, "df_meta", pd.DataFrame())
+        league_opts = ["ALL (Full System Reset)"]
+        if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+            league_opts += sorted(df_meta["league_name"].dropna().astype(str).unique().tolist())
+    
+        target_reset_quick = st.selectbox("Replay scope", league_opts, key="match_log_replay_scope")
+        confirm_replay = st.text_input("Type REPLAY to confirm", value="", key="match_log_replay_confirm")
+    
+        if st.button("🔄 Replay Now", type="primary", disabled=(confirm_replay.strip().upper() != "REPLAY"), key="match_log_replay_btn"):
+            bar = st.progress(0.0)
+            with st.spinner("Replaying..."):
+                result = replay_history(
+                    supabase=ctx.supabase,
+                    club_id=str(ctx.club_id),
+                    df_meta=df_meta,
+                    target_reset=str(target_reset_quick),
+                    progress_cb=lambda x: bar.progress(float(x)),
+                )
+            st.success("Replay complete.")
+            st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
+            st.info(f"Matches rewritten: {result['matches_rewritten']}")
+            st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
+            st.rerun()
 
     st.divider()
 
