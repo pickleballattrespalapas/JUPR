@@ -73,23 +73,23 @@ def render(ctx):
 
     target_reset = st.selectbox("Replay scope", league_opts)
 
-        if st.button(f"⚠️ Replay History for: {target_reset}"):
-            bar = st.progress(0.0)
-            with st.spinner("Crunching..."):
-                result = replay_history(
-                    supabase=supabase,
-                    club_id=club_id,
-                    df_meta=df_meta,
-                    target_reset=str(target_reset),
-                    progress_cb=lambda x: bar.progress(float(x)),
-                )
-    
-            st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
-            st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
-            st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
-            st.success("Replay complete.")
-            time.sleep(0.6)
-            st.rerun()
+    if st.button(f"⚠️ Replay History for: {target_reset}"):
+        bar = st.progress(0.0)
+        with st.spinner("Crunching..."):
+            result = replay_history(
+                supabase=supabase,
+                club_id=club_id,
+                df_meta=df_meta,
+                target_reset=str(target_reset),
+                progress_cb=lambda x: bar.progress(float(x)),
+            )
+
+        st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
+        st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
+        st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
+        st.success("Replay complete.")
+        time.sleep(0.6)
+        st.rerun()
 
 
     st.divider()
