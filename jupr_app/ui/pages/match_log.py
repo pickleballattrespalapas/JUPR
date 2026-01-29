@@ -122,8 +122,6 @@ def render(ctx):
 
     st.divider()
 
-       st.divider()
-
     # Bulk match editor UI
     st.subheader("✏️ Bulk Match Editor")
     st.caption("Filter matches, select rows, edit league/date/week_tag/match_type/notes/is_active, preview impact, then apply safely.")
