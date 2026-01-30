@@ -2,6 +2,7 @@ import time
 import pandas as pd
 
 from jupr_app.domain.player_activity import add_activity_columns
+from jupr_app.domain.gamification.requirements import load_requirements_map
 
 
 def load_data(supabase, club_id: str, match_limit: int = 5000):
@@ -78,6 +79,11 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 .execute()
             )
             df_badges = pd.DataFrame(badges_resp.data or [])
+            if not df_badges.empty and "badge_id" in df_badges.columns:
+                requirements_map = load_requirements_map()
+                df_badges["requirements"] = (
+                    df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
+                )
 
             # Player badges (club-scoped)
             pb_resp = (
