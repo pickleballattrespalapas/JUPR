@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 from typing import Any
 
-from jupr_app.domain.gamification.badge_registry import registry
+from jupr_app.domain.gamification.badge_registry import is_badge_active, registry
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.evaluators import build_evaluation_context
 
@@ -25,6 +25,8 @@ def compute_candidates_for_player(
     evaluation = build_evaluation_context(ctx, club_id, league_id, as_of)
     candidates: list[BadgeCandidate] = []
     for spec in registry().values():
+        if not is_badge_active(spec.badge_id):
+            continue
         try:
             for candidate in spec.evaluator(evaluation):
                 if int(candidate.player_id) != int(player_id):
@@ -45,6 +47,8 @@ def compute_candidates_for_club(
         raise ValueError("compute_candidates_for_club requires a context with match data")
     evaluation = build_evaluation_context(ctx, club_id, league_id, as_of)
     for spec in registry().values():
+        if not is_badge_active(spec.badge_id):
+            continue
         try:
             yield from spec.evaluator(evaluation)
         except Exception:

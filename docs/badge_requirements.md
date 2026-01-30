@@ -16,8 +16,8 @@ This file defines the exact, player-facing requirements to unlock each badge.
    - You can earn it multiple times (as determined by its context: match/week/month/league/season/opponent).
 
 5) Important reality check:
-   - The Streamlit app automatically awards the badges implemented in `jupr_app/domain/gamification/badge_rules.py`
-     and lifetime participation via `jupr_app/domain/badges_participation.py`.
+   - The Streamlit app awards badges through the badge engine registry/evaluators via
+     `jupr_app/domain/gamification/ensure_badges.py`.
    - Some catalog badges exist but are NOT currently awarded automatically (they are placeholders or require inputs we don’t store yet).
    - Some catalog badges are marked inactive (`is_active = false`) and are intentionally not unlockable.
 
@@ -91,12 +91,12 @@ Earned once per “bounce-back” win match.
 
 ## breakthrough — Breakthrough (non-stackable)
 Status: NOT CURRENTLY AWARDED by the automated badge job.
-(Defined in the catalog, but there is no awarding rule wired into `badge_rules.ensure_badges`.)
+(Defined in the catalog, but there is no evaluator wired into the badge engine registry.)
 Recommendation: keep it active only after you implement awarding logic.
 
 ## above_expectations — Above Expectations (stackable)
 Status: NOT CURRENTLY AWARDED by the automated badge job.
-(Defined in the catalog, but not awarded by `badge_rules`.)
+(Defined in the catalog, but not awarded by the badge engine.)
 
 ---
 
@@ -110,7 +110,7 @@ Unlock: Your first “clutch upset” win:
 
 ## clutch_performer — Clutch Performer (non-stackable)
 Status: NOT CURRENTLY AWARDED by the automated badge job.
-(Defined in the catalog, but not awarded by `badge_rules`.)
+(Defined in the catalog, but not awarded by the badge engine.)
 
 ---
 

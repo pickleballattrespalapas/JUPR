@@ -14,9 +14,7 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
 )
-from jupr_app.domain.gamification.podium_awards import ensure_podium_awards_exist
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
-from jupr_app.domain.gamification.top_performer_awards import ensure_league_top_performer_awards
 
 logger = logging.getLogger(__name__)
 
@@ -1056,9 +1054,6 @@ def render(ctx):
         league_options = inactive_leagues["league_name"].tolist() if not inactive_leagues.empty else []
         league_labels = dict(zip(inactive_leagues["league_name"], inactive_leagues["display_label"]))
         completed_league_ids = set(league_options)
-        for league_id in completed_league_ids:
-            ensure_podium_awards_exist(ctx, league_id)
-            ensure_league_top_performer_awards(ctx, league_id)
 
         badge_markdown("#### Career Trophy Case", label="trophies.case.header")
         trophy_case = get_player_trophy_case(player_badges, pid, completed_league_ids, limit=8)

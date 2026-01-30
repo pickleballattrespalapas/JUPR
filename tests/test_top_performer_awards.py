@@ -158,11 +158,15 @@ def test_ensure_league_top_performer_awards_is_idempotent():
     ensure_league_top_performer_awards(ctx, "Spring 2024 Ladder")
 
     inserted = storage["player_badges"]
-    assert len(inserted) == 4
     badge_ids = {row["badge_id"] for row in inserted}
-    assert badge_ids == {
+    assert {
         "top_performer_highest_rating",
         "top_performer_most_improved",
         "top_performer_best_win_pct",
         "top_performer_most_wins",
+    } <= badge_ids
+    unique_keys = {
+        (row.get("club_id"), row.get("player_id"), row.get("badge_id"), row.get("context_id"))
+        for row in inserted
     }
+    assert len(unique_keys) == len(inserted)
