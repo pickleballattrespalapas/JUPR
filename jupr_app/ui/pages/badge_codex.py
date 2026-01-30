@@ -22,6 +22,11 @@ def _lore_text(value: object | None) -> str:
     return text if text else "No story yet."
 
 
+def _requirements_text(value: object | None) -> str:
+    text = str(value or "").strip()
+    return text if text else "Requirements TBD"
+
+
 def _player_options(df_players: pd.DataFrame) -> list[tuple[str, int]]:
     if df_players is None or df_players.empty:
         return []
@@ -122,6 +127,8 @@ def render(ctx) -> None:
                 icon = badge_icon(badge.get("badge_id"), badge.get("category"))
             st.markdown(f"**{icon} {name}**")
             st.caption(f"Prestige {prestige}")
+            requirements = html.escape(_requirements_text(badge.get("requirements")))
+            st.caption(f"Requirements: {requirements}")
             lore = html.escape(_lore_text(badge.get("lore")))
             if lore:
                 st.caption(lore)
