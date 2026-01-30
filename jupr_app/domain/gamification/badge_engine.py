@@ -19,13 +19,16 @@ def compute_candidates_for_player(
     league_id: str | None = None,
     as_of: datetime | None = None,
     ctx: Any | None = None,
+    *,
+    status: str = "live",
+    award_timing: str = "live",
 ) -> list[BadgeCandidate]:
     if ctx is None:
         raise ValueError("compute_candidates_for_player requires a context with match data")
     evaluation = build_evaluation_context(ctx, club_id, league_id, as_of)
     candidates: list[BadgeCandidate] = []
     for spec in registry().values():
-        if not is_badge_active(spec.badge_id):
+        if not is_badge_active(spec.badge_id, status=status, award_timing=award_timing):
             continue
         try:
             for candidate in spec.evaluator(evaluation):
@@ -42,12 +45,15 @@ def compute_candidates_for_club(
     league_id: str | None = None,
     as_of: datetime | None = None,
     ctx: Any | None = None,
+    *,
+    status: str = "live",
+    award_timing: str = "live",
 ) -> Iterator[BadgeCandidate]:
     if ctx is None:
         raise ValueError("compute_candidates_for_club requires a context with match data")
     evaluation = build_evaluation_context(ctx, club_id, league_id, as_of)
     for spec in registry().values():
-        if not is_badge_active(spec.badge_id):
+        if not is_badge_active(spec.badge_id, status=status, award_timing=award_timing):
             continue
         try:
             yield from spec.evaluator(evaluation)

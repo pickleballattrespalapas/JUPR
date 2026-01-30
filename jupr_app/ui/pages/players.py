@@ -474,6 +474,13 @@ def _badge_requirements_text(value: object | None) -> str:
     return text if text else "Requirements TBD"
 
 
+def _badge_status_label(value: object | None) -> str:
+    status = str(value or "").strip().lower()
+    if not status or status == "live":
+        return ""
+    return f"Status: {status.title()}"
+
+
 def _trophy_display_name(row: pd.Series) -> str:
     for key in ["badge_name", "name", "title"]:
         value = row.get(key)
@@ -1269,6 +1276,7 @@ def render(ctx):
                     stack_text = f" ×{stack}" if stack and stack > 1 else ""
                     lore = html.escape(_badge_lore_text(badge.get("lore")))
                     requirements = html.escape(_badge_requirements_text(badge.get("requirements")))
+                    status_label = html.escape(_badge_status_label(badge.get("badge_status")))
                     featured_cards.append(
                         f"""
                     <div class="badge-card">
@@ -1277,6 +1285,7 @@ def render(ctx):
                             <span class="truncate-1">{html.escape(str(badge.get('name', 'Badge')))}{stack_text}</span>
                         </div>
                         <div class="badge-subtext">Prestige {int(badge.get('prestige', 0) or 0)}</div>
+                        {f'<div class="badge-subtext">{status_label}</div>' if status_label else ''}
                         <div class="badge-subtext truncate-2">Requirements: {requirements}</div>
                         <div class="badge-subtext truncate-1">{lore}</div>
                     </div>
@@ -1345,6 +1354,7 @@ def render(ctx):
                         if status == "locked":
                             hint = html.escape(_badge_hint_text(badge.get("hint")))
                             requirements = html.escape(_badge_requirements_text(badge.get("requirements")))
+                            status_label = html.escape(_badge_status_label(badge.get("badge_status")))
                             card_items.append(
                                 f"""
                             <div class="badge-card silhouette">
@@ -1353,6 +1363,7 @@ def render(ctx):
                                     <span class="truncate-1">{name}{stack_text}</span>
                                 </div>
                                 <div class="badge-subtext">Prestige {prestige}</div>
+                                {f'<div class="badge-subtext">{status_label}</div>' if status_label else ''}
                                 <div class="badge-subtext truncate-2">Requirements: {requirements}</div>
                                 <div class="badge-subtext truncate-2">{hint}</div>
                             </div>
@@ -1361,6 +1372,7 @@ def render(ctx):
                         else:
                             lore = html.escape(_badge_lore_text(badge.get("lore")))
                             requirements = html.escape(_badge_requirements_text(badge.get("requirements")))
+                            status_label = html.escape(_badge_status_label(badge.get("badge_status")))
                             card_items.append(
                                 f"""
                             <div class="badge-card">
@@ -1369,6 +1381,7 @@ def render(ctx):
                                     <span class="truncate-1">{name}{stack_text}</span>
                                 </div>
                                 <div class="badge-subtext">Prestige {prestige}</div>
+                                {f'<div class="badge-subtext">{status_label}</div>' if status_label else ''}
                                 <div class="badge-subtext truncate-2">Requirements: {requirements}</div>
                                 <div class="badge-subtext truncate-2">{lore}</div>
                             </div>

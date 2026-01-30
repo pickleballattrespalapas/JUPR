@@ -27,6 +27,13 @@ def _requirements_text(value: object | None) -> str:
     return text if text else "Requirements TBD"
 
 
+def _badge_status_label(value: object | None) -> str:
+    status = str(value or "").strip().lower()
+    if not status or status == "live":
+        return ""
+    return f"Status: {status.title()}"
+
+
 def _player_options(df_players: pd.DataFrame) -> list[tuple[str, int]]:
     if df_players is None or df_players.empty:
         return []
@@ -127,6 +134,9 @@ def render(ctx) -> None:
                 icon = badge_icon(badge.get("badge_id"), badge.get("category"))
             st.markdown(f"**{icon} {name}**")
             st.caption(f"Prestige {prestige}")
+            status_label = _badge_status_label(badge.get("badge_status"))
+            if status_label:
+                st.caption(status_label)
             requirements = html.escape(_requirements_text(badge.get("requirements")))
             st.caption(f"Requirements: {requirements}")
             lore = html.escape(_lore_text(badge.get("lore")))

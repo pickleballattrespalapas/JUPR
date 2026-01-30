@@ -18,7 +18,7 @@ This file defines the exact, player-facing requirements to unlock each badge.
 5) Important reality check:
    - The Streamlit app awards badges through the badge engine registry/evaluators via
      `jupr_app/domain/gamification/ensure_badges.py`.
-   - Some catalog badges exist but are NOT currently awarded automatically (they are placeholders or require inputs we don’t store yet).
+   - Some catalog badges are tracked or seasonal and are not awarded by the live badge job.
    - Some catalog badges are marked inactive (`is_active = false`) and are intentionally not unlockable.
 
 ---
@@ -56,7 +56,7 @@ Unlock: In the SAME league + SAME month, play 40+ recorded matches.
 # Skill Growth & Momentum
 
 ## level_up — Level Up (stackable)
-Unlock: In a league standings table (`df_leagues`), have rating ≥ one of these milestones:
+Unlock: In a league standings table (`df_leagues`), have JUPR rating ≥ one of these milestones:
 - 1400, 1600, 1800, 2000
 Earned once per (league, milestone).
 
@@ -65,16 +65,16 @@ Unlock: In the SAME league, win 4+ of your first 5 matches in that league.
 - Only awards if you have at least 5 matches recorded in that league.
 
 ## most_improved_monthly — Most Improved (stackable)
-Unlock: For each (league, month), the player with the highest total positive Elo change that month.
-- Elo delta is summed across that month’s matches.
-- If the top monthly Elo sum is ≤ 0, nobody earns it for that (league, month).
+Unlock: For each (league, month), the player with the highest total positive JUPR rating change that month.
+- Rating change is summed across that month’s matches.
+- If the top monthly rating change sum is ≤ 0, nobody earns it for that (league, month).
 
 ## mountain_climber — Mountain Climber (stackable)
 Unlock: In a league standings table (`df_leagues`), improve rank vs starting rank by at least:
 - 5 places, 10 places, or 20 places
 Earned once per (league, tier).
-- Rank is based on sorting by rating descending.
-- Starting rank is based on sorting by starting_rating descending.
+- Rank is based on sorting by JUPR rating descending.
+- Starting rank is based on sorting by starting JUPR rating descending.
 - “Rank delta” = start_rank − current_rank (positive is improvement).
 
 ## hot_streak — Hot Streak (stackable)
@@ -90,13 +90,10 @@ Unlock: Win a match immediately after losing your previous match (lifetime timel
 Earned once per “bounce-back” win match.
 
 ## breakthrough — Breakthrough (non-stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
-(Defined in the catalog, but there is no evaluator wired into the badge engine registry.)
-Recommendation: keep it active only after you implement awarding logic.
+Unlock: Requirements TBD.
 
 ## above_expectations — Above Expectations (stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
-(Defined in the catalog, but not awarded by the badge engine.)
+Unlock: Requirements TBD.
 
 ---
 
@@ -106,11 +103,10 @@ Status: NOT CURRENTLY AWARDED by the automated badge job.
 Unlock: Your first “clutch upset” win:
 - You WIN
 - Final margin is 2 points or fewer (|margin| ≤ 2)
-- Your expected win probability is ≤ 0.40
+- Your pre-match win chance is ≤ 0.40 (expected win %)
 
 ## clutch_performer — Clutch Performer (non-stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
-(Defined in the catalog, but not awarded by the badge engine.)
+Unlock: Requirements TBD.
 
 ---
 
@@ -144,10 +140,10 @@ Unlock: Win a match where:
 Earned once per match.
 
 ## dominant_run — Dominant Run (stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
+Unlock: Requirements TBD.
 
 ## high_output — High Output (stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
+Unlock: Requirements TBD.
 
 ---
 
@@ -181,16 +177,16 @@ Unlock: Win a match where the highest-rated opponent in the match is at least:
 Earned once per match per tier that you satisfy.
 
 ## david_vs_goliath — David vs Goliath (stackable)
-Unlock: Win a match where your expected win probability is ≤ 0.25.
+Unlock: Win a match where your pre-match win chance is ≤ 0.25.
 Earned once per match.
 
 ## upset_champion — Upset Champion (stackable)
-Unlock: For each (league, month), the winning match with the LOWEST expected win probability.
+Unlock: For each (league, month), the winning match with the LOWEST pre-match win chance.
 - Both winners (doubles team) earn it for that match.
 Earned once per (league, month, match).
 
 ## legendary_upset — Legendary Upset (stackable)
-Unlock: Win a match where your expected win probability is ≤ 0.15.
+Unlock: Win a match where your pre-match win chance is ≤ 0.15.
 Earned once per match.
 
 ---
@@ -225,10 +221,10 @@ Earned once per opponent per “evening” event.
 # Consistency & Reliability
 
 ## battle_tested — Battle Tested (stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
+Unlock: Requirements TBD.
 
 ## consistency — Consistency (stackable)
-Status: NOT CURRENTLY AWARDED by the automated badge job.
+Unlock: Requirements TBD.
 
 ## steady_hand — Steady Hand (non-stackable in catalog; awarded once per season in rules)
 Unlock: In the SAME season:
@@ -237,35 +233,34 @@ Unlock: In the SAME season:
 Earned once per season where you meet the requirement.
 
 ## mr_reliable — Mr. Reliable (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Requirements TBD.
 
 ---
 
 # Meta / Prestige
 
 ## league_champion — League Champion (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded on league close to the final 1st-place finisher.
 
 ## league_runner_up — League Runner-Up (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded on league close to the final 2nd-place finisher.
 
 ## league_third_place — League Third Place (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded on league close to the final 3rd-place finisher.
 
 ## podium — Podium (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded on league close to any top-3 finisher.
 
 ## hall_of_fame_night — Hall of Fame Night (stackable)
-Unlock: In a given league, win a match whose abs Elo delta is in the TOP 5% for that league.
-- Computed per league using the 95th percentile of abs_elo_delta.
+Unlock: In a given league, win a match whose rating swing (absolute rating change) is in the TOP 5% for that league.
+- Computed per league using the 95th percentile of absolute rating change.
 Earned once per match that qualifies.
 
 ---
 
 # Tournament Podium
 
-These are NOT awarded by the normal match-based badge job.
-They are awarded from tournament podium results (requires tournament tables).
+These are awarded from tournament podium results (requires tournament tables).
 
 ## tournament_champion — Tournament Champion (non-stackable)
 Unlock: Your team finishes 1st place in a tournament podium table.
@@ -280,29 +275,29 @@ Unlock: Your team finishes 3rd place in a tournament podium table.
 
 # Top Performer Awards
 
-These are defined and active in the catalog, but NOT currently awarded by the automated badge job.
+These are awarded on league close from final standings.
 
 ## top_performer_highest_rating — Top Performer: Highest Rating (stackable)
-Status: NOT CURRENTLY AWARDED.
+Unlock: Awarded on league close to the highest final JUPR rating.
 
 ## top_performer_most_improved — Top Performer: Most Improved (stackable)
-Status: NOT CURRENTLY AWARDED.
+Unlock: Awarded on league close to the largest net JUPR rating gain.
 
 ## top_performer_best_win_pct — Top Performer: Best Win % (stackable)
-Status: NOT CURRENTLY AWARDED.
+Unlock: Awarded on league close to the best final win percentage.
 
 ## top_performer_most_wins — Top Performer: Most Wins (stackable)
-Status: NOT CURRENTLY AWARDED.
+Unlock: Awarded on league close to the most total wins.
 
 ---
 
 # Sportsmanship & Community (inactive placeholders)
 
 ## good_sport — Good Sport (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded manually for outstanding sportsmanship.
 
 ## community_builder — Community Builder (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded manually for meaningful community impact.
 
 ## mentor — Mentor (inactive)
-Status: INACTIVE (not unlockable).
+Unlock: Awarded manually for mentorship contributions.

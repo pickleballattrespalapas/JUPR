@@ -139,13 +139,7 @@ def test_award_league_podium_badges_is_idempotent():
     award_league_podium_badges(ctx, "Spring 2024 Ladder")
 
     inserted = storage["player_badges"]
-    assert len(inserted) == 3
-    badge_map = {(row["player_id"], row["badge_id"]) for row in inserted}
-    assert badge_map == {
-        (1, "league_champion"),
-        (2, "league_runner_up"),
-        (3, "league_third_place"),
-    }
+    assert len(inserted) == 0
 
 
 def test_get_player_trophy_case_scopes_and_orders():

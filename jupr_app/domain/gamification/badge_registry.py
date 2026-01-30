@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
+from jupr_app.domain.gamification.badge_schema import BadgeDefinitionSchema, load_badge_definitions
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
 from jupr_app.domain.gamification.evaluators import (
     evaluate_above_expectations,
@@ -136,15 +137,44 @@ def all_badge_ids() -> list[str]:
     return list(registry().keys())
 
 
-_BADGE_DEFINITIONS_BY_ID = {b.badge_id: b for b in BADGE_DEFINITIONS}
+_CANONICAL_BADGES: list[BadgeDefinitionSchema] | None = None
+
+
+def _build_rule_map() -> dict[str, dict[str, object]]:
+    return {
+        spec.badge_id: {
+            "rule": spec.evaluator.__name__,
+            "params": {"context_type": spec.context_type, "is_stackable": spec.is_stackable},
+        }
+        for spec in registry().values()
+    }
+
+
+def canonical_badge_definitions() -> list[BadgeDefinitionSchema]:
+    global _CANONICAL_BADGES
+    if _CANONICAL_BADGES is None:
+        _CANONICAL_BADGES = load_badge_definitions(BADGE_DEFINITIONS, rules=_build_rule_map())
+    return list(_CANONICAL_BADGES)
+
+
+def badge_schema_by_id() -> dict[str, BadgeDefinitionSchema]:
+    return {badge.id: badge for badge in canonical_badge_definitions()}
+
+
+def awardable_badge_ids(*, status: str = "live", award_timing: str = "live") -> set[str]:
+    return {
+        badge.id
+        for badge in canonical_badge_definitions()
+        if badge.status == status and badge.award_timing == award_timing
+    }
 
 
 def active_badge_ids() -> set[str]:
-    return {b.badge_id for b in _BADGE_DEFINITIONS_BY_ID.values() if b.is_active}
+    return awardable_badge_ids(status="live", award_timing="live")
 
 
-def is_badge_active(badge_id: str) -> bool:
-    badge = _BADGE_DEFINITIONS_BY_ID.get(badge_id)
+def is_badge_active(badge_id: str, *, status: str = "live", award_timing: str = "live") -> bool:
+    badge = badge_schema_by_id().get(str(badge_id))
     if badge is None:
-        return True
-    return bool(badge.is_active)
+        return False
+    return badge.status == status and badge.award_timing == award_timing
