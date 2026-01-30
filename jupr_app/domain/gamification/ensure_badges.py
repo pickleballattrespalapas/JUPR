@@ -19,6 +19,8 @@ def ensure_badges(
     as_of=None,
     tournament_id: str | None = None,
     tournament_name: str | None = None,
+    status: str = "live",
+    award_timing: str = "live",
 ) -> list:
     if bool(getattr(ctx, "public_mode", False)):
         return []
@@ -41,6 +43,8 @@ def ensure_badges(
                 league_id=league_id,
                 as_of=as_of,
                 ctx=evaluation_ctx,
+                status=status,
+                award_timing=award_timing,
             )
         )
         if not candidates:

@@ -115,4 +115,10 @@ def build_tournament_podium_candidates(
 def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
     from jupr_app.domain.gamification.ensure_badges import ensure_badges
 
-    return ensure_badges(ctx, tournament_id=tournament_id, tournament_name=tournament_name)
+    return ensure_badges(
+        ctx,
+        tournament_id=tournament_id,
+        tournament_name=tournament_name,
+        award_timing="manual",
+        status="live",
+    )

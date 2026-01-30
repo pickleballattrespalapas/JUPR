@@ -2,6 +2,7 @@ import time
 import pandas as pd
 
 from jupr_app.domain.player_activity import add_activity_columns
+from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
 
 
@@ -83,6 +84,16 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 requirements_map = load_requirements_map()
                 df_badges["requirements"] = (
                     df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
+                )
+                schema_map = badge_schema_by_id()
+                df_badges["badge_status"] = df_badges["badge_id"].astype(str).map(
+                    lambda bid: schema_map.get(str(bid)).status if str(bid) in schema_map else "live"
+                )
+                df_badges["badge_award_timing"] = df_badges["badge_id"].astype(str).map(
+                    lambda bid: schema_map.get(str(bid)).award_timing if str(bid) in schema_map else "live"
+                )
+                df_badges["badge_scope"] = df_badges["badge_id"].astype(str).map(
+                    lambda bid: schema_map.get(str(bid)).scope if str(bid) in schema_map else None
                 )
 
             # Player badges (club-scoped)

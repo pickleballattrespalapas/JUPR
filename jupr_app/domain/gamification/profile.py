@@ -62,6 +62,9 @@ def build_gamification_summary(
         "icon_key": None,
         "tier": None,
         "scope": None,
+        "badge_scope": None,
+        "badge_status": "live",
+        "badge_award_timing": "live",
         "category": "",
         "is_stackable": False,
     }
@@ -133,6 +136,9 @@ def build_gamification_summary(
                     "icon_key": first.get("icon_key", None),
                     "tier": first.get("tier", None),
                     "scope": first.get("scope", None),
+                    "badge_scope": first.get("badge_scope", None),
+                    "badge_status": first.get("badge_status", "live"),
+                    "badge_award_timing": first.get("badge_award_timing", "live"),
                     "stack_count": int(len(group_sorted)),
                     "first_earned_at": first.get("earned_at"),
                     "last_earned_at": last.get("earned_at"),
@@ -159,6 +165,9 @@ def build_gamification_summary(
                 "icon_key": r(row, "icon_key", None),
                 "tier": r(row, "tier", None),
                 "scope": r(row, "scope", None),
+                "badge_scope": r(row, "badge_scope", None),
+                "badge_status": r(row, "badge_status", "live"),
+                "badge_award_timing": r(row, "badge_award_timing", "live"),
             }
         )
 
