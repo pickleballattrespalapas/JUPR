@@ -14,7 +14,7 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
 )
-from jupr_app.domain.gamification.requirements import load_requirements
+from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     if badges_df.empty:
         return pd.DataFrame()
 
-    requirements_map = load_requirements()
+    requirements_map = load_requirements_map()
     badges_df["requirements"] = badges_df["badge_id"].map(requirements_map).fillna("Requirements TBD")
 
     return pb_df.merge(badges_df, on="badge_id", how="left")
@@ -137,7 +137,7 @@ def fetch_badge_definitions(_supabase) -> pd.DataFrame:
         )
         df = pd.DataFrame(resp.data or [])
         if not df.empty:
-            requirements_map = load_requirements()
+            requirements_map = load_requirements_map()
             df["requirements"] = df["badge_id"].map(requirements_map).fillna("Requirements TBD")
         return df
     except Exception:

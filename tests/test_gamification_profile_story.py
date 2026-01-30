@@ -59,7 +59,8 @@ def test_profile_summary_locked_and_prestige():
     assert summary["unlocked_badges"][0]["latest_tape_excerpt"]
     locked = summary["locked_badges"]
     assert locked and locked[0]["hint"]
-    assert "requirements" not in locked[0]
+    assert "requirements" in locked[0]
+    assert locked[0]["requirements"] == "Requirements TBD"
 
 
 def test_story_generation_highlight_and_foreshadow_dedupe():

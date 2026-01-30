@@ -12,7 +12,7 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
 from jupr_app.ui.helpers import build_badge_story
-from jupr_app.domain.gamification.requirements import load_requirements
+from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.domain.story_stats import (
     build_best_partner_map,
     build_rival_map,
@@ -164,7 +164,7 @@ def _fetch_story_badges(ctx, player_ids):
     }
     story_df = story_df.rename(columns=column_map)
     if "badge_id" in story_df.columns and "requirements" not in story_df.columns:
-        requirements_map = load_requirements()
+        requirements_map = load_requirements_map()
         story_df["requirements"] = story_df["badge_id"].map(requirements_map).fillna("Requirements TBD")
     return story_df
 
