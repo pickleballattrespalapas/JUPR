@@ -3,14 +3,26 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_integrity import dedupe_player_badges_rows
-from jupr_app.domain.gamification.badge_rules import BadgeAward, _insert_badges
-from jupr_app.domain.badges_participation import _insert_badges as insert_participation_badges
+from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 
 
 class CaptureTable:
     def __init__(self):
         self.on_conflict = None
         self.rows = []
+        self.filters = []
+
+    def select(self, _cols):
+        return self
+
+    def eq(self, column, value):
+        self.filters.append(("eq", column, value))
+        return self
+
+    def in_(self, column, values):
+        self.filters.append(("in", column, set(values)))
+        return self
 
     def upsert(self, rows, on_conflict=None):
         self.on_conflict = on_conflict
@@ -18,7 +30,13 @@ class CaptureTable:
         return self
 
     def execute(self):
-        return SimpleNamespace(data=self.rows)
+        data = list(self.rows)
+        for op, column, value in self.filters:
+            if op == "eq":
+                data = [row for row in data if str(row.get(column)) == str(value)]
+            elif op == "in":
+                data = [row for row in data if row.get(column) in value]
+        return SimpleNamespace(data=data)
 
 
 class CaptureSupabase:
@@ -63,34 +81,33 @@ def test_dedupe_player_badges_rows_keeps_earliest():
 
 def test_badge_awards_insert_uses_upsert_conflict():
     supabase = CaptureSupabase()
-    awards = [
-        BadgeAward(
-            player_id=1,
+    candidates = [
+        BadgeCandidate(
             badge_id="first_win",
+            player_id=1,
+            club_id="club",
             context_type="overall",
             context_id="first_win",
             match_id="m1",
-            value_num=None,
             value_json={"tape_excerpt": "The first win hit the archive."},
         )
     ]
-    _insert_badges(supabase, "club", awards)
+    upsert_player_badges(supabase, "club", candidates)
     assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_id"
 
 
 def test_participation_insert_uses_upsert_conflict():
     supabase = CaptureSupabase()
-    rows = [
-        {
-            "id": "1",
-            "club_id": "club",
-            "player_id": 1,
-            "badge_id": "participant",
-            "earned_at": "2024-01-01T00:00:00Z",
-            "context_type": "overall",
-            "context_id": None,
-            "value_num": 5,
-        }
+    candidates = [
+        BadgeCandidate(
+            badge_id="participant",
+            player_id=1,
+            club_id="club",
+            context_type="overall",
+            context_id=None,
+            match_id=None,
+            value_num=5,
+        )
     ]
-    insert_participation_badges(supabase, rows)
+    upsert_player_badges(supabase, "club", candidates)
     assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_id"

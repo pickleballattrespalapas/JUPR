@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# DEPRECATED: do not use; the badge engine/registry is the single source of truth.
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
@@ -16,10 +18,36 @@ from jupr_app.domain.gamification.copy_pack import (
     pick_variant,
     render_template,
 )
-from jupr_app.domain.gamification.story_engine import ensure_player_stories
 from jupr_app.domain.match_filters import apply_match_filters, normalize_player_id, normalize_score
 
 logger = logging.getLogger(__name__)
+
+
+_FACT_COLUMNS = [
+    "club_id",
+    "player_id",
+    "match_id",
+    "league",
+    "date_dt",
+    "week_key",
+    "month_key",
+    "season_key",
+    "win",
+    "points_for",
+    "points_against",
+    "margin",
+    "partner_id",
+    "opponent_ids",
+    "expected_win_prob",
+    "elo_delta_signed",
+    "abs_elo_delta",
+    "opp_max_rating",
+    "lobby_avg_rating",
+]
+
+
+def _empty_facts() -> pd.DataFrame:
+    return pd.DataFrame(columns=_FACT_COLUMNS)
 
 
 @dataclass(frozen=True)
@@ -34,23 +62,10 @@ class BadgeAward:
 
 
 def ensure_badges(ctx) -> None:
-    if bool(getattr(ctx, "public_mode", False)):
-        return
+    """DEPRECATED: use jupr_app.domain.gamification.ensure_badges.ensure_badges."""
+    from jupr_app.domain.gamification.ensure_badges import ensure_badges as ensure_engine_badges
 
-    supabase = getattr(ctx, "supabase", None)
-    club_id = str(getattr(ctx, "club_id", "") or "")
-    if supabase is None or not club_id:
-        return
-
-    try:
-        _seed_badges(supabase)
-        existing = _fetch_existing_badges(supabase, club_id)
-        awards, facts = compute_badge_awards(ctx, existing=existing)
-        if awards:
-            _insert_badges(supabase, club_id, awards)
-            ensure_player_stories(ctx, facts, awards)
-    except Exception:
-        logger.exception("ensure_badges failed")
+    ensure_engine_badges(ctx)
 
 
 def compute_badge_awards(
@@ -138,7 +153,7 @@ def compute_badge_awards(
 def build_player_match_facts(ctx) -> pd.DataFrame:
     df_matches = getattr(ctx, "df_matches", None)
     if df_matches is None or df_matches.empty:
-        return pd.DataFrame()
+        return _empty_facts()
 
     df_players = getattr(ctx, "df_players_all", None)
     rating_map: dict[int, float] = {}
@@ -151,9 +166,11 @@ def build_player_match_facts(ctx) -> pd.DataFrame:
     filters = {"club_id": getattr(ctx, "club_id", None), "exclude_popups": True}
     filtered = apply_match_filters(df_matches, filters)
     if filtered.empty:
-        return pd.DataFrame()
+        return _empty_facts()
 
     filtered = filtered.copy()
+    if "id" not in filtered.columns:
+        filtered["id"] = range(1, len(filtered) + 1)
     filtered["date_dt"] = pd.to_datetime(filtered.get("date", None), utc=True, errors="coerce")
     filtered = filtered.dropna(subset=["date_dt"]).sort_values(["date_dt", "id"], ascending=[True, True])
 

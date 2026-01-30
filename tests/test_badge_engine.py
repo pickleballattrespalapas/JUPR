@@ -3,10 +3,11 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
-from jupr_app.domain.gamification.badge_registry import registry
+from jupr_app.domain.gamification.badge_registry import active_badge_ids, registry
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.copy_pack import load_copy_pack
+from jupr_app.domain.gamification.ensure_badges import ensure_badges
 
 
 class FakeTable:
@@ -61,7 +62,8 @@ def test_registry_includes_copy_pack_badges():
     pack = load_copy_pack()
     copy_ids = set((pack.get("badges") or {}).keys())
     reg_ids = set(registry().keys())
-    assert copy_ids <= reg_ids
+    active_copy_ids = copy_ids & active_badge_ids()
+    assert active_copy_ids <= reg_ids
 
 
 def test_engine_returns_candidates():
@@ -116,7 +118,58 @@ def test_badge_upsert_adds_tape_excerpt_and_is_idempotent():
     assert len(created) == 1
     rows = storage["player_badges"]
     assert rows[0]["value_json"]["tape_excerpt"]
+    assert rows[0]["value_json"]["tape_title"]
 
     created_again = upsert_player_badges(supabase, "club", [candidate])
     assert created_again == []
     assert len(storage["player_badges"]) == 1
+
+
+def test_ensure_badges_is_idempotent():
+    df_matches = pd.DataFrame(
+        [
+            {
+                "id": "m1",
+                "club_id": "club",
+                "league": "Open",
+                "date": "2024-01-05T10:00:00Z",
+                "t1_p1": 1,
+                "t1_p2": 2,
+                "t2_p1": 3,
+                "t2_p2": 4,
+                "score_t1": 11,
+                "score_t2": 7,
+            }
+        ]
+    )
+    df_players_all = pd.DataFrame(
+        [
+            {"id": 1, "rating": 1200},
+            {"id": 2, "rating": 1200},
+            {"id": 3, "rating": 1200},
+            {"id": 4, "rating": 1200},
+        ]
+    )
+    storage = {}
+    supabase = FakeSupabase(storage)
+    ctx = SimpleNamespace(
+        df_matches=df_matches,
+        df_players_all=df_players_all,
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+        id_to_name={},
+        club_id="club",
+        supabase=supabase,
+        public_mode=False,
+    )
+    ensure_badges(ctx)
+    ensure_badges(ctx)
+    assert len(storage.get("player_badges", [])) == len(
+        {tuple(row.get(k) for k in ["club_id", "player_id", "badge_id", "context_id"]) for row in storage["player_badges"]}
+    )
+
+
+def test_registry_covers_active_badges():
+    reg_ids = set(registry().keys())
+    missing = active_badge_ids() - reg_ids
+    assert not missing

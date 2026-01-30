@@ -9,7 +9,8 @@ Badges live in `jupr_app/domain/gamification/badge_catalog.py`. Each `BadgeDefin
 When seeding, the catalog is upserted into the `badges` table so UI clients can build the Badge Codex.
 
 ## Award Rules
-Award logic is isolated in `jupr_app/domain/gamification/badge_rules.py` and uses a reusable
+Award logic lives in the badge engine evaluators (`jupr_app/domain/gamification/evaluators.py`)
+and is registered in `jupr_app/domain/gamification/badge_registry.py`. The engine builds a
 player-match fact table derived from match data. The rules:
 - Always filter matches with `apply_match_filters` (no voided/invalid records)
 - Produce stable context IDs for idempotency
@@ -32,15 +33,16 @@ Story rows are written to `player_stories` using a unique constraint to prevent 
 - Collection stats by category
 
 ## Running Locally
-The gamification jobs run when `ensure_badges(ctx)` is executed. In Streamlit, this happens during
+The gamification jobs run when `ensure_badges(ctx)` is executed (see
+`jupr_app/domain/gamification/ensure_badges.py`). In Streamlit, this happens during
 data refresh. You can also call the function manually in a notebook or shell by constructing a
 context object with `supabase`, `club_id`, and match dataframes.
 
 ## Adding a New Badge
 1. Add a `BadgeDefinition` entry in `badge_catalog.py` with lore + hint.
-2. Implement award logic in `badge_rules.py`, returning a stable `context_id`.
-3. Add a tape excerpt in the award rule and, if needed, a highlight in `story_engine.py`.
-4. Update tests to cover the new behavior.
+2. Implement award logic in `evaluators.py` and register it in `badge_registry.py`, returning a stable `context_id`.
+3. Add any copy pack updates needed for tape excerpts/highlights.
+4. Update tests to cover the new behavior and registry completeness.
 
 ## Verification Checklist (Production)
 ### SQL sanity checks

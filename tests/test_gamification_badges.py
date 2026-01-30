@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from jupr_app.domain.gamification.badge_rules import compute_badge_awards
+from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 
 
 def _match_row(match_id, date, t1_p1, t2_p1, score_t1, score_t2, league="A"):
@@ -31,15 +31,10 @@ def test_first_win_idempotent():
     df_players = pd.DataFrame([{"id": 1, "rating": 1200}, {"id": 2, "rating": 1200}])
     ctx = SimpleNamespace(df_matches=df_matches, df_players_all=df_players, club_id="club")
 
-    awards, _ = compute_badge_awards(ctx, existing=set())
-    first_win = [a for a in awards if a.badge_id == "first_win"]
+    candidates = list(compute_candidates_for_club("club", ctx=ctx))
+    first_win = [a for a in candidates if a.badge_id == "first_win"]
     assert len(first_win) == 1
-    assert first_win[0].value_json
-    assert first_win[0].value_json.get("tape_excerpt")
-
-    existing = {(str(a.player_id), a.badge_id, a.context_id) for a in awards}
-    awards_again, _ = compute_badge_awards(ctx, existing=existing)
-    assert not awards_again
+    assert first_win[0].context_id == "first_win"
 
 
 def test_hot_streak_tiers_context():
@@ -50,8 +45,8 @@ def test_hot_streak_tiers_context():
     df_players = pd.DataFrame([{"id": 1, "rating": 1400}, {"id": 2, "rating": 1400}])
     ctx = SimpleNamespace(df_matches=df_matches, df_players_all=df_players, club_id="club")
 
-    awards, _ = compute_badge_awards(ctx, existing=set())
-    streaks = [a for a in awards if a.badge_id == "hot_streak"]
+    candidates = list(compute_candidates_for_club("club", ctx=ctx))
+    streaks = [a for a in candidates if a.badge_id == "hot_streak"]
     context_ids = {a.context_id for a in streaks}
     assert {"A:streak:5:m5", "A:streak:10:m10", "A:streak:20:m20"} == context_ids
 
@@ -67,8 +62,8 @@ def test_weekly_regular_consecutive_weeks():
     df_players = pd.DataFrame([{"id": 1, "rating": 1400}, {"id": 2, "rating": 1400}])
     ctx = SimpleNamespace(df_matches=df_matches, df_players_all=df_players, club_id="club")
 
-    awards, _ = compute_badge_awards(ctx, existing=set())
-    weekly = [a for a in awards if a.badge_id == "weekly_regular" and a.player_id == 1]
+    candidates = list(compute_candidates_for_club("club", ctx=ctx))
+    weekly = [a for a in candidates if a.badge_id == "weekly_regular" and a.player_id == 1]
     assert len(weekly) == 1
     assert weekly[0].context_id == "A:2024"
 
@@ -86,7 +81,7 @@ def test_upset_champion_picks_lowest_expected():
     df_players = pd.DataFrame([{"id": 1, "rating": 1400}, {"id": 2, "rating": 1400}])
     ctx = SimpleNamespace(df_matches=df_matches, df_players_all=df_players, club_id="club")
 
-    awards, _ = compute_badge_awards(ctx, existing=set())
-    upset = [a for a in awards if a.badge_id == "upset_champion"]
+    candidates = list(compute_candidates_for_club("club", ctx=ctx))
+    upset = [a for a in candidates if a.badge_id == "upset_champion"]
     assert upset
     assert any(a.context_id.endswith("match:m1") for a in upset)

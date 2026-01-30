@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
 from jupr_app.domain.gamification.evaluators import (
     evaluate_above_expectations,
@@ -48,6 +49,13 @@ from jupr_app.domain.gamification.evaluators import (
     evaluate_social_butterfly,
     evaluate_steady_hand,
     evaluate_swiss_army_knife,
+    evaluate_top_performer_best_win_pct,
+    evaluate_top_performer_highest_rating,
+    evaluate_top_performer_most_improved,
+    evaluate_top_performer_most_wins,
+    evaluate_tournament_champion,
+    evaluate_tournament_runner_up,
+    evaluate_tournament_third_place,
     evaluate_untouchable,
     evaluate_upset_champion,
     evaluate_weekly_regular,
@@ -113,9 +121,30 @@ def registry() -> dict[str, BadgeSpec]:
         BadgeSpec("high_output", evaluate_high_output, "match", True),
         BadgeSpec("battle_tested", evaluate_battle_tested, "season", True),
         BadgeSpec("consistency", evaluate_consistency, "season", True),
+        BadgeSpec("top_performer_highest_rating", evaluate_top_performer_highest_rating, "league", True),
+        BadgeSpec("top_performer_most_improved", evaluate_top_performer_most_improved, "league", True),
+        BadgeSpec("top_performer_best_win_pct", evaluate_top_performer_best_win_pct, "league", True),
+        BadgeSpec("top_performer_most_wins", evaluate_top_performer_most_wins, "league", True),
+        BadgeSpec("tournament_champion", evaluate_tournament_champion, "tournament", False),
+        BadgeSpec("tournament_runner_up", evaluate_tournament_runner_up, "tournament", False),
+        BadgeSpec("tournament_third_place", evaluate_tournament_third_place, "tournament", False),
     ]
     return {spec.badge_id: spec for spec in specs}
 
 
 def all_badge_ids() -> list[str]:
     return list(registry().keys())
+
+
+_BADGE_DEFINITIONS_BY_ID = {b.badge_id: b for b in BADGE_DEFINITIONS}
+
+
+def active_badge_ids() -> set[str]:
+    return {b.badge_id for b in _BADGE_DEFINITIONS_BY_ID.values() if b.is_active}
+
+
+def is_badge_active(badge_id: str) -> bool:
+    badge = _BADGE_DEFINITIONS_BY_ID.get(badge_id)
+    if badge is None:
+        return True
+    return bool(badge.is_active)

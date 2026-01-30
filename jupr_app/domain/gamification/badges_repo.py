@@ -38,6 +38,8 @@ def upsert_player_badges(
         value_json.setdefault("badge_id", candidate.badge_id)
         if "tape_excerpt" not in value_json or not value_json.get("tape_excerpt"):
             value_json["tape_excerpt"] = _build_tape_excerpt(candidate, value_json)
+        if "tape_title" not in value_json or not value_json.get("tape_title"):
+            value_json["tape_title"] = _build_tape_title(candidate, value_json)
         rows.append(
             {
                 "id": str(uuid4()),
@@ -105,3 +107,13 @@ def _build_tape_excerpt(candidate: BadgeCandidate, data: dict[str, Any]) -> str:
     if lines:
         return "\n".join(lines[:4])
     return ""
+
+
+def _build_tape_title(candidate: BadgeCandidate, data: dict[str, Any]) -> str:
+    copy = get_badge_copy(candidate.badge_id)
+    highlight = copy.get("highlight", {}) if isinstance(copy, dict) else {}
+    titles = highlight.get("titles", []) if isinstance(highlight, dict) else []
+    seed = f"{candidate.player_id}:{candidate.badge_id}:{candidate.context_id}:title"
+    template = pick_variant(titles, seed)
+    rendered = render_template(template, data | {"badge_name": copy.get("name", candidate.badge_id)})
+    return rendered or str(data.get("badge_name") or candidate.badge_id)

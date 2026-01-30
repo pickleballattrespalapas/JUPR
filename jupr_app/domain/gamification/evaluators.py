@@ -7,9 +7,16 @@ from typing import Any
 
 import pandas as pd
 
-from jupr_app.domain.badges_participation import compute_lifetime_games
+from jupr_app.domain.awards import compute_top_performer_awards
 from jupr_app.domain.gamification.badge_rules import build_player_match_facts
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
+from jupr_app.domain.gamification.participation import compute_lifetime_games
+from jupr_app.domain.gamification.top_performer_awards import (
+    TOP_PERFORMER_BADGE_IDS,
+    _build_league_standings,
+    _min_games_for_league,
+)
+from jupr_app.domain.tournament_podium import build_tournament_podium_candidates
 
 
 logger = logging.getLogger(__name__)
@@ -118,10 +125,10 @@ def evaluate_weekly_regular(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandid
 
 def evaluate_iron_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    grouped = facts.groupby(["player_id", "league", "week_key"])["date_dt"].nunique().reset_index()
+    grouped = facts.groupby(["player_id", "league", "week_key"]).size().reset_index(name="matches")
     candidates: list[BadgeCandidate] = []
     for row in grouped.itertuples(index=False):
-        if int(row.date_dt) >= 3:
+        if int(row.matches) >= 5:
             candidates.append(
                 BadgeCandidate(
                     badge_id="iron_week",
@@ -130,7 +137,7 @@ def evaluate_iron_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
                     context_type="week",
                     context_id=f"{row.league}:{row.week_key}",
                     match_id=None,
-                    value_json={"league": row.league, "week": row.week_key, "nights": int(row.date_dt)},
+                    value_json={"league": row.league, "week": row.week_key, "matches": int(row.matches)},
                 )
             )
     return candidates
@@ -206,7 +213,7 @@ def evaluate_rocket_start(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidat
                     club_id=ctx.club_id,
                     context_type="league",
                     context_id=f"{league}:rocket_start",
-                    match_id=str(head.iloc[0]["match_id"]),
+                    match_id=None,
                     value_json={"league": league},
                 )
             )
@@ -582,22 +589,34 @@ def evaluate_david_vs_goliath(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 def evaluate_upset_champion(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    wins = facts[(facts["win"] == True) & (facts["expected_win_prob"] <= 0.2)]
-    if wins.empty:
+    winners = facts[facts["win"] == True].copy()
+    if winners.empty:
         return []
-    first = wins.sort_values(["date_dt", "match_id"]).groupby("player_id", as_index=False).first()
-    return [
-        BadgeCandidate(
-            badge_id="upset_champion",
-            player_id=int(row.player_id),
-            club_id=ctx.club_id,
-            context_type="match",
-            context_id=f"{row.match_id}:upset_champion",
-            match_id=str(row.match_id),
-            value_json={"match_id": str(row.match_id), "expected_prob": float(row.expected_win_prob)},
-        )
-        for row in first.itertuples(index=False)
-    ]
+    match_stats = (
+        winners.groupby(["league", "month_key", "match_id"])
+        .agg(expected_win_prob=("expected_win_prob", "min"), player_ids=("player_id", lambda x: list(x)))
+        .reset_index()
+    )
+    match_stats = match_stats.sort_values(["league", "month_key", "expected_win_prob"])
+    candidates: list[BadgeCandidate] = []
+    for (league, month_key), group in match_stats.groupby(["league", "month_key"]):
+        if ctx.league_id and str(league) != str(ctx.league_id):
+            continue
+        top = group.iloc[0]
+        for pid in top.player_ids:
+            candidates.append(
+                BadgeCandidate(
+                    badge_id="upset_champion",
+                    player_id=int(pid),
+                    club_id=ctx.club_id,
+                    context_type="month",
+                    context_id=f"{league}:month:{month_key}:match:{top.match_id}",
+                    match_id=str(top.match_id),
+                    value_num=float(top.expected_win_prob),
+                    value_json={"league": league, "month": month_key, "expected_prob": float(top.expected_win_prob)},
+                )
+            )
+    return candidates
 
 
 def evaluate_hall_of_fame_night(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -733,10 +752,118 @@ def evaluate_consistency(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
     return _inactive("consistency", "missing consistency definition")
 
 
+def _cached_top_performer_candidates(ctx: BadgeEvaluationContext) -> list[BadgeCandidate]:
+    key = str(ctx.league_id or "__all__")
+    cache = getattr(ctx.ctx, "_top_performer_candidates_cache", None)
+    if isinstance(cache, dict) and cache.get("key") == key:
+        return cache.get("candidates", [])
+
+    df_leagues = getattr(ctx.ctx, "df_leagues", None)
+    df_meta = getattr(ctx.ctx, "df_meta", None)
+    id_to_name = getattr(ctx.ctx, "id_to_name", {}) or {}
+    if df_leagues is None or df_leagues.empty:
+        candidates: list[BadgeCandidate] = []
+        setattr(ctx.ctx, "_top_performer_candidates_cache", {"key": key, "candidates": candidates})
+        return candidates
+
+    league_ids = (
+        [ctx.league_id]
+        if ctx.league_id
+        else sorted(df_leagues["league_name"].dropna().astype(str).unique().tolist())
+    )
+    candidates = []
+    for league_id in league_ids:
+        min_games = _min_games_for_league(df_meta, league_id)
+        if min_games <= 0:
+            continue
+        standings = _build_league_standings(df_leagues, league_id, id_to_name)
+        if standings.empty:
+            continue
+        qualified = standings[standings["matches_played"] >= int(min_games)].copy()
+        if qualified.empty:
+            continue
+        awards = compute_top_performer_awards(qualified, min_games=min_games, winners_per_category=1)
+        for award in awards:
+            category_key = award.get("category_key")
+            badge_id = TOP_PERFORMER_BADGE_IDS.get(str(category_key))
+            if not badge_id:
+                continue
+            rank = int(award.get("rank", 1))
+            context_id = f"{league_id}:top_performer:{category_key}:{rank}"
+            value_json = {
+                "league_id": league_id,
+                "category_key": category_key,
+                "category_label": award.get("category_label"),
+                "metric_value": award.get("metric_value"),
+                "metric_display": award.get("metric_display"),
+                "min_games": int(min_games),
+                "rank": rank,
+            }
+            candidates.append(
+                BadgeCandidate(
+                    badge_id=badge_id,
+                    player_id=int(award["player_id"]),
+                    club_id=ctx.club_id,
+                    context_type="league",
+                    context_id=context_id,
+                    match_id=None,
+                    value_json=value_json,
+                    value_num=award.get("metric_value") if award.get("metric_value") is not None else None,
+                )
+            )
+
+    setattr(ctx.ctx, "_top_performer_candidates_cache", {"key": key, "candidates": candidates})
+    return candidates
+
+
+def _cached_tournament_podium_candidates(ctx: BadgeEvaluationContext) -> list[BadgeCandidate]:
+    tournament_id = getattr(ctx.ctx, "tournament_id", None)
+    tournament_name = getattr(ctx.ctx, "tournament_name", None)
+    if not tournament_id:
+        return []
+    cache = getattr(ctx.ctx, "_tournament_podium_candidates_cache", None)
+    key = (str(tournament_id), str(tournament_name or ""))
+    if isinstance(cache, dict) and cache.get("key") == key:
+        return cache.get("candidates", [])
+    candidates = build_tournament_podium_candidates(ctx.ctx, str(tournament_id), tournament_name)
+    setattr(ctx.ctx, "_tournament_podium_candidates_cache", {"key": key, "candidates": candidates})
+    return candidates
+
+
+def evaluate_top_performer_highest_rating(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_top_performer_candidates(ctx) if c.badge_id == "top_performer_highest_rating"]
+
+
+def evaluate_top_performer_most_improved(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_top_performer_candidates(ctx) if c.badge_id == "top_performer_most_improved"]
+
+
+def evaluate_top_performer_best_win_pct(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_top_performer_candidates(ctx) if c.badge_id == "top_performer_best_win_pct"]
+
+
+def evaluate_top_performer_most_wins(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_top_performer_candidates(ctx) if c.badge_id == "top_performer_most_wins"]
+
+
+def evaluate_tournament_champion(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_tournament_podium_candidates(ctx) if c.badge_id == "tournament_champion"]
+
+
+def evaluate_tournament_runner_up(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_tournament_podium_candidates(ctx) if c.badge_id == "tournament_runner_up"]
+
+
+def evaluate_tournament_third_place(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
+    return [c for c in _cached_tournament_podium_candidates(ctx) if c.badge_id == "tournament_third_place"]
+
+
 def build_evaluation_context(ctx: Any, club_id: str, league_id: str | None, as_of: datetime | None) -> BadgeEvaluationContext:
     facts = build_player_match_facts(ctx)
     if facts.empty:
-        matches = getattr(ctx, "df_matches", pd.DataFrame()) or pd.DataFrame()
+        matches = getattr(ctx, "df_matches", None)
+        if matches is None:
+            matches = pd.DataFrame()
     else:
         matches = facts
     if league_id:
