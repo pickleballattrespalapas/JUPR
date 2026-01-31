@@ -62,8 +62,6 @@ def test_copy_pack_has_required_badges():
     assert "badges" in pack
     for badge_id in required:
         copy = get_badge_copy(badge_id)
-        assert copy["lore"]
-        assert copy["hint"]
         assert copy["tape_excerpts"]
 
 
@@ -85,8 +83,6 @@ def test_copy_pack_player_facing_words_clean():
         if not isinstance(entry, dict):
             continue
         texts = [
-            entry.get("lore", ""),
-            entry.get("hint", ""),
             *(entry.get("tape_excerpts", []) or []),
         ]
         highlight = entry.get("highlight", {}) or {}

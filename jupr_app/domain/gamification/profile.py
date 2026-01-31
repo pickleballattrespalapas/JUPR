@@ -55,8 +55,6 @@ def build_gamification_summary(
     pb = df_player_badges.copy() if df_player_badges is not None else pd.DataFrame()
 
     optional_columns = {
-        "lore": "",
-        "hint": "",
         "requirements": "Requirements TBD",
         "rarity": None,
         "icon_key": None,
@@ -130,7 +128,6 @@ def build_gamification_summary(
                     "category": first.get("category", ""),
                     "rarity": _resolve_rarity(first.get("rarity"), first.get("prestige", 0)),
                     "prestige": int(first.get("prestige", 0) or 0),
-                    "lore": first.get("lore", ""),
                     "requirements": first.get("requirements", "Requirements TBD"),
                     "is_stackable": bool(first.get("is_stackable", False)),
                     "icon_key": first.get("icon_key", None),
@@ -158,8 +155,6 @@ def build_gamification_summary(
                 "category": r(row, "category", ""),
                 "rarity": _resolve_rarity(r(row, "rarity", None), r(row, "prestige", 0)),
                 "prestige": int(r(row, "prestige", 0) or 0),
-                "lore": r(row, "lore", ""),
-                "hint": r(row, "hint", ""),
                 "requirements": r(row, "requirements", "Requirements TBD"),
                 "is_stackable": bool(r(row, "is_stackable", False)),
                 "icon_key": r(row, "icon_key", None),

@@ -12,8 +12,6 @@ def test_aggregation_counts_and_prestige():
                 "prestige": 75,
                 "category": "Rivalries",
                 "rarity": "legendary",
-                "lore": "The tape favors the fearless.",
-                "hint": "The mountain tips when the underdog swings.",
                 "is_active": True,
             },
             {
@@ -22,8 +20,6 @@ def test_aggregation_counts_and_prestige():
                 "prestige": 15,
                 "category": "Participation",
                 "rarity": "common",
-                "lore": "A first chapter.",
-                "hint": "There is always a first frame.",
                 "is_active": True,
             },
             {
@@ -32,8 +28,6 @@ def test_aggregation_counts_and_prestige():
                 "prestige": 50,
                 "category": "Momentum",
                 "rarity": "epic",
-                "lore": "Wins blur together.",
-                "hint": "The film strip barely cools.",
                 "is_active": True,
             },
         ]
@@ -70,7 +64,7 @@ def test_aggregation_counts_and_prestige():
     assert giant["latest_tape_excerpt"]
 
     locked = summary["locked_badges"]
-    assert any(b["badge_id"] == "hot_streak" and b["hint"] for b in locked)
+    assert any(b["badge_id"] == "hot_streak" for b in locked)
 
 
 def test_featured_badges_unique():

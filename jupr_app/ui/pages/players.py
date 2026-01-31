@@ -105,7 +105,7 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
             _supabase.table("badges")
             .select(
                 "badge_id,name,prestige,category,is_stackable,is_active,rarity,tier,"
-                "icon_key,lore,hint,scope"
+                "icon_key,scope"
             )
             .in_("badge_id", badge_ids)
             .execute()
@@ -136,7 +136,7 @@ def fetch_badge_definitions(_supabase) -> pd.DataFrame:
             _supabase.table("badges")
             .select(
                 "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                "tier,icon_key,lore,hint,scope,created_at"
+                "tier,icon_key,scope,created_at"
             )
             .execute()
         )

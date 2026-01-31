@@ -259,7 +259,7 @@ def _seed_badges(supabase) -> None:
     existing_by_id = {}
     if not force_backfill:
         try:
-            resp = supabase.table("badges").select("badge_id,lore,hint").execute()
+            resp = supabase.table("badges").select("badge_id").execute()
             existing_by_id = {str(row.get("badge_id")): row for row in resp.data or []}
         except Exception:
             logger.exception("Failed to fetch badges for copy backfill")

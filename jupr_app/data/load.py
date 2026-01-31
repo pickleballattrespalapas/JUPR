@@ -75,7 +75,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 supabase.table("badges")
                 .select(
                     "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                    "tier,icon_key,lore,hint,scope,created_at"
+                    "tier,icon_key,scope,created_at"
                 )
                 .execute()
             )
