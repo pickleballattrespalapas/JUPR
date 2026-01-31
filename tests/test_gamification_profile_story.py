@@ -22,8 +22,6 @@ def test_profile_summary_locked_and_prestige():
                 "prestige": 15,
                 "category": "Participation & Habit Loop",
                 "rarity": "common",
-                "lore": "The first mark on the ledger.",
-                "hint": "There is always a first frame.",
                 "icon_key": "first_win",
                 "tier": None,
                 "scope": "overall",
@@ -34,8 +32,6 @@ def test_profile_summary_locked_and_prestige():
                 "prestige": 50,
                 "category": "Skill Growth & Momentum",
                 "rarity": "epic",
-                "lore": "Wins blur together.",
-                "hint": "The film strip barely cools.",
                 "icon_key": "hot_streak",
                 "tier": None,
                 "scope": "league",
@@ -58,7 +54,7 @@ def test_profile_summary_locked_and_prestige():
     assert summary["total_active_badge_types"] == 2
     assert summary["unlocked_badges"][0]["latest_tape_excerpt"]
     locked = summary["locked_badges"]
-    assert locked and locked[0]["hint"]
+    assert locked
     assert "requirements" in locked[0]
     assert locked[0]["requirements"] == "Requirements TBD"
 
@@ -167,8 +163,6 @@ def test_player_facing_copy_has_no_banned_words():
                 "prestige": 15,
                 "category": "Participation & Habit Loop",
                 "rarity": "common",
-                "lore": "The first mark on the ledger.",
-                "hint": "There is always a first frame.",
                 "icon_key": "first_win",
                 "tier": None,
                 "scope": "overall",
@@ -187,9 +181,11 @@ def test_player_facing_copy_has_no_banned_words():
     )
     summary = build_gamification_summary(9, df_badges, df_player_badges)
     for badge in summary.get("unlocked_badges", []):
-        assert_no_banned_words(" ".join([badge.get("name", ""), badge.get("lore", ""), badge.get("latest_tape_excerpt", "")]))
+        assert_no_banned_words(
+            " ".join([badge.get("name", ""), badge.get("latest_tape_excerpt", "")])
+        )
     for badge in summary.get("locked_badges", []):
-        assert_no_banned_words(" ".join([badge.get("name", ""), badge.get("lore", ""), badge.get("hint", "")]))
+        assert_no_banned_words(" ".join([badge.get("name", "")]))
 
 
 def test_story_cards_dedupe_by_type_and_context():
