@@ -63,7 +63,7 @@ def build_player_activity_update(existing_last_game_at, match_time) -> dict:
     latest = max_activity_time(existing_last_game_at, match_time)
     if latest is None:
         return {}
-    return {"last_game_at": latest.isoformat(), "inactive_at": None}
+    return {"last_game_at": latest.isoformat(), "inactive_at": None, "active": True}
 
 
 def recompute_last_game_at_for_players(

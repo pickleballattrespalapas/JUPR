@@ -41,6 +41,7 @@ def test_build_player_activity_update_reactivates_and_sets_last_game_at():
     existing = "2024-01-01T00:00:00+00:00"
     match_time = datetime(2024, 1, 10, 12, 0, tzinfo=timezone.utc)
     payload = build_player_activity_update(existing, match_time)
+    assert payload["active"] is True
     assert payload["inactive_at"] is None
     assert payload["last_game_at"] == match_time.isoformat()
 
