@@ -872,19 +872,19 @@ def render(ctx):
             margin-bottom: 0.75rem;
         }
         .badge-stat {
-            background: var(--panel, rgba(255,255,255,0.04));
-            border: 1px solid var(--border, rgba(255,255,255,0.10));
+            background: var(--panel);
+            border: 1px solid var(--border);
             box-shadow: var(--shadow, none);
             border-radius: 0.75rem;
             padding: 0.75rem 0.9rem;
             min-width: 120px;
-            color: var(--text-primary, rgba(255,255,255,0.92));
+            color: var(--text-primary);
         }
         .badge-stat-label {
             font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: var(--text-secondary, rgba(255,255,255,0.80));
+            color: var(--text-secondary);
         }
         .badge-stat-value {
             font-size: 1.6rem;
@@ -902,11 +902,11 @@ def render(ctx):
             align-items: center;
             padding: 0.25rem 0.5rem;
             border-radius: 999px;
-            border: 1px solid var(--border, rgba(255,255,255,0.10));
-            background: var(--pill-bg, rgba(255,255,255,0.04));
+            border: 1px solid var(--border);
+            background: var(--pill-bg);
             font-size: 0.8rem;
             max-width: 180px;
-            color: var(--text-primary, rgba(255,255,255,0.92));
+            color: var(--text-primary);
         }
         .trophy-section {
             display: flex;
@@ -918,7 +918,7 @@ def render(ctx):
             font-size: 0.7rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: var(--text-secondary, rgba(255,255,255,0.80));
+            color: var(--text-secondary);
         }
         .trophy-chip-row {
             display: flex;
@@ -928,7 +928,7 @@ def render(ctx):
         }
         .trophy-league {
             font-size: 0.78rem;
-            color: var(--text-muted, rgba(255,255,255,0.65));
+            color: var(--text-muted);
         }
         .trophy-chip {
             display: inline-flex;
@@ -936,12 +936,12 @@ def render(ctx):
             align-items: flex-start;
             padding: 0.35rem 0.6rem;
             border-radius: 0.75rem;
-            border: 1px solid var(--border, rgba(255,255,255,0.10));
-            background: var(--panel, rgba(255,255,255,0.04));
+            border: 1px solid var(--border);
+            background: var(--panel);
             box-shadow: var(--shadow, none);
             font-size: 0.8rem;
             max-width: 320px;
-            color: var(--text-primary, rgba(255,255,255,0.92));
+            color: var(--text-primary);
         }
         .trophy-text {
             display: flex;
@@ -955,7 +955,7 @@ def render(ctx):
         }
         .trophy-body {
             font-size: 0.7rem;
-            color: var(--text-muted, rgba(255,255,255,0.65));
+            color: var(--text-muted);
         }
         .trophy-case-grid {
             display: grid;
@@ -964,14 +964,14 @@ def render(ctx):
         }
         .trophy-case-card {
             border-radius: 0.85rem;
-            border: 1px solid var(--border, rgba(255,255,255,0.12));
-            background: var(--panel, rgba(255,255,255,0.04));
+            border: 1px solid var(--border);
+            background: var(--panel);
             box-shadow: var(--shadow, none);
             padding: 0.8rem 0.85rem;
             display: flex;
             flex-direction: column;
             gap: 0.35rem;
-            color: var(--text-primary, rgba(255,255,255,0.92));
+            color: var(--text-primary);
         }
         .trophy-case-header {
             display: flex;
@@ -981,7 +981,7 @@ def render(ctx):
         }
         .trophy-case-meta {
             font-size: 0.75rem;
-            color: var(--text-muted, rgba(255,255,255,0.65));
+            color: var(--text-muted);
         }
         .badge-grid {
             display: grid;
@@ -1003,17 +1003,17 @@ def render(ctx):
         }
         .badge-card {
             border-radius: 0.8rem;
-            border: 1px solid var(--border, rgba(255,255,255,0.10));
-            background: var(--panel, rgba(255,255,255,0.04));
+            border: 1px solid var(--border);
+            background: var(--panel);
             box-shadow: var(--shadow, none);
             padding: 0.7rem 0.8rem;
             display: flex;
             flex-direction: column;
             gap: 0.35rem;
-            color: var(--text-primary, rgba(255,255,255,0.92));
+            color: var(--text-primary);
         }
         .badge-card.silhouette {
-            background: var(--panel, rgba(255,255,255,0.04));
+            background: var(--panel);
             opacity: 0.7;
         }
         .badge-card-header {
@@ -1024,7 +1024,7 @@ def render(ctx):
         }
         .badge-subtext {
             font-size: 0.75rem;
-            color: var(--text-muted, rgba(255,255,255,0.65));
+            color: var(--text-muted);
         }
         .badge-subtext p {
             margin: 0;
