@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Iterable, Literal
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS, BadgeDefinition
@@ -61,7 +62,7 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
     )
     assign(["weekly_regular"], status="live", scope="league", award_timing="live")
     assign(["iron_week", "clean_sweep_week"], status="live", scope="week", award_timing="live")
-    assign(["marathon_month", "most_improved_monthly", "draft_master", "upset_champion"], status="live", scope="month", award_timing="live")
+    assign(["marathon_month", "most_improved_monthly", "upset_champion"], status="live", scope="month", award_timing="live")
     assign(
         ["level_up", "rocket_start", "mountain_climber", "hot_streak"],
         status="live",
@@ -73,7 +74,6 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
             "bounce_back",
             "pickle_perfection",
             "blowout_artist",
-            "high_roller",
             "giant_slayer",
             "david_vs_goliath",
             "legendary_upset",
@@ -82,7 +82,8 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
         scope="match",
         award_timing="live",
     )
-    assign(["ice_in_veins", "social_butterfly", "network_builder", "untouchable"], status="live", scope="lifetime", award_timing="live")
+    assign(["ice_in_veins", "social_butterfly", "network_builder", "untouchable", "high_roller"], status="live", scope="lifetime", award_timing="live")
+    assign(["draft_master"], status="live", scope="week", award_timing="live")
     assign(["swiss_army_knife", "steady_hand"], status="live", scope="season", award_timing="live")
     assign(["hall_of_fame_night"], status="live", scope="match", award_timing="live")
     assign(
@@ -129,6 +130,68 @@ _VALID_STATUS = {"live", "tracked", "seasonal", "curated", "retired"}
 _VALID_SCOPE = {"match", "week", "month", "season", "league", "lifetime"}
 _VALID_AWARD_TIMING = {"live", "on_league_close", "manual", "disabled"}
 
+_REQUIRED_BADGE_TITLES = [
+    "Level Up",
+    "Most Improved",
+    "Mountain Climber",
+    "Hot Streak",
+    "Untouchable",
+    "Weekly Regular",
+    "Iron Week",
+    "Clean Sweep Week",
+    "High Roller",
+    "Draft Master",
+    "Giant Slayer",
+    "Participant",
+    "Dedicated Participant",
+    "Lifetime Participant",
+    "First Win",
+    "Marathon Month",
+    "Rocket Start",
+    "Blowout Artist",
+    "Pickle Perfection",
+    "Bounce Back",
+    "Ice in Veins",
+    "David vs Goliath",
+    "Legendary Upset",
+    "Upset Champion",
+    "Hall of Fame Night",
+    "Social Butterfly",
+    "Network Builder",
+    "Nemesis Found",
+    "Rivalry Win",
+    "Rivalry Streak",
+    "Settled the Score",
+    "Swiss Army Knife",
+    "Steady Hand",
+    "Tournament Champion",
+    "Tournament Runner-Up",
+    "Tournament Third Place",
+    "Top Performer: Highest Rating",
+    "Top Performer: Most Wins",
+    "Top Performer: Best Win %",
+    "Top Performer: Most Improved",
+]
+
+
+def _validate_requirements(requirements: dict[str, str], badges: list[BadgeDefinition]) -> None:
+    errors: list[str] = []
+    badge_titles = {badge.name for badge in badges}
+    missing_titles = [title for title in _REQUIRED_BADGE_TITLES if title not in badge_titles]
+    if missing_titles:
+        errors.append(f"missing badge titles: {', '.join(missing_titles)}")
+
+    bad_requirements = [
+        badge_id
+        for badge_id, text in requirements.items()
+        if re.search(r"elo", text or "", flags=re.IGNORECASE)
+    ]
+    if bad_requirements:
+        errors.append(f"requirements contain forbidden term 'Elo': {', '.join(sorted(bad_requirements))}")
+
+    if errors:
+        raise ValueError(f"Badge requirement validation failed: {'; '.join(errors)}")
+
 
 def _map_legacy_scope(scope: str | None) -> BadgeScope | None:
     if not scope:
@@ -154,6 +217,8 @@ def load_badge_definitions(
     badges = list(raw_badges or BADGE_DEFINITIONS)
     requirements = requirements_map or load_requirements_map()
     rules_map = rules or {}
+
+    _validate_requirements(requirements, badges)
 
     definitions: list[BadgeDefinitionSchema] = []
     errors: list[str] = []

@@ -125,19 +125,19 @@ def evaluate_weekly_regular(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandid
 
 def evaluate_iron_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    grouped = facts.groupby(["player_id", "league", "week_key"]).size().reset_index(name="matches")
+    grouped = facts.groupby(["player_id", "week_key"])["league"].nunique().reset_index(name="leagues")
     candidates: list[BadgeCandidate] = []
     for row in grouped.itertuples(index=False):
-        if int(row.matches) >= 5:
+        if int(row.leagues) >= 3:
             candidates.append(
                 BadgeCandidate(
                     badge_id="iron_week",
                     player_id=int(row.player_id),
                     club_id=ctx.club_id,
                     context_type="week",
-                    context_id=f"{row.league}:{row.week_key}",
+                    context_id=f"{row.week_key}",
                     match_id=None,
-                    value_json={"league": row.league, "week": row.week_key, "matches": int(row.matches)},
+                    value_json={"week": row.week_key, "leagues": int(row.leagues)},
                 )
             )
     return candidates
@@ -171,23 +171,28 @@ def evaluate_level_up(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
         return []
     df = df_leagues.copy()
     df["league_name"] = df["league_name"].fillna("").astype(str).str.strip()
-    df["rating"] = pd.to_numeric(df.get("rating", 1200.0), errors="coerce").fillna(1200.0)
-    milestones = [1400, 1600, 1800, 2000]
+    df["rating"] = pd.to_numeric(df.get("rating", 0.0), errors="coerce").fillna(0.0)
+    milestones = [3.0, 3.5, 4.0, 4.5, 5.0]
     candidates: list[BadgeCandidate] = []
+    awarded: set[tuple[int, float]] = set()
     for row in df.itertuples(index=False):
         if not row.league_name:
             continue
         if ctx.league_id and str(row.league_name) != str(ctx.league_id):
             continue
         for milestone in milestones:
+            key = (int(row.player_id), float(milestone))
+            if key in awarded:
+                continue
             if float(row.rating) >= milestone:
+                awarded.add(key)
                 candidates.append(
                     BadgeCandidate(
                         badge_id="level_up",
                         player_id=int(row.player_id),
                         club_id=ctx.club_id,
                         context_type="league",
-                        context_id=f"{row.league_name}:milestone:{milestone}",
+                        context_id=f"milestone:{milestone}",
                         match_id=None,
                         value_json={"league": row.league_name, "milestone": milestone},
                     )
@@ -405,12 +410,13 @@ def evaluate_blowout_artist(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandid
 def evaluate_untouchable(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of).sort_values(["date_dt", "match_id"])
     candidates: list[BadgeCandidate] = []
+    base_streak = 20
     for player_id, group in facts.groupby("player_id"):
         streak = 0
         for row in group.itertuples(index=False):
             if row.win:
                 streak += 1
-                if streak >= 8:
+                if streak >= base_streak:
                     candidates.append(
                         BadgeCandidate(
                             badge_id="untouchable",
@@ -429,10 +435,11 @@ def evaluate_untouchable(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    grouped = facts.groupby(["player_id", "league", "week_key"])
+    grouped = facts.groupby(["player_id", "week_key"])
     candidates: list[BadgeCandidate] = []
-    for (player_id, league, week_key), group in grouped:
-        if len(group) < 3:
+    for (player_id, week_key), group in grouped:
+        distinct_leagues = group["league"].nunique()
+        if distinct_leagues < 2:
             continue
         if group["win"].all():
             candidates.append(
@@ -441,9 +448,9 @@ def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
                     player_id=int(player_id),
                     club_id=ctx.club_id,
                     context_type="week",
-                    context_id=f"{league}:{week_key}",
+                    context_id=f"{week_key}",
                     match_id=None,
-                    value_json={"league": league, "week": week_key},
+                    value_json={"week": week_key, "leagues": int(distinct_leagues), "matches": int(len(group))},
                 )
             )
     return candidates
@@ -451,19 +458,24 @@ def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 def evaluate_high_roller(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    high = facts[(facts["win"] == True) & (facts["points_for"] >= 15) & (facts["margin"] >= 6)]
-    return [
-        BadgeCandidate(
-            badge_id="high_roller",
-            player_id=int(row.player_id),
-            club_id=ctx.club_id,
-            context_type="match",
-            context_id=f"{row.match_id}:high_roller",
-            match_id=str(row.match_id),
-            value_json={"match_id": str(row.match_id), "points_for": int(row.points_for)},
-        )
-        for row in high.itertuples(index=False)
-    ]
+    wins = facts[facts["win"] == True]
+    grouped = wins.groupby("player_id").size()
+    candidates: list[BadgeCandidate] = []
+    for player_id, win_count in grouped.items():
+        if int(win_count) >= 100:
+            candidates.append(
+                BadgeCandidate(
+                    badge_id="high_roller",
+                    player_id=int(player_id),
+                    club_id=ctx.club_id,
+                    context_type="overall",
+                    context_id="lifetime_wins_100",
+                    match_id=None,
+                    value_json={"wins": int(win_count)},
+                    value_num=float(win_count),
+                )
+            )
+    return candidates
 
 
 def evaluate_social_butterfly(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -509,7 +521,7 @@ def evaluate_network_builder(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandi
 def evaluate_draft_master(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
     wins = facts[(facts["win"] == True) & facts["partner_id"].notna()]
-    grouped = wins.groupby(["player_id", "month_key"])["partner_id"].nunique().reset_index()
+    grouped = wins.groupby(["player_id", "week_key"])["partner_id"].nunique().reset_index()
     candidates: list[BadgeCandidate] = []
     for row in grouped.itertuples(index=False):
         if int(row.partner_id) >= 5:
@@ -518,10 +530,10 @@ def evaluate_draft_master(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidat
                     badge_id="draft_master",
                     player_id=int(row.player_id),
                     club_id=ctx.club_id,
-                    context_type="month",
-                    context_id=f"{row.month_key}",
+                    context_type="week",
+                    context_id=f"{row.week_key}",
                     match_id=None,
-                    value_json={"month": row.month_key, "partners": int(row.partner_id)},
+                    value_json={"week": row.week_key, "partners": int(row.partner_id)},
                 )
             )
     return candidates
@@ -550,24 +562,21 @@ def evaluate_swiss_army_knife(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 def evaluate_giant_slayer(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    tiers = [1800, 2000, 2200]
     wins = facts[(facts["win"] == True) & facts["opp_max_rating"].notna()]
-    candidates: list[BadgeCandidate] = []
-    for row in wins.itertuples(index=False):
-        for tier in tiers:
-            if float(row.opp_max_rating) >= tier:
-                candidates.append(
-                    BadgeCandidate(
-                        badge_id="giant_slayer",
-                        player_id=int(row.player_id),
-                        club_id=ctx.club_id,
-                        context_type="match",
-                        context_id=f"{row.match_id}:tier:{tier}",
-                        match_id=str(row.match_id),
-                        value_json={"match_id": str(row.match_id), "tier": tier},
-                    )
-                )
-    return candidates
+    min_opponent_rating = 2000
+    return [
+        BadgeCandidate(
+            badge_id="giant_slayer",
+            player_id=int(row.player_id),
+            club_id=ctx.club_id,
+            context_type="match",
+            context_id=f"{row.match_id}:min_rating:{min_opponent_rating}",
+            match_id=str(row.match_id),
+            value_json={"match_id": str(row.match_id), "min_opponent_rating": min_opponent_rating},
+        )
+        for row in wins.itertuples(index=False)
+        if float(row.opp_max_rating) >= min_opponent_rating
+    ]
 
 
 def evaluate_david_vs_goliath(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -630,7 +639,7 @@ def evaluate_hall_of_fame_night(ctx: BadgeEvaluationContext) -> Iterable[BadgeCa
         values = group["abs_elo_delta"].dropna()
         if values.empty:
             continue
-        threshold = values.quantile(0.995)
+        threshold = values.quantile(0.95)
         heroes = group[group["abs_elo_delta"] >= threshold]
         for row in heroes.itertuples(index=False):
             candidates.append(

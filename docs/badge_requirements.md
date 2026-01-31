@@ -26,68 +26,47 @@ This file defines the exact, player-facing requirements to unlock each badge.
 # Participation & Habit Loop
 
 ## participant — Participant (non-stackable)
-Unlock: Play 1 recorded match (lifetime).
+Unlock: Play **1 recorded match** (lifetime).
 
 ## dedicated_participant_50 — Dedicated Participant (non-stackable)
-Unlock: Play 50 recorded matches (lifetime).
+Unlock: Play **50 recorded matches** (lifetime).
 
 ## lifetime_participant_200 — Lifetime Participant (non-stackable)
-Unlock: Play 200 recorded matches (lifetime).
+Unlock: Play **200 recorded matches** (lifetime).
 
 ## first_win — First Win (non-stackable)
-Unlock: Record your first win (lifetime).
-- Any win in any league.
+Unlock: Record your **first win** (lifetime). Any league counts.
 
 ## weekly_regular — Weekly Regular (non-stackable)
-Unlock: In the SAME league, appear in 4+ consecutive ISO weeks with ≥1 match per week.
-- You don’t need 4 weeks in a row on the calendar, you need 4 consecutive ISO week keys.
-- Missing a week breaks the streak.
+Unlock: In the **same league**, play **≥1 match** in **4 consecutive ISO weeks** (Mon–Sun). Missing a week breaks the streak.
 
 ## iron_week — Iron Week (stackable)
-Unlock: In the SAME league + SAME ISO week, play 5+ recorded matches.
-- Earned once per (league, week).
+Unlock: Play in **3+ different leagues** in a single **ISO week** (Mon–Sun).
 
 ## marathon_month — Marathon Month (stackable)
-Unlock: In the SAME league + SAME month, play 40+ recorded matches.
-- Earned once per (league, month).
+Unlock: In the **same league**, play **40+ matches** in a single **calendar month**. Earned once per league per month.
 
 ---
 
 # Skill Growth & Momentum
 
 ## level_up — Level Up (stackable)
-Unlock: In a league standings table (`df_leagues`), have JUPR rating ≥ one of these milestones:
-- 1400, 1600, 1800, 2000
-Earned once per (league, milestone).
+Unlock: Awarded the first time reaching a **JUPR rating** milestone: **3.0 / 3.5 / 4.0 / 4.5 / 5.0**.
 
 ## rocket_start — Rocket Start (non-stackable)
-Unlock: In the SAME league, win 4+ of your first 5 matches in that league.
-- Only awards if you have at least 5 matches recorded in that league.
+Unlock: In the **same league**, win **4+ of your first 5 matches** (requires 5 recorded matches in that league).
 
 ## most_improved_monthly — Most Improved (stackable)
-Unlock: For each (league, month), the player with the highest total positive JUPR rating change that month.
-- Rating change is summed across that month’s matches.
-- If the top monthly rating change sum is ≤ 0, nobody earns it for that (league, month).
+Unlock: **Monthly (per league):** Highest total **positive JUPR rating gain** across matches that month. If nobody finishes net‑positive, no award.
 
 ## mountain_climber — Mountain Climber (stackable)
-Unlock: In a league standings table (`df_leagues`), improve rank vs starting rank by at least:
-- 5 places, 10 places, or 20 places
-Earned once per (league, tier).
-- Rank is based on sorting by JUPR rating descending.
-- Starting rank is based on sorting by starting JUPR rating descending.
-- “Rank delta” = start_rank − current_rank (positive is improvement).
+Unlock: In a league, improve your **standing** by **5 / 10 / 20 places** from your starting rank. Standings are ordered by **JUPR rating**.
 
 ## hot_streak — Hot Streak (stackable)
-Unlock: In the SAME league, hit a win streak of exactly:
-- 5 wins in a row
-- 10 wins in a row
-- 20 wins in a row
-You earn the badge at the exact match where the streak reaches that tier.
-Earned once per (league, tier, streak-ending match).
+Unlock: In the **same league**, reach a win streak of **5 / 10 / 20** consecutive wins (milestones).
 
 ## bounce_back — Bounce Back (stackable)
-Unlock: Win a match immediately after losing your previous match (lifetime timeline order).
-Earned once per “bounce-back” win match.
+Unlock: Win your **next recorded match** after a loss (based on match history order).
 
 ## breakthrough — Breakthrough (non-stackable)
 Unlock: Requirements TBD.
@@ -100,10 +79,7 @@ Unlock: Requirements TBD.
 # Clutch & Pressure
 
 ## ice_in_veins — Ice in Veins (non-stackable)
-Unlock: Your first “clutch upset” win:
-- You WIN
-- Final margin is 2 points or fewer (|margin| ≤ 2)
-- Your pre-match win chance is ≤ 0.40 (expected win %)
+Unlock: Your first **clutch upset**: win by **2 points or fewer** when your **pre‑match win chance** is **40% or less**.
 
 ## clutch_performer — Clutch Performer (non-stackable)
 Unlock: Requirements TBD.
@@ -113,31 +89,19 @@ Unlock: Requirements TBD.
 # Dominance & Quality
 
 ## pickle_perfection — Pickle Perfection (stackable)
-Unlock: Win a match where the opponent scores 0 points.
-- points_against == 0
-Earned once per match.
+Unlock: Win a match **without conceding a point** (opponent scores **0**).
 
 ## blowout_artist — Blowout Artist (stackable)
-Unlock: Win a match by 8+ points.
-- margin ≥ 8
-Earned once per match.
+Unlock: Win a match by **8+ points**.
 
 ## untouchable — Untouchable (stackable)
-Unlock: Get to an 8-win streak (lifetime timeline order).
-- Every win after streak ≥ 8 will award another instance (it is stackable in code).
-Earned with context_id including the match that ended the streak window.
+Unlock: Reach a **20+ match** win streak (lifetime). Earn it again for each additional consecutive win beyond 20.
 
 ## clean_sweep_week — Clean Sweep Week (stackable)
-Unlock: In the SAME league + SAME ISO week:
-- play at least 3 matches, AND
-- win ALL of them
-Earned once per (league, week).
+Unlock: In one **ISO week** (Mon–Sun), play **at least one match in 2+ different leagues** and **win them all**.
 
 ## high_roller — High Roller (stackable)
-Unlock: Win a match where:
-- points_for ≥ 15 AND
-- margin ≥ 6
-Earned once per match.
+Unlock: Record **100+ lifetime match wins**.
 
 ## dominant_run — Dominant Run (stackable)
 Unlock: Requirements TBD.
@@ -150,71 +114,48 @@ Unlock: Requirements TBD.
 # Versatility & Social Graph
 
 ## social_butterfly — Social Butterfly (non-stackable)
-Unlock: Have 20+ unique partners across your recorded matches (lifetime).
-- Only matches where partner_id exists count.
+Unlock: Play with **20+ different partners** (lifetime). Doubles only; a recorded partner is required.
 
 ## network_builder — Network Builder (non-stackable)
-Unlock: Have 50+ unique partners across your recorded matches (lifetime).
-- Only matches where partner_id exists count.
+Unlock: Play with **50+ different partners** (lifetime). Doubles only; a recorded partner is required.
 
 ## draft_master — Draft Master (stackable)
-Unlock: In the SAME month:
-- WIN matches with 5+ unique partners that month
-Earned once per month where you meet the requirement.
+Unlock: In a single **ISO week** (Mon–Sun), record wins with **5+ different partners**.
 
 ## swiss_army_knife — Swiss Army Knife (non-stackable)
-Unlock: In the SAME season:
-- WIN matches in 3+ distinct leagues
-Earned once per season where you meet the requirement.
+Unlock: In the same season, record wins in **3+ different leagues**.
 
 ---
 
 # Prestige / Rarity
 
 ## giant_slayer — Giant Slayer (stackable)
-Unlock: Win a match where the highest-rated opponent in the match is at least:
-- 1800, 2000, or 2200
-Earned once per match per tier that you satisfy.
+Unlock: Win a match where the **highest‑rated opponent (JUPR rating)** is **2000+**.
 
 ## david_vs_goliath — David vs Goliath (stackable)
-Unlock: Win a match where your pre-match win chance is ≤ 0.25.
-Earned once per match.
+Unlock: Win a match when your **pre‑match win chance** is **25% or less**.
 
 ## upset_champion — Upset Champion (stackable)
-Unlock: For each (league, month), the winning match with the LOWEST pre-match win chance.
-- Both winners (doubles team) earn it for that match.
-Earned once per (league, month, match).
+Unlock: **Monthly (per league):** the win with the **lowest pre‑match win chance**. All winners on the team receive it.
 
 ## legendary_upset — Legendary Upset (stackable)
-Unlock: Win a match where your pre-match win chance is ≤ 0.15.
-Earned once per match.
+Unlock: Win a match when your **pre‑match win chance** is **15% or less**.
 
 ---
 
 # Rivalry & Nemesis
 
 ## nemesis_found — Nemesis Found (non-stackable)
-Unlock: Against a specific opponent:
-- you have played 6+ games vs them, AND
-- your win rate vs them is ≤ 40%
-Earned once per opponent who qualifies.
+Unlock: Against an opponent you’ve faced **6+ times**, your head‑to‑head win rate is **40% or less**.
 
 ## rivalry_win — Rivalry Win (stackable)
-Unlock: If an opponent is already your “nemesis” (as defined above),
-then any WIN against that opponent earns Rivalry Win.
-Earned once per match win vs a nemesis.
+Unlock: Beat your **nemesis** (as defined in *Nemesis Found*).
 
 ## rivalry_streak — Rivalry Streak (stackable)
-Unlock: Against the SAME opponent:
-- win 3 matches in a row vs them
-Earned once per opponent per streak hit.
+Unlock: Against the **same opponent**, win **3 matches in a row**.
 
 ## settled_the_score — Settled the Score (stackable)
-Unlock: Against the SAME opponent, when you bring your record to exactly even
-after being down.
-- In practice: a win that makes your wins == your losses vs that opponent,
-  after previously having more losses than wins.
-Earned once per opponent per “evening” event.
+Unlock: Against the **same opponent**, win a match that makes your head‑to‑head record **exactly even**.
 
 ---
 
@@ -227,10 +168,7 @@ Unlock: Requirements TBD.
 Unlock: Requirements TBD.
 
 ## steady_hand — Steady Hand (non-stackable in catalog; awarded once per season in rules)
-Unlock: In the SAME season:
-- play 20+ matches, AND
-- win rate ≥ 60%
-Earned once per season where you meet the requirement.
+Unlock: In the same season, play **20+ matches** and maintain a win rate of **60%+**.
 
 ## mr_reliable — Mr. Reliable (inactive)
 Unlock: Requirements TBD.
@@ -252,9 +190,7 @@ Unlock: Awarded on league close to the final 3rd-place finisher.
 Unlock: Awarded on league close to any top-3 finisher.
 
 ## hall_of_fame_night — Hall of Fame Night (stackable)
-Unlock: In a given league, win a match whose rating swing (absolute rating change) is in the TOP 5% for that league.
-- Computed per league using the 95th percentile of absolute rating change.
-Earned once per match that qualifies.
+Unlock: In a league, win a match with a **top‑5% rating swing** for that league (by **absolute JUPR rating change**).
 
 ---
 
@@ -263,13 +199,13 @@ Earned once per match that qualifies.
 These are awarded from tournament podium results (requires tournament tables).
 
 ## tournament_champion — Tournament Champion (non-stackable)
-Unlock: Your team finishes 1st place in a tournament podium table.
+Unlock: Finish **1st** on a tournament podium.
 
 ## tournament_runner_up — Tournament Runner-Up (non-stackable)
-Unlock: Your team finishes 2nd place in a tournament podium table.
+Unlock: Finish **2nd** on a tournament podium.
 
 ## tournament_third_place — Tournament Third Place (non-stackable)
-Unlock: Your team finishes 3rd place in a tournament podium table.
+Unlock: Finish **3rd** on a tournament podium.
 
 ---
 
@@ -278,16 +214,16 @@ Unlock: Your team finishes 3rd place in a tournament podium table.
 These are awarded on league close from final standings.
 
 ## top_performer_highest_rating — Top Performer: Highest Rating (stackable)
-Unlock: Awarded on league close to the highest final JUPR rating.
+Unlock: **Seasonal (league close):** finish with the highest **JUPR rating** in the league.
 
 ## top_performer_most_improved — Top Performer: Most Improved (stackable)
-Unlock: Awarded on league close to the largest net JUPR rating gain.
+Unlock: **Seasonal (league close):** largest **JUPR rating gain** from season start to season end.
 
 ## top_performer_best_win_pct — Top Performer: Best Win % (stackable)
-Unlock: Awarded on league close to the best final win percentage.
+Unlock: **Seasonal (league close):** finish with the best **win percentage** in the league.
 
 ## top_performer_most_wins — Top Performer: Most Wins (stackable)
-Unlock: Awarded on league close to the most total wins.
+Unlock: **Seasonal (league close):** finish with the most **wins** in the league.
 
 ---
 
