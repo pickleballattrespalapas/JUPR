@@ -326,7 +326,7 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         icon_key="high_roller",
         lore="The pace stayed high and the points kept pouring.",
         hint="The scoreboard got a workout.",
-        scope="match",
+        scope="overall",
     ),
     BadgeDefinition(
         badge_id="dominant_run",
@@ -396,7 +396,7 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         icon_key="draft_master",
         lore="Different pairings, same result. The tape shows the range.",
         hint="This month keeps swapping jerseys.",
-        scope="month",
+        scope="week",
     ),
     BadgeDefinition(
         badge_id="swiss_army_knife",
