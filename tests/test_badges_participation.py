@@ -60,31 +60,85 @@ class FakeSupabase:
         return FakeTable(self.storage, name)
 
 
-def test_compute_lifetime_games_counts_team_rows():
+def test_compute_lifetime_games_counts_match_rows_doubles():
     df_matches = pd.DataFrame(
         [
-            {"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 8},
-            {"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 9},
-            {"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": None, "score_t1": 11, "score_t2": 9},
-            {"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 0, "score_t2": 0},
+            {
+                "id": "m1",
+                "t1_p1": 1,
+                "t1_p2": 2,
+                "t2_p1": 3,
+                "t2_p2": 4,
+                "score_t1": 11,
+                "score_t2": 8,
+                "club_id": "club",
+            }
         ]
     )
     ctx = SimpleNamespace(df_matches=df_matches, club_id="club")
     counts = compute_lifetime_games(ctx)
-    assert counts == {1: 2, 2: 2, 3: 2, 4: 2}
+    assert counts == {1: 1, 2: 1, 3: 1, 4: 1}
 
 
-def test_compute_lifetime_games_counts_player_rows():
+def test_compute_lifetime_games_counts_match_rows_singles():
     df_matches = pd.DataFrame(
         [
-            {"player_id": 10, "score_t1": 11, "score_t2": 6},
-            {"player_id": 10, "score_t1": 11, "score_t2": 9},
-            {"player_id": 11, "score_t1": 0, "score_t2": 0},
+            {"id": "m1", "t1_p1": 1, "t2_p1": 3, "score_t1": 11, "score_t2": 9, "club_id": "club"},
+            {"id": "m2", "t1_p1": 2, "t2_p1": 4, "score_t1": 11, "score_t2": 6, "club_id": "club"},
         ]
     )
     ctx = SimpleNamespace(df_matches=df_matches, club_id="club")
     counts = compute_lifetime_games(ctx)
-    assert counts == {10: 2}
+    assert counts == {1: 1, 2: 1, 3: 1, 4: 1}
+
+
+def test_compute_lifetime_games_counts_player_rows_dedupes():
+    df_matches = pd.DataFrame(
+        [
+            {"player_id": 10, "match_id": "m1", "score_t1": 11, "score_t2": 6, "club_id": "club"},
+            {"player_id": 10, "match_id": "m1", "score_t1": 11, "score_t2": 6, "club_id": "club"},
+            {"player_id": 10, "match_id": "m2", "score_t1": 11, "score_t2": 9, "club_id": "club"},
+            {"player_id": 11, "match_id": "m2", "score_t1": 11, "score_t2": 9, "club_id": "club"},
+        ]
+    )
+    ctx = SimpleNamespace(df_matches=df_matches, club_id="club")
+    counts = compute_lifetime_games(ctx)
+    assert counts == {10: 2, 11: 1}
+
+
+def test_compute_lifetime_games_filters_popups_and_invalid_scores():
+    df_matches = pd.DataFrame(
+        [
+            {
+                "id": "m1",
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 11,
+                "score_t2": 8,
+                "match_type": "PopUp",
+                "club_id": "club",
+            },
+            {
+                "id": "m2",
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 0,
+                "score_t2": 0,
+                "club_id": "club",
+            },
+            {
+                "id": "m3",
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 11,
+                "score_t2": 6,
+                "club_id": "club",
+            },
+        ]
+    )
+    ctx = SimpleNamespace(df_matches=df_matches, club_id="club")
+    counts = compute_lifetime_games(ctx)
+    assert counts == {1: 1, 2: 1}
 
 
 def test_participation_badges_awarded_via_engine_idempotent():
