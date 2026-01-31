@@ -459,8 +459,8 @@ def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 def evaluate_high_roller(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    wins = facts[facts["win"] == True]
-    grouped = wins.groupby("player_id").size()
+    wins = facts[facts["win"] == True].dropna(subset=["match_id"])
+    grouped = wins.groupby("player_id")["match_id"].nunique()
     candidates: list[BadgeCandidate] = []
     for player_id, win_count in grouped.items():
         if int(win_count) >= 100:
