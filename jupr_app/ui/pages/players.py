@@ -20,6 +20,7 @@ from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
 )
 from jupr_app.domain.gamification.requirements import load_requirements_map
+from jupr_app.domain.gamification.top_performer_awards import TOP_PERFORMER_BADGE_IDS
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
 
 logger = logging.getLogger(__name__)
@@ -473,6 +474,34 @@ def _trophy_display_name(row: pd.Series) -> str:
         if cleaned:
             return cleaned
     return "Trophy"
+
+
+def _is_top_performer_badge(badge_id: str | None) -> bool:
+    badge_key = str(badge_id or "").strip()
+    if not badge_key:
+        return False
+    if badge_key.startswith("top_performer_"):
+        return True
+    return badge_key in set(TOP_PERFORMER_BADGE_IDS.values())
+
+
+def _format_top_performer_title(badge_name: str | None, category_label: str | None) -> str:
+    base = str(category_label or badge_name or "Top Performer").strip()
+    if not base:
+        base = "Top Performer"
+    if base.lower().startswith("top performer"):
+        return base
+    return f"Top Performer: {base}"
+
+
+def _format_top_performer_rank(value_json: dict) -> str:
+    rank = value_json.get("rank")
+    if rank is None:
+        return ""
+    try:
+        return f"#{int(rank)}"
+    except Exception:
+        return f"#{rank}"
 
 
 def _decorate_trophies_with_leagues(
@@ -1090,16 +1119,23 @@ def render(ctx):
                     continue
                 icon = "🏆"
                 value_json = _parse_value_json(row.get("value_json"))
-                category_label = value_json.get("category_label")
-                trophy_title = category_label or _trophy_display_name(row)
+                badge_name = _trophy_display_name(row)
+                if _is_top_performer_badge(row.get("badge_id")):
+                    trophy_title = _format_top_performer_title(badge_name, value_json.get("category_label"))
+                    rank_label = _format_top_performer_rank(value_json)
+                else:
+                    trophy_title = badge_name
+                    rank_label = ""
                 metric_display = value_json.get("metric_display")
                 if not metric_display:
                     metric_display = _format_top_performer_metric(
                         value_json.get("category_key"),
                         value_json.get("metric_value"),
                     )
-                if not metric_display and value_json.get("rank") is not None:
-                    metric_display = f"Rank {value_json.get('rank')}"
+                if rank_label:
+                    metric_display = f"{rank_label} • {metric_display}" if metric_display else rank_label
+                elif not metric_display and value_json.get("rank") is not None:
+                    metric_display = f"#{value_json.get('rank')}"
                 league_label = str(row.get("league_label") or "League")
                 earned_at_label = _format_earned_at(row.get("earned_at"))
                 earned_at_label = f"Earned {earned_at_label}" if earned_at_label else ""

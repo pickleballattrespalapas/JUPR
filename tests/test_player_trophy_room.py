@@ -5,6 +5,8 @@ import pandas as pd
 from jupr_app.domain.gamification.podium_awards import award_league_podium_badges
 from jupr_app.ui.pages.players import (
     _decorate_trophies_with_leagues,
+    _format_top_performer_rank,
+    _format_top_performer_title,
     build_inactive_league_options,
     filter_player_league_trophies,
     get_player_trophy_case,
@@ -236,3 +238,12 @@ def test_decorate_trophies_handles_missing_prestige_column():
     decorated = _decorate_trophies_with_leagues(df, {})
 
     assert decorated["prestige_num"].tolist() == [0, 0]
+
+
+def test_top_performer_title_uses_category_label_without_badge_name():
+    title = _format_top_performer_title(None, "Most Wins")
+    assert "Most Wins" in title
+
+
+def test_top_performer_rank_formats_rank():
+    assert _format_top_performer_rank({"rank": 1}) == "#1"

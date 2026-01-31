@@ -16,6 +16,7 @@ from jupr_app.domain.gamification.top_performer_awards import (
     _build_league_standings,
     _min_games_for_league,
 )
+from jupr_app.domain.leagues import get_league_meta_row, is_league_ended
 from jupr_app.domain.tournament_podium import build_tournament_podium_candidates
 
 
@@ -782,6 +783,9 @@ def _cached_top_performer_candidates(ctx: BadgeEvaluationContext) -> list[BadgeC
     )
     candidates = []
     for league_id in league_ids:
+        meta_row = get_league_meta_row(df_meta, league_id)
+        if not is_league_ended(meta_row):
+            continue
         min_games = _min_games_for_league(df_meta, league_id)
         if min_games <= 0:
             continue
