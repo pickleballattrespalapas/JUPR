@@ -339,6 +339,8 @@ def process_matches(
                 payload["wins"] += int(cur.get("wins", 0) or 0)
                 payload["losses"] += int(cur.get("losses", 0) or 0)
                 payload["matches_played"] += int(cur.get("matches_played", 0) or 0)
+                payload["is_active"] = True
+                payload["inactive_at"] = None
 
                 if cur.get("starting_rating") is not None:
                     payload["starting_rating"] = float(cur["starting_rating"])
@@ -350,6 +352,8 @@ def process_matches(
                 ))
             else:
                 payload["starting_rating"] = float(stats.get("start", 1200.0))
+                payload["is_active"] = True
+                payload["inactive_at"] = None
                 sb_retry(lambda payload=payload: supabase.table("league_ratings").insert(payload).execute())
 
     return {
