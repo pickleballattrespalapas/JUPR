@@ -114,8 +114,9 @@ def _render_badge_card(badge: dict, column, open_key: str) -> None:
             unsafe_allow_html=True,
         )
         if st.button("View details", key=open_key, use_container_width=True):
-            st.session_state["badge_codex_open"] = badge_id
-            st.session_state["badge_codex_details_open"] = True
+            st.session_state["badge_details_open"] = True
+            st.session_state["badge_details_badge_id"] = badge_id
+            st.rerun()
 
 
 def get_badge_earners_page(
@@ -155,7 +156,7 @@ def get_badge_earners_page(
 
 
 def _get_badge_state(badge_id: str, total_known: int | None) -> dict:
-    key = f"badge_codex_state_{badge_id}"
+    key = f"badge_earners::{badge_id}"
     if key not in st.session_state:
         st.session_state[key] = {
             "earners": [],
@@ -164,6 +165,7 @@ def _get_badge_state(badge_id: str, total_known: int | None) -> dict:
             "has_more": total_known is None or total_known > 0,
             "loading": False,
             "error": None,
+            "loaded_once": False,
         }
     return st.session_state[key]
 
@@ -194,22 +196,11 @@ def _load_more_earners(state: dict, badge_id: str, df_player_badges, df_players)
 def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_players) -> None:
     state = _get_badge_state(badge_id, earners_count)
 
-    if (
-        earners_count != 0
-        and not state["earners"]
-        and not state["loading"]
-        and state["error"] is None
-        and state.get("offset", 0) == 0
-    ):
-        with st.spinner("Loading earners..."):
-            _load_more_earners(state, badge_id, df_player_badges, df_players)
-
-    with st.expander(
-        f"Earners ({earners_count})" if earners_count is not None else "Earners",
-        expanded=False,
-    ):
+    expander_label = f"Earners ({earners_count})" if earners_count is not None else "Earners"
+    with st.expander(expander_label, expanded=False):
         if earners_count == 0:
             st.caption("No one has earned this badge yet.")
+            return
 
         if state["error"]:
             st.error(f"Couldn’t load earners. {state['error']}")
@@ -217,6 +208,16 @@ def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_p
                 state["error"] = None
                 with st.spinner("Loading earners..."):
                     _load_more_earners(state, badge_id, df_player_badges, df_players)
+                state["loaded_once"] = True
+                st.rerun()
+
+        if not state["loaded_once"] and state["error"] is None:
+            if st.button("Load earners", key=f"badge_codex_load_{badge_id}"):
+                with st.spinner("Loading earners..."):
+                    _load_more_earners(state, badge_id, df_player_badges, df_players)
+                state["loaded_once"] = True
+                st.rerun()
+            return
 
         if state["loading"]:
             st.info("Loading earners...")
@@ -226,18 +227,15 @@ def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_p
             for earner in state["earners"]:
                 st.markdown(f"- 👤 {earner['name']}")
 
-        if (
-            earners_count != 0
-            and state.get("total") == 0
-            and not state["loading"]
-            and state["error"] is None
-        ):
+        if state.get("total") == 0 and not state["loading"] and state["error"] is None:
             st.caption("No one has earned this badge yet.")
 
         if state.get("has_more") and not state["loading"]:
             if st.button("Load more", key=f"badge_codex_load_more_{badge_id}"):
                 with st.spinner("Loading earners..."):
                     _load_more_earners(state, badge_id, df_player_badges, df_players)
+                state["loaded_once"] = True
+                st.rerun()
 
 
 def _render_badge_details(selected_badge: dict, df_player_badges, df_players) -> None:
@@ -253,14 +251,24 @@ def _render_badge_details(selected_badge: dict, df_player_badges, df_players) ->
     _render_earners_section(badge_id, earners_count, df_player_badges, df_players)
 
     if st.button("Close", key=f"badge_codex_close_{badge_id}"):
-        st.session_state["badge_codex_open"] = None
-        st.session_state["badge_codex_details_open"] = False
+        st.session_state["badge_details_open"] = False
+        st.session_state["badge_details_badge_id"] = None
         st.rerun()
+
+
+@st.dialog("Badge details")
+def _render_badge_details_dialog(selected_badge: dict, df_player_badges, df_players) -> None:
+    _render_badge_details(selected_badge, df_player_badges, df_players)
 
 
 def render(ctx) -> None:
     st.header("Badge Codex")
     st.caption("A full ledger of badges, with reels for the ones already on tape.")
+
+    if "badge_details_open" not in st.session_state:
+        st.session_state["badge_details_open"] = False
+    if "badge_details_badge_id" not in st.session_state:
+        st.session_state["badge_details_badge_id"] = None
 
     st.markdown(
         """
@@ -322,20 +330,11 @@ def render(ctx) -> None:
 
     sections = _group_badges(badges)
 
-    selected_badge_id = st.session_state.get("badge_codex_open")
-    details_open = st.session_state.get("badge_codex_details_open")
+    selected_badge_id = st.session_state.get("badge_details_badge_id")
+    details_open = st.session_state.get("badge_details_open")
     selected_badge = None
     if selected_badge_id:
         selected_badge = next((badge for badge in badges if badge.get("badge_id") == selected_badge_id), None)
-
-    dialog = getattr(st, "dialog", None)
-    if details_open and selected_badge:
-        if callable(dialog):
-            with dialog("Badge details"):
-                _render_badge_details(selected_badge, player_badges, df_players)
-        else:
-            with st.container(border=True):
-                _render_badge_details(selected_badge, player_badges, df_players)
 
     for section_name, items in sections:
         st.subheader(section_name)
@@ -347,3 +346,6 @@ def render(ctx) -> None:
                 open_key=f"badge_codex_open_{badge.get('badge_id', '')}",
             )
         st.markdown("<div style='height: 0.5rem'></div>", unsafe_allow_html=True)
+
+    if details_open and selected_badge:
+        _render_badge_details_dialog(selected_badge, player_badges, df_players)
