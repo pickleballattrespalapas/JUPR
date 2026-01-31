@@ -130,7 +130,7 @@ Unlock: In the same season, record wins in **3+ different leagues**.
 # Prestige / Rarity
 
 ## giant_slayer — Giant Slayer (stackable)
-Unlock: Win a match where the **highest‑rated opponent (JUPR rating)** is **2000+**.
+Unlock: Win a match where the highest‑rated opponent **is >5.0+**.
 
 ## david_vs_goliath — David vs Goliath (stackable)
 Unlock: Win a match when your **pre‑match win chance** is **25% or less**.
@@ -152,10 +152,10 @@ Unlock: Against an opponent you’ve faced **6+ times**, your head‑to‑head w
 Unlock: Beat your **nemesis** (as defined in *Nemesis Found*).
 
 ## rivalry_streak — Rivalry Streak (stackable)
-Unlock: Against the **same opponent**, win **3 matches in a row**.
+Unlock: Against your **nemesis**, win **3 matches in a row**.
 
 ## settled_the_score — Settled the Score (stackable)
-Unlock: Against the **same opponent**, win a match that makes your head‑to‑head record **exactly even**.
+Unlock: Against your **nemesis**, win a match that makes your head‑to‑head record **exactly even**.
 
 ---
 
