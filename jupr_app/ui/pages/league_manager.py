@@ -1,8 +1,9 @@
 # jupr_app/ui/pages/league_manager.py
 from __future__ import annotations
 
+import json
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from jupr_app.domain.player_ops import safe_add_player
 
 import pandas as pd
@@ -19,10 +20,10 @@ from jupr_app.domain.league_night_roster import (
     suggest_court_sizes,
 )
 from jupr_app.domain.leagues import (
-    compute_top_performer_preview,
-    end_league_and_award_top_performers,
+    compute_top_performer_awards_for_config,
     get_league_meta_row,
-    is_league_ended,
+    mint_top_performer_badges,
+    normalize_league_status,
 )
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.roster import (
@@ -42,11 +43,132 @@ def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _safe_json_load(value, default):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def _parse_date(value: object | None) -> date | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        return pd.to_datetime(value, errors="coerce").date()
+    except Exception:
+        return None
+
+
+def _parse_blackout_dates(raw: str) -> list[str]:
+    entries = [part.strip() for part in (raw or "").replace("\n", ",").split(",") if part.strip()]
+    results: list[str] = []
+    for entry in entries:
+        parsed = _parse_date(entry)
+        if parsed:
+            results.append(parsed.isoformat())
+    return sorted(set(results))
+
+
+def _build_schedule_preview(schedule_cfg: dict) -> pd.DataFrame:
+    start_date = _parse_date(schedule_cfg.get("start_date"))
+    if not start_date:
+        return pd.DataFrame()
+    weekday = schedule_cfg.get("weekday")
+    if weekday is None:
+        return pd.DataFrame()
+    try:
+        weekday = int(weekday)
+    except Exception:
+        return pd.DataFrame()
+    weeks = schedule_cfg.get("weeks")
+    end_date = _parse_date(schedule_cfg.get("end_date"))
+    time_start = schedule_cfg.get("time_start", "")
+    time_end = schedule_cfg.get("time_end", "")
+    blackout = {d for d in (schedule_cfg.get("blackout_dates") or []) if d}
+
+    first_date = start_date + timedelta(days=(weekday - start_date.weekday()) % 7)
+    dates: list[date] = []
+    if weeks:
+        try:
+            total = int(weeks)
+        except Exception:
+            total = 0
+        for idx in range(total):
+            dates.append(first_date + timedelta(weeks=idx))
+    elif end_date:
+        current = first_date
+        while current <= end_date:
+            dates.append(current)
+            current = current + timedelta(weeks=1)
+
+    rows = []
+    for idx, day in enumerate(dates, start=1):
+        if day.isoformat() in blackout:
+            continue
+        rows.append(
+            {
+                "Session": idx,
+                "Date": day.isoformat(),
+                "Start": time_start,
+                "End": time_end,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _schedule_to_ics(schedule_cfg: dict) -> str:
+    preview = _build_schedule_preview(schedule_cfg)
+    if preview.empty:
+        return ""
+    tz = schedule_cfg.get("timezone") or "UTC"
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//JUPR//League Schedule//EN",
+    ]
+    for _, row in preview.iterrows():
+        date_str = row.get("Date")
+        time_start = row.get("Start") or "18:00"
+        time_end = row.get("End") or "20:00"
+        start_stamp = f"{date_str.replace('-', '')}T{time_start.replace(':', '')}00"
+        end_stamp = f"{date_str.replace('-', '')}T{time_end.replace(':', '')}00"
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"DTSTART;TZID={tz}:{start_stamp}",
+                f"DTEND;TZID={tz}:{end_stamp}",
+                "SUMMARY:League Session",
+                "END:VEVENT",
+            ]
+        )
+    lines.append("END:VCALENDAR")
+    return "\n".join(lines)
+
+
 def _league_options(df_meta: pd.DataFrame) -> list[str]:
     if df_meta is not None and not df_meta.empty and "is_active" in df_meta.columns and "league_name" in df_meta.columns:
         opts = sorted(df_meta[df_meta["is_active"] == True]["league_name"].dropna().astype(str).tolist())
         return opts if opts else ["Default"]
     return ["Default"]
+
+
+def _extract_court_board_defaults(meta_row: dict | None) -> dict:
+    defaults = _safe_json_load((meta_row or {}).get("court_board_defaults"), {}) or {}
+    return {
+        "max_used_courts": int(defaults.get("max_used_courts") or 0) or 0,
+        "players_per_court": str(defaults.get("players_per_court") or "4"),
+        "rotation_mode": str(defaults.get("rotation_mode") or "fixed"),
+        "game_format_points": int(defaults.get("game_format_points") or 11),
+        "game_format_time": int(defaults.get("game_format_time") or 15),
+        "total_courts": int(defaults.get("total_courts") or 0),
+        "court_identifiers": list(defaults.get("court_identifiers") or []),
+    }
 
 
 def _seed_rating_for_player(pid: int, league_name: str, df_players_all: pd.DataFrame, df_leagues: pd.DataFrame) -> float:
@@ -113,6 +235,50 @@ def render(ctx):
 
             opts = _league_options(df_meta)
             lg_select = st.selectbox("Select League", opts, key="ladder_lg")
+            meta_row = get_league_meta_row(df_meta, lg_select) or {}
+            if st.session_state.get("ladder_defaults_league") != lg_select:
+                defaults = _extract_court_board_defaults(meta_row)
+                st.session_state["ladder_defaults_league"] = lg_select
+                st.session_state["ladder_max_used_courts"] = defaults.get("max_used_courts", 0)
+                st.session_state["ladder_players_per_court"] = defaults.get("players_per_court", "4")
+                st.session_state["ladder_rotation_mode"] = defaults.get("rotation_mode", "fixed")
+                st.session_state["ladder_game_format_points"] = defaults.get("game_format_points", 11)
+                st.session_state["ladder_game_format_time"] = defaults.get("game_format_time", 15)
+            with st.expander("Court Board Defaults", expanded=False):
+                st.caption("Defaults sourced from league settings. Adjust for this event if needed.")
+                st.number_input(
+                    "Max used courts",
+                    min_value=0,
+                    step=1,
+                    value=int(st.session_state.get("ladder_max_used_courts", 0)),
+                    key="ladder_max_used_courts",
+                )
+                st.selectbox(
+                    "Players per court preference",
+                    ["4", "5", "6+"],
+                    index=["4", "5", "6+"].index(str(st.session_state.get("ladder_players_per_court", "4"))),
+                    key="ladder_players_per_court",
+                )
+                st.selectbox(
+                    "Rotation mode",
+                    ["fixed", "queue"],
+                    index=["fixed", "queue"].index(str(st.session_state.get("ladder_rotation_mode", "fixed"))),
+                    key="ladder_rotation_mode",
+                )
+                st.number_input(
+                    "Game format points cap",
+                    min_value=1,
+                    step=1,
+                    value=int(st.session_state.get("ladder_game_format_points", 11)),
+                    key="ladder_game_format_points",
+                )
+                st.number_input(
+                    "Game format time cap (minutes)",
+                    min_value=1,
+                    step=1,
+                    value=int(st.session_state.get("ladder_game_format_time", 15)),
+                    key="ladder_game_format_time",
+                )
             week_select = st.selectbox("Week", [f"Week {i}" for i in range(1, 13)] + ["Playoffs"], key="ladder_wk")
             num_rounds = st.number_input(
                 "Total Rounds to Play",
@@ -903,7 +1069,7 @@ def render(ctx):
     # TAB 2: SETTINGS
     # ============================================================
     with tabs[1]:
-        st.subheader("Settings")
+        st.subheader("Premium League Editor")
 
         with st.expander("➕ Create New League", expanded=False):
             default_k = int(DEFAULT_K_FACTOR) if DEFAULT_K_FACTOR is not None else 32
@@ -917,9 +1083,8 @@ def render(ctx):
                 value=default_k,
                 key="create_league_k_factor",
             )
-            is_active = st.checkbox("Active", value=True, key="create_league_active")
 
-            if st.button("Create League", type="primary"):
+            if st.button("Create Draft", type="primary"):
                 trimmed_name = str(league_name or "").strip()
                 if not trimmed_name:
                     st.error("League name is required.")
@@ -945,7 +1110,8 @@ def render(ctx):
                     "description": str(description or "").strip(),
                     "min_games": int(min_games or 0),
                     "k_factor": int(k_factor or default_k),
-                    "is_active": bool(is_active),
+                    "is_active": False,
+                    "status": "draft",
                 }
 
                 try:
@@ -959,93 +1125,587 @@ def render(ctx):
                     st.stop()
 
                 st.session_state["force_data_refresh"] = True
-                st.success("League created.")
+                st.success("League draft created.")
                 st.rerun()
 
         if df_meta is None or df_meta.empty:
             st.info("No league metadata loaded.")
             return
 
-        with st.expander("🏁 End League", expanded=False):
-            league_names = (
-                df_meta["league_name"].dropna().astype(str).str.strip().unique().tolist()
-                if "league_name" in df_meta.columns
-                else []
-            )
-            if not league_names:
-                st.info("No leagues available to end.")
-            else:
-                league_names = sorted({name for name in league_names if name})
-                end_league_id = st.selectbox("League to end", league_names, key="end_league_select")
-                meta_row = get_league_meta_row(df_meta, end_league_id) or {}
-                already_ended = is_league_ended(meta_row)
-                if already_ended:
-                    ended_at = meta_row.get("ended_at")
-                    ended_label = f" (ended {ended_at})" if ended_at else ""
-                    st.warning(f"League already ended{ended_label}.")
+        league_names = (
+            df_meta["league_name"].dropna().astype(str).str.strip().unique().tolist()
+            if "league_name" in df_meta.columns
+            else []
+        )
+        if not league_names:
+            st.info("No leagues available.")
+            return
 
-                preview_awards = compute_top_performer_preview(
+        league_names = sorted({name for name in league_names if name})
+        selected_league = st.selectbox("League", league_names, key="league_editor_select")
+        meta_row = get_league_meta_row(df_meta, selected_league) or {}
+        status = normalize_league_status(meta_row)
+        status_label = status.title()
+        st.markdown(f"**Status:** {status_label}")
+        if status == "active":
+            st.warning("Active leagues are locked to safe edits only (description and awards visibility).")
+        if status in {"ended", "archived"}:
+            st.info("Ended leagues are read-only, except for archiving and award review.")
+
+        schedule_cfg = _safe_json_load(meta_row.get("schedule_config"), {})
+        court_cfg = _safe_json_load(meta_row.get("court_board_defaults"), {})
+        rules_cfg = _safe_json_load(meta_row.get("rules_config"), {})
+        awards_cfg = _safe_json_load(meta_row.get("awards_config"), {})
+        overview_cfg = rules_cfg.get("overview", {}) if isinstance(rules_cfg, dict) else {}
+        competition_cfg = rules_cfg.get("competition", {}) if isinstance(rules_cfg, dict) else {}
+
+        def _update_league(payload: dict) -> None:
+            if not meta_row.get("id"):
+                st.error("League metadata ID is missing.")
+                return
+            ctx.supabase.table("leagues_metadata").update(payload).eq("id", int(meta_row["id"])).eq(
+                "club_id", str(ctx.club_id)
+            ).execute()
+            st.session_state["force_data_refresh"] = True
+            st.success("League updated.")
+            time.sleep(0.3)
+            st.rerun()
+
+        def _build_payload(
+            *,
+            status_override: str | None = None,
+            is_active_override: bool | None = None,
+            started_at_override: str | None = None,
+        ) -> dict:
+            min_games_val = int(st.session_state.get("le_min_games", 0) or 0)
+            k_factor_val = int(st.session_state.get("le_k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
+            divisions_raw = str(st.session_state.get("le_divisions", "") or "")
+            divisions = [d.strip() for d in divisions_raw.split(",") if d.strip()]
+            rules_payload = {
+                "overview": {
+                    "league_type": str(st.session_state.get("le_type", "") or "").strip(),
+                    "divisions": divisions,
+                    "summary": str(st.session_state.get("le_summary", "") or "").strip(),
+                },
+                "competition": {
+                    "scoring_rules": str(st.session_state.get("le_scoring", "") or "").strip(),
+                    "match_format": str(st.session_state.get("le_match_format", "") or "").strip(),
+                    "tie_break_rules": str(st.session_state.get("le_tie_break", "") or "").strip(),
+                    "dispute_window": str(st.session_state.get("le_dispute_window", "") or "").strip(),
+                    "dispute_policy": str(st.session_state.get("le_dispute_policy", "") or "").strip(),
+                },
+            }
+            end_date_value = st.session_state.get("le_end_date") if st.session_state.get("le_use_end_date") else ""
+            schedule_payload = {
+                "start_date": str(st.session_state.get("le_start_date") or ""),
+                "weeks": int(st.session_state.get("le_weeks") or 0) or None,
+                "end_date": str(end_date_value or ""),
+                "weekday": int(st.session_state.get("le_weekday") or 0),
+                "time_start": str(st.session_state.get("le_time_start") or ""),
+                "time_end": str(st.session_state.get("le_time_end") or ""),
+                "timezone": str(st.session_state.get("le_timezone") or ""),
+                "blackout_dates": _parse_blackout_dates(st.session_state.get("le_blackouts", "") or ""),
+                "session_capacity": int(st.session_state.get("le_capacity") or 0) or None,
+            }
+            court_payload = {
+                "total_courts": int(st.session_state.get("le_total_courts") or 0),
+                "court_identifiers": [
+                    c.strip()
+                    for c in str(st.session_state.get("le_court_ids", "") or "").split(",")
+                    if c.strip()
+                ],
+                "max_used_courts": int(st.session_state.get("le_max_used_courts") or 0),
+                "players_per_court": str(st.session_state.get("le_players_per_court") or ""),
+                "rotation_mode": str(st.session_state.get("le_rotation_mode") or ""),
+                "game_format_points": int(st.session_state.get("le_game_format_points") or 0),
+                "game_format_time": int(st.session_state.get("le_game_format_time") or 0),
+            }
+            categories = {}
+            award_defaults = int(st.session_state.get("le_award_depth", 1) or 1)
+            for key in ["highest_rating", "most_improved", "best_win_pct", "most_wins"]:
+                categories[key] = {
+                    "enabled": bool(st.session_state.get(f"award_{key}_enabled", True)),
+                    "min_games": int(st.session_state.get(f"award_{key}_min_games", min_games_val) or min_games_val),
+                    "depth": int(st.session_state.get(f"award_{key}_depth", award_defaults) or award_defaults),
+                }
+            awards_payload = {
+                "default_min_games": min_games_val,
+                "default_depth": award_defaults,
+                "categories": categories,
+            }
+            payload = {
+                "description": str(st.session_state.get("le_desc", "") or ""),
+                "min_games": min_games_val,
+                "k_factor": k_factor_val,
+                "schedule_config": schedule_payload,
+                "court_board_defaults": court_payload,
+                "rules_config": rules_payload,
+                "awards_config": awards_payload,
+            }
+            if status_override is not None:
+                payload["status"] = status_override
+            if is_active_override is not None:
+                payload["is_active"] = is_active_override
+            if started_at_override is not None:
+                payload["started_at"] = started_at_override
+            return payload
+
+        action_cols = st.columns(5)
+        if action_cols[0].button("Save Draft", disabled=status not in {"draft", "active"}):
+            payload = _build_payload(status_override="draft", is_active_override=False)
+            _update_league(payload)
+        if action_cols[1].button("Publish/Start League", disabled=status in {"ended", "archived"}):
+            started_at = meta_row.get("started_at") or _utc_iso_now()
+            payload = _build_payload(status_override="active", is_active_override=True, started_at_override=started_at)
+            _update_league(payload)
+        if action_cols[2].button("End League", disabled=status in {"ended", "archived"}):
+            st.session_state["end_league_wizard_open"] = True
+        if action_cols[3].button("Archive", disabled=status != "ended"):
+            payload = _build_payload(status_override="archived", is_active_override=False)
+            _update_league(payload)
+        duplicate_name = action_cols[4].text_input("Duplicate as", value=f"{selected_league} Copy", key="dup_name")
+        if action_cols[4].button("Duplicate", type="secondary"):
+            payload = {
+                "club_id": str(ctx.club_id),
+                "league_name": str(duplicate_name or "").strip() or f"{selected_league} Copy",
+                "description": str(meta_row.get("description") or ""),
+                "min_games": int(meta_row.get("min_games") or 0),
+                "k_factor": int(meta_row.get("k_factor") or DEFAULT_K_FACTOR),
+                "is_active": False,
+                "status": "draft",
+                "schedule_config": schedule_cfg,
+                "court_board_defaults": court_cfg,
+                "rules_config": rules_cfg,
+                "awards_config": awards_cfg,
+            }
+            ctx.supabase.table("leagues_metadata").insert(payload).execute()
+            st.session_state["force_data_refresh"] = True
+            st.success("Draft duplicated.")
+            st.rerun()
+
+        tabs_editor = st.tabs(
+            [
+                "Overview",
+                "Schedule",
+                "Courts & Court Board Defaults",
+                "Competition Format & Rules",
+                "Ratings & Eligibility",
+                "Awards & Trophies",
+            ]
+        )
+
+        with tabs_editor[0]:
+            st.text_input("League name", value=selected_league, disabled=True)
+            st.text_area(
+                "Description",
+                value=str(meta_row.get("description") or ""),
+                key="le_desc",
+                disabled=status in {"ended", "archived"},
+            )
+            st.text_input(
+                "League type",
+                value=str(overview_cfg.get("league_type") or ""),
+                key="le_type",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Divisions (comma separated)",
+                value=", ".join(overview_cfg.get("divisions") or []),
+                key="le_divisions",
+                disabled=status != "draft",
+            )
+            st.text_area(
+                "Summary",
+                value=str(overview_cfg.get("summary") or ""),
+                key="le_summary",
+                disabled=status != "draft",
+            )
+
+        with tabs_editor[1]:
+            schedule_start = _parse_date(schedule_cfg.get("start_date")) or date.today()
+            schedule_end = _parse_date(schedule_cfg.get("end_date"))
+            st.date_input(
+                "Start date",
+                value=schedule_start,
+                key="le_start_date",
+                disabled=status != "draft",
+            )
+            st.number_input(
+                "Weeks (optional)",
+                min_value=0,
+                step=1,
+                value=int(schedule_cfg.get("weeks") or 0),
+                key="le_weeks",
+                disabled=status != "draft",
+            )
+            st.checkbox(
+                "Use end date",
+                value=bool(schedule_end),
+                key="le_use_end_date",
+                disabled=status != "draft",
+            )
+            st.date_input(
+                "End date (optional)",
+                value=schedule_end or date.today(),
+                key="le_end_date",
+                disabled=status != "draft",
+            )
+            weekday_val = int(schedule_cfg.get("weekday") or 0)
+            weekday_name = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            st.selectbox(
+                "Weekday",
+                list(range(7)),
+                format_func=lambda idx: weekday_name[idx],
+                index=weekday_val,
+                key="le_weekday",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Time window start (HH:MM)",
+                value=str(schedule_cfg.get("time_start") or "18:00"),
+                key="le_time_start",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Time window end (HH:MM)",
+                value=str(schedule_cfg.get("time_end") or "20:00"),
+                key="le_time_end",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Timezone",
+                value=str(schedule_cfg.get("timezone") or "UTC"),
+                key="le_timezone",
+                disabled=status != "draft",
+            )
+            blackout_text = ", ".join(schedule_cfg.get("blackout_dates") or [])
+            st.text_area(
+                "Blackout dates (comma or newline separated)",
+                value=blackout_text,
+                key="le_blackouts",
+                disabled=status != "draft",
+            )
+            st.number_input(
+                "Session capacity",
+                min_value=0,
+                step=1,
+                value=int(schedule_cfg.get("session_capacity") or 0),
+                key="le_capacity",
+                disabled=status != "draft",
+            )
+
+            preview_end_date = st.session_state.get("le_end_date") if st.session_state.get("le_use_end_date") else ""
+            preview_cfg = {
+                "start_date": st.session_state.get("le_start_date"),
+                "weeks": st.session_state.get("le_weeks"),
+                "end_date": preview_end_date,
+                "weekday": st.session_state.get("le_weekday"),
+                "time_start": st.session_state.get("le_time_start"),
+                "time_end": st.session_state.get("le_time_end"),
+                "timezone": st.session_state.get("le_timezone"),
+                "blackout_dates": _parse_blackout_dates(st.session_state.get("le_blackouts", "")),
+            }
+            preview_df = _build_schedule_preview(preview_cfg)
+            if not preview_df.empty:
+                st.dataframe(preview_df, hide_index=True, use_container_width=True)
+                ics_content = _schedule_to_ics(preview_cfg)
+                if ics_content:
+                    st.download_button("Download ICS", data=ics_content, file_name="league_schedule.ics")
+            else:
+                st.caption("Fill out schedule details to preview sessions.")
+
+        with tabs_editor[2]:
+            st.number_input(
+                "Total courts",
+                min_value=0,
+                step=1,
+                value=int(court_cfg.get("total_courts") or 0),
+                key="le_total_courts",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Court identifiers (comma separated)",
+                value=", ".join(court_cfg.get("court_identifiers") or []),
+                key="le_court_ids",
+                disabled=status != "draft",
+            )
+            st.number_input(
+                "Max used courts",
+                min_value=0,
+                step=1,
+                value=int(court_cfg.get("max_used_courts") or 0),
+                key="le_max_used_courts",
+                disabled=status != "draft",
+            )
+            st.selectbox(
+                "Players per court preference",
+                ["4", "5", "6+"],
+                index=["4", "5", "6+"].index(str(court_cfg.get("players_per_court") or "4")),
+                key="le_players_per_court",
+                disabled=status != "draft",
+            )
+            st.selectbox(
+                "Rotation mode",
+                ["fixed", "queue"],
+                index=["fixed", "queue"].index(str(court_cfg.get("rotation_mode") or "fixed")),
+                key="le_rotation_mode",
+                disabled=status != "draft",
+            )
+            st.number_input(
+                "Game format points cap",
+                min_value=1,
+                step=1,
+                value=int(court_cfg.get("game_format_points") or 11),
+                key="le_game_format_points",
+                disabled=status != "draft",
+            )
+            st.number_input(
+                "Game format time cap (minutes)",
+                min_value=1,
+                step=1,
+                value=int(court_cfg.get("game_format_time") or 15),
+                key="le_game_format_time",
+                disabled=status != "draft",
+            )
+
+        with tabs_editor[3]:
+            st.text_area(
+                "Scoring rules",
+                value=str(competition_cfg.get("scoring_rules") or ""),
+                key="le_scoring",
+                disabled=status != "draft",
+            )
+            st.text_area(
+                "Match format",
+                value=str(competition_cfg.get("match_format") or ""),
+                key="le_match_format",
+                disabled=status != "draft",
+            )
+            st.text_area(
+                "Tie-break rules",
+                value=str(competition_cfg.get("tie_break_rules") or ""),
+                key="le_tie_break",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Dispute window",
+                value=str(competition_cfg.get("dispute_window") or ""),
+                key="le_dispute_window",
+                disabled=status != "draft",
+            )
+            st.text_input(
+                "Who can submit disputes",
+                value=str(competition_cfg.get("dispute_policy") or ""),
+                key="le_dispute_policy",
+                disabled=status != "draft",
+            )
+
+        with tabs_editor[4]:
+            st.number_input(
+                "Minimum games",
+                min_value=0,
+                step=1,
+                value=int(meta_row.get("min_games") or 0),
+                key="le_min_games",
+                disabled=status != "draft",
+            )
+            st.number_input(
+                "K-factor",
+                min_value=1,
+                step=1,
+                value=int(meta_row.get("k_factor") or DEFAULT_K_FACTOR),
+                key="le_k_factor",
+                disabled=status != "draft",
+            )
+
+        with tabs_editor[5]:
+            st.number_input(
+                "Award depth (top 1 vs top 3)",
+                min_value=1,
+                max_value=3,
+                step=2,
+                value=int(awards_cfg.get("default_depth") or 1),
+                key="le_award_depth",
+                disabled=status != "draft",
+            )
+            for key, label in [
+                ("highest_rating", "Highest Rating"),
+                ("most_improved", "Most Improved"),
+                ("best_win_pct", "Best Win %"),
+                ("most_wins", "Most Wins"),
+            ]:
+                cat_cfg = (awards_cfg.get("categories") or {}).get(key, {})
+                st.checkbox(
+                    f"{label} enabled",
+                    value=bool(cat_cfg.get("enabled", True)),
+                    key=f"award_{key}_enabled",
+                    disabled=status != "draft",
+                )
+                st.number_input(
+                    f"{label} min games",
+                    min_value=0,
+                    step=1,
+                    value=int(cat_cfg.get("min_games") or meta_row.get("min_games") or 0),
+                    key=f"award_{key}_min_games",
+                    disabled=status != "draft",
+                )
+                st.number_input(
+                    f"{label} award depth",
+                    min_value=1,
+                    max_value=3,
+                    step=2,
+                    value=int(cat_cfg.get("depth") or awards_cfg.get("default_depth") or 1),
+                    key=f"award_{key}_depth",
+                    disabled=status != "draft",
+                )
+
+        wizard_open = st.session_state.get("end_league_wizard_open", False)
+        with st.expander("🏁 End League Wizard", expanded=wizard_open):
+            step = int(st.session_state.get("end_league_step", 1))
+            st.markdown(f"**Step {step} of 5**")
+
+            if step == 1:
+                st.info("Freezing will mark the league as ended and lock settings.")
+                if st.button("Freeze & Continue", type="primary"):
+                    ended_at = _utc_iso_now()
+                    payload = _build_payload(status_override="ended", is_active_override=False)
+                    payload["ended_at"] = ended_at
+                    payload["ended_by"] = "admin"
+                    _update_league(payload)
+                    st.session_state["end_league_frozen_at"] = ended_at
+                    st.session_state["end_league_step"] = 2
+                    st.session_state["end_league_wizard_open"] = True
+                    st.rerun()
+
+            elif step == 2:
+                awards = compute_top_performer_awards_for_config(
                     df_leagues,
                     df_meta,
                     id_to_name,
-                    end_league_id,
-                    winners_per_category=1,
+                    selected_league,
+                    awards_config=_build_payload().get("awards_config"),
                 )
-                if preview_awards:
+                st.session_state["end_league_awards"] = awards
+                if awards:
                     preview_rows = [
                         {
                             "Category": award.get("category_label") or award.get("category_key"),
-                            "Winner": award.get("player_name") or award.get("player_id"),
                             "Rank": award.get("rank"),
+                            "Player": award.get("player_name") or award.get("player_id"),
                             "Metric": award.get("metric_display"),
                         }
-                        for award in preview_awards
+                        for award in awards
                     ]
                     st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
-                else:
-                    st.info("No top performer winners found (check min games or standings).")
-
-                confirm = st.checkbox(
-                    "I confirm these Top Performer winners.",
-                    disabled=already_ended,
-                    key="end_league_confirm",
-                )
-                if st.button(
-                    "End League",
-                    type="primary",
-                    disabled=already_ended or not confirm,
-                    key="end_league_submit",
-                ):
-                    result = end_league_and_award_top_performers(
-                        ctx,
-                        end_league_id,
-                        admin_id="admin",
-                    )
-                    if result.get("ended"):
-                        st.session_state["force_data_refresh"] = True
-                        st.success("League ended and Top Performer trophies awarded.")
+                    if st.button("Continue to Overrides"):
+                        st.session_state["end_league_step"] = 3
+                        st.session_state["end_league_wizard_open"] = True
                         st.rerun()
-                    st.error("Unable to end league. Check logs for details.")
+                else:
+                    st.warning("No winners found. Check eligibility rules or standings.")
 
-        cols = [c for c in ["id", "league_name", "is_active", "min_games", "description", "k_factor"] if c in df_meta.columns]
-        editor = st.data_editor(
-            df_meta[cols],
-            disabled=["id", "league_name"],
-            hide_index=True,
-            use_container_width=True,
-        )
+            elif step == 3:
+                awards = st.session_state.get("end_league_awards", [])
+                league_players = pd.DataFrame()
+                if df_leagues is not None and not df_leagues.empty and "league_name" in df_leagues.columns:
+                    league_players = df_leagues[df_leagues["league_name"].astype(str) == str(selected_league)].copy()
+                player_ids = sorted(league_players.get("player_id", pd.Series(dtype="int")).dropna().astype(int).unique().tolist())
+                if not awards:
+                    st.info("No awards to override.")
+                if not player_ids:
+                    st.warning("No players found for this league.")
+                for award in awards:
+                    category_key = award.get("category_key")
+                    rank = int(award.get("rank") or 1)
+                    override_key = f"{category_key}:{rank}"
+                    st.markdown(f"**{award.get('category_label')} #{rank}**")
+                    if player_ids:
+                        default_player = (
+                            int(award.get("player_id")) if award.get("player_id") is not None else player_ids[0]
+                        )
+                        st.selectbox(
+                            "Winner",
+                            player_ids,
+                            index=player_ids.index(default_player) if default_player in player_ids else 0,
+                            format_func=lambda pid: f"{id_to_name.get(int(pid), pid)} (#{pid})",
+                            key=f"override_player_{override_key}",
+                        )
+                    st.text_area(
+                        "Override note (required if changed)",
+                        key=f"override_note_{override_key}",
+                    )
+                if st.button("Continue to Confirm"):
+                    st.session_state["end_league_step"] = 4
+                    st.session_state["end_league_wizard_open"] = True
+                    st.rerun()
 
-        if st.button("Save Config"):
-            for _, r in editor.iterrows():
-                ctx.supabase.table("leagues_metadata").update(
-                    {
-                        "is_active": bool(r.get("is_active", True)),
-                        "min_games": int(r.get("min_games", 0) or 0),
-                        "k_factor": int(r.get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR),
-                        "description": str(r.get("description", "") or ""),
-                    }
-                ).eq("id", int(r["id"])).eq("club_id", str(ctx.club_id)).execute()
+            elif step == 4:
+                awards = st.session_state.get("end_league_awards", [])
+                if not awards:
+                    st.info("No awards to confirm.")
+                override_notes = {}
+                final_awards = []
+                for award in awards:
+                    category_key = award.get("category_key")
+                    rank = int(award.get("rank") or 1)
+                    override_key = f"{category_key}:{rank}"
+                    selected_pid = st.session_state.get(f"override_player_{override_key}", award.get("player_id"))
+                    note = str(st.session_state.get(f"override_note_{override_key}", "") or "").strip()
+                    if int(selected_pid) != int(award.get("player_id")) and not note:
+                        st.error(f"Override note required for {award.get('category_label')} #{rank}.")
+                        st.stop()
+                    if note:
+                        override_notes[override_key] = note
+                    updated_award = dict(award)
+                    updated_award["player_id"] = int(selected_pid)
+                    updated_award["player_name"] = id_to_name.get(int(selected_pid), str(selected_pid))
+                    final_awards.append(updated_award)
+                st.dataframe(pd.DataFrame(final_awards), hide_index=True, use_container_width=True)
+                if st.button("Confirm & Mint Badges", type="primary"):
+                    ended_at = meta_row.get("ended_at") or st.session_state.get("end_league_frozen_at") or _utc_iso_now()
+                    created = mint_top_performer_badges(
+                        ctx.supabase,
+                        club_id=str(ctx.club_id),
+                        league_id=str(selected_league),
+                        awards=final_awards,
+                        ended_at=ended_at,
+                        override_notes=override_notes,
+                    )
+                    st.success(f"Minted {len(created)} top performer badges.")
+                    st.session_state["end_league_step"] = 5
+                    st.session_state["end_league_wizard_open"] = True
+                    st.rerun()
 
-            st.success("Saved.")
-            time.sleep(0.3)
-            st.rerun()
+            elif step == 5:
+                st.success("League closed. You can archive it now.")
+                if st.button("Archive league", type="secondary"):
+                    payload = _build_payload(status_override="archived", is_active_override=False)
+                    _update_league(payload)
+
+        with st.expander("Advanced (Legacy Grid)", expanded=False):
+            cols = [
+                c
+                for c in ["id", "league_name", "is_active", "min_games", "description", "k_factor"]
+                if c in df_meta.columns
+            ]
+            editor = st.data_editor(
+                df_meta[cols],
+                disabled=["id", "league_name"],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+            if st.button("Save Config"):
+                for _, r in editor.iterrows():
+                    ctx.supabase.table("leagues_metadata").update(
+                        {
+                            "is_active": bool(r.get("is_active", True)),
+                            "min_games": int(r.get("min_games", 0) or 0),
+                            "k_factor": int(r.get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR),
+                            "description": str(r.get("description", "") or ""),
+                        }
+                    ).eq("id", int(r["id"])).eq("club_id", str(ctx.club_id)).execute()
+
+                st.success("Saved.")
+                time.sleep(0.3)
+                st.rerun()

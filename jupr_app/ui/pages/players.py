@@ -466,6 +466,14 @@ def _format_top_performer_metric(category_key: str | None, metric_value: object 
 
 
 def _trophy_display_name(row: pd.Series) -> str:
+    badge_id = str(row.get("badge_id") or "").strip()
+    value_json = _parse_value_json(row.get("value_json"))
+    if _is_top_performer_badge(badge_id):
+        category_label = value_json.get("category_label")
+        badge_name = row.get("badge_name") or row.get("name") or row.get("title")
+        title = _format_top_performer_title(badge_name, category_label)
+        rank = _format_top_performer_rank(value_json)
+        return f"{title} {rank}".strip()
     for key in ["badge_name", "name", "title"]:
         value = row.get(key)
         if value is None:
