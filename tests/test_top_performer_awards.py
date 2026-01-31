@@ -140,6 +140,7 @@ def test_ensure_league_top_performer_awards_is_idempotent():
             {
                 "league_name": "Spring 2024 Ladder",
                 "min_games": 6,
+                "is_active": False,
             }
         ]
     )

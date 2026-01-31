@@ -18,6 +18,12 @@ from jupr_app.domain.league_night_roster import (
     roster_change_availability,
     suggest_court_sizes,
 )
+from jupr_app.domain.leagues import (
+    compute_top_performer_preview,
+    end_league_and_award_top_performers,
+    get_league_meta_row,
+    is_league_ended,
+)
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.roster import (
     compress_courts,
@@ -959,6 +965,67 @@ def render(ctx):
         if df_meta is None or df_meta.empty:
             st.info("No league metadata loaded.")
             return
+
+        with st.expander("🏁 End League", expanded=False):
+            league_names = (
+                df_meta["league_name"].dropna().astype(str).str.strip().unique().tolist()
+                if "league_name" in df_meta.columns
+                else []
+            )
+            if not league_names:
+                st.info("No leagues available to end.")
+            else:
+                league_names = sorted({name for name in league_names if name})
+                end_league_id = st.selectbox("League to end", league_names, key="end_league_select")
+                meta_row = get_league_meta_row(df_meta, end_league_id) or {}
+                already_ended = is_league_ended(meta_row)
+                if already_ended:
+                    ended_at = meta_row.get("ended_at")
+                    ended_label = f" (ended {ended_at})" if ended_at else ""
+                    st.warning(f"League already ended{ended_label}.")
+
+                preview_awards = compute_top_performer_preview(
+                    df_leagues,
+                    df_meta,
+                    id_to_name,
+                    end_league_id,
+                    winners_per_category=1,
+                )
+                if preview_awards:
+                    preview_rows = [
+                        {
+                            "Category": award.get("category_label") or award.get("category_key"),
+                            "Winner": award.get("player_name") or award.get("player_id"),
+                            "Rank": award.get("rank"),
+                            "Metric": award.get("metric_display"),
+                        }
+                        for award in preview_awards
+                    ]
+                    st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+                else:
+                    st.info("No top performer winners found (check min games or standings).")
+
+                confirm = st.checkbox(
+                    "I confirm these Top Performer winners.",
+                    disabled=already_ended,
+                    key="end_league_confirm",
+                )
+                if st.button(
+                    "End League",
+                    type="primary",
+                    disabled=already_ended or not confirm,
+                    key="end_league_submit",
+                ):
+                    result = end_league_and_award_top_performers(
+                        ctx,
+                        end_league_id,
+                        admin_id="admin",
+                    )
+                    if result.get("ended"):
+                        st.session_state["force_data_refresh"] = True
+                        st.success("League ended and Top Performer trophies awarded.")
+                        st.rerun()
+                    st.error("Unable to end league. Check logs for details.")
 
         cols = [c for c in ["id", "league_name", "is_active", "min_games", "description", "k_factor"] if c in df_meta.columns]
         editor = st.data_editor(
