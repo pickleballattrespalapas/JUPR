@@ -1,37 +1,15 @@
 from __future__ import annotations
 
-import html
 import logging
 
 import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.gamification.profile import build_gamification_summary
+from jupr_app.ui.helpers import display_requirement_text
 from jupr_app.ui.pages.players import badge_icon
 
 logger = logging.getLogger(__name__)
-
-
-def _hint_text(value: object | None) -> str:
-    text = str(value or "").strip()
-    return text if text else "No hint yet."
-
-
-def _lore_text(value: object | None) -> str:
-    text = str(value or "").strip()
-    return text if text else "No story yet."
-
-
-def _requirements_text(value: object | None) -> str:
-    text = str(value or "").strip()
-    return text if text else "Requirements TBD"
-
-
-def _badge_status_label(value: object | None) -> str:
-    status = str(value or "").strip().lower()
-    if not status or status == "live":
-        return ""
-    return f"Status: {status.title()}"
 
 
 def _player_options(df_players: pd.DataFrame) -> list[tuple[str, int]]:
@@ -134,14 +112,5 @@ def render(ctx) -> None:
                 icon = badge_icon(badge.get("badge_id"), badge.get("category"))
             st.markdown(f"**{icon} {name}**")
             st.caption(f"Prestige {prestige}")
-            status_label = _badge_status_label(badge.get("badge_status"))
-            if status_label:
-                st.caption(status_label)
-            requirements = html.escape(_requirements_text(badge.get("requirements")))
-            st.caption(f"Requirements: {requirements}")
-            lore = html.escape(_lore_text(badge.get("lore")))
-            if lore:
-                st.caption(lore)
-            if status == "locked":
-                hint = html.escape(_hint_text(badge.get("hint")))
-                st.caption(hint)
+            requirements = display_requirement_text(badge.get("requirements"))
+            st.markdown(requirements)
