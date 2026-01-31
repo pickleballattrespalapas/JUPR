@@ -899,6 +899,63 @@ def render(ctx):
     with tabs[1]:
         st.subheader("Settings")
 
+        with st.expander("➕ Create New League", expanded=False):
+            default_k = int(DEFAULT_K_FACTOR) if DEFAULT_K_FACTOR is not None else 32
+            league_name = st.text_input("League name (required)", key="create_league_name")
+            description = st.text_area("Description (optional)", key="create_league_description")
+            min_games = st.number_input("Minimum games", min_value=0, step=1, value=6, key="create_league_min_games")
+            k_factor = st.number_input(
+                "K-factor",
+                min_value=1,
+                step=1,
+                value=default_k,
+                key="create_league_k_factor",
+            )
+            is_active = st.checkbox("Active", value=True, key="create_league_active")
+
+            if st.button("Create League", type="primary"):
+                trimmed_name = str(league_name or "").strip()
+                if not trimmed_name:
+                    st.error("League name is required.")
+                    st.stop()
+
+                normalized_input = trimmed_name.lower()
+                if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
+                    existing = (
+                        df_meta["league_name"]
+                        .dropna()
+                        .astype(str)
+                        .str.strip()
+                        .str.lower()
+                        .tolist()
+                    )
+                    if normalized_input in existing:
+                        st.error("A league with that name already exists for this club.")
+                        st.stop()
+
+                payload = {
+                    "club_id": str(ctx.club_id),
+                    "league_name": trimmed_name,
+                    "description": str(description or "").strip(),
+                    "min_games": int(min_games or 0),
+                    "k_factor": int(k_factor or default_k),
+                    "is_active": bool(is_active),
+                }
+
+                try:
+                    resp = ctx.supabase.table("leagues_metadata").insert(payload).execute()
+                except Exception as exc:
+                    st.error(f"Could not create league: {exc}")
+                    st.stop()
+
+                if getattr(resp, "error", None):
+                    st.error(f"Could not create league: {resp.error}")
+                    st.stop()
+
+                st.session_state["force_data_refresh"] = True
+                st.success("League created.")
+                st.rerun()
+
         if df_meta is None or df_meta.empty:
             st.info("No league metadata loaded.")
             return
