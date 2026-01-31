@@ -303,6 +303,7 @@ def main():
             faqs,
             players,
             badge_codex,
+            badge_debug,
             challenge_ladder,
             challenge_ladder_admin,
             match_uploader,
@@ -324,6 +325,7 @@ def main():
             "🎯 Match Explorer": match_explorer,
             "🔍 Player Search": players,
             "📼 Badge Codex": badge_codex,
+            "🧪 Badge Debug": badge_debug,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
 
@@ -347,6 +349,7 @@ def main():
             "match_explorer": "🎯 Match Explorer",
             "players": "🔍 Player Search",
             "badge_codex": "📼 Badge Codex",
+            "badge_debug": "🧪 Badge Debug",
             "challenge_ladder": "🪜 Challenge Ladder",
             "faqs": "❓ FAQs",
 
@@ -377,6 +380,7 @@ def main():
             "🎨 Theme QA",
             "🏆 Tournaments",
             "🏆 Tournament Manager",
+            "🧪 Badge Debug",
         }
 
         # Visible labels based on auth

@@ -36,7 +36,13 @@ def compute_candidates_for_player(
                     continue
                 candidates.append(candidate)
         except Exception:
-            logger.exception("Badge evaluator failed for %s", spec.badge_id)
+            logger.exception(
+                "Badge evaluator failed for %s (club_id=%s league_id=%s)",
+                spec.badge_id,
+                club_id,
+                league_id,
+                extra={"badge_id": spec.badge_id, "club_id": club_id, "league_id": league_id},
+            )
     return candidates
 
 
@@ -58,4 +64,10 @@ def compute_candidates_for_club(
         try:
             yield from spec.evaluator(evaluation)
         except Exception:
-            logger.exception("Badge evaluator failed for %s", spec.badge_id)
+            logger.exception(
+                "Badge evaluator failed for %s (club_id=%s league_id=%s)",
+                spec.badge_id,
+                club_id,
+                league_id,
+                extra={"badge_id": spec.badge_id, "club_id": club_id, "league_id": league_id},
+            )
