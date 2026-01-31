@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+import re
 import urllib.parse
 
 import pandas as pd
 import streamlit as st
+from markdown_it import MarkdownIt
+
+_REQUIREMENT_MARKDOWN = MarkdownIt("commonmark", {"html": False})
+
+
+def display_requirement_text(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "Requirements TBD"
+    cleaned = re.sub(r"^(requirements?)\s*:\s*", "", text, flags=re.IGNORECASE)
+    return cleaned.strip() or "Requirements TBD"
+
+
+def render_requirement_inline_html(raw: str | None) -> str:
+    text = display_requirement_text(raw)
+    return _REQUIREMENT_MARKDOWN.renderInline(text)
 
 
 def qp_get(key: str, default: str = "") -> str:
