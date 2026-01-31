@@ -4,7 +4,7 @@ import pandas as pd
 
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.top_performer_awards import TOP_PERFORMER_BADGE_IDS
-from jupr_app.domain.leagues import end_league_and_award_top_performers
+from jupr_app.domain.leagues import end_league_and_award_top_performers, mint_top_performer_badges
 
 
 class FakeTable:
@@ -159,3 +159,53 @@ def test_end_league_award_is_idempotent():
         for row in inserted
     }
     assert len(unique_keys) == len(inserted)
+
+
+def test_mint_top_performer_badges_is_idempotent_and_sets_context():
+    storage = {"player_badges": []}
+    supabase = FakeSupabase(storage)
+    awards = [
+        {
+            "category_key": "most_wins",
+            "category_label": "Most Wins",
+            "player_id": 7,
+            "metric_value": 12,
+            "metric_display": "12",
+            "rank": 1,
+        },
+        {
+            "category_key": "best_win_pct",
+            "category_label": "Best Win %",
+            "player_id": 8,
+            "metric_value": 72.5,
+            "metric_display": "72.5%",
+            "rank": 2,
+        },
+    ]
+    created = mint_top_performer_badges(
+        supabase,
+        club_id="club",
+        league_id="Spring 2024 Ladder",
+        awards=awards,
+        ended_at="2026-01-01T00:00:00Z",
+        override_notes={},
+    )
+    created_again = mint_top_performer_badges(
+        supabase,
+        club_id="club",
+        league_id="Spring 2024 Ladder",
+        awards=awards,
+        ended_at="2026-01-01T00:00:00Z",
+        override_notes={},
+    )
+    assert len(created) == 2
+    assert len(created_again) == 0
+    inserted = storage.get("player_badges", [])
+    assert len(inserted) == 2
+    context_ids = {row.get("context_id") for row in inserted}
+    assert "Spring 2024 Ladder:top_performer:most_wins:1" in context_ids
+    assert "Spring 2024 Ladder:top_performer:best_win_pct:2" in context_ids
+    value_json = inserted[0].get("value_json") or {}
+    assert value_json.get("league_id") == "Spring 2024 Ladder"
+    assert value_json.get("category_label")
+    assert value_json.get("rank")
