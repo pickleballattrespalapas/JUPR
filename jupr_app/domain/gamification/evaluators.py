@@ -57,7 +57,7 @@ def _participant_candidates(ctx: BadgeEvaluationContext, badge_id: str, threshol
                 player_id=int(player_id),
                 club_id=ctx.club_id,
                 context_type="overall",
-                context_id=None,
+                context_id="overall",
                 match_id=None,
                 value_json={"games": int(games)},
                 value_num=float(games),

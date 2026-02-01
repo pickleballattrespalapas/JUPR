@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from jupr_app.domain.gamification.badge_integrity import dedupe_player_badges_rows
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
@@ -104,10 +105,27 @@ def test_participation_insert_uses_upsert_conflict():
             player_id=1,
             club_id="club",
             context_type="overall",
-            context_id=None,
+            context_id="overall",
             match_id=None,
             value_num=5,
         )
     ]
     upsert_player_badges(supabase, "club", candidates)
     assert supabase.table_ref.on_conflict == "club_id,player_id,badge_id,context_id"
+
+
+def test_upsert_rejects_missing_context_id():
+    supabase = CaptureSupabase()
+    candidates = [
+        BadgeCandidate(
+            badge_id="participant",
+            player_id=1,
+            club_id="club",
+            context_type="overall",
+            context_id=None,
+            match_id=None,
+            value_num=5,
+        )
+    ]
+    with pytest.raises(ValueError):
+        upsert_player_badges(supabase, "club", candidates)

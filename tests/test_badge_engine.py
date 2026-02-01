@@ -110,7 +110,7 @@ def test_badge_upsert_adds_tape_excerpt_and_is_idempotent():
         player_id=1,
         club_id="club",
         context_type="overall",
-        context_id=None,
+        context_id="overall",
         match_id=None,
         value_json={"games": 1},
     )
