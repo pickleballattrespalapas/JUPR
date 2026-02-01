@@ -17,6 +17,8 @@ class BadgeDefinition:
     lore: str
     hint: str
     scope: str
+    state: str = "live"
+    eval_triggers: tuple[str, ...] = ("match_recorded", "match_updated")
 
 
 BADGE_DEFINITIONS: list[BadgeDefinition] = [

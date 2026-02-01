@@ -34,6 +34,56 @@ ensure_badges(ctx)  # full club
 ensure_badges(ctx, league_id="Spring 2024 Ladder")  # scoped league
 ```
 
+## Recompute CLI (audit + backfill)
+Use the recompute CLI to run audited badge evaluations in dry-run, append-only, or strict modes.
+
+```bash
+python -m jupr_app.cli.badge_recompute \
+  --club_id CLUB123 \
+  --mode dry-run \
+  --league_id "Spring 2024 Ladder"
+
+python -m jupr_app.cli.badge_recompute \
+  --club_id CLUB123 \
+  --mode append-only \
+  --badge_id participant \
+  --created-by admin@example.com
+
+python -m jupr_app.cli.badge_recompute \
+  --club_id CLUB123 \
+  --mode strict \
+  --badge_id participant \
+  --revoke-reason "strict recompute cleanup" \
+  --allow-strict-global
+```
+
+Each run writes a row to `badge_eval_runs` and, when updating awards, tags `player_badges` with
+`awarded_by='recompute'`, a `rule_version` hash, and the `eval_run_id`. Strict mode soft-revokes
+awards by setting `revoked_at`, `revoked_by`, and `revoke_reason`.
+
+## Incremental badge evaluation
+When matches are ingested or edited, the app enqueues badge evaluation work instead of evaluating
+the full match history on every page view:
+- `badge_eval_queue` stores pending evaluation events (match recorded/updated, player IDs, context).
+- `player_badge_facts` stores incremental counters used by evaluators (future worker use).
+
+Current implementation only enqueues events; a worker will dequeue and process them separately.
+
+### Running the worker locally
+```bash
+python - <<'PY'
+from jupr_app.data.client import make_supabase
+from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+
+supabase = make_supabase("https://YOUR_PROJECT.supabase.co", "SERVICE_ROLE_KEY")
+process_badge_eval_queue(supabase, max_jobs=10, time_budget_seconds=5)
+PY
+```
+
+### Scheduler suggestion
+Run the worker on a cron (e.g., Supabase Scheduled Function or GitHub Actions) every few minutes to
+drain the `badge_eval_queue` table without blocking Streamlit requests.
+
 ## Adding a new badge end-to-end
 1. Add the badge to the catalog (`badge_catalog.py`).
 2. Add copy pack entries (tape excerpts/highlight titles).

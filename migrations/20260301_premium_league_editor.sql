@@ -17,12 +17,12 @@ set status = case
 end
 where status is null;
 
-insert into public.badges (badge_id, name, prestige, category, is_stackable, is_active, rarity, tier, icon_key, lore, hint, scope)
+insert into public.badges (badge_id, name, prestige, category, is_stackable, is_active, rarity, tier, icon_key, lore, hint, scope, state)
 values
-    ('top_performer_highest_rating', 'Top Performer: Highest Rating', 130, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'The league closes with your rating on the peak.', 'Finish the season with the highest mark.', 'league'),
-    ('top_performer_most_improved', 'Top Performer: Most Improved', 125, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'The biggest climb shows up in the final tape.', 'Make the largest rating leap in the league.', 'league'),
-    ('top_performer_best_win_pct', 'Top Performer: Best Win %', 120, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'The league’s cleanest record shines at the top.', 'Finish with the best win percentage.', 'league'),
-    ('top_performer_most_wins', 'Top Performer: Most Wins', 115, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'No one stacks wins faster when the season closes.', 'Lead the league in total wins.', 'league')
+    ('top_performer_highest_rating', 'Top Performer: Highest Rating', 130, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'The league closes with your rating on the peak.', 'Finish the season with the highest mark.', 'league', 'live'),
+    ('top_performer_most_improved', 'Top Performer: Most Improved', 125, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'The biggest climb shows up in the final tape.', 'Make the largest rating leap in the league.', 'league', 'live'),
+    ('top_performer_best_win_pct', 'Top Performer: Best Win %', 120, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'The league’s cleanest record shines at the top.', 'Finish with the best win percentage.', 'league', 'live'),
+    ('top_performer_most_wins', 'Top Performer: Most Wins', 115, 'Top Performer Awards', true, true, 'legendary', null, 'trophy', 'No one stacks wins faster when the season closes.', 'Lead the league in total wins.', 'league', 'live')
 on conflict (badge_id) do update set
     name = excluded.name,
     prestige = excluded.prestige,
@@ -34,7 +34,8 @@ on conflict (badge_id) do update set
     icon_key = excluded.icon_key,
     lore = excluded.lore,
     hint = excluded.hint,
-    scope = excluded.scope;
+    scope = excluded.scope,
+    state = excluded.state;
 
 do $$
 begin

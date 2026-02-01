@@ -21,6 +21,7 @@ def ensure_badges(
     tournament_name: str | None = None,
     status: str = "live",
     award_timing: str = "live",
+    allow_non_live: bool = False,
 ) -> list:
     if bool(getattr(ctx, "public_mode", False)):
         return []
@@ -45,6 +46,7 @@ def ensure_badges(
                 ctx=evaluation_ctx,
                 status=status,
                 award_timing=award_timing,
+                allow_non_live=allow_non_live,
             )
         )
         if not candidates:

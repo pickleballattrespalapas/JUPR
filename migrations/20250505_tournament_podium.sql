@@ -12,7 +12,7 @@ create table if not exists public.tournament_podium (
 
 create index if not exists idx_tournament_podium_tournament_id on public.tournament_podium (tournament_id);
 
-insert into public.badges (badge_id, name, prestige, category, is_stackable, is_active, rarity, tier, icon_key, lore, hint, scope)
+insert into public.badges (badge_id, name, prestige, category, is_stackable, is_active, rarity, tier, icon_key, lore, hint, scope, state)
 values
     (
         'tournament_champion',
@@ -27,7 +27,7 @@ values
         'The bracket closes with your team on the top step.',
         'Win the tournament to claim gold.',
         'tournament'
-    ),
+    , 'live'),
     (
         'tournament_runner_up',
         'Tournament Runner-Up',
@@ -41,7 +41,7 @@ values
         'Second place still lands on the stage.',
         'Finish as the tournament runner-up.',
         'tournament'
-    ),
+    , 'live'),
     (
         'tournament_third_place',
         'Tournament Third Place',
@@ -55,7 +55,7 @@ values
         'Third place keeps your name on the podium.',
         'Earn the bronze finish.',
         'tournament'
-    )
+    , 'live')
 on conflict (badge_id) do update set
     name = excluded.name,
     prestige = excluded.prestige,
@@ -67,4 +67,5 @@ on conflict (badge_id) do update set
     icon_key = excluded.icon_key,
     lore = excluded.lore,
     hint = excluded.hint,
-    scope = excluded.scope;
+    scope = excluded.scope,
+    state = excluded.state;

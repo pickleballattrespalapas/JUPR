@@ -8,6 +8,8 @@ from jupr_app.domain.replay_history import replay_history
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
+from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
+from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.layout import page_shell
 
 def render(ctx):
@@ -58,6 +60,16 @@ def render(ctx):
             status.update(label="Complete", state="complete")
 
     st.divider()
+
+    # -------------------------
+    # Badge Eval Queue (opportunistic worker)
+    # -------------------------
+    st.subheader("🧵 Badge Eval Queue")
+    st.caption("Process queued badge evaluations without blocking the UI (short time budget).")
+    if st.button("Process queued badge evaluations", key="badge_eval_queue_process"):
+        with st.spinner("Processing queued badge evaluations..."):
+            result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
+        st.success(f"Processed {result['processed']} job(s); {result['errored']} error(s).")
 
     # -------------------------
     # Replay History
@@ -178,3 +190,67 @@ def render(ctx):
                 st.success(f"Awarded {len(created)} new badges.")
                 st.caption("Developer summary: new awards by badge ID.")
                 st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # -------------------------
+    # Badge State Controls
+    # -------------------------
+    st.subheader("🧊 Badge State Controls")
+    st.caption("Update badge awardability with a required reason. Allowed path: live → frozen → deprecated.")
+
+    df_badges = getattr(ctx, "df_badges", pd.DataFrame())
+    if df_badges is None or df_badges.empty or "badge_id" not in df_badges.columns:
+        st.info("Badge definitions are unavailable.")
+        return
+
+    df_badges = df_badges.copy()
+    df_badges["badge_id"] = df_badges["badge_id"].astype(str)
+    df_badges["name"] = df_badges.get("name", "Badge")
+    df_badges["state"] = df_badges.get("state", "live").fillna("live").astype(str)
+
+    badge_rows = df_badges.sort_values("name")
+    badge_id = st.selectbox(
+        "Badge",
+        badge_rows["badge_id"].tolist(),
+        format_func=lambda bid: f"{badge_rows.loc[badge_rows['badge_id'] == bid, 'name'].iloc[0]} ({bid})",
+        key="badge_state_badge_id",
+    )
+    current_state = (
+        badge_rows.loc[badge_rows["badge_id"] == badge_id, "state"].iloc[0]
+        if badge_id
+        else "live"
+    )
+    st.caption(f"Current state: **{current_state}**")
+
+    new_state = st.selectbox(
+        "New state",
+        ALLOWED_BADGE_STATES,
+        index=ALLOWED_BADGE_STATES.index(current_state)
+        if current_state in ALLOWED_BADGE_STATES
+        else 0,
+        key="badge_state_new_state",
+    )
+    reason = st.text_input("Reason for change", key="badge_state_reason")
+    force = st.checkbox("Force transition (admin override)", value=False, key="badge_state_force")
+
+    if st.button("Update Badge State", key="badge_state_update"):
+        if not reason.strip():
+            st.error("Please provide a reason for the state change.")
+        else:
+            transition = can_transition_badge_state(current_state, new_state, force=force)
+            if not transition.allowed:
+                st.error(transition.reason or "Transition not allowed.")
+            else:
+                try:
+                    supabase.table("badges").update(
+                        {
+                            "state": new_state,
+                            "state_changed_at": datetime.now(timezone.utc).isoformat(),
+                            "state_change_reason": reason.strip(),
+                        }
+                    ).eq("badge_id", badge_id).execute()
+                    st.success(f"Updated {badge_id} → {new_state}.")
+                except Exception as exc:
+                    st.error("Failed to update badge state.")
+                    st.exception(exc)

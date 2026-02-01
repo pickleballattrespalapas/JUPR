@@ -24,7 +24,7 @@ def _badge_earner_counts(df_player_badges) -> dict[str, int]:
     return {str(k): int(v) for k, v in counts.to_dict().items()}
 
 
-def get_all_badges(df_badges, df_player_badges) -> list[dict]:
+def get_all_badges(df_badges, df_player_badges, *, include_deprecated: bool = False) -> list[dict]:
     if df_badges is None or df_badges.empty:
         return []
     earners_map = _badge_earner_counts(df_player_badges)
@@ -36,6 +36,9 @@ def get_all_badges(df_badges, df_player_badges) -> list[dict]:
         earners_count = earners_map.get(badge_id)
         if earners_count is None and has_player_badges:
             earners_count = 0
+        state = str(getattr(row, "state", "") or "live")
+        if state == "deprecated" and not include_deprecated and (earners_count is None or earners_count == 0):
+            continue
         badges.append(
             {
                 "badge_id": badge_id,
@@ -44,6 +47,7 @@ def get_all_badges(df_badges, df_player_badges) -> list[dict]:
                 "prestige": getattr(row, "prestige", 0),
                 "requirements": getattr(row, "requirements", None),
                 "earners_count": earners_count,
+                "state": state,
             }
         )
     return sorted(badges, key=lambda item: item["name"].lower())
@@ -100,6 +104,10 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
     icon = badge_icon(badge_id, badge.get("category"))
     requirements_summary = _summarize_requirement(badge.get("requirements"))
     earners_count = badge.get("earners_count")
+    state = str(badge.get("state") or "live")
+    state_label = None
+    if state in {"frozen", "deprecated"}:
+        state_label = state.capitalize()
     open_key = f"badge_earners_open::{badge_id}"
     open_state = st.session_state.setdefault(open_key, False)
     toggle_label = (
@@ -114,6 +122,7 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
             <div class="badge-card">
                 <div class="badge-card__icon">{icon}</div>
                 <div class="badge-card__name" title="{name}">{name}</div>
+                {f"<div class='badge-card__state'>{state_label}</div>" if state_label else ""}
                 <div class="badge-card__req">{requirements_summary}</div>
                 <div class="badge-card__meta">{'' if earners_count is None else f'{earners_count} earners'}</div>
             </div>
@@ -293,6 +302,17 @@ def render(ctx) -> None:
                 color: var(--text-muted);
                 min-height: 1.2em;
             }
+            .badge-card__state {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                font-size: 0.7rem;
+                color: var(--text-muted);
+                border: 1px solid var(--border);
+                border-radius: 999px;
+                padding: 0.1rem 0.5rem;
+                align-self: flex-start;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -306,7 +326,11 @@ def render(ctx) -> None:
         st.info("Badge data is still loading.")
         return
 
-    badges = get_all_badges(badge_defs, player_badges)
+    include_deprecated = False
+    if bool(getattr(ctx, "admin_logged_in", False)):
+        include_deprecated = st.toggle("Include deprecated badges", value=False)
+
+    badges = get_all_badges(badge_defs, player_badges, include_deprecated=include_deprecated)
     if not badges:
         st.caption("No badges are available yet.")
         return
