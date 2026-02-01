@@ -150,8 +150,12 @@ def compute_badge_awards(
     return awards, facts
 
 
-def build_player_match_facts(ctx) -> pd.DataFrame:
-    df_matches = getattr(ctx, "df_matches", None)
+def build_player_match_facts(
+    ctx, df_matches_override: pd.DataFrame | None = None, club_id_override: str | None = None
+) -> pd.DataFrame:
+    df_matches = df_matches_override
+    if df_matches is None:
+        df_matches = getattr(ctx, "df_matches", None)
     if df_matches is None or df_matches.empty:
         return _empty_facts()
 
@@ -163,7 +167,8 @@ def build_player_match_facts(ctx) -> pd.DataFrame:
         except Exception:
             rating_map = {}
 
-    filters = {"club_id": getattr(ctx, "club_id", None), "exclude_popups": True}
+    club_id = club_id_override if club_id_override is not None else getattr(ctx, "club_id", None)
+    filters = {"club_id": club_id, "exclude_popups": True}
     filtered = apply_match_filters(df_matches, filters)
     if filtered.empty:
         return _empty_facts()
