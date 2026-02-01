@@ -11,6 +11,7 @@ from jupr_app.domain.player_activity import (
     coerce_utc_datetime,
     max_activity_time,
 )
+from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 
 
 def process_matches(
@@ -46,6 +47,8 @@ def process_matches(
     overall_updates: dict[int, dict[str, Any]] = {}   # pid -> {"r","w","l","mp"}
     island_updates: dict[tuple[int, str], dict[str, Any]] = {}  # (pid, league) -> {"r","start","w","l","mp"}
     last_game_updates: dict[int, datetime] = {}
+    affected_players: set[int] = set()
+    match_payloads: list[dict[str, Any]] = []
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -234,6 +237,7 @@ def process_matches(
 
         for pid in (p1, p2, p3, p4):
             last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
+            affected_players.add(int(pid))
 
         stored_elo_delta = abs(do1) if (t1_outcome is True) else abs(do2)
 
@@ -265,6 +269,7 @@ def process_matches(
                 "tournament_game_id": m.get("tournament_game_id"),
             }
         )
+        match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})
 
     # -------------------------
     # Write match rows
@@ -274,6 +279,15 @@ def process_matches(
         for i in range(0, len(db_matches), CHUNK_M):
             chunk = db_matches[i : i + CHUNK_M]
             sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
+
+        if supabase is not None:
+            enqueue_badge_eval(
+                supabase,
+                club_id=str(club_id),
+                event_type="match_recorded",
+                player_ids=sorted(affected_players),
+                payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
+            )
 
     # -------------------------
     # Update overall player rows

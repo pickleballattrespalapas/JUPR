@@ -5,6 +5,7 @@ import json
 
 import pandas as pd
 
+from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
     """
@@ -257,6 +258,17 @@ def apply_bulk_match_edits(
     except Exception:
         # don't fail admin operation if recompute fails
         warnings.append("Unable to recompute last_game_at for players automatically. (Non-fatal)")
+
+    if updated_ids and supabase is not None:
+        for match_id in updated_ids:
+            enqueue_badge_eval(
+                supabase,
+                club_id=str(club_id),
+                event_type="match_updated",
+                player_ids=sorted(affected_players),
+                match_id=str(match_id),
+                payload={"updated_ids": updated_ids[:50]},
+            )
 
     return {
         "updated_count": len(updated_ids),

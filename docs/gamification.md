@@ -8,6 +8,14 @@ Badges live in `jupr_app/domain/gamification/badge_catalog.py`. Each `BadgeDefin
 
 When seeding, the catalog is upserted into the `badges` table so UI clients can build the Badge Codex.
 
+## Badge State (Awardability)
+Badges also have a `state` that controls award eligibility:
+- **live**: eligible for new awards.
+- **frozen**: no new awards, but previously earned badges remain visible.
+- **deprecated**: no new awards and treated as legacy; previously earned badges remain visible.
+
+State changes should be tracked with `state_changed_at` and optional `state_change_reason` in the `badges` table.
+
 ## Award Rules
 Award logic lives in the badge engine evaluators (`jupr_app/domain/gamification/evaluators.py`)
 and is registered in `jupr_app/domain/gamification/badge_registry.py`. The engine builds a
@@ -17,6 +25,19 @@ player-match fact table derived from match data. The rules:
 - Attach a narrative `tape_excerpt` inside `value_json` for each award
 
 Badges that need unavailable data should remain inactive in the catalog until the inputs exist.
+
+## Award Auditing
+Each award in `player_badges` can include provenance fields:
+- `awarded_by`: `engine`, `recompute`, or `admin` (default is `engine`).
+- `rule_version`: optional text to track evaluator revisions.
+- `eval_run_id`: optional link to a `badge_eval_runs` entry used for recompute/backfill runs.
+
+Recompute/backfill runs can be logged in `badge_eval_runs` with scope metadata and summaries.
+Strict recompute runs may soft-revoke awards by setting `revoked_at`, `revoked_by`, and `revoke_reason`.
+
+## Incremental evaluation queue
+Match ingestion and edits enqueue work in `badge_eval_queue` so badge evaluation can run
+incrementally instead of scanning all matches during page rendering.
 
 ## Story Cards
 `jupr_app/domain/gamification/story_engine.py` builds story cards with:

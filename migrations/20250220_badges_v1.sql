@@ -1,5 +1,12 @@
 create extension if not exists "pgcrypto";
 
+do $$
+begin
+    if not exists (select 1 from pg_type where typname = 'badge_state') then
+        create type badge_state as enum ('live', 'frozen', 'deprecated');
+    end if;
+end $$;
+
 create table if not exists badges (
     badge_id text primary key,
     name text not null,
@@ -7,10 +14,16 @@ create table if not exists badges (
     category text not null,
     is_stackable boolean not null default false,
     is_active boolean not null default true,
+    state badge_state not null default 'live',
+    state_changed_at timestamptz not null default now(),
+    state_change_reason text,
     created_at timestamptz not null default now()
 );
 
 alter table badges
+    add column if not exists state badge_state not null default 'live',
+    add column if not exists state_changed_at timestamptz not null default now(),
+    add column if not exists state_change_reason text,
     add column if not exists created_at timestamptz not null default now();
 
 alter table badges
@@ -104,24 +117,25 @@ create policy club_update_player_badges
         club_id = coalesce(current_setting('request.jwt.claims', true)::jsonb ->> 'club_id', '')
     );
 
-insert into badges (badge_id, name, prestige, category, is_stackable, is_active)
+insert into badges (badge_id, name, prestige, category, is_stackable, is_active, state)
 values
-    ('participant', 'Participant', 10, 'participation', false, true),
-    ('dedicated_participant_50', 'Dedicated Participant', 25, 'participation', false, true),
-    ('lifetime_participant_200', 'Lifetime Participant', 50, 'participation', false, true),
-    ('mountain_climber', 'Mountain Climber', 45, 'momentum', true, true),
-    ('breakthrough', 'Breakthrough', 55, 'momentum', false, true),
-    ('above_expectations', 'Above Expectations', 50, 'performance', true, true),
-    ('clutch_performer', 'Clutch Performer', 60, 'performance', true, true),
-    ('dominant_run', 'Dominant Run', 45, 'dominance', true, true),
-    ('high_output', 'High Output', 40, 'dominance', true, true),
-    ('battle_tested', 'Battle Tested', 50, 'quality', true, true),
-    ('consistency', 'Consistency', 60, 'quality', true, true),
-    ('giant_slayer', 'Giant Slayer', 75, 'rarity', true, true),
-    ('upset_champion', 'Upset Champion', 90, 'rarity', true, true)
+    ('participant', 'Participant', 10, 'participation', false, true, 'live'),
+    ('dedicated_participant_50', 'Dedicated Participant', 25, 'participation', false, true, 'live'),
+    ('lifetime_participant_200', 'Lifetime Participant', 50, 'participation', false, true, 'live'),
+    ('mountain_climber', 'Mountain Climber', 45, 'momentum', true, true, 'live'),
+    ('breakthrough', 'Breakthrough', 55, 'momentum', false, true, 'live'),
+    ('above_expectations', 'Above Expectations', 50, 'performance', true, true, 'live'),
+    ('clutch_performer', 'Clutch Performer', 60, 'performance', true, true, 'live'),
+    ('dominant_run', 'Dominant Run', 45, 'dominance', true, true, 'live'),
+    ('high_output', 'High Output', 40, 'dominance', true, true, 'live'),
+    ('battle_tested', 'Battle Tested', 50, 'quality', true, true, 'live'),
+    ('consistency', 'Consistency', 60, 'quality', true, true, 'live'),
+    ('giant_slayer', 'Giant Slayer', 75, 'rarity', true, true, 'live'),
+    ('upset_champion', 'Upset Champion', 90, 'rarity', true, true, 'live')
 on conflict (badge_id) do update set
     name = excluded.name,
     prestige = excluded.prestige,
     category = excluded.category,
     is_stackable = excluded.is_stackable,
-    is_active = excluded.is_active;
+    is_active = excluded.is_active,
+    state = excluded.state;

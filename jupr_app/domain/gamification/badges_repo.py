@@ -78,6 +78,10 @@ def upsert_player_badges(
     supabase: Any,
     club_id: str,
     candidates: Iterable[BadgeCandidate],
+    *,
+    awarded_by: str = "engine",
+    rule_version: str | None = None,
+    eval_run_id: str | None = None,
 ) -> list[BadgeCandidate]:
     global _PLAYER_BADGES_CONTRACT_CHECKED
     candidate_list = list(candidates)
@@ -119,6 +123,9 @@ def upsert_player_badges(
                 "match_id": candidate.match_id,
                 "value_num": candidate.value_num,
                 "value_json": value_json,
+                "awarded_by": awarded_by,
+                "rule_version": rule_version,
+                "eval_run_id": eval_run_id,
             }
         )
         created.append(candidate)

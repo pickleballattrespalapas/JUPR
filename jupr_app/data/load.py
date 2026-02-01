@@ -75,12 +75,16 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 supabase.table("badges")
                 .select(
                     "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                    "tier,icon_key,scope,created_at"
+                    "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
                 )
                 .execute()
             )
             df_badges = pd.DataFrame(badges_resp.data or [])
             if not df_badges.empty and "badge_id" in df_badges.columns:
+                if "state" not in df_badges.columns:
+                    df_badges["state"] = "live"
+                if "eval_triggers" not in df_badges.columns:
+                    df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
                 requirements_map = load_requirements_map()
                 df_badges["requirements"] = (
                     df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
@@ -101,7 +105,8 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 supabase.table("player_badges")
                 .select(
                     "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
-                    "match_id,value_num,value_json"
+                    "match_id,value_num,value_json,awarded_by,rule_version,eval_run_id,"
+                    "revoked_at,revoked_by,revoke_reason"
                 )
                 .eq("club_id", club_id)
                 .execute()
