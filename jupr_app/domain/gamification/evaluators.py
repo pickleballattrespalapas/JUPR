@@ -871,10 +871,18 @@ def evaluate_tournament_third_place(ctx: BadgeEvaluationContext) -> Iterable[Bad
     return [c for c in _cached_tournament_podium_candidates(ctx) if c.badge_id == "tournament_third_place"]
 
 
-def build_evaluation_context(ctx: Any, club_id: str, league_id: str | None, as_of: datetime | None) -> BadgeEvaluationContext:
-    facts = build_player_match_facts(ctx)
+def build_evaluation_context(
+    ctx: Any,
+    club_id: str,
+    league_id: str | None,
+    as_of: datetime | None,
+    df_matches_override: pd.DataFrame | None = None,
+) -> BadgeEvaluationContext:
+    facts = build_player_match_facts(ctx, df_matches_override=df_matches_override, club_id_override=club_id)
     if facts.empty:
-        matches = getattr(ctx, "df_matches", None)
+        matches = df_matches_override
+        if matches is None:
+            matches = getattr(ctx, "df_matches", None)
         if matches is None:
             matches = pd.DataFrame()
     else:

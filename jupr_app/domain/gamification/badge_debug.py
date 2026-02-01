@@ -45,11 +45,16 @@ def build_badge_debug_report(
         raw_matches = df_matches.head(int(limit_matches)).copy()
 
     if filtered_matches is None or match_audit is None:
+        context_filters = {"club_id": club_id, "exclude_popups": True}
+        if league_id:
+            context_filters["league_name"] = league_id
         filtered_matches, match_audit = apply_match_filters_with_audit(
-            raw_matches, {"club_id": club_id, "exclude_popups": True}
+            raw_matches, context_filters
         )
 
-    evaluation = build_evaluation_context(ctx, club_id, league_id, as_of=None)
+    evaluation = build_evaluation_context(
+        ctx, club_id, league_id, as_of=None, df_matches_override=filtered_matches
+    )
     report = BadgeDebugReport(
         club_id=str(club_id),
         league_id=league_id,
