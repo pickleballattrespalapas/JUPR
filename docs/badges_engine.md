@@ -14,6 +14,12 @@ The engine computes `BadgeCandidate` objects via the registry/evaluators and per
 `badges_repo.upsert_player_badges`, which enforces idempotency using the
 `club_id,player_id,badge_id,context_id` unique key.
 
+## Player badge uniqueness contract
+- **Uniqueness key:** `(club_id, player_id, badge_id, context_id)`
+- `context_id` encodes the award scope (overall / league / season / day) and **must always be set**.
+- `context_type` is informational only and does **not** participate in uniqueness.
+- A badge can be earned multiple times only if the `context_id` differs.
+
 ## How to run backfill
 ### Streamlit admin tool
 Use **Admin Tools → Badge Backfill**. This calls `ensure_badges()` with optional league and as-of

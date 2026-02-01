@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import os
+import re
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -10,6 +12,66 @@ from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant,
 
 
 logger = logging.getLogger(__name__)
+PLAYER_BADGES_CONFLICT_KEY = "club_id,player_id,badge_id,context_id"
+_PLAYER_BADGES_CONTRACT_CHECKED = False
+
+
+def ensure_player_badges_contract(supabase: Any) -> bool:
+    expected_columns = ["club_id", "player_id", "badge_id", "context_id"]
+    try:
+        resp = (
+            supabase.table("pg_indexes")
+            .select("schemaname,tablename,indexname,indexdef")
+            .eq("schemaname", "public")
+            .eq("tablename", "player_badges")
+            .execute()
+        )
+    except Exception:
+        logger.exception("Failed to verify player_badges unique index; skipping contract check")
+        return False
+
+    rows = resp.data or []
+    if _has_unique_index_on_columns(rows, expected_columns):
+        return True
+
+    logger.error(
+        "player_badges unique contract missing or mismatched. Expected unique index on (%s).",
+        ", ".join(expected_columns),
+    )
+    if _should_raise_on_schema_mismatch():
+        raise RuntimeError("player_badges unique index contract missing")
+    return False
+
+
+def _has_unique_index_on_columns(rows: Iterable[dict[str, Any]], expected: list[str]) -> bool:
+    expected_normalized = [col.strip().lower() for col in expected]
+    for row in rows:
+        indexdef = str(row.get("indexdef") or "")
+        if "UNIQUE" not in indexdef.upper():
+            continue
+        columns = _extract_index_columns(indexdef)
+        if columns == expected_normalized:
+            return True
+    return False
+
+
+def _extract_index_columns(indexdef: str) -> list[str]:
+    match = re.search(r"\(([^)]+)\)", indexdef)
+    if not match:
+        return []
+    columns = []
+    for col in match.group(1).split(","):
+        col = col.strip().strip('"')
+        if col:
+            columns.append(col.lower())
+    return columns
+
+
+def _should_raise_on_schema_mismatch() -> bool:
+    env = os.getenv("JUPR_ENV", "").lower()
+    if env in {"dev", "development", "local"}:
+        return True
+    return os.getenv("BADGE_DEBUG") == "1" or os.getenv("JUPR_ADMIN") == "1"
 
 
 def upsert_player_badges(
@@ -17,9 +79,14 @@ def upsert_player_badges(
     club_id: str,
     candidates: Iterable[BadgeCandidate],
 ) -> list[BadgeCandidate]:
+    global _PLAYER_BADGES_CONTRACT_CHECKED
     candidate_list = list(candidates)
     if not candidate_list:
         return []
+
+    if not _PLAYER_BADGES_CONTRACT_CHECKED:
+        ensure_player_badges_contract(supabase)
+        _PLAYER_BADGES_CONTRACT_CHECKED = True
 
     existing = _fetch_existing_keys(supabase, club_id, candidate_list)
     now = datetime.now(timezone.utc).isoformat()
@@ -27,9 +94,9 @@ def upsert_player_badges(
     created: list[BadgeCandidate] = []
 
     for candidate in candidate_list:
-        context_id = candidate.context_id
-        if context_id is None:
-            context_id = str(candidate.badge_id)
+        if candidate.context_id is None or str(candidate.context_id).strip() == "":
+            raise ValueError(f"Missing context_id for badge {candidate.badge_id} (player {candidate.player_id})")
+        context_id = str(candidate.context_id)
         key = (int(candidate.player_id), str(candidate.badge_id), str(context_id))
         if key in existing:
             continue
@@ -63,7 +130,7 @@ def upsert_player_badges(
     for i in range(0, len(rows), chunk):
         supabase.table("player_badges").upsert(
             rows[i : i + chunk],
-            on_conflict="club_id,player_id,badge_id,context_id",
+            on_conflict=PLAYER_BADGES_CONFLICT_KEY,
         ).execute()
     return created
 
@@ -93,8 +160,10 @@ def _fetch_existing_keys(
         except Exception:
             continue
         badge_id = str(row.get("badge_id"))
-        context_id = str(row.get("context_id") or badge_id)
-        existing.add((player_id, badge_id, context_id))
+        context_id = row.get("context_id")
+        if context_id is None:
+            continue
+        existing.add((player_id, badge_id, str(context_id)))
     return existing
 
 
