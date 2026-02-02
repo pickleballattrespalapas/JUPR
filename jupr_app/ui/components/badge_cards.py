@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import textwrap
 
 from markdown_it import MarkdownIt
 
@@ -48,13 +49,16 @@ def render_badge_card_html(
     meta_html = html.escape(str(meta_text)) if meta_text else ""
     state_html = html.escape(str(state_label)) if state_label else ""
 
-    return f"""
-    <div class="badge-card">
-        <div class="badge-card__icon">{icon_text}</div>
-        <div class="badge-card__name" title="{name_text}">{name_text}</div>
-        {f'<div class="badge-card__state">{state_html}</div>' if state_html else ''}
-        {f'<div class="badge-card__desc">{desc_html}</div>' if desc_html else ''}
-        <div class="badge-card__req"><span class="label">Req:</span> {req_html}</div>
-        <div class="badge-card__meta">{meta_html}</div>
-    </div>
-    """
+    # Dedent/strip prevents Streamlit markdown from treating indented HTML as code blocks.
+    return textwrap.dedent(
+        f"""
+        <div class="badge-card">
+            <div class="badge-card__icon">{icon_text}</div>
+            <div class="badge-card__name" title="{name_text}">{name_text}</div>
+            {f'<div class="badge-card__state">{state_html}</div>' if state_html else ''}
+            {f'<div class="badge-card__desc">{desc_html}</div>' if desc_html else ''}
+            <div class="badge-card__req"><span class="label">Req:</span> {req_html}</div>
+            <div class="badge-card__meta">{meta_html}</div>
+        </div>
+        """
+    ).strip()
