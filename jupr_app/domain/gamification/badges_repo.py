@@ -9,11 +9,13 @@ from uuid import uuid4
 
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant, render_template
+from postgrest.exceptions import APIError
 
 
 logger = logging.getLogger(__name__)
 PLAYER_BADGES_CONFLICT_KEY = "club_id,player_id,badge_id,context_id"
 _PLAYER_BADGES_CONTRACT_CHECKED = False
+_PLAYER_BADGES_OPTIONAL_COLUMNS = ("awarded_by", "rule_version", "eval_run_id")
 
 
 def ensure_player_badges_contract(supabase: Any) -> bool:
@@ -135,11 +137,45 @@ def upsert_player_badges(
 
     chunk = 200
     for i in range(0, len(rows), chunk):
-        supabase.table("player_badges").upsert(
+        _upsert_player_badges_chunk(
+            supabase,
             rows[i : i + chunk],
+        )
+    return created
+
+
+def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> None:
+    try:
+        supabase.table("player_badges").upsert(
+            rows,
             on_conflict=PLAYER_BADGES_CONFLICT_KEY,
         ).execute()
-    return created
+    except APIError as exc:
+        if _is_missing_column_error(exc, _PLAYER_BADGES_OPTIONAL_COLUMNS):
+            logger.warning(
+                "player_badges schema missing optional columns; retrying upsert without provenance fields."
+            )
+            stripped = [_strip_optional_columns(row, _PLAYER_BADGES_OPTIONAL_COLUMNS) for row in rows]
+            supabase.table("player_badges").upsert(
+                stripped,
+                on_conflict=PLAYER_BADGES_CONFLICT_KEY,
+            ).execute()
+        else:
+            raise
+
+
+def _strip_optional_columns(row: dict[str, Any], columns: Iterable[str]) -> dict[str, Any]:
+    cleaned = dict(row)
+    for col in columns:
+        cleaned.pop(col, None)
+    return cleaned
+
+
+def _is_missing_column_error(exc: APIError, columns: Iterable[str]) -> bool:
+    if getattr(exc, "code", None) != "42703":
+        return False
+    message = str(exc)
+    return any(col in message for col in columns)
 
 
 def _fetch_existing_keys(

@@ -273,6 +273,8 @@ def main():
             df_player_badges,
             name_to_id,
             id_to_name,
+            schema_degraded,
+            schema_degraded_reason,
         ) = get_data(CLUB_ID)
 
         ctx = AppContext(
@@ -289,7 +291,17 @@ def main():
             id_to_name=id_to_name,
             public_mode=PUBLIC_MODE,
             admin_logged_in=admin_logged_in,
+            schema_degraded=schema_degraded,
+            schema_degraded_reason=schema_degraded_reason,
         )
+
+        if admin_logged_in and schema_degraded:
+            st.warning(
+                "Badge schema is behind the app code. Apply migrations/20260625_badge_recompute_runs.sql and "
+                "migrations/20260630_player_badges_revocation.sql to restore awarded_by/rule_version/"
+                "eval_run_id/revoked_* support. "
+                f"Details: {schema_degraded_reason}"
+            )
 
         if df_player_badges is not None and df_player_badges.empty:
             player_ids = []

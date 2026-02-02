@@ -61,6 +61,56 @@ Each run writes a row to `badge_eval_runs` and, when updating awards, tags `play
 `awarded_by='recompute'`, a `rule_version` hash, and the `eval_run_id`. Strict mode soft-revokes
 awards by setting `revoked_at`, `revoked_by`, and `revoke_reason`.
 
+## Schema notes (player_badges provenance + revocation)
+The recompute engine expects the migrations in:
+- `migrations/20260625_badge_recompute_runs.sql`
+- `migrations/20260630_player_badges_revocation.sql`
+
+If your Supabase environment isn't applying migrations automatically, run the SQL below in the
+Supabase SQL editor to add the missing columns and grants:
+
+```sql
+create table if not exists public.badge_eval_runs (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  created_by text,
+  mode text not null,
+  scope_json jsonb not null default '{}'::jsonb,
+  status text not null default 'queued',
+  started_at timestamptz,
+  finished_at timestamptz,
+  summary_json jsonb not null default '{}'::jsonb,
+  error text
+);
+
+alter table if exists public.player_badges
+  add column if not exists awarded_by text not null default 'engine',
+  add column if not exists rule_version text,
+  add column if not exists eval_run_id uuid references public.badge_eval_runs(id),
+  add column if not exists revoked_at timestamptz,
+  add column if not exists revoked_by text,
+  add column if not exists revoke_reason text;
+
+grant select (
+  id,
+  club_id,
+  player_id,
+  badge_id,
+  earned_at,
+  context_type,
+  context_id,
+  match_id,
+  value_num,
+  value_json,
+  awarded_by,
+  rule_version,
+  eval_run_id,
+  revoked_at,
+  revoked_by,
+  revoke_reason
+) on public.player_badges to anon, authenticated;
+```
+
 ## Incremental badge evaluation
 When matches are ingested or edited, the app enqueues badge evaluation work instead of evaluating
 the full match history on every page view:

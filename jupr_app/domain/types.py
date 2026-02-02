@@ -17,3 +17,5 @@ class AppContext:
     id_to_name: dict
     public_mode: bool
     admin_logged_in: bool
+    schema_degraded: bool = False
+    schema_degraded_reason: str | None = None
