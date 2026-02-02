@@ -4,7 +4,7 @@ import logging
 
 import streamlit as st
 
-from jupr_app.ui.helpers import display_requirement_text
+from jupr_app.ui.helpers import display_requirement_text, render_requirement_inline_html
 from jupr_app.ui.pages.players import badge_icon
 
 logger = logging.getLogger(__name__)
@@ -54,13 +54,7 @@ def get_all_badges(df_badges, df_player_badges, *, include_deprecated: bool = Fa
 
 
 def _summarize_requirement(requirements) -> str:
-    text = display_requirement_text(requirements)
-    if not text:
-        return "Req: -"
-    normalized = " ".join(str(text).split())
-    if len(normalized) > 40:
-        normalized = f"{normalized[:37].rstrip()}..."
-    return f"Req: {normalized}"
+    return display_requirement_text(requirements)
 
 
 def _group_badges(badges: list[dict]) -> list[tuple[str, list[dict]]]:
@@ -103,6 +97,7 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
     name = badge.get("name", "Badge")
     icon = badge_icon(badge_id, badge.get("category"))
     requirements_summary = _summarize_requirement(badge.get("requirements"))
+    requirements_html = render_requirement_inline_html(requirements_summary)
     earners_count = badge.get("earners_count")
     state = str(badge.get("state") or "live")
     state_label = None
@@ -123,7 +118,7 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
                 <div class="badge-card__icon">{icon}</div>
                 <div class="badge-card__name" title="{name}">{name}</div>
                 {f"<div class='badge-card__state'>{state_label}</div>" if state_label else ""}
-                <div class="badge-card__req">{requirements_summary}</div>
+                <div class="badge-card__req"><span class="label">Req:</span> {requirements_html}</div>
                 <div class="badge-card__meta">{'' if earners_count is None else f'{earners_count} earners'}</div>
             </div>
             """,
@@ -293,9 +288,15 @@ def render(ctx) -> None:
             .badge-card__req {
                 font-size: 0.8rem;
                 color: var(--text-muted);
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
+                white-space: normal;
+                overflow: visible;
+                text-overflow: clip;
+                display: block;
+            }
+            .badge-card__req .label {
+                font-weight: 600;
+                margin-right: 0.25rem;
+                color: var(--text-muted);
             }
             .badge-card__meta {
                 font-size: 0.75rem;

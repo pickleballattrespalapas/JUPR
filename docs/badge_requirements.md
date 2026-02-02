@@ -82,7 +82,7 @@ Unlock: Requirements TBD.
 Unlock: Your first **clutch upset**: win by **2 points or fewer** when your **pre‑match win chance** is **40% or less**.
 
 ## clutch_performer — Clutch Performer (non-stackable)
-Unlock: Requirements TBD.
+Unlock: Win **3+ matches** decided by **2 points or fewer** in a single season.
 
 ---
 
@@ -162,16 +162,16 @@ Unlock: Against your **nemesis**, win a match that makes your head‑to‑head r
 # Consistency & Reliability
 
 ## battle_tested — Battle Tested (stackable)
-Unlock: Requirements TBD.
+Unlock: Play **10+ matches** in a single **ISO week** (Mon–Sun).
 
 ## consistency — Consistency (stackable)
-Unlock: Requirements TBD.
+Unlock: In the same season, post a win rate between **55–65%** across **30+ matches**.
 
 ## steady_hand — Steady Hand (non-stackable in catalog; awarded once per season in rules)
 Unlock: In the same season, play **20+ matches** and maintain a win rate of **60%+**.
 
 ## mr_reliable — Mr. Reliable (inactive)
-Unlock: Requirements TBD.
+Unlock: In the same season, play **40+ matches** and maintain a win rate of **50%+**.
 
 ---
 
