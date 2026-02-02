@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import textwrap
 
 import streamlit as st
 
@@ -115,10 +116,7 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
             copy_plain=copy_plain,
             state_label=state_label,
         )
-        st.markdown(
-            card_html,
-            unsafe_allow_html=True,
-        )
+        st.markdown(textwrap.dedent(card_html).strip(), unsafe_allow_html=True)
         if st.button(toggle_label, key=f"badge_codex_toggle_{badge_id}", use_container_width=True):
             open_state = not open_state
             st.session_state[open_key] = open_state
