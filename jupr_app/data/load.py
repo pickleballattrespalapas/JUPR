@@ -4,6 +4,7 @@ import pandas as pd
 from jupr_app.domain.player_activity import add_activity_columns
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
+from postgrest.exceptions import APIError
 
 
 def load_data(supabase, club_id: str, match_limit: int = 5000):
@@ -71,14 +72,29 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_meta = pd.DataFrame(meta_resp.data or [])
 
             # Badges (global definitions)
-            badges_resp = (
-                supabase.table("badges")
-                .select(
-                    "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                    "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
+            try:
+                # Support older badge schema variants that lack state-related columns.
+                badges_resp = (
+                    supabase.table("badges")
+                    .select(
+                        "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                        "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
+                    )
+                    .execute()
                 )
-                .execute()
-            )
+            except APIError as exc:
+                message = str(exc)
+                if getattr(exc, "code", None) == "42703" or "badges.state does not exist" in message:
+                    badges_resp = (
+                        supabase.table("badges")
+                        .select(
+                            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                            "tier,icon_key,scope,created_at"
+                        )
+                        .execute()
+                    )
+                else:
+                    raise
             df_badges = pd.DataFrame(badges_resp.data or [])
             if not df_badges.empty and "badge_id" in df_badges.columns:
                 if "state" not in df_badges.columns:
