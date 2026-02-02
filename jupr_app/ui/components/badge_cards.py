@@ -18,12 +18,16 @@ _HTML_TAG_RE = re.compile(r"<[^>]*>")
 def _tripwire_plain_text(text: str | None, *, field: str) -> str | None:
     if not text:
         return None
-    if "<div" in text or "badge-card__" in text or "<" in text:
+    raw_text = str(text)
+    probe_text = raw_text
+    if "&lt;" in raw_text or "&#60;" in raw_text or "&#x3c;" in raw_text:
+        probe_text = html.unescape(raw_text)
+    if "badge-card__" in probe_text or "<div" in probe_text or _HTML_TAG_RE.search(probe_text):
         logger.error("HTML detected at UI boundary for badge %s; stripping tags.", field)
-        stripped = _HTML_TAG_RE.sub("", text)
+        stripped = _HTML_TAG_RE.sub("", probe_text)
         stripped = stripped.replace("<", "").replace(">", "")
         return stripped.strip()
-    return text
+    return raw_text
 
 
 def render_inline_badge_text(text: str | None) -> str:
