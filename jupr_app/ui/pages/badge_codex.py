@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
-import textwrap
+import os
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
+from jupr_app.ui.components import badge_cards
 from jupr_app.ui.components.badge_cards import render_badge_card_html
 from jupr_app.ui.pages.players import badge_icon
 
@@ -91,7 +93,14 @@ def _group_badges(badges: list[dict]) -> list[tuple[str, list[dict]]]:
     return [(section, sorted(items, key=lambda item: item["name"].lower())) for section, items in ordered_sections]
 
 
-def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> None:
+def _render_badge_card(
+    badge: dict,
+    column,
+    df_player_badges,
+    df_players,
+    *,
+    debug_badges: bool = False,
+) -> None:
     badge_id = badge.get("badge_id", "")
     name = badge.get("name", "Badge")
     icon = badge_icon(badge_id, badge.get("category"))
@@ -116,7 +125,44 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
             copy_plain=copy_plain,
             state_label=state_label,
         )
-        st.markdown(textwrap.dedent(card_html).strip(), unsafe_allow_html=True)
+        final_md = card_html
+        if debug_badges and not st.session_state.get("badge_codex_debug_shown"):
+            st.session_state["badge_codex_debug_shown"] = True
+            lines = final_md.splitlines()
+            has_blank_line = any(line.strip() == "" for line in lines)
+            has_4space_lines = any(
+                line.startswith("    ") or line.startswith("\t") for line in lines if line.strip()
+            )
+            blank_then_4space = any(
+                lines[idx].strip() == "" and (lines[idx + 1].startswith("    ") or lines[idx + 1].startswith("\t"))
+                for idx in range(len(lines) - 1)
+            )
+            first_nonblank = next((line for line in lines if line.strip()), "")
+            leading_ws = len(first_nonblank) - len(first_nonblank.lstrip(" \t")) if first_nonblank else 0
+            starts_with_div_at_col0 = first_nonblank.lstrip(" \t").startswith("<div") and leading_ws <= 3
+            contains_escaped_lt = "&lt;" in final_md or "&#60;" in final_md or "&#x3c;" in final_md
+            analysis_lines = ["line | lead_ws | blank | preview", "-" * 78]
+            for idx, line in enumerate(lines, start=1):
+                lead = len(line) - len(line.lstrip(" \t"))
+                is_blank = line.strip() == ""
+                analysis_lines.append(f"{idx:>4} | {lead:>7} | {str(is_blank):<5} | {line[:60]}")
+            st.caption("Badge render debug (first card only).")
+            st.text(f"badge_cards.__file__ = {badge_cards.__file__}")
+            st.text(f"BADGE_RENDER_REV = {badge_cards.BADGE_RENDER_REV}")
+            st.code(final_md, language="html")
+            st.text("\n".join(analysis_lines))
+            st.text(
+                "Flags: "
+                f"has_blank_line={has_blank_line}, "
+                f"has_4space_lines={has_4space_lines}, "
+                f"blank_then_4space={blank_then_4space}, "
+                f"starts_with_div_at_col0={starts_with_div_at_col0}, "
+                f"contains_escaped_lt={contains_escaped_lt}"
+            )
+            if blank_then_4space:
+                st.warning("Debug guard: blank line followed by 4-space indentation detected.")
+            components.html(final_md, height=260, scrolling=True)
+        st.markdown(final_md, unsafe_allow_html=True)
         if st.button(toggle_label, key=f"badge_codex_toggle_{badge_id}", use_container_width=True):
             open_state = not open_state
             st.session_state[open_key] = open_state
@@ -313,6 +359,8 @@ def render(ctx) -> None:
     )
 
     df_players = getattr(ctx, "df_players_all", None)
+    debug_env = os.getenv("JUPR_DEBUG_BADGES") == "1"
+    debug_badges = st.sidebar.checkbox("Debug badge render", value=debug_env)
 
     badge_defs = getattr(ctx, "df_badges", None)
     player_badges = getattr(ctx, "df_player_badges", None)
@@ -340,5 +388,6 @@ def render(ctx) -> None:
                 columns[idx % 3],
                 player_badges,
                 df_players,
+                debug_badges=debug_badges,
             )
         st.markdown("<div style='height: 0.5rem'></div>", unsafe_allow_html=True)
