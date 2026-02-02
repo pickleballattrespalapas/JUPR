@@ -117,16 +117,32 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 )
 
             # Player badges (club-scoped)
-            pb_resp = (
-                supabase.table("player_badges")
-                .select(
-                    "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
-                    "match_id,value_num,value_json,awarded_by,rule_version,eval_run_id,"
-                    "revoked_at,revoked_by,revoke_reason"
+            try:
+                pb_resp = (
+                    supabase.table("player_badges")
+                    .select(
+                        "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
+                        "match_id,value_num,value_json,awarded_by,rule_version,eval_run_id,"
+                        "revoked_at,revoked_by,revoke_reason"
+                    )
+                    .eq("club_id", club_id)
+                    .execute()
                 )
-                .eq("club_id", club_id)
-                .execute()
-            )
+            except APIError as exc:
+                message = str(exc)
+                if getattr(exc, "code", None) == "42703" or "player_badges.awarded_by does not exist" in message:
+                    pb_resp = (
+                        supabase.table("player_badges")
+                        .select(
+                            "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
+                            "match_id,value_num,value_json,rule_version,eval_run_id,"
+                            "revoked_at,revoked_by,revoke_reason"
+                        )
+                        .eq("club_id", club_id)
+                        .execute()
+                    )
+                else:
+                    raise
             df_player_badges = pd.DataFrame(pb_resp.data or [])
 
             # Mappings
