@@ -9,11 +9,12 @@ import streamlit as st
 import pandas as pd
 from streamlit.components.v1 import html as st_html
 
+from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
+from jupr_app.ui.components.badge_cards import render_inline_badge_text
 from jupr_app.ui.helpers import (
     qp_get,
     build_match_explorer_link,
     display_requirement_text,
-    render_requirement_inline_html,
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
@@ -1309,10 +1310,11 @@ def render(ctx):
             else:
                 featured_cards = []
                 for badge in featured:
+                    copy_plain = build_badge_copy_plain(badge)
                     icon = badge_icon(badge.get("badge_id"), badge.get("category"))
                     stack = badge.get("stack_count", 1)
                     stack_text = f" ×{stack}" if stack and stack > 1 else ""
-                    requirements_html = render_requirement_inline_html(badge.get("requirements"))
+                    requirements_html = render_inline_badge_text(copy_plain.req_text)
                     featured_cards.append(
                         f"""
                     <div class="badge-card">
@@ -1380,13 +1382,14 @@ def render(ctx):
                     card_items = []
                     for badge in visible_badges:
                         status = badge.get("status")
+                        copy_plain = build_badge_copy_plain(badge)
                         name = html.escape(str(badge.get("name", "Badge")))
                         prestige = int(badge.get("prestige", 0) or 0)
                         icon = badge_icon(badge.get("badge_id"), badge.get("category"))
                         stack = badge.get("stack_count", 1)
                         stack_text = f" ×{stack}" if stack and stack > 1 else ""
                         if status == "locked":
-                            requirements_html = render_requirement_inline_html(badge.get("requirements"))
+                            requirements_html = render_inline_badge_text(copy_plain.req_text)
                             card_items.append(
                                 f"""
                             <div class="badge-card silhouette">
@@ -1400,7 +1403,7 @@ def render(ctx):
                             """
                             )
                         else:
-                            requirements_html = render_requirement_inline_html(badge.get("requirements"))
+                            requirements_html = render_inline_badge_text(copy_plain.req_text)
                             card_items.append(
                                 f"""
                             <div class="badge-card">
