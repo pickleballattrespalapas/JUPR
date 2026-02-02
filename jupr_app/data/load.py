@@ -5,14 +5,95 @@ from jupr_app.domain.player_activity import add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
+import re
 from postgrest.exceptions import APIError
+
+
+PLAYER_BADGES_BASE_COLUMNS = [
+    "id",
+    "club_id",
+    "player_id",
+    "badge_id",
+    "earned_at",
+    "context_type",
+    "context_id",
+    "match_id",
+    "value_num",
+    "value_json",
+]
+PLAYER_BADGES_OPTIONAL_COLUMNS = [
+    "awarded_by",
+    "rule_version",
+    "eval_run_id",
+    "revoked_at",
+    "revoked_by",
+    "revoke_reason",
+]
+
+
+def _missing_player_badges_columns(exc: APIError) -> set[str]:
+    message = str(exc)
+    missing = {col for col in PLAYER_BADGES_OPTIONAL_COLUMNS if col in message}
+    if missing:
+        return missing
+    matches = re.findall(r"player_badges\\.([a-zA-Z0-9_]+)", message)
+    return {col for col in matches if col in PLAYER_BADGES_OPTIONAL_COLUMNS}
+
+
+def _ensure_player_badges_columns(df: pd.DataFrame) -> pd.DataFrame:
+    defaults = {
+        "awarded_by": "engine",
+        "rule_version": None,
+        "eval_run_id": None,
+        "revoked_at": None,
+        "revoked_by": None,
+        "revoke_reason": None,
+    }
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    return df
+
+
+def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, str | None]:
+    schema_degraded = False
+    schema_degraded_reason = None
+    select_cols = ",".join(PLAYER_BADGES_BASE_COLUMNS + PLAYER_BADGES_OPTIONAL_COLUMNS)
+    try:
+        pb_resp = (
+            supabase.table("player_badges")
+            .select(select_cols)
+            .eq("club_id", club_id)
+            .execute()
+        )
+    except APIError as exc:
+        missing = _missing_player_badges_columns(exc)
+        if getattr(exc, "code", None) == "42703" and missing:
+            schema_degraded = True
+            schema_degraded_reason = (
+                "player_badges missing columns "
+                f"{', '.join(sorted(missing))}; apply migrations/20260625_badge_recompute_runs.sql and "
+                "migrations/20260630_player_badges_revocation.sql."
+            )
+            legacy_select = ",".join(PLAYER_BADGES_BASE_COLUMNS)
+            pb_resp = (
+                supabase.table("player_badges")
+                .select(legacy_select)
+                .eq("club_id", club_id)
+                .execute()
+            )
+        else:
+            raise
+    df_player_badges = pd.DataFrame(pb_resp.data or [])
+    df_player_badges = _ensure_player_badges_columns(df_player_badges)
+    return df_player_badges, schema_degraded, schema_degraded_reason
 
 
 def load_data(supabase, club_id: str, match_limit: int = 5000):
     """
     Loads club-scoped tables and returns:
       df_players_all, df_players_active, df_leagues, df_matches, df_meta, df_badges,
-      df_player_badges, name_to_id, id_to_name
+      df_player_badges, name_to_id, id_to_name, schema_degraded, schema_degraded_reason
 
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
@@ -23,6 +104,8 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
 
     for attempt in range(max_retries):
         try:
+            schema_degraded = False
+            schema_degraded_reason = None
             # Players
             p_resp = (
                 supabase.table("players")
@@ -121,33 +204,10 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 )
 
             # Player badges (club-scoped)
-            try:
-                pb_resp = (
-                    supabase.table("player_badges")
-                    .select(
-                        "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
-                        "match_id,value_num,value_json,awarded_by,rule_version,eval_run_id,"
-                        "revoked_at,revoked_by,revoke_reason"
-                    )
-                    .eq("club_id", club_id)
-                    .execute()
-                )
-            except APIError as exc:
-                message = str(exc)
-                if getattr(exc, "code", None) == "42703" or "player_badges.awarded_by does not exist" in message:
-                    pb_resp = (
-                        supabase.table("player_badges")
-                        .select(
-                            "id,club_id,player_id,badge_id,earned_at,context_type,context_id,"
-                            "match_id,value_num,value_json,rule_version,eval_run_id,"
-                            "revoked_at,revoked_by,revoke_reason"
-                        )
-                        .eq("club_id", club_id)
-                        .execute()
-                    )
-                else:
-                    raise
-            df_player_badges = pd.DataFrame(pb_resp.data or [])
+            df_player_badges, schema_degraded, schema_degraded_reason = _fetch_player_badges(
+                supabase,
+                club_id,
+            )
 
             # Mappings
             if (
@@ -200,6 +260,8 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 df_player_badges,
                 name_to_id,
                 id_to_name,
+                schema_degraded,
+                schema_degraded_reason,
             )
 
         except Exception as e:

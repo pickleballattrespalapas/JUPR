@@ -78,6 +78,8 @@ def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: 
         df_player_badges,
         name_to_id,
         id_to_name,
+        schema_degraded,
+        schema_degraded_reason,
     ) = load_data(supabase, club_id, match_limit=match_limit)
     return SimpleNamespace(
         supabase=supabase,
@@ -93,6 +95,8 @@ def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: 
         id_to_name=id_to_name,
         public_mode=False,
         admin_logged_in=True,
+        schema_degraded=schema_degraded,
+        schema_degraded_reason=schema_degraded_reason,
     )
 
 
