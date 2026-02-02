@@ -4,7 +4,8 @@ import logging
 
 import streamlit as st
 
-from jupr_app.ui.helpers import render_requirement_inline_html
+from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
+from jupr_app.ui.components.badge_cards import render_badge_card_html
 from jupr_app.ui.pages.players import badge_icon
 
 logger = logging.getLogger(__name__)
@@ -93,11 +94,6 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
     badge_id = badge.get("badge_id", "")
     name = badge.get("name", "Badge")
     icon = badge_icon(badge_id, badge.get("category"))
-    requirements_html = render_requirement_inline_html(badge.get("requirements"))
-    description_md = badge.get("description_md")
-    description_html = (
-        render_requirement_inline_html(description_md) if description_md else ""
-    )
     earners_count = badge.get("earners_count")
     state = str(badge.get("state") or "live")
     state_label = None
@@ -112,17 +108,15 @@ def _render_badge_card(badge: dict, column, df_player_badges, df_players) -> Non
     )
 
     with column:
+        copy_plain = build_badge_copy_plain(badge, earners_count=earners_count)
+        card_html = render_badge_card_html(
+            name=name,
+            icon=icon,
+            copy_plain=copy_plain,
+            state_label=state_label,
+        )
         st.markdown(
-            f"""
-            <div class="badge-card">
-                <div class="badge-card__icon">{icon}</div>
-                <div class="badge-card__name" title="{name}">{name}</div>
-                {f"<div class='badge-card__state'>{state_label}</div>" if state_label else ""}
-                {f"<div class='badge-card__desc'>{description_html}</div>" if description_html else ""}
-                <div class="badge-card__req"><span class="label">Req:</span> {requirements_html}</div>
-                <div class="badge-card__meta">{'' if earners_count is None else f'{earners_count} earners'}</div>
-            </div>
-            """,
+            card_html,
             unsafe_allow_html=True,
         )
         if st.button(toggle_label, key=f"badge_codex_toggle_{badge_id}", use_container_width=True):
