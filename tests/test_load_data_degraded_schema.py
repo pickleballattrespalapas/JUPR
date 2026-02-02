@@ -62,7 +62,7 @@ class _FakeSupabase:
 
 
 def test_load_data_degrades_player_badges_schema(monkeypatch):
-    monkeypatch.setenv("JUPR_SKIP_DB_PREFLIGHT", "1")
+    monkeypatch.setenv("JUPR_SKIP_BADGE_SCHEMA_PREFLIGHT", "1")
     supabase = _FakeSupabase()
 
     (
