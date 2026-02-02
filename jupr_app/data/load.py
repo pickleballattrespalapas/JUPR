@@ -2,6 +2,7 @@ import time
 import pandas as pd
 
 from jupr_app.domain.player_activity import add_activity_columns
+from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from postgrest.exceptions import APIError
@@ -104,6 +105,9 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 requirements_map = load_requirements_map()
                 df_badges["requirements"] = (
                     df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
+                )
+                df_badges["description_md"] = (
+                    df_badges["badge_id"].astype(str).map(BADGE_DESCRIPTIONS_MD).fillna("")
                 )
                 schema_map = badge_schema_by_id()
                 df_badges["badge_status"] = df_badges["badge_id"].astype(str).map(
