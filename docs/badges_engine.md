@@ -111,6 +111,13 @@ grant select (
 ) on public.player_badges to anon, authenticated;
 ```
 
+### Applying migrations from the repo
+If you have direct Postgres access, apply migrations in order with:
+
+```bash
+DATABASE_URL="postgres://USER:PASSWORD@HOST:5432/dbname" make db-migrate
+```
+
 ## Incremental badge evaluation
 When matches are ingested or edited, the app enqueues badge evaluation work instead of evaluating
 the full match history on every page view:
