@@ -5,6 +5,7 @@ from jupr_app.domain.player_activity import add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
+from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
 import re
 from postgrest.exceptions import APIError
 
@@ -98,6 +99,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
     club_id = str(club_id)
+    ensure_badge_schema_preflight(supabase)
 
     max_retries = 3
     last_err = None

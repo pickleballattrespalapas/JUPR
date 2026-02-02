@@ -61,7 +61,8 @@ class _FakeSupabase:
         return _FakeTableQuery(self, name)
 
 
-def test_load_data_degrades_player_badges_schema():
+def test_load_data_degrades_player_badges_schema(monkeypatch):
+    monkeypatch.setenv("JUPR_SKIP_DB_PREFLIGHT", "1")
     supabase = _FakeSupabase()
 
     (
