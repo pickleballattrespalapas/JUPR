@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import textwrap
 
 from markdown_it import MarkdownIt
 
@@ -17,12 +18,16 @@ _HTML_TAG_RE = re.compile(r"<[^>]*>")
 def _tripwire_plain_text(text: str | None, *, field: str) -> str | None:
     if not text:
         return None
-    if "<div" in text or "badge-card__" in text or "<" in text:
+    raw_text = str(text)
+    probe_text = raw_text
+    if "&lt;" in raw_text or "&#60;" in raw_text or "&#x3c;" in raw_text:
+        probe_text = html.unescape(raw_text)
+    if "badge-card__" in probe_text or "<div" in probe_text or _HTML_TAG_RE.search(probe_text):
         logger.error("HTML detected at UI boundary for badge %s; stripping tags.", field)
-        stripped = _HTML_TAG_RE.sub("", text)
+        stripped = _HTML_TAG_RE.sub("", probe_text)
         stripped = stripped.replace("<", "").replace(">", "")
         return stripped.strip()
-    return text
+    return raw_text
 
 
 def render_inline_badge_text(text: str | None) -> str:
@@ -48,13 +53,16 @@ def render_badge_card_html(
     meta_html = html.escape(str(meta_text)) if meta_text else ""
     state_html = html.escape(str(state_label)) if state_label else ""
 
-    return f"""
-    <div class="badge-card">
-        <div class="badge-card__icon">{icon_text}</div>
-        <div class="badge-card__name" title="{name_text}">{name_text}</div>
-        {f'<div class="badge-card__state">{state_html}</div>' if state_html else ''}
-        {f'<div class="badge-card__desc">{desc_html}</div>' if desc_html else ''}
-        <div class="badge-card__req"><span class="label">Req:</span> {req_html}</div>
-        <div class="badge-card__meta">{meta_html}</div>
-    </div>
-    """
+    # Dedent/strip prevents Streamlit markdown from treating indented HTML as code blocks.
+    return textwrap.dedent(
+        f"""
+        <div class="badge-card">
+            <div class="badge-card__icon">{icon_text}</div>
+            <div class="badge-card__name" title="{name_text}">{name_text}</div>
+            {f'<div class="badge-card__state">{state_html}</div>' if state_html else ''}
+            {f'<div class="badge-card__desc">{desc_html}</div>' if desc_html else ''}
+            <div class="badge-card__req"><span class="label">Req:</span> {req_html}</div>
+            <div class="badge-card__meta">{meta_html}</div>
+        </div>
+        """
+    ).strip()
