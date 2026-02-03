@@ -6,6 +6,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from jupr_app.domain.events import upsert_or_get_active_event
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.ui.layout import page_shell
@@ -52,14 +53,19 @@ def render(ctx):
         selected_league = c2.selectbox("Select League", opts, key="mu_selected_league")
         match_type_db = "Live Match"
         is_popup = False
+        popup_event_name = None
     else:
-        selected_league = c2.text_input("Event Name", "Saturday Social", key="mu_event_name")
+        popup_event_name = c2.text_input("Event Name", "Saturday Social", key="mu_event_name")
         match_type_db = "PopUp"
         is_popup = True
 
     if is_popup:
-        selected_league = (selected_league or "").strip() or "Pop-Up Event"
-        selected_league = f"POPUP::{selected_league}"
+        popup_event_name = (popup_event_name or "").strip() or "Pop-Up Event"
+        selected_league = "POPUP"
+        if st.session_state.get("mu_event_id_name") != popup_event_name:
+            st.session_state.mu_event_id = None
+        if st.session_state.get("mu_event_id"):
+            st.caption(f"Event ID: {st.session_state.mu_event_id}")
 
     week_tag = c3.selectbox(
         "Week / Session",
@@ -119,6 +125,15 @@ def render(ctx):
         st.session_state.mu_batch_df = edited_batch.copy()
 
         if st.button("Submit Batch", key="mu_submit_batch"):
+            event_id = None
+            if is_popup:
+                event_id = upsert_or_get_active_event(
+                    supabase,
+                    club_id=str(club_id),
+                    name=popup_event_name,
+                )
+                st.session_state.mu_event_id = event_id
+                st.session_state.mu_event_id_name = popup_event_name
             valid_batch = []
             for _, row in edited_batch.iterrows():
                 try:
@@ -141,6 +156,8 @@ def render(ctx):
                             "match_type": match_type_db,
                             "week_tag": week_tag,
                             "is_popup": is_popup,
+                            "context_type": "event" if is_popup else None,
+                            "context_id": event_id if is_popup else None,
                         }
                     )
 
@@ -200,6 +217,14 @@ def render(ctx):
             )
 
             if st.form_submit_button("Generate"):
+                if is_popup:
+                    event_id = upsert_or_get_active_event(
+                        supabase,
+                        club_id=str(club_id),
+                        name=popup_event_name,
+                    )
+                    st.session_state.mu_event_id = event_id
+                    st.session_state.mu_event_id_name = popup_event_name
                 st.session_state.mu_lc_schedule = []
                 st.session_state.mu_active_lg = selected_league
                 st.session_state.mu_active_wk = week_tag
@@ -243,6 +268,10 @@ def render(ctx):
                                 "match_type": st.session_state.mu_active_mt,
                                 "week_tag": st.session_state.mu_active_wk,
                                 "is_popup": bool(st.session_state.mu_active_is_popup),
+                                "context_type": "event" if st.session_state.mu_active_is_popup else None,
+                                "context_id": st.session_state.get("mu_event_id")
+                                if st.session_state.mu_active_is_popup
+                                else None,
                             }
                         )
 
