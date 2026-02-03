@@ -499,6 +499,7 @@ def render(ctx):
             r0["player_id"] = r0["player_id"].astype(int)
         if "tier_id" in r0.columns:
             r0["tier_id"] = r0["tier_id"].astype(str)
+            r0["tier_id"] = r0["tier_id"].apply(normalize_tier_id)
         if "is_active" in r0.columns:
             # Supabase booleans come back as bool; keep as-is
             pass

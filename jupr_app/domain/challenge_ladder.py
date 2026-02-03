@@ -68,7 +68,9 @@ def normalize_tier_id(tier_id: str) -> str:
     tid = str(tier_id or "").strip().upper()
     if tid == "EMER":
         return "DEV"
-    return tid or "DEV"
+    if tid == "":
+        return "DEV"
+    return tid
 
 
 def tier_for_jupr(jupr: float) -> str:
@@ -116,6 +118,8 @@ def sorted_tiers(tiers: list[str]) -> list[str]:
     ordered = [tid for tid in TIER_ORDER if tid in input_set and not (tid in seen or seen.add(tid))]
     extras = [str(t) for t in tiers if str(t) not in TIER_ORDER and str(t) not in seen and not seen.add(str(t))]
     return ordered + extras
+
+
 
 
 # -------------------------
@@ -420,3 +424,9 @@ def ladder_compute_challenge_outcome(df_match_rows: pd.DataFrame) -> Optional[Di
         "points_chal": pts_chal,
         "point_diff_def": pdiff,
     }
+
+
+# Optional cleanup:
+# update ladder_roster set tier_id='DEV' where tier_id='EMER';
+# update ladder_challenges set tier_id='DEV' where tier_id='EMER';
+# update ladder_player_flags set tier_move_dest_tier='DEV' where tier_move_dest_tier='EMER';
