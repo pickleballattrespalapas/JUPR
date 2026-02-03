@@ -9,6 +9,7 @@ import streamlit as st
 
 from jupr_app.domain.challenge_ladder import (
     TIER_ORDER,
+    normalize_tier_id,
     tier_title,
     ladder_nm,
     ladder_bucket_challenge,
@@ -136,6 +137,8 @@ def render(ctx):
 
     settings = ladder_fetch_settings(ctx.supabase, ctx.club_id)
     df_roster, df_flags, df_ch, df_pass = ladder_load_core(ctx.supabase, ctx.club_id)
+    if df_roster is not None and not df_roster.empty and "tier_id" in df_roster.columns:
+        df_roster["tier_id"] = df_roster["tier_id"].astype(str).apply(normalize_tier_id)
     active_ids = None
     if getattr(ctx, "df_players_active", None) is not None and not ctx.df_players_active.empty:
         if "id" in ctx.df_players_active.columns:
