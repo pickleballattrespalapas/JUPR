@@ -91,6 +91,57 @@ def requirement_for(badge_id: str) -> str:
     return requirements.get(str(badge_id), "Requirements TBD")
 
 
+def audit_missing_badge_requirements(badge_defs) -> list[dict]:
+    """Return missing requirement entries for the badge catalog.
+
+    To resolve missing entries, add or update the badge heading in docs/badge_requirements.md:
+    "## <badge_id> — <Badge Name>" followed by an "Unlock:" line with the requirement text.
+    """
+
+    def _get_field(row, *fields):
+        for field in fields:
+            if isinstance(row, dict) and field in row:
+                return row.get(field)
+            if hasattr(row, field):
+                return getattr(row, field)
+        return None
+
+    def _iter_badges(defs):
+        if defs is None:
+            return []
+        if hasattr(defs, "itertuples"):
+            return list(defs.itertuples(index=False))
+        return list(defs)
+
+    def _first_value(row, *fields):
+        for field in fields:
+            value = _get_field(row, field)
+            if value is not None and str(value).strip() != "":
+                return value
+        return None
+
+    missing: list[dict] = []
+    for row in _iter_badges(badge_defs):
+        badge_id = _first_value(row, "badge_id", "slug", "id")
+        if badge_id is None:
+            continue
+        badge_id_str = str(badge_id)
+        returned_text = requirement_for(badge_id_str)
+        cleaned = str(returned_text or "").strip()
+        if not cleaned or cleaned == "Requirements TBD":
+            missing.append(
+                {
+                    "badge_id": badge_id_str,
+                    "slug": _first_value(row, "slug"),
+                    "name": str(_get_field(row, "name") or "Badge"),
+                    "category": _get_field(row, "category"),
+                    "source_hint": _first_value(row, "source_hint", "source"),
+                    "returned_text": cleaned or "Requirements TBD",
+                }
+            )
+    return missing
+
+
 def missing_badge_ids(all_badge_ids: list[str]) -> list[str]:
     requirements = load_requirements_map()
     return [str(badge_id) for badge_id in all_badge_ids if str(badge_id) not in requirements]

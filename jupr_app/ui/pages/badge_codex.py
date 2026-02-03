@@ -7,6 +7,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
+from jupr_app.domain.gamification.requirements import audit_missing_badge_requirements
 from jupr_app.ui.components import badge_cards
 from jupr_app.ui.components.badge_cards import render_badge_card_html
 from jupr_app.ui.pages.players import badge_icon
@@ -361,12 +362,32 @@ def render(ctx) -> None:
     df_players = getattr(ctx, "df_players_all", None)
     debug_env = os.getenv("JUPR_DEBUG_BADGES") == "1"
     debug_badges = st.sidebar.checkbox("Debug badge render", value=debug_env)
+    admin_mode = bool(getattr(ctx, "is_admin", False) or getattr(ctx, "admin_logged_in", False))
+    debug_admin_mode = admin_mode or debug_env
 
     badge_defs = getattr(ctx, "df_badges", None)
     player_badges = getattr(ctx, "df_player_badges", None)
     if badge_defs is None:
         st.info("Badge data is still loading.")
         return
+
+    if debug_admin_mode:
+        missing_requirements = audit_missing_badge_requirements(badge_defs)
+        logger.info("Badge requirements audit: %s missing entries", len(missing_requirements))
+        with st.expander("Admin: Missing badge requirements", expanded=False):
+            if missing_requirements:
+                st.dataframe(missing_requirements, use_container_width=True)
+                st.caption("Markdown stubs for docs/badge_requirements.md")
+                stub_lines = []
+                for entry in missing_requirements:
+                    badge_id = entry.get("badge_id", "")
+                    name = entry.get("name", "Badge")
+                    stub_lines.append(f"## {badge_id} — {name}")
+                    stub_lines.append("Unlock: Requirements TBD.")
+                    stub_lines.append("")
+                st.code("\n".join(stub_lines).strip(), language="markdown")
+            else:
+                st.success("All badges have requirement strings.")
 
     include_deprecated = False
     if bool(getattr(ctx, "admin_logged_in", False)):
