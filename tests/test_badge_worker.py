@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from postgrest.exceptions import APIError
+
+from jupr_app.domain.gamification.badge_queue import BADGE_QUEUE_TABLE, enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 
 
@@ -43,6 +45,8 @@ class FakeTable:
         return self
 
     def insert(self, payload):
+        if self.storage.get("raise_missing_table"):
+            raise APIError({"code": "PGRST205", "message": "missing table"})
         rows = payload if isinstance(payload, list) else [payload]
         stored = self.storage.setdefault(self.name, [])
         for row in rows:
@@ -52,6 +56,8 @@ class FakeTable:
         return self
 
     def upsert(self, rows, on_conflict=None):
+        if self.storage.get("raise_missing_table"):
+            raise APIError({"code": "PGRST205", "message": "missing table"})
         existing = self.storage.setdefault(self.name, [])
         keys = [c.strip() for c in str(on_conflict or "").split(",") if c.strip()]
         existing_keys = {tuple(row.get(k) for k in keys) for row in existing} if keys else set()
@@ -68,6 +74,8 @@ class FakeTable:
         return self
 
     def execute(self):
+        if self.storage.get("raise_missing_table"):
+            raise APIError({"code": "PGRST205", "message": "missing table"})
         data = list(self.storage.get(self.name, []))
         for op, column, value in self.filters:
             if op == "eq":
@@ -191,3 +199,16 @@ def test_worker_error_marks_queue(monkeypatch):
     rows = storage.get("badge_eval_queue", [])
     assert rows[0]["status"] == "error"
     assert rows[0]["attempts"] == 1
+
+
+def test_enqueue_badge_eval_missing_table_is_ignored():
+    storage = {"raise_missing_table": True}
+    supabase = FakeSupabase(storage)
+    enqueue_badge_eval(
+        supabase,
+        club_id="club",
+        event_type="match_recorded",
+        player_ids=[1],
+        match_id="m1",
+    )
+    assert storage.get(BADGE_QUEUE_TABLE) is None
