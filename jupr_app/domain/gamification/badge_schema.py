@@ -113,9 +113,12 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
         award_timing="on_league_close",
     )
 
-    assign(["breakthrough", "above_expectations", "clutch_performer"], status="tracked", scope="lifetime", award_timing="disabled")
-    assign(["dominant_run"], status="tracked", scope="league", award_timing="disabled")
-    assign(["high_output", "rivalry_win"], status="tracked", scope="match", award_timing="disabled")
+    assign(["breakthrough"], status="live", scope="lifetime", award_timing="live")
+    assign(["above_expectations"], status="live", scope="match", award_timing="live")
+    assign(["dominant_run"], status="live", scope="league", award_timing="live")
+    assign(["high_output"], status="live", scope="week", award_timing="live")
+    assign(["clutch_performer"], status="tracked", scope="lifetime", award_timing="disabled")
+    assign(["rivalry_win"], status="tracked", scope="match", award_timing="disabled")
     assign(["nemesis_found", "rivalry_streak", "settled_the_score"], status="tracked", scope="lifetime", award_timing="disabled")
     assign(["battle_tested", "consistency", "mr_reliable"], status="tracked", scope="season", award_timing="disabled")
     assign(["good_sport", "community_builder"], status="curated", scope="lifetime", award_timing="manual")

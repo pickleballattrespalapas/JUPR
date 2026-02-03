@@ -6,6 +6,7 @@ from typing import Any
 
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
+from jupr_app.domain.gamification.rule_versions import compute_badge_rule_version
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,12 @@ def ensure_badges(
         )
         if not candidates:
             return []
-        return upsert_player_badges(supabase, resolved_club_id, candidates)
+        return upsert_player_badges(
+            supabase,
+            resolved_club_id,
+            candidates,
+            rule_version=compute_badge_rule_version(),
+        )
     except Exception:
         logger.exception("ensure_badges failed")
         return []

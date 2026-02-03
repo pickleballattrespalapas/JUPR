@@ -69,10 +69,10 @@ Unlock: In the **same league**, reach a win streak of **5 / 10 / 20** consecutiv
 Unlock: Win your **next recorded match** after a loss (based on match history order).
 
 ## breakthrough — Breakthrough (non-stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing explicit breakthrough criteria).
+Unlock: **Milestones:** the **first time** you reach a new JUPR rating milestone of **3.25 / 3.75 / 4.25 / 4.75**. Each milestone is earned **once** (lifetime).
 
 ## above_expectations — Above Expectations (stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing expected performance baseline).
+Unlock: Win a match when your **pre‑match win chance is 40% or less** (requires win‑probability; if unavailable, no awards).
 
 ---
 
@@ -104,10 +104,10 @@ Unlock: In one **ISO week** (Mon–Sun), play **at least one match in 2+ differe
 Unlock: Record **100+ lifetime match wins**.
 
 ## dominant_run — Dominant Run (stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing dominant run criteria).
+Unlock: In the **same league**, reach win‑streak milestones of **5 / 10 / 20** consecutive wins. Earn each milestone **once per league**.
 
 ## high_output — High Output (stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing high output definition).
+Unlock: In an **ISO week** (Mon–Sun), win a match scoring **11+** while the opponent scores **7 or fewer**. Earn **once per week**.
 
 ---
 

@@ -9,6 +9,13 @@ import pandas as pd
 
 from jupr_app.domain.awards import compute_top_performer_awards
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
+from jupr_app.domain.gamification.badge_thresholds import (
+    ABOVE_EXPECTATIONS_MAX_PROB,
+    BREAKTHROUGH_MILESTONES,
+    DOMINANT_RUN_STREAKS,
+    HIGH_OUTPUT_MAX_POINTS_AGAINST,
+    HIGH_OUTPUT_MIN_POINTS_FOR,
+)
 from jupr_app.domain.gamification.match_facts import build_player_match_facts
 from jupr_app.domain.gamification.participation import compute_lifetime_games
 from jupr_app.domain.gamification.top_performer_awards import (
@@ -739,19 +746,146 @@ def evaluate_mentor(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
 
 
 def evaluate_breakthrough(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("breakthrough", "missing explicit breakthrough criteria")
+    facts = _as_of_filter(ctx.facts, ctx.as_of).sort_values(["date_dt", "match_id"])
+    if facts.empty:
+        return []
+    if not any(col in facts.columns for col in ["rating_pre", "rating_post"]):
+        return _inactive("breakthrough", "missing rating progression data")
+
+    candidates: list[BadgeCandidate] = []
+    milestone_map = {int(pid): set() for pid in facts["player_id"].dropna().astype(int).unique()}
+    for row in facts.itertuples(index=False):
+        player_id = int(row.player_id)
+        for milestone in BREAKTHROUGH_MILESTONES:
+            if milestone in milestone_map[player_id]:
+                continue
+            rating_post = getattr(row, "rating_post", None)
+            rating_pre = getattr(row, "rating_pre", None)
+            if rating_post is None or rating_pre is None:
+                continue
+            if float(rating_pre) < float(milestone) <= float(rating_post):
+                milestone_map[player_id].add(milestone)
+                candidates.append(
+                    BadgeCandidate(
+                        badge_id="breakthrough",
+                        player_id=player_id,
+                        club_id=ctx.club_id,
+                        context_type="lifetime",
+                        context_id=f"milestone:{milestone}",
+                        match_id=str(row.match_id),
+                        value_json={
+                            "match_id": str(row.match_id),
+                            "milestone": float(milestone),
+                            "rating_pre": float(rating_pre),
+                            "rating_post": float(rating_post),
+                        },
+                        value_num=float(milestone),
+                    )
+                )
+    return candidates
 
 
 def evaluate_above_expectations(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("above_expectations", "missing expected performance baseline")
+    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    if facts.empty:
+        return []
+    if "expected_win_prob" not in facts.columns:
+        return _inactive("above_expectations", "missing expected win probability")
+    wins = facts[(facts["win"] == True) & (facts["expected_win_prob"] <= ABOVE_EXPECTATIONS_MAX_PROB)]
+    if wins.empty:
+        return []
+    candidates: list[BadgeCandidate] = []
+    for row in wins.itertuples(index=False):
+        candidates.append(
+            BadgeCandidate(
+                badge_id="above_expectations",
+                player_id=int(row.player_id),
+                club_id=ctx.club_id,
+                context_type="match",
+                context_id=f"match:{row.match_id}",
+                match_id=str(row.match_id),
+                value_json={
+                    "match_id": str(row.match_id),
+                    "expected_win_prob": float(row.expected_win_prob),
+                },
+                value_num=float(row.expected_win_prob),
+            )
+        )
+    return candidates
 
 
 def evaluate_dominant_run(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("dominant_run", "missing dominant run criteria")
+    facts = _as_of_filter(ctx.facts, ctx.as_of).sort_values(["date_dt", "match_id"])
+    if facts.empty:
+        return []
+    candidates: list[BadgeCandidate] = []
+    for (player_id, league), group in facts.groupby(["player_id", "league"]):
+        if ctx.league_id and str(league) != str(ctx.league_id):
+            continue
+        streak = 0
+        awarded: set[int] = set()
+        for row in group.itertuples(index=False):
+            if row.win:
+                streak += 1
+                for milestone in DOMINANT_RUN_STREAKS:
+                    if milestone in awarded:
+                        continue
+                    if streak >= milestone:
+                        awarded.add(int(milestone))
+                        candidates.append(
+                            BadgeCandidate(
+                                badge_id="dominant_run",
+                                player_id=int(player_id),
+                                club_id=ctx.club_id,
+                                context_type="league",
+                                context_id=f"{league}:streak:{milestone}",
+                                match_id=str(row.match_id),
+                                value_json={
+                                    "league_id": league,
+                                    "streak_length": int(streak),
+                                    "milestone": int(milestone),
+                                },
+                                value_num=float(milestone),
+                            )
+                        )
+            else:
+                streak = 0
+    return candidates
 
 
 def evaluate_high_output(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("high_output", "missing high output definition")
+    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    if facts.empty:
+        return []
+    wins = facts[
+        (facts["win"] == True)
+        & (facts["points_for"] >= HIGH_OUTPUT_MIN_POINTS_FOR)
+        & (facts["points_against"] <= HIGH_OUTPUT_MAX_POINTS_AGAINST)
+    ]
+    if wins.empty:
+        return []
+    candidates: list[BadgeCandidate] = []
+    wins = wins.sort_values(["date_dt", "match_id"])
+    for (player_id, week_key), group in wins.groupby(["player_id", "week_key"]):
+        row = group.iloc[0]
+        context_id = f"week:{week_key}"
+        candidates.append(
+            BadgeCandidate(
+                badge_id="high_output",
+                player_id=int(player_id),
+                club_id=ctx.club_id,
+                context_type="week",
+                context_id=context_id,
+                match_id=str(row.match_id),
+                value_json={
+                    "match_id": str(row.match_id),
+                    "score_for": int(row.points_for),
+                    "score_against": int(row.points_against),
+                    "week": week_key,
+                },
+            )
+        )
+    return candidates
 
 
 def evaluate_battle_tested(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:

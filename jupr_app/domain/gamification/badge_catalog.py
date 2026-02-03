@@ -216,7 +216,7 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         icon_key="breakthrough",
         lore="The tape catches the moment the ceiling moves.",
         hint="There was a game when things started to look different.",
-        scope="overall",
+        scope="lifetime",
     ),
     BadgeDefinition(
         badge_id="above_expectations",
@@ -230,7 +230,7 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         icon_key="above_expectations",
         lore="The room expected one thing. The tape shows another.",
         hint="The projection didn’t match the result.",
-        scope="overall",
+        scope="match",
     ),
     BadgeDefinition(
         badge_id="ice_in_veins",
@@ -356,7 +356,7 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         icon_key="high_output",
         lore="The scoreboard fills faster than the room expects.",
         hint="The total keeps climbing.",
-        scope="match",
+        scope="week",
     ),
     BadgeDefinition(
         badge_id="social_butterfly",

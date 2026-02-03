@@ -12,6 +12,7 @@ from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_player
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
+from jupr_app.domain.gamification.rule_versions import compute_badge_rule_version
 
 
 def process_badge_eval_queue(
@@ -55,6 +56,7 @@ def process_badge_eval_queue(
                         job_club_id,
                         candidates,
                         awarded_by="engine",
+                        rule_version=compute_badge_rule_version(),
                     )
             ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
             processed += 1

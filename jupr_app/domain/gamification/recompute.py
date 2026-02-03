@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime, timezone
-import hashlib
-import json
 from types import SimpleNamespace
 from typing import Any, Iterable
 
 import pandas as pd
 
 from jupr_app.data.load import load_data
-from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
+from jupr_app.domain.gamification.rule_versions import compute_badge_rule_version
 
 
 def run_badge_recompute(
@@ -82,7 +79,7 @@ def run_badge_recompute(
         existing_keys = {(row["player_id"], row["badge_id"], row["context_id"]) for row in existing_rows}
         computed_keys = {(c.player_id, str(c.badge_id), str(c.context_id)) for c in computed}
 
-        rule_version = rule_version or _compute_rule_version()
+        rule_version = rule_version or compute_badge_rule_version()
         summary: dict[str, Any] = {
             "mode": mode,
             "scope": scope,
@@ -261,13 +258,6 @@ def _clear_revocation(supabase: Any, row_id: str) -> None:
             "revoke_reason": None,
         }
     ).eq("id", row_id).execute()
-
-
-def _compute_rule_version() -> str:
-    payload = [asdict(badge) for badge in BADGE_DEFINITIONS]
-    raw = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    digest = hashlib.sha1(raw).hexdigest()
-    return f"badge_catalog:{digest}"
 
 
 def _create_eval_run(supabase: Any, created_by: str | None, mode: str, scope: dict[str, Any]) -> str:

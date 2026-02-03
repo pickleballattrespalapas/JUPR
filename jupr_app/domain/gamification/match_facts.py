@@ -35,6 +35,8 @@ _FACT_COLUMNS = [
     "abs_elo_delta",
     "opp_max_rating",
     "lobby_avg_rating",
+    "rating_pre",
+    "rating_post",
 ]
 
 
@@ -96,6 +98,10 @@ def build_player_match_facts(
         r2 = _safe_rating(getattr(row, "t1_p2_r", None), rating_map.get(p2))
         r3 = _safe_rating(getattr(row, "t2_p1_r", None), rating_map.get(p3))
         r4 = _safe_rating(getattr(row, "t2_p2_r", None), rating_map.get(p4))
+        e1 = _safe_float(getattr(row, "t1_p1_r_end", None))
+        e2 = _safe_float(getattr(row, "t1_p2_r_end", None))
+        e3 = _safe_float(getattr(row, "t2_p1_r_end", None))
+        e4 = _safe_float(getattr(row, "t2_p2_r_end", None))
 
         team1 = [pid for pid in (p1, p2) if pid]
         team2 = [pid for pid in (p3, p4) if pid]
@@ -111,11 +117,11 @@ def build_player_match_facts(
 
         lobby_avg_rating = _avg([r for r in [r1, r2, r3, r4] if r is not None])
 
-        for pid, team, partner, opp_ids, my_score, opp_score, opp_avg, opp_max, expected_win in (
-            (p1, 1, p2, team2, s1, s2, _avg([r3, r4] if p4 else [r3]), _max_rating([r3, r4]), expected_t1),
-            (p2, 1, p1, team2, s1, s2, _avg([r3, r4] if p4 else [r3]), _max_rating([r3, r4]), expected_t1),
-            (p3, 2, p4, team1, s2, s1, _avg([r1, r2] if p2 else [r1]), _max_rating([r1, r2]), 1.0 - expected_t1),
-            (p4, 2, p3, team1, s2, s1, _avg([r1, r2] if p2 else [r1]), _max_rating([r1, r2]), 1.0 - expected_t1),
+        for pid, team, partner, opp_ids, my_score, opp_score, opp_avg, opp_max, expected_win, pre, post in (
+            (p1, 1, p2, team2, s1, s2, _avg([r3, r4] if p4 else [r3]), _max_rating([r3, r4]), expected_t1, r1, e1),
+            (p2, 1, p1, team2, s1, s2, _avg([r3, r4] if p4 else [r3]), _max_rating([r3, r4]), expected_t1, r2, e2),
+            (p3, 2, p4, team1, s2, s1, _avg([r1, r2] if p2 else [r1]), _max_rating([r1, r2]), 1.0 - expected_t1, r3, e3),
+            (p4, 2, p3, team1, s2, s1, _avg([r1, r2] if p2 else [r1]), _max_rating([r1, r2]), 1.0 - expected_t1, r4, e4),
         ):
             if not pid:
                 continue
@@ -144,6 +150,8 @@ def build_player_match_facts(
                     "abs_elo_delta": abs(delta_abs) if delta_abs is not None else None,
                     "opp_max_rating": float(opp_max) if opp_max is not None else None,
                     "lobby_avg_rating": float(lobby_avg_rating) if lobby_avg_rating is not None else None,
+                    "rating_pre": float(pre) if pre is not None else None,
+                    "rating_post": float(post) if post is not None else None,
                 }
             )
 
