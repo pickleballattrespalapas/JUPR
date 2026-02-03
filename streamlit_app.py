@@ -454,6 +454,12 @@ def main():
 
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
                 get_data.clear()
+                try:
+                    from jupr_app.domain.gamification.requirements import clear_requirements_cache
+
+                    clear_requirements_cache()
+                except Exception:
+                    pass
                 st.rerun()
 
             sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")

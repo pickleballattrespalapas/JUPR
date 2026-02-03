@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 
 _REQUIREMENTS_CACHE: dict[str, str] | None = None
+_REQUIREMENTS_CACHE_MTIME: float | None = None
+_REQUIREMENTS_CACHE_PATH: str | None = None
 
 _HEADING_RE = re.compile(r"^#{2,3}\s+(.+)$")
 _REQ_RE = re.compile(r"^(Unlock|Status):\s*(.+)$", re.IGNORECASE)
@@ -71,15 +73,37 @@ def _parse_requirements(text: str) -> dict[str, str]:
 
 
 def load_requirements_map() -> dict[str, str]:
-    global _REQUIREMENTS_CACHE
-    if _REQUIREMENTS_CACHE is not None:
-        return _REQUIREMENTS_CACHE
-    requirements: dict[str, str] = {}
+    global _REQUIREMENTS_CACHE, _REQUIREMENTS_CACHE_MTIME, _REQUIREMENTS_CACHE_PATH
     requirements_path = _requirements_path()
-    if requirements_path and requirements_path.exists():
-        requirements = _parse_requirements(requirements_path.read_text(encoding="utf-8"))
+    if not requirements_path or not requirements_path.exists():
+        if _REQUIREMENTS_CACHE is None:
+            _REQUIREMENTS_CACHE = {}
+            _REQUIREMENTS_CACHE_MTIME = None
+            _REQUIREMENTS_CACHE_PATH = None
+        return _REQUIREMENTS_CACHE
+
+    path_str = str(requirements_path)
+    mtime = requirements_path.stat().st_mtime
+
+    if (
+        _REQUIREMENTS_CACHE is not None
+        and _REQUIREMENTS_CACHE_MTIME == mtime
+        and _REQUIREMENTS_CACHE_PATH == path_str
+    ):
+        return _REQUIREMENTS_CACHE
+
+    requirements = _parse_requirements(requirements_path.read_text(encoding="utf-8"))
     _REQUIREMENTS_CACHE = requirements
+    _REQUIREMENTS_CACHE_MTIME = mtime
+    _REQUIREMENTS_CACHE_PATH = path_str
     return requirements
+
+
+def clear_requirements_cache() -> None:
+    global _REQUIREMENTS_CACHE, _REQUIREMENTS_CACHE_MTIME, _REQUIREMENTS_CACHE_PATH
+    _REQUIREMENTS_CACHE = None
+    _REQUIREMENTS_CACHE_MTIME = None
+    _REQUIREMENTS_CACHE_PATH = None
 
 
 def load_requirements() -> dict[str, str]:
