@@ -52,6 +52,7 @@ def process_matches(
 
     skipped_incomplete = 0
     skipped_empty = 0
+    has_non_popup_match = False
 
     def get_k(league_name: str) -> int:
         if df_meta is None or getattr(df_meta, "empty", True):
@@ -185,6 +186,8 @@ def process_matches(
         week_tag = str(m.get("week_tag", "") or "")
         match_type = str(m.get("match_type", "") or "")
         is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
+        if not is_popup:
+            has_non_popup_match = True
 
         dt_val = m.get("date", None)
         match_dt = coerce_utc_datetime(dt_val)
@@ -280,7 +283,7 @@ def process_matches(
             chunk = db_matches[i : i + CHUNK_M]
             sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
 
-        if supabase is not None:
+        if supabase is not None and has_non_popup_match:
             enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),

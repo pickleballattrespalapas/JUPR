@@ -57,6 +57,10 @@ def render(ctx):
         match_type_db = "PopUp"
         is_popup = True
 
+    if is_popup:
+        selected_league = (selected_league or "").strip() or "Pop-Up Event"
+        selected_league = f"POPUP::{selected_league}"
+
     week_tag = c3.selectbox(
         "Week / Session",
         [f"Week {i}" for i in range(1, 13)] + ["Playoffs", "Finals", "Event"],
@@ -245,15 +249,20 @@ def render(ctx):
                 if st.form_submit_button("Submit"):
                     payload = [x for x in all_res if (x["s1"] > 0 or x["s2"] > 0)]
                     if payload:
-                        process_matches(
-                            payload,
-                            supabase=supabase,
-                            club_id=str(club_id),
-                            name_to_id=name_to_id,
-                            df_players_all=df_players_all,
-                            df_leagues=df_leagues,
-                            df_meta=df_meta,
-                        )
+                        try:
+                            process_matches(
+                                payload,
+                                supabase=supabase,
+                                club_id=str(club_id),
+                                name_to_id=name_to_id,
+                                df_players_all=df_players_all,
+                                df_leagues=df_leagues,
+                                df_meta=df_meta,
+                            )
+                        except Exception as e:
+                            st.error("Failed to submit matches.")
+                            st.exception(e)
+                            st.stop()
 
                     st.success("✅ Done!")
                     if "mu_lc_schedule" in st.session_state:
