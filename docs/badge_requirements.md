@@ -69,10 +69,10 @@ Unlock: In the **same league**, reach a win streak of **5 / 10 / 20** consecutiv
 Unlock: Win your **next recorded match** after a loss (based on match history order).
 
 ## breakthrough — Breakthrough (non-stackable)
-Unlock: Requirements TBD.
+Unlock: Not currently awarded — badge evaluator is inactive (missing explicit breakthrough criteria).
 
 ## above_expectations — Above Expectations (stackable)
-Unlock: Requirements TBD.
+Unlock: Not currently awarded — badge evaluator is inactive (missing expected performance baseline).
 
 ---
 
@@ -104,10 +104,10 @@ Unlock: In one **ISO week** (Mon–Sun), play **at least one match in 2+ differe
 Unlock: Record **100+ lifetime match wins**.
 
 ## dominant_run — Dominant Run (stackable)
-Unlock: Requirements TBD.
+Unlock: Not currently awarded — badge evaluator is inactive (missing dominant run criteria).
 
 ## high_output — High Output (stackable)
-Unlock: Requirements TBD.
+Unlock: Not currently awarded — badge evaluator is inactive (missing high output definition).
 
 ---
 
