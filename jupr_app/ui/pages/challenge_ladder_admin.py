@@ -11,6 +11,7 @@ from jupr_app.domain.tier_movement import compute_out_of_tier_streak
 
 from jupr_app.domain.challenge_ladder import (
     TIER_ORDER,
+    normalize_tier_id,
     tier_title,
     tier_for_jupr,
     tier_idx,
@@ -176,6 +177,8 @@ def render(ctx):
 
     settings = ladder_fetch_settings(supabase, club_id)
     df_roster, df_flags, df_ch, df_pass = ladder_load_core(supabase, club_id)
+    if df_roster is not None and not df_roster.empty and "tier_id" in df_roster.columns:
+        df_roster["tier_id"] = df_roster["tier_id"].astype(str).apply(normalize_tier_id)
 
     tabs = st.tabs(["📊 Dashboard", "🧾 Intake", "🗂 Challenge Detail", "👥 Roster", "⬆️⬇️ Tier Movement", "🏖 Overrides", "📜 Audit"])
 

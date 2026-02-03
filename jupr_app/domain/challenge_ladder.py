@@ -54,15 +54,21 @@ def ladder_nm(pid: int, id_to_name: Dict[int, str]) -> str:
 # -------------------------
 # Tier definitions (Option A, range-labeled)
 # -------------------------
-TIER_ORDER = ["PREM", "ADV", "INT", "DEV", "EMER"]
+TIER_ORDER = ["PREM", "ADV", "INT", "DEV"]
 
 TIER_DEFS = {
     "PREM": {"label": "Premier",       "min": 4.25, "max": None, "range": "4.25+"},
     "ADV":  {"label": "Advanced",      "min": 3.75, "max": 4.25, "range": "3.75–4.25"},
     "INT":  {"label": "Intermediate",  "min": 3.25, "max": 3.75, "range": "3.25–3.75"},
-    "DEV":  {"label": "Developing",    "min": 3.0,  "max": 3.25, "range": "3.0–3.25"},
-    "EMER": {"label": "Emerging",      "min": None, "max": 3.0,  "range": "< 3.0"},
+    "DEV":  {"label": "Developing",    "min": None, "max": 3.25, "range": "< 3.25"},
 }
+
+
+def normalize_tier_id(tier_id: str) -> str:
+    tid = str(tier_id or "").strip().upper()
+    if tid == "EMER":
+        return "DEV"
+    return tid or "DEV"
 
 
 def tier_for_jupr(jupr: float) -> str:
@@ -70,8 +76,6 @@ def tier_for_jupr(jupr: float) -> str:
         x = float(jupr)
     except Exception:
         return "INT"
-    if x < 3.0:
-        return "EMER"
     if x < 3.25:
         return "DEV"
     if x < 3.75:
@@ -82,13 +86,14 @@ def tier_for_jupr(jupr: float) -> str:
 
 
 def tier_title(tier_id: str) -> str:
-    t = TIER_DEFS.get(str(tier_id), {"label": str(tier_id), "range": ""})
+    tid = normalize_tier_id(tier_id)
+    t = TIER_DEFS.get(tid, {"label": tid, "range": ""})
     rng = t.get("range", "")
     return f"{t.get('label','Tier')} — {rng}".strip(" —")
 
 
 def tier_idx(tier_id: str) -> int:
-    tid = str(tier_id)
+    tid = normalize_tier_id(tier_id)
     return TIER_ORDER.index(tid) if tid in TIER_ORDER else 999
 
 
@@ -103,8 +108,8 @@ def is_demotion(from_tier: str, to_tier: str) -> bool:
 def sorted_tiers(tiers: list[str]) -> list[str]:
     """Return tiers sorted by TIER_ORDER (highest -> lowest).
 
-    >>> sorted_tiers(["DEV", "PREM", "EMER"])
-    ['PREM', 'DEV', 'EMER']
+    >>> sorted_tiers(["DEV", "PREM"])
+    ['PREM', 'DEV']
     """
     seen = set()
     input_set = {str(t) for t in tiers}
