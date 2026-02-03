@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable
 from datetime import datetime
 import logging
@@ -739,19 +740,169 @@ def evaluate_mentor(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
 
 
 def evaluate_breakthrough(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("breakthrough", "missing explicit breakthrough criteria")
+    df_leagues = getattr(ctx.ctx, "df_leagues", None)
+    if df_leagues is None or df_leagues.empty:
+        return []
+    if "league_name" not in df_leagues.columns or "player_id" not in df_leagues.columns:
+        return []
+    df = df_leagues.copy()
+    df["league_name"] = df["league_name"].fillna("").astype(str).str.strip()
+    df["rating"] = pd.to_numeric(df.get("rating", 1200.0), errors="coerce").fillna(1200.0)
+    df["starting_rating"] = pd.to_numeric(df.get("starting_rating", df["rating"]), errors="coerce").fillna(df["rating"])
+    df["matches_played"] = pd.to_numeric(df.get("matches_played", 0), errors="coerce").fillna(0).astype(int)
+    candidates: list[BadgeCandidate] = []
+    for league_name, league_df in df.groupby("league_name"):
+        if not league_name:
+            continue
+        if ctx.league_id and str(league_name) != str(ctx.league_id):
+            continue
+        start_sorted = league_df.sort_values("starting_rating", ascending=False).reset_index(drop=True)
+        start_sorted["start_rank"] = start_sorted.index + 1
+        current_sorted = league_df.sort_values("rating", ascending=False).reset_index(drop=True)
+        current_sorted["current_rank"] = current_sorted.index + 1
+        ranks = start_sorted[["player_id", "start_rank"]].merge(
+            current_sorted[["player_id", "current_rank"]], on="player_id", how="inner"
+        )
+        ranks = ranks.merge(league_df[["player_id", "matches_played"]], on="player_id", how="left")
+        for _, row in ranks.iterrows():
+            matches_played = int(row.get("matches_played", 0) or 0)
+            if matches_played < 10:
+                continue
+            start_rank = int(row["start_rank"])
+            current_rank = int(row["current_rank"])
+            for tier in (25, 10):
+                if start_rank > tier and current_rank <= tier:
+                    candidates.append(
+                        BadgeCandidate(
+                            badge_id="breakthrough",
+                            player_id=int(row["player_id"]),
+                            club_id=ctx.club_id,
+                            context_type="league",
+                            context_id=f"{league_name}:breakthrough:top{tier}",
+                            match_id=None,
+                            value_json={
+                                "league": league_name,
+                                "tier": tier,
+                                "start_rank": start_rank,
+                                "current_rank": current_rank,
+                                "matches_played": matches_played,
+                            },
+                        )
+                    )
+    return candidates
 
 
 def evaluate_above_expectations(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("above_expectations", "missing expected performance baseline")
+    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    facts = _league_filter(facts, ctx.league_id)
+    if facts.empty:
+        return []
+    facts = facts.copy()
+    if "league" not in facts.columns:
+        facts["league"] = "OVERALL"
+    thresholds: dict[str, float] = {}
+    if "abs_elo_delta" in facts.columns:
+        non_null = facts["abs_elo_delta"].dropna()
+        if not non_null.empty:
+            thresholds = (
+                facts.groupby("league")["abs_elo_delta"]
+                .quantile(0.75, interpolation="linear")
+                .dropna()
+                .astype(float)
+                .to_dict()
+            )
+    candidates: list[BadgeCandidate] = []
+    for row in facts.itertuples(index=False):
+        if not bool(getattr(row, "win", False)):
+            continue
+        expected_win_prob = getattr(row, "expected_win_prob", None)
+        if expected_win_prob is None or float(expected_win_prob) > 0.40:
+            continue
+        margin = getattr(row, "margin", None)
+        if margin is None or float(margin) < 4:
+            continue
+        abs_elo_delta = getattr(row, "abs_elo_delta", None)
+        league = getattr(row, "league", "OVERALL")
+        threshold = thresholds.get(str(league))
+        if abs_elo_delta is not None and threshold is not None:
+            if float(abs_elo_delta) < float(threshold):
+                continue
+        candidates.append(
+            BadgeCandidate(
+                badge_id="above_expectations",
+                player_id=int(row.player_id),
+                club_id=ctx.club_id,
+                context_type="match",
+                context_id=f"{row.match_id}:above_expectations",
+                match_id=str(row.match_id),
+                value_json={
+                    "expected_win_prob": float(expected_win_prob),
+                    "margin": float(margin),
+                    "abs_elo_delta": float(abs_elo_delta) if abs_elo_delta is not None else None,
+                },
+            )
+        )
+    return candidates
 
 
 def evaluate_dominant_run(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("dominant_run", "missing dominant run criteria")
+    facts = _as_of_filter(ctx.facts, ctx.as_of).sort_values(["date_dt", "match_id"])
+    if facts.empty:
+        return []
+    candidates: list[BadgeCandidate] = []
+    for player_id, group in facts.groupby("player_id"):
+        streak = 0
+        margin_sum = 0.0
+        for row in group.itertuples(index=False):
+            if row.win:
+                streak += 1
+                margin_sum += float(row.margin)
+                avg_margin = margin_sum / streak
+                if streak >= 10 and avg_margin >= 5.0:
+                    candidates.append(
+                        BadgeCandidate(
+                            badge_id="dominant_run",
+                            player_id=int(player_id),
+                            club_id=ctx.club_id,
+                            context_type="overall",
+                            context_id=f"dominant_run:streak:{streak}:end:{row.match_id}",
+                            match_id=str(row.match_id),
+                            value_json={"streak": streak, "avg_margin": avg_margin},
+                        )
+                    )
+            else:
+                streak = 0
+                margin_sum = 0.0
+    return candidates
 
 
 def evaluate_high_output(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("high_output", "missing high output definition")
+    facts = _as_of_filter(ctx.facts, ctx.as_of).sort_values(["date_dt", "match_id"])
+    if facts.empty:
+        return []
+    candidates: list[BadgeCandidate] = []
+    for player_id, group in facts.groupby("player_id"):
+        window = deque(maxlen=25)
+        for row in group.itertuples(index=False):
+            window.append(row)
+            if len(window) < 25:
+                continue
+            wins = int(sum(1 for item in window if item.win))
+            avg_margin = float(sum(float(item.margin) for item in window) / len(window))
+            if wins >= 20 and avg_margin >= 4.0:
+                end_match_id = window[-1].match_id
+                candidates.append(
+                    BadgeCandidate(
+                        badge_id="high_output",
+                        player_id=int(player_id),
+                        club_id=ctx.club_id,
+                        context_type="overall",
+                        context_id=f"high_output:window25:end:{end_match_id}",
+                        match_id=str(end_match_id),
+                        value_json={"window": 25, "wins": wins, "avg_margin": avg_margin},
+                    )
+                )
+    return candidates
 
 
 def evaluate_battle_tested(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
