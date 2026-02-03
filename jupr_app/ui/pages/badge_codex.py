@@ -7,6 +7,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
+from jupr_app.domain.gamification.requirements import load_requirements_map, requirement_for
 from jupr_app.ui.components import badge_cards
 from jupr_app.ui.components.badge_cards import render_badge_card_html
 from jupr_app.ui.pages.players import badge_icon
@@ -440,3 +441,20 @@ def render(ctx) -> None:
                 st.code("\n".join(stub_lines).strip(), language="markdown")
             else:
                 st.text("No stubs needed.")
+
+        with st.expander("Admin: Requirement resolver debug", expanded=False):
+            debug_badge_ids = [
+                "above_expectations",
+                "breakthrough",
+                "dominant_run",
+                "high_output",
+            ]
+            req_map = load_requirements_map()
+            st.caption("Live resolver output for select badge IDs.")
+            st.markdown(f"- Total requirements loaded: **{len(req_map)}**")
+            for badge_id in debug_badge_ids:
+                resolved = requirement_for(badge_id)
+                exists = badge_id in req_map
+                st.markdown(
+                    f"- `{badge_id}`: exists={exists} · resolved: {resolved}",
+                )
