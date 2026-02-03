@@ -68,11 +68,11 @@ Unlock: In the **same league**, reach a win streak of **5 / 10 / 20** consecutiv
 ## bounce_back — Bounce Back (stackable)
 Unlock: Win your **next recorded match** after a loss (based on match history order).
 
-## breakthrough — Breakthrough (non-stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing explicit breakthrough criteria).
+## breakthrough — Breakthrough (stackable)
+Unlock: In a league, play **10+ matches** and move from **outside the top 25 / top 10** (starting rank) into the **current top 25 / top 10** (by JUPR rating). Earn each tier separately.
 
 ## above_expectations — Above Expectations (stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing expected performance baseline).
+Unlock: Win with **expected win chance ≤ 40%** and a **4+ point margin**. If rating deltas are available, the match must be at or above the **75th percentile** of absolute rating delta within that league.
 
 ---
 
@@ -104,10 +104,10 @@ Unlock: In one **ISO week** (Mon–Sun), play **at least one match in 2+ differe
 Unlock: Record **100+ lifetime match wins**.
 
 ## dominant_run — Dominant Run (stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing dominant run criteria).
+Unlock: Across all leagues, reach a **10+ match win streak** with **average win margin ≥ 5** across the current streak. Earn it again for each additional win while the streak and average margin stay at or above the threshold.
 
 ## high_output — High Output (stackable)
-Unlock: Not currently awarded — badge evaluator is inactive (missing high output definition).
+Unlock: Across all leagues, in your **last 25 matches**, record **20+ wins** with **average margin ≥ 4**.
 
 ---
 
