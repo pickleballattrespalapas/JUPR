@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from jupr_app.domain.replay_history import replay_history
 
+from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
@@ -11,6 +12,16 @@ from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.layout import page_shell
+
+
+def _get_api_error_code(exc: APIError) -> str | None:
+    code = getattr(exc, "code", None)
+    if code:
+        return code
+    if exc.args and isinstance(exc.args[0], dict):
+        return exc.args[0].get("code")
+    return None
+
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
@@ -68,8 +79,27 @@ def render(ctx):
     st.caption("Process queued badge evaluations without blocking the UI (short time budget).")
     if st.button("Process queued badge evaluations", key="badge_eval_queue_process"):
         with st.spinner("Processing queued badge evaluations..."):
-            result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
-        st.success(f"Processed {result['processed']} job(s); {result['errored']} error(s).")
+            try:
+                result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
+            except APIError as exc:
+                code = _get_api_error_code(exc)
+                if code in {"PGRST205", "42P01"}:
+                    st.error(
+                        "Missing table badge_eval_queue; apply migrations/20260705_badge_eval_queue.sql and "
+                        "run NOTIFY pgrst, 'reload schema';"
+                    )
+                    st.code(
+                        "-- Apply migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
+                        language="sql",
+                    )
+                else:
+                    st.error("Failed to process queued badge evaluations.")
+                    st.exception(exc)
+            except Exception as exc:  # noqa: BLE001 - UI should not crash
+                st.error("Failed to process queued badge evaluations.")
+                st.exception(exc)
+            else:
+                st.success(f"Processed {result['processed']} job(s); {result['errored']} error(s).")
 
     # -------------------------
     # Replay History

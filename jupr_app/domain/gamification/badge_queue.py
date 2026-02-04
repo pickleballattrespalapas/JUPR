@@ -67,25 +67,39 @@ def enqueue_badge_eval(
 def dequeue_badge_eval(supabase: Any) -> dict[str, Any] | None:
     if supabase is None:
         return None
-    resp = (
-        supabase.table(BADGE_QUEUE_TABLE)
-        .select("*")
-        .eq("status", "pending")
-        .order("created_at", desc=False)
-        .limit(1)
-        .execute()
-    )
-    rows = resp.data or []
-    if not rows:
-        return None
-    job = rows[0]
-    attempts = int(job.get("attempts") or 0) + 1
-    supabase.table(BADGE_QUEUE_TABLE).update(
-        {"status": "processing", "attempts": attempts}
-    ).eq("id", job.get("id")).execute()
-    job["attempts"] = attempts
-    job["status"] = "processing"
-    return job
+    try:
+        resp = (
+            supabase.table(BADGE_QUEUE_TABLE)
+            .select("*")
+            .eq("status", "pending")
+            .order("created_at", desc=False)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return None
+        job = rows[0]
+        attempts = int(job.get("attempts") or 0) + 1
+        supabase.table(BADGE_QUEUE_TABLE).update(
+            {"status": "processing", "attempts": attempts}
+        ).eq("id", job.get("id")).execute()
+        job["attempts"] = attempts
+        job["status"] = "processing"
+        return job
+    except APIError as exc:
+        code = _get_api_error_code(exc)
+        message = _get_api_error_message(exc)
+        if code in _MISSING_TABLE_CODES:
+            logger.warning(
+                "Badge queue table %s missing in PostgREST schema cache (code=%s message=%s). "
+                "Skipping badge dequeue.",
+                BADGE_QUEUE_TABLE,
+                code,
+                message,
+            )
+            return None
+        raise
 
 
 def ack_badge_eval(

@@ -24,6 +24,7 @@ MIGRATION_HINT = (
     "PostgREST schema cache"
 )
 REQUIRED_BADGE_TABLES = {"badge_eval_runs"}
+OPTIONAL_BADGE_TABLES = {"badge_eval_queue"}
 SKIP_PREFLIGHT_ENV = "JUPR_SKIP_BADGE_SCHEMA_PREFLIGHT"
 _MISSING_COLUMN_CODES = {"PGRST204"}
 _MISSING_TABLE_CODES = {"PGRST205", "42P01"}
@@ -35,7 +36,8 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
     if _should_skip_preflight():
         return True
     missing_columns = _find_missing_player_badges_columns(supabase)
-    missing_tables = _find_missing_tables(supabase)
+    missing_tables = _find_missing_tables(supabase, REQUIRED_BADGE_TABLES)
+    missing_optional_tables = _find_missing_tables(supabase, OPTIONAL_BADGE_TABLES)
     if missing_columns or missing_tables:
         message_parts = [MIGRATION_HINT + "."]
         if missing_columns:
@@ -45,6 +47,11 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
             missing_tables_list = ", ".join(sorted(missing_tables))
             message_parts.append(f"Missing tables: {missing_tables_list}.")
         raise RuntimeError(" ".join(message_parts))
+    if missing_optional_tables:
+        logger.warning(
+            "Optional badge tables missing: %s. Badge queue processing will be disabled until applied.",
+            ", ".join(sorted(missing_optional_tables)),
+        )
     return True
 
 
@@ -56,9 +63,9 @@ def _find_missing_player_badges_columns(supabase: Any) -> set[str]:
     return missing
 
 
-def _find_missing_tables(supabase: Any) -> set[str]:
+def _find_missing_tables(supabase: Any, tables: set[str]) -> set[str]:
     missing = set()
-    for table in sorted(REQUIRED_BADGE_TABLES):
+    for table in sorted(tables):
         if not _probe_table(supabase, table):
             missing.add(table)
     return missing
