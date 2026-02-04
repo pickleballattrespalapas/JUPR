@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 MAX_STORY_BADGES = 2
 
 
+def _safe_text(value: object) -> str:
+    text = "" if value is None else str(value)
+    if ("&lt;" in text or "&gt;" in text or "&amp;" in text) and "<" not in text and ">" not in text:
+        return text
+    return html.escape(text)
+
+
 def _delta_color(delta, up_color, flat_color, down_color):
     try:
         if pd.isna(delta):
@@ -96,7 +103,7 @@ def _player_profile_url(pid, public_mode, ctx):
 
 
 def _build_player_link(pid, name, public_mode, ctx):
-    safe_name = html.escape(str(name))
+    safe_name = _safe_text(name)
     url = _player_profile_url(pid, public_mode, ctx)
     if not url:
         return safe_name
@@ -1253,8 +1260,8 @@ def render(ctx):
                         title_parts.append(f"Prestige {int(prestige)}")
                     title = " • ".join(title_parts)
                     badge_parts.append(
-                        f'<span class="lb-story-badge" title="{html.escape(title)}">'
-                        f"{html.escape(str(icon))}</span>"
+                        f'<span class="lb-story-badge" title="{_safe_text(title)}">'
+                        f"{_safe_text(icon)}</span>"
                     )
                 story_badges_html = f'<div class="lb-badge-strip">{"".join(badge_parts)}</div>'
             elif row.get("matches_played", 0) == 0:
@@ -1279,7 +1286,7 @@ def render(ctx):
                         inserts.append(_build_partner_story(partner, id_to_name))
                 if inserts:
                     story_text = f"{story_text} {' '.join(inserts)}".strip()
-            story_text_html = f'<div class="lb-story-text">{html.escape(story_text)}</div>'
+            story_text_html = f'<div class="lb-story-text">{_safe_text(story_text)}</div>'
             st.markdown(
                 f"""
                 <div class="lb-standings-card">
