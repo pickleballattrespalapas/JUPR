@@ -6,6 +6,6 @@ def test_safe_text_escapes_html_story():
     assert leaderboards._safe_text(raw_story) == "&lt;b&gt;Hi&lt;/b&gt; &amp; stuff"
 
 
-def test_safe_text_preserves_preescaped_text():
-    escaped_story = "&lt;div&gt;Already escaped&lt;/div&gt;"
-    assert leaderboards._safe_text(escaped_story) == escaped_story
+def test_safe_text_escapes_div_tags():
+    raw_story = "<div>Already escaped</div>"
+    assert leaderboards._safe_text(raw_story) == "&lt;div&gt;Already escaped&lt;/div&gt;"

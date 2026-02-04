@@ -24,10 +24,7 @@ MAX_STORY_BADGES = 2
 
 
 def _safe_text(value: object) -> str:
-    text = "" if value is None else str(value)
-    if ("&lt;" in text or "&gt;" in text or "&amp;" in text) and "<" not in text and ">" not in text:
-        return text
-    return html.escape(text)
+    return html.escape("" if value is None else str(value))
 
 
 def _delta_color(delta, up_color, flat_color, down_color):
@@ -1286,7 +1283,8 @@ def render(ctx):
                         inserts.append(_build_partner_story(partner, id_to_name))
                 if inserts:
                     story_text = f"{story_text} {' '.join(inserts)}".strip()
-            story_text_html = f'<div class="lb-story-text">{_safe_text(story_text)}</div>'
+            safe_story_text = _safe_text(story_text)
+            story_text_html = f'<div class="lb-story-text">{safe_story_text}</div>'
             st.markdown(
                 f"""
                 <div class="lb-standings-card">
