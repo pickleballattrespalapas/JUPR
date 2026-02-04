@@ -163,10 +163,12 @@ def render(ctx):
                 id_to_name=ctx.id_to_name,
             )
 
-            t_tabs = st.tabs([tier_title(tid) for tid in TIER_ORDER])
+            q_all = st.text_input("Search ladder (all tiers)", value="", key="challenge_ladder_search_all")
 
-            for i, tid in enumerate(TIER_ORDER):
-                with t_tabs[i]:
+            cols = st.columns(4)
+            for col, tid in zip(cols, TIER_ORDER):
+                with col:
+                    st.subheader(tier_title(tid))
                     # Defensive filtering (pandas can hold bools as object)
                     sub = df_roster.copy()
                     if "is_active" in sub.columns:
@@ -187,9 +189,8 @@ def render(ctx):
                     sub["status"] = sub["player_id"].apply(lambda pid: status_map.get(int(pid), {}).get("status", "Ready to Defend"))
                     sub["detail"] = sub["player_id"].apply(lambda pid: status_map.get(int(pid), {}).get("detail", ""))
 
-                    q = st.text_input(f"Search ({tier_title(tid)})", value="", key=f"challenge_ladder_search_{tid}")
-                    if q.strip():
-                        sub = sub[sub["name"].str.contains(q.strip(), case=False, na=False)].copy()
+                    if q_all.strip():
+                        sub = sub[sub["name"].str.contains(q_all.strip(), case=False, na=False)].copy()
 
                     if "rank" in sub.columns:
                         sub = sub.sort_values("rank", ascending=True).copy()
@@ -205,9 +206,33 @@ def render(ctx):
                             return str(r)
 
                         sub["Rank"] = sub["rank"].astype(int).apply(rank_badge)
-                        st.dataframe(sub[["Rank", "name", "status", "detail"]], use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            sub[["Rank", "name", "status"]],
+                            use_container_width=True,
+                            hide_index=True,
+                            height=520,
+                        )
+                        with st.expander("Show details", expanded=False):
+                            st.dataframe(
+                                sub[["Rank", "name", "status", "detail"]],
+                                use_container_width=True,
+                                hide_index=True,
+                                height=520,
+                            )
                     else:
-                        st.dataframe(sub[["name", "status", "detail"]], use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            sub[["name", "status"]],
+                            use_container_width=True,
+                            hide_index=True,
+                            height=520,
+                        )
+                        with st.expander("Show details", expanded=False):
+                            st.dataframe(
+                                sub[["name", "status", "detail"]],
+                                use_container_width=True,
+                                hide_index=True,
+                                height=520,
+                            )
 
     # -------------------------
     # TAB 2: ACTIVE CHALLENGES
