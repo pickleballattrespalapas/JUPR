@@ -185,6 +185,14 @@ def render(ctx):
         if "mu_lc_courts" not in st.session_state:
             st.session_state.mu_lc_courts = 1
 
+        format_expected_games = {
+            "4-Player": 3,
+            "5-Player": 5,
+            "6-Player": 5,
+            "8-Player": 14,
+            "12-Player": 33,
+        }
+
         st.session_state.mu_lc_courts = st.number_input(
             "Courts",
             min_value=1,
@@ -202,6 +210,9 @@ def render(ctx):
                     ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"],
                     key=f"mu_fmt_{i}",
                 )
+                expected_games = format_expected_games.get(t)
+                if expected_games is not None:
+                    cc1.caption(f"Expected games for this format: {expected_games}")
                 n = cc2.text_area(
                     f"Players C{i+1}",
                     height=70,
@@ -276,10 +287,54 @@ def render(ctx):
                         )
 
                 if st.form_submit_button("Submit"):
+                    per_court_counts = ", ".join(
+                        f"C{c['c']}={len(c['m'])}" for c in st.session_state.mu_lc_schedule
+                    )
+                    st.caption(
+                        f"Rendered matches per court: {per_court_counts}. "
+                        f"Total rendered matches: {len(all_res)}."
+                    )
                     payload = [x for x in all_res if (x["s1"] > 0 or x["s2"] > 0)]
+                    st.info(f"Submitting {len(payload)} of {len(all_res)} matches (non-zero scores).")
+
+                    zero_score_count = len(all_res) - len(payload)
+                    unmapped_rows = []
+                    def is_unmapped(name):
+                        if name is None:
+                            return True
+                        name_str = str(name).strip()
+                        if not name_str:
+                            return True
+                        if name_str.isdigit():
+                            return False
+                        return name_to_id.get(name_str) is None
+
+                    for idx, match in enumerate(payload, start=1):
+                        t1_p1 = match.get("t1_p1")
+                        t1_p2 = match.get("t1_p2")
+                        t2_p1 = match.get("t2_p1")
+                        t2_p2 = match.get("t2_p2")
+                        names = [t1_p1, t1_p2, t2_p1, t2_p2]
+                        if any(is_unmapped(name) for name in names):
+                            unmapped_rows.append(
+                                {
+                                    "match_index": idx,
+                                    "t1": f"{t1_p1}/{t1_p2}",
+                                    "t2": f"{t2_p1}/{t2_p2}",
+                                }
+                            )
+
+                    with st.expander("Debug: skipped matches", expanded=False):
+                        st.write(f"Zero-score matches: {zero_score_count}")
+                        if unmapped_rows:
+                            st.write("Unmapped player names (first 20 non-zero matches):")
+                            st.table(pd.DataFrame(unmapped_rows[:20]))
+                        else:
+                            st.write("Unmapped player names: 0")
+
                     if payload:
                         try:
-                            process_matches(
+                            result = process_matches(
                                 payload,
                                 supabase=supabase,
                                 club_id=str(club_id),
@@ -292,8 +347,15 @@ def render(ctx):
                             st.error("Failed to submit matches.")
                             st.exception(e)
                             st.stop()
+                        st.success(
+                            "✅ Done! "
+                            f"Inserted {result.get('inserted', 0)} matches. "
+                            f"Skipped incomplete: {result.get('skipped_incomplete', 0)}. "
+                            f"Skipped empty: {result.get('skipped_empty', 0)}."
+                        )
+                    else:
+                        st.warning("No non-zero score matches to submit.")
 
-                    st.success("✅ Done!")
                     if "mu_lc_schedule" in st.session_state:
                         del st.session_state.mu_lc_schedule
                     time.sleep(0.8)
