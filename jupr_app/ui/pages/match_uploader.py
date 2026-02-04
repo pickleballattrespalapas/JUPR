@@ -9,6 +9,7 @@ import streamlit as st
 from jupr_app.domain.events import upsert_or_get_active_event
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.ui.layout import page_shell
 
 
@@ -36,6 +37,13 @@ def render(ctx):
     if supabase is None or not club_id or name_to_id is None:
         st.error("Match Uploader missing required ctx fields: supabase, club_id, or name_to_id.")
         return
+
+    if "mu_pending_new_players" not in st.session_state:
+        st.session_state.mu_pending_new_players = []
+    if "mu_pending_courts_data" not in st.session_state:
+        st.session_state.mu_pending_courts_data = None
+    if "mu_new_players_editor_seed" not in st.session_state:
+        st.session_state.mu_new_players_editor_seed = None
 
     # ---- Top controls ----
     c1, c2, c3 = st.columns(3)
@@ -185,6 +193,112 @@ def render(ctx):
         if "mu_lc_courts" not in st.session_state:
             st.session_state.mu_lc_courts = 1
 
+        pending_new_players = st.session_state.get("mu_pending_new_players") or []
+        if pending_new_players:
+            st.subheader("New players found — create profiles to continue")
+
+            seed_df = st.session_state.get("mu_new_players_editor_seed")
+            if seed_df is None or seed_df.empty or len(seed_df) != len(pending_new_players):
+                seed_df = pd.DataFrame(
+                    {
+                        "Name": [str(x) for x in pending_new_players],
+                        "Starting JUPR": [3.5] * len(pending_new_players),
+                    }
+                )
+                st.session_state.mu_new_players_editor_seed = seed_df
+
+            edited_new = st.data_editor(
+                seed_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Starting JUPR": st.column_config.NumberColumn(
+                        "Starting JUPR",
+                        min_value=1.0,
+                        max_value=7.0,
+                        step=0.1,
+                    )
+                },
+                key="mu_new_players_editor",
+            )
+
+            if st.button("Create Players & Continue", type="primary"):
+                errors = []
+                for _, row in edited_new.iterrows():
+                    nm = str(row["Name"]).strip()
+                    jupr = float(row["Starting JUPR"])
+                    ok, err = safe_add_player(
+                        supabase=ctx.supabase,
+                        club_id=str(ctx.club_id),
+                        name=nm,
+                        rating_jupr=jupr,
+                    )
+                    if not ok:
+                        errors.append(f"{nm}: {err}")
+
+                if errors:
+                    for err in errors:
+                        st.error(f"Could not add {err}")
+                    st.stop()
+
+                fetch = (
+                    ctx.supabase.table("players")
+                    .select("id,name,rating")
+                    .eq("club_id", str(ctx.club_id))
+                    .execute()
+                )
+                all_rows = fetch.data or []
+                refreshed_name_to_id = {
+                    str(row["name"]).strip(): int(row["id"])
+                    for row in all_rows
+                    if str(row.get("name", "")).strip()
+                }
+                refreshed_id_to_name = {
+                    int(row["id"]): str(row["name"]).strip()
+                    for row in all_rows
+                    if row.get("id") is not None and str(row.get("name", "")).strip()
+                }
+
+                if isinstance(ctx.name_to_id, dict):
+                    ctx.name_to_id.update(refreshed_name_to_id)
+                if isinstance(getattr(ctx, "id_to_name", None), dict):
+                    ctx.id_to_name.update(refreshed_id_to_name)
+                st.session_state["force_data_refresh"] = True
+
+                pending_data = st.session_state.get("mu_pending_courts_data") or {}
+                st.session_state.mu_pending_new_players = []
+                st.session_state.mu_pending_courts_data = None
+                st.session_state.mu_new_players_editor_seed = None
+
+                if pending_data.get("is_popup"):
+                    event_id = upsert_or_get_active_event(
+                        supabase,
+                        club_id=str(club_id),
+                        name=pending_data.get("popup_event_name") or "Pop-Up Event",
+                    )
+                    st.session_state.mu_event_id = event_id
+                    st.session_state.mu_event_id_name = pending_data.get("popup_event_name") or "Pop-Up Event"
+
+                st.session_state.mu_lc_schedule = []
+                st.session_state.mu_active_lg = pending_data.get("selected_league")
+                st.session_state.mu_active_wk = pending_data.get("week_tag")
+                st.session_state.mu_active_is_popup = pending_data.get("is_popup")
+                st.session_state.mu_active_mt = pending_data.get("match_type_db")
+
+                pending_c_data = pending_data.get("c_data") or []
+                pending_custom_sched = pending_data.get("custom_sched") or ""
+                for idx, c in enumerate(pending_c_data):
+                    pl = [x.strip() for x in c["names"].replace("\n", ",").split(",") if x.strip()]
+                    st.session_state.mu_lc_schedule.append(
+                        {
+                            "c": idx + 1,
+                            "m": get_match_schedule(c["type"], pl, custom_text=pending_custom_sched),
+                        }
+                    )
+                st.rerun()
+
+            st.stop()
+
         format_expected_games = {
             "4-Player": 3,
             "5-Player": 5,
@@ -228,6 +342,42 @@ def render(ctx):
             )
 
             if st.form_submit_button("Generate"):
+                def normalize_name(name: str) -> str:
+                    return " ".join(str(name or "").replace("\u00A0", " ").split())
+
+                normalized_name_to_id = {
+                    normalize_name(k): v
+                    for k, v in (name_to_id or {}).items()
+                    if normalize_name(k)
+                }
+
+                all_names = set()
+                for c in c_data:
+                    pl = [x.strip() for x in c["names"].replace("\n", ",").split(",") if x.strip()]
+                    all_names.update(pl)
+
+                missing_names = []
+                for nm in sorted(all_names):
+                    if nm in name_to_id:
+                        continue
+                    normalized_nm = normalize_name(nm)
+                    if normalized_nm and normalized_name_to_id.get(normalized_nm) is not None:
+                        continue
+                    missing_names.append(nm)
+
+                if missing_names:
+                    st.session_state.mu_pending_new_players = missing_names
+                    st.session_state.mu_pending_courts_data = {
+                        "c_data": c_data,
+                        "custom_sched": custom_sched,
+                        "popup_event_name": popup_event_name,
+                        "week_tag": week_tag,
+                        "match_type_db": match_type_db,
+                        "selected_league": selected_league,
+                        "is_popup": is_popup,
+                    }
+                    st.rerun()
+
                 if is_popup:
                     event_id = upsert_or_get_active_event(
                         supabase,
@@ -295,10 +445,13 @@ def render(ctx):
                         f"Total rendered matches: {len(all_res)}."
                     )
                     payload = [x for x in all_res if (x["s1"] > 0 or x["s2"] > 0)]
-                    st.info(f"Submitting {len(payload)} of {len(all_res)} matches (non-zero scores).")
+                    total_games = len(all_res)
+                    scored_games = len(payload)
+                    st.info(f"Generated {total_games} games. Submitting {scored_games} scored games.")
 
                     zero_score_count = len(all_res) - len(payload)
                     unmapped_rows = []
+
                     def is_unmapped(name):
                         if name is None:
                             return True
@@ -324,17 +477,9 @@ def render(ctx):
                                 }
                             )
 
-                    with st.expander("Debug: skipped matches", expanded=False):
-                        st.write(f"Zero-score matches: {zero_score_count}")
-                        if unmapped_rows:
-                            st.write("Unmapped player names (first 20 non-zero matches):")
-                            st.table(pd.DataFrame(unmapped_rows[:20]))
-                        else:
-                            st.write("Unmapped player names: 0")
-
                     if payload:
                         try:
-                            result = process_matches(
+                            res = process_matches(
                                 payload,
                                 supabase=supabase,
                                 club_id=str(club_id),
@@ -348,11 +493,16 @@ def render(ctx):
                             st.exception(e)
                             st.stop()
                         st.success(
-                            "✅ Done! "
-                            f"Inserted {result.get('inserted', 0)} matches. "
-                            f"Skipped incomplete: {result.get('skipped_incomplete', 0)}. "
-                            f"Skipped empty: {result.get('skipped_empty', 0)}."
+                            f"Inserted {res.get('inserted', 0)} • "
+                            f"Skipped incomplete {res.get('skipped_incomplete', 0)} • "
+                            f"Skipped empty {res.get('skipped_empty', 0)}"
                         )
+                        if res.get("skipped_incomplete", 0) > 0:
+                            with st.expander("Unmapped names in submitted matches", expanded=False):
+                                if unmapped_rows:
+                                    st.table(pd.DataFrame(unmapped_rows))
+                                else:
+                                    st.write("No unmapped names detected in the submitted payload.")
                     else:
                         st.warning("No non-zero score matches to submit.")
 
