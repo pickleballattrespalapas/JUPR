@@ -8,9 +8,9 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.challenge_ladder import (
+    TIER_DEFS,
     TIER_ORDER,
     normalize_tier_id,
-    tier_title,
     ladder_nm,
     ladder_bucket_challenge,
     ladder_compute_status_map,
@@ -162,13 +162,45 @@ def render(ctx):
                 settings=settings,
                 id_to_name=ctx.id_to_name,
             )
+            st.markdown(
+                """
+<style>
+.tier-title { font-size: 1.35rem; font-weight: 700; margin: 0 0 0.15rem 0; }
+.tier-range { font-size: 0.95rem; opacity: 0.70; margin: 0 0 0.55rem 0; }
+.tier-block { padding-top: 0.25rem; }
+</style>
+""",
+                unsafe_allow_html=True,
+            )
+
+            STATUS_SHORT = {
+                "Ready to Defend": "Ready",
+                "Reinstate Required": "Reinstate",
+                "Vacation": "Vacation",
+                "Pass Hold": "Pass Hold",
+                "Locked": "Locked",
+                "Protected": "Protected",
+                "Cooldown": "Cooldown",
+            }
+
+            TABLE_HEIGHT = 520
+
+            def render_tier_header(tid: str):
+                t = TIER_DEFS.get(tid, {"label": tid, "range": ""})
+                st.markdown(
+                    f"<div class='tier-block'>"
+                    f"<div class='tier-title'>{t.get('label')}</div>"
+                    f"<div class='tier-range'>{t.get('range','')}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
             q_all = st.text_input("Search ladder (all tiers)", value="", key="challenge_ladder_search_all")
 
             cols = st.columns(4)
             for col, tid in zip(cols, TIER_ORDER):
                 with col:
-                    st.subheader(tier_title(tid))
+                    render_tier_header(tid)
                     # Defensive filtering (pandas can hold bools as object)
                     sub = df_roster.copy()
                     if "is_active" in sub.columns:
@@ -182,7 +214,13 @@ def render(ctx):
                         continue
 
                     if sub.empty:
-                        st.info("No players in this tier.")
+                        empty = pd.DataFrame([{"Rank": "", "name": "No players", "status": ""}])
+                        st.dataframe(
+                            empty,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=TABLE_HEIGHT,
+                        )
                         continue
 
                     sub["name"] = sub["player_id"].apply(lambda x: ladder_nm(int(x), ctx.id_to_name))
@@ -206,32 +244,34 @@ def render(ctx):
                             return str(r)
 
                         sub["Rank"] = sub["rank"].astype(int).apply(rank_badge)
+                        sub["status_short"] = sub["status"].apply(lambda s: STATUS_SHORT.get(str(s), str(s)))
                         st.dataframe(
-                            sub[["Rank", "name", "status"]],
+                            sub[["Rank", "name", "status_short"]].rename(columns={"status_short": "status"}),
                             use_container_width=True,
                             hide_index=True,
-                            height=520,
+                            height=TABLE_HEIGHT,
                         )
                         with st.expander("Show details", expanded=False):
                             st.dataframe(
                                 sub[["Rank", "name", "status", "detail"]],
                                 use_container_width=True,
                                 hide_index=True,
-                                height=520,
+                                height=260,
                             )
                     else:
+                        sub["status_short"] = sub["status"].apply(lambda s: STATUS_SHORT.get(str(s), str(s)))
                         st.dataframe(
-                            sub[["name", "status"]],
+                            sub[["name", "status_short"]].rename(columns={"status_short": "status"}),
                             use_container_width=True,
                             hide_index=True,
-                            height=520,
+                            height=TABLE_HEIGHT,
                         )
                         with st.expander("Show details", expanded=False):
                             st.dataframe(
                                 sub[["name", "status", "detail"]],
                                 use_container_width=True,
                                 hide_index=True,
-                                height=520,
+                                height=260,
                             )
 
     # -------------------------
