@@ -1,5 +1,6 @@
 import html
 import logging
+import textwrap
 import urllib.parse
 import streamlit as st
 import pandas as pd
@@ -1285,26 +1286,24 @@ def render(ctx):
                     story_text = f"{story_text} {' '.join(inserts)}".strip()
             safe_story_text = _safe_text(story_text)
             story_text_html = f'<div class="lb-story-text">{safe_story_text}</div>'
-            st.markdown(
-                f"""
-                <div class="lb-standings-card">
-                    <div class="lb-standings-top">
-                        <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
-                        <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
-                        <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
-                    </div>
-                    <div class="lb-standings-stats">
-                        <span>{int(row['matches_played'])} games</span>
-                        <span>{_format_win_pct(row['Win %'])} win %</span>
-                        <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
-                    </div>
-                    {story_badges_html}
-                    {story_text_html}
-                    <div class="lb-row" style="gap:6px;">{badge_html}</div>
+            card_html = f"""
+            <div class="lb-standings-card">
+                <div class="lb-standings-top">
+                    <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
+                    <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
+                    <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                <div class="lb-standings-stats">
+                    <span>{int(row['matches_played'])} games</span>
+                    <span>{_format_win_pct(row['Win %'])} win %</span>
+                    <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
+                </div>
+                {story_badges_html}
+                {story_text_html}
+                <div class="lb-row" style="gap:6px;">{badge_html}</div>
+            </div>
+            """
+            st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
 
         if len(standings) > limit:
             if st.button("Load more", key="lb_load_more"):
