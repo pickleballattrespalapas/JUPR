@@ -577,69 +577,78 @@ def render(ctx):
                     if int(ctx.name_to_id.get(nm, -1)) not in {int(chal_id), int(def_id)}
                 ]
 
+                def _pick_partner(label: str, key: str, options: list[str]) -> str | None:
+                    if not options:
+                        st.selectbox(label, ["No eligible options"], disabled=True, key=f"{key}_disabled")
+                        return None
+                    existing = st.session_state.get(key)
+                    index = options.index(existing) if existing in options else 0
+                    return st.selectbox(label, options, index=index, key=key)
+
                 if not available_partner_names:
                     st.warning("No eligible partner players available (excluding challenger/defender).")
                 else:
                     default_dt = dt_utc_now()
                     draft_key = f"ladder_result_draft_{ch_id}"
                     with st.form(f"record_result_{ch_id}"):
-                        st.markdown("**Partners**")
+                        st.markdown("### Match A Partners")
                         pa_cols = st.columns(2)
                         with pa_cols[0]:
-                            partner_a_chal_name = st.selectbox(
-                                "Challenger partner (A)",
-                                available_partner_names,
+                            partner_a_chal_name = _pick_partner(
+                                "challenger_partner_A",
                                 key=f"sw_partner_a_chal_{ch_id}",
-                            )
-                        with pa_cols[1]:
-                            partner_a_def_name = st.selectbox(
-                                "Defender partner (A)",
-                                available_partner_names,
-                                key=f"sw_partner_a_def_{ch_id}",
+                                options=available_partner_names,
                             )
 
+                        match_a_def_options = [
+                            nm for nm in available_partner_names
+                            if nm != partner_a_chal_name
+                        ]
+                        with pa_cols[1]:
+                            partner_a_def_name = _pick_partner(
+                                "defender_partner_A",
+                                key=f"sw_partner_a_def_{ch_id}",
+                                options=match_a_def_options,
+                            )
+
+                        st.markdown("### Match B Partners")
+                        match_b_chal_options = [
+                            nm for nm in available_partner_names
+                            if nm != partner_a_chal_name
+                        ]
                         pb_cols = st.columns(2)
                         with pb_cols[0]:
-                            partner_b_chal_name = st.selectbox(
-                                "Challenger partner (B)",
-                                available_partner_names,
+                            partner_b_chal_name = _pick_partner(
+                                "challenger_partner_B",
                                 key=f"sw_partner_b_chal_{ch_id}",
-                            )
-                        with pb_cols[1]:
-                            partner_b_def_name = st.selectbox(
-                                "Defender partner (B)",
-                                available_partner_names,
-                                key=f"sw_partner_b_def_{ch_id}",
+                                options=match_b_chal_options,
                             )
 
-                        def _score_inputs(tag: str):
-                            st.markdown(f"**Match {tag} (best-of-3)**")
+                        match_b_def_options = [
+                            nm for nm in available_partner_names
+                            if nm != partner_a_def_name and nm != partner_b_chal_name
+                        ]
+                        with pb_cols[1]:
+                            partner_b_def_name = _pick_partner(
+                                "defender_partner_B",
+                                key=f"sw_partner_b_def_{ch_id}",
+                                options=match_b_def_options,
+                            )
+
+                        def _score_inputs(tag: str, chal_partner_name: str | None, def_partner_name: str | None):
+                            st.markdown(f"### Match {tag} (best-of-3)")
                             rows = []
                             for i in range(1, 4):
-                                g_cols = st.columns(2)
-                                with g_cols[0]:
-                                    s1 = st.number_input(
-                                        f"Match {tag} Game {i} - Challenger side",
-                                        min_value=0,
-                                        max_value=50,
-                                        step=1,
-                                        value=0,
-                                        key=f"m_{tag.lower()}_g{i}_s1_{ch_id}",
-                                    )
-                                with g_cols[1]:
-                                    s2 = st.number_input(
-                                        f"Match {tag} Game {i} - Defender side",
-                                        min_value=0,
-                                        max_value=50,
-                                        step=1,
-                                        value=0,
-                                        key=f"m_{tag.lower()}_g{i}_s2_{ch_id}",
-                                    )
+                                c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
+                                c1.text(f"Game {i}: {challenger_name} & {chal_partner_name or '—'}")
+                                s1 = c2.number_input("S1", 0, 99, 0, 1, key=f"m_{tag.lower()}_g{i}_s1_{ch_id}")
+                                s2 = c3.number_input("S2", 0, 99, 0, 1, key=f"m_{tag.lower()}_g{i}_s2_{ch_id}")
+                                c4.text(f"{defender_name} & {def_partner_name or '—'}")
                                 rows.append((int(s1), int(s2)))
                             return rows
 
-                        match_a_games_all = _score_inputs("A")
-                        match_b_games_all = _score_inputs("B")
+                        match_a_games_all = _score_inputs("A", partner_a_chal_name, partner_a_def_name)
+                        match_b_games_all = _score_inputs("B", partner_b_chal_name, partner_b_def_name)
 
                         dt_cols = st.columns(2)
                         with dt_cols[0]:
@@ -659,6 +668,10 @@ def render(ctx):
                         partner_ids = [partner_a_chal_id, partner_a_def_id, partner_b_chal_id, partner_b_def_id]
                         if any(pid is None for pid in partner_ids):
                             errors.append("Could not resolve one or more selected partners to player IDs.")
+                        else:
+                            excluded_ids = {int(chal_id), int(def_id)}
+                            if any(int(pid) in excluded_ids for pid in partner_ids):
+                                errors.append("Partners cannot be the challenger or defender.")
 
                         if partner_a_chal_id == partner_a_def_id:
                             errors.append("Match A partners must be different people.")
