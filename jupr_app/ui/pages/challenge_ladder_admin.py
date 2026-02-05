@@ -517,8 +517,7 @@ def render(ctx):
                 st.success("Pass recorded (challenge closed).")
                 st.rerun()
 
-            accepted_record_statuses = {"ACCEPTED_SCHEDULING", "IN_PROGRESS", "AWAITING_VERIFICATION", "OVERDUE_PLAY"}
-            if str(ch_row.get("status") or "") in accepted_record_statuses:
+            if str(ch_row.get("status") or "") == "ACCEPTED_SCHEDULING":
                 st.divider()
                 st.subheader("🏁 Record Match Result")
                 st.caption(
@@ -526,39 +525,68 @@ def render(ctx):
                     "Challenger and defender remain opponents in both matches."
                 )
 
+                challenger_name = ladder_nm(chal_id, id_to_name)
+                defender_name = ladder_nm(def_id, id_to_name)
                 all_player_names = sorted([str(n) for n in (ctx.name_to_id or {}).keys()])
-                if not all_player_names:
-                    st.warning("No players available for partner selection.")
+                available_partner_names = [
+                    nm for nm in all_player_names
+                    if int(ctx.name_to_id.get(nm, -1)) not in {int(chal_id), int(def_id)}
+                ]
+
+                if not available_partner_names:
+                    st.warning("No eligible partner players available (excluding challenger/defender).")
                 else:
                     default_dt = dt_utc_now()
                     with st.form(f"record_result_{ch_id}"):
-                        p_cols = st.columns(2)
-                        with p_cols[0]:
-                            partner_a_name = st.selectbox(
-                                "Swing Partner A (plays with Challenger in Match A)",
-                                all_player_names,
-                                key=f"sw_partner_a_{ch_id}",
+                        st.markdown("**Match A**")
+                        pa_cols = st.columns(2)
+                        with pa_cols[0]:
+                            partner_a_chal_name = st.selectbox(
+                                "Challenger partner (Match A)",
+                                available_partner_names,
+                                key=f"sw_partner_a_chal_{ch_id}",
                             )
-                        with p_cols[1]:
-                            partner_b_name = st.selectbox(
-                                "Swing Partner B (plays with Defender in Match A)",
-                                all_player_names,
-                                key=f"sw_partner_b_{ch_id}",
+                        with pa_cols[1]:
+                            partner_a_def_name = st.selectbox(
+                                "Defender partner (Match A)",
+                                available_partner_names,
+                                key=f"sw_partner_a_def_{ch_id}",
                             )
 
-                        st.markdown("**Match A**: Challenger + Partner A vs Defender + Partner B")
                         a_cols = st.columns(2)
                         with a_cols[0]:
-                            match_a_s1 = st.number_input("Match A Team 1 score", min_value=0, step=1, value=11, key=f"m_a_s1_{ch_id}")
+                            match_a_s1 = st.number_input(
+                                "Match A score (Challenger side)", min_value=0, step=1, value=11, key=f"m_a_s1_{ch_id}"
+                            )
                         with a_cols[1]:
-                            match_a_s2 = st.number_input("Match A Team 2 score", min_value=0, step=1, value=8, key=f"m_a_s2_{ch_id}")
+                            match_a_s2 = st.number_input(
+                                "Match A score (Defender side)", min_value=0, step=1, value=8, key=f"m_a_s2_{ch_id}"
+                            )
 
-                        st.markdown("**Match B**: Challenger + Partner B vs Defender + Partner A")
+                        st.markdown("**Match B**")
+                        pb_cols = st.columns(2)
+                        with pb_cols[0]:
+                            partner_b_chal_name = st.selectbox(
+                                "Challenger partner (Match B)",
+                                available_partner_names,
+                                key=f"sw_partner_b_chal_{ch_id}",
+                            )
+                        with pb_cols[1]:
+                            partner_b_def_name = st.selectbox(
+                                "Defender partner (Match B)",
+                                available_partner_names,
+                                key=f"sw_partner_b_def_{ch_id}",
+                            )
+
                         b_cols = st.columns(2)
                         with b_cols[0]:
-                            match_b_s1 = st.number_input("Match B Team 1 score", min_value=0, step=1, value=8, key=f"m_b_s1_{ch_id}")
+                            match_b_s1 = st.number_input(
+                                "Match B score (Challenger side)", min_value=0, step=1, value=8, key=f"m_b_s1_{ch_id}"
+                            )
                         with b_cols[1]:
-                            match_b_s2 = st.number_input("Match B Team 2 score", min_value=0, step=1, value=11, key=f"m_b_s2_{ch_id}")
+                            match_b_s2 = st.number_input(
+                                "Match B score (Defender side)", min_value=0, step=1, value=11, key=f"m_b_s2_{ch_id}"
+                            )
 
                         dt_cols = st.columns(2)
                         with dt_cols[0]:
@@ -570,40 +598,40 @@ def render(ctx):
 
                     if submit_result:
                         before = ch_row.copy()
-                        partner_a_id = ctx.name_to_id.get(str(partner_a_name))
-                        partner_b_id = ctx.name_to_id.get(str(partner_b_name))
+                        partner_a_chal_id = ctx.name_to_id.get(str(partner_a_chal_name))
+                        partner_a_def_id = ctx.name_to_id.get(str(partner_a_def_name))
+                        partner_b_chal_id = ctx.name_to_id.get(str(partner_b_chal_name))
+                        partner_b_def_id = ctx.name_to_id.get(str(partner_b_def_name))
 
-                        if partner_a_id is None or partner_b_id is None:
-                            st.error("Could not resolve one or both swing partners to player IDs.")
+                        partner_ids = [partner_a_chal_id, partner_a_def_id, partner_b_chal_id, partner_b_def_id]
+                        if any(pid is None for pid in partner_ids):
+                            st.error("Could not resolve one or more selected partners to player IDs.")
                             st.stop()
 
-                        if int(partner_a_id) == int(partner_b_id):
-                            st.error("Swing Partner A and Swing Partner B must be different players.")
-                            st.stop()
-
+                        match_iso = pd.Timestamp.combine(match_date, match_time).tz_localize("UTC").isoformat()
                         match_a = {
-                            "date": pd.Timestamp.combine(match_date, match_time).tz_localize("UTC").isoformat(),
-                            "league": "Challenge Ladder",
-                            "match_type": "PopUp",
+                            "date": match_iso,
+                            "league": "OVERALL",
+                            "match_type": "ChallengeLadder",
                             "is_popup": True,
                             "t1_p1": int(chal_id),
-                            "t1_p2": int(partner_a_id),
+                            "t1_p2": int(partner_a_chal_id),
                             "t2_p1": int(def_id),
-                            "t2_p2": int(partner_b_id),
+                            "t2_p2": int(partner_a_def_id),
                             "s1": int(match_a_s1),
                             "s2": int(match_a_s2),
                             "context_type": "challenge_ladder",
                             "context_id": int(ch_id),
                         }
                         match_b = {
-                            "date": pd.Timestamp.combine(match_date, match_time).tz_localize("UTC").isoformat(),
-                            "league": "Challenge Ladder",
-                            "match_type": "PopUp",
+                            "date": match_iso,
+                            "league": "OVERALL",
+                            "match_type": "ChallengeLadder",
                             "is_popup": True,
                             "t1_p1": int(chal_id),
-                            "t1_p2": int(partner_b_id),
+                            "t1_p2": int(partner_b_chal_id),
                             "t2_p1": int(def_id),
-                            "t2_p2": int(partner_a_id),
+                            "t2_p2": int(partner_b_def_id),
                             "s1": int(match_b_s1),
                             "s2": int(match_b_s2),
                             "context_type": "challenge_ladder",
@@ -641,15 +669,13 @@ def render(ctx):
                             st.stop()
 
                         winner_name = ladder_nm(int(winner_id), id_to_name)
-                        challenger_name = ladder_nm(chal_id, id_to_name)
-                        defender_name = ladder_nm(def_id, id_to_name)
                         summary = (
-                            f"Match A: {challenger_name}+{ladder_nm(int(partner_a_id), id_to_name)} "
+                            f"Match A: {challenger_name}+{ladder_nm(int(partner_a_chal_id), id_to_name)} "
                             f"{int(match_a['s1'])}-{int(match_a['s2'])} "
-                            f"{defender_name}+{ladder_nm(int(partner_b_id), id_to_name)}; "
-                            f"Match B: {challenger_name}+{ladder_nm(int(partner_b_id), id_to_name)} "
+                            f"{defender_name}+{ladder_nm(int(partner_a_def_id), id_to_name)}; "
+                            f"Match B: {challenger_name}+{ladder_nm(int(partner_b_chal_id), id_to_name)} "
                             f"{int(match_b['s1'])}-{int(match_b['s2'])} "
-                            f"{defender_name}+{ladder_nm(int(partner_a_id), id_to_name)}. "
+                            f"{defender_name}+{ladder_nm(int(partner_b_def_id), id_to_name)}. "
                             f"Winner: {winner_name}."
                         )
 
@@ -663,9 +689,14 @@ def render(ctx):
 
                         if int(winner_id) == int(chal_id):
                             try:
-                                sb_retry(lambda: supabase.rpc("ladder_swap_ranks", {"p_club_id": club_id, "p_player_a": chal_id, "p_player_b": def_id}).execute())
+                                sb_retry(
+                                    lambda: supabase.rpc(
+                                        "ladder_swap_ranks",
+                                        {"p_club_id": club_id, "p_player_a": chal_id, "p_player_b": def_id},
+                                    ).execute()
+                                )
                             except Exception:
-                                st.warning("Rank swap RPC (ladder_swap_ranks) not available; challenge completed without swapping ranks.")
+                                st.warning("Rank swap RPC failed; challenge completed and ratings updated without swapping ranks.")
 
                         ladder_audit(
                             supabase,
@@ -680,7 +711,7 @@ def render(ctx):
                         if int(pm_result.get("inserted", 0)) != 2:
                             st.warning(f"Expected 2 inserted matches; got {pm_result}.")
                         else:
-                            st.success("Challenge result recorded. 2 matches inserted and ratings updated.")
+                            st.success("Challenge result recorded. 2 matches inserted and OVERALL ratings updated.")
                         st.rerun()
 
     # -------------------------
