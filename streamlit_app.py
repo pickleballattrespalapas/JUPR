@@ -322,6 +322,7 @@ def main():
         from jupr_app.ui.pages import (
             leaderboards,
             league_results,
+            league_printout,
             match_explorer,
             faqs,
             players,
@@ -345,6 +346,7 @@ def main():
         PAGES = {
             "🏆 Leaderboards": leaderboards,
             "📊 League Results": league_results,
+            "🖨️ League Night Printout": league_printout,
             "🎯 Match Explorer": match_explorer,
             "🔍 Player Search": players,
             "📼 Badge Codex": badge_codex,
@@ -369,6 +371,7 @@ def main():
         PAGE_KEY_TO_LABEL = {
             "leaderboards": "🏆 Leaderboards",
             "league_results": "📊 League Results",
+            "league_printout": "🖨️ League Night Printout",
             "match_explorer": "🎯 Match Explorer",
             "players": "🔍 Player Search",
             "badge_codex": "📼 Badge Codex",
@@ -417,6 +420,7 @@ def main():
         PUBLIC_NAV_KEYS = [
             "leaderboards",
             "league_results",
+            "league_printout",
             "match_explorer",
             "players",
             "badge_codex",
