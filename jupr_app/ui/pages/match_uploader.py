@@ -341,6 +341,7 @@ def render(ctx):
             "5-Player": 5,
             "6-Player": 5,
             "8-Player": 14,
+            "9-Player": 18,
             "12-Player": 33,
         }
 
@@ -358,7 +359,7 @@ def render(ctx):
                 cc1, cc2 = st.columns([1, 3])
                 t = cc1.selectbox(
                     f"Format C{i+1}",
-                    ["4-Player", "5-Player", "6-Player", "8-Player", "12-Player"],
+                    ["4-Player", "5-Player", "6-Player", "8-Player", "9-Player", "12-Player"],
                     key=f"mu_fmt_{i}",
                 )
                 expected_games = format_expected_games.get(t)
