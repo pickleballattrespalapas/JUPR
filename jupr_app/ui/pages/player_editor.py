@@ -4,10 +4,12 @@ import time
 from datetime import datetime, timezone
 
 from jupr_app.ui.layout import page_shell
+from jupr_app.domain.player_ops import safe_add_player
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
+    PICK_KEY = "player_editor_pick"
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")
@@ -27,9 +29,28 @@ def render(ctx):
             name = st.text_input("Name")
             rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1)
             if st.form_submit_button("Add Player"):
+                name_clean = name.strip()
+                if not name_clean:
+                    st.error("Name required.")
+                    st.stop()
+                existing = (
+                    supabase.table("players")
+                    .select("id,name")
+                    .eq("club_id", club_id)
+                    .eq("name", name_clean)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if existing:
+                    st.info("Player already exists — opening existing record.")
+                    st.session_state[PICK_KEY] = name_clean
+                    time.sleep(0.1)
+                    st.rerun()
                 payload = {
                     "club_id": club_id,
-                    "name": name.strip(),
+                    "name": name_clean,
                     "rating": float(rating) * 400.0,
                     "starting_rating": float(rating) * 400.0,
                     "wins": 0,
@@ -38,9 +59,18 @@ def render(ctx):
                     "active": True,
                     "inactive_at": None,
                 }
-                supabase.table("players").insert(payload).execute()
-                st.success("Added. Use Refresh in sidebar to reload cached data.")
-                time.sleep(0.4)
+                ok, err = safe_add_player(
+                    supabase=supabase,
+                    club_id=club_id,
+                    name=name_clean,
+                    rating_jupr=float(rating),
+                )
+                if not ok:
+                    st.error(err or "Unable to add player.")
+                    st.stop()
+                st.success("Added.")
+                st.session_state[PICK_KEY] = name_clean
+                time.sleep(0.2)
                 st.rerun()
 
     st.divider()
@@ -53,7 +83,7 @@ def render(ctx):
         st.stop()
 
     all_names = sorted(df_players_all["name"].astype(str).tolist())
-    pick = st.selectbox("Select Player", [""] + all_names, index=0)
+    pick = st.selectbox("Select Player", [""] + all_names, index=0, key=PICK_KEY)
 
     if not pick:
         st.info("Pick a player to edit.")
