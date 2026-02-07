@@ -1653,6 +1653,9 @@ def render(ctx):
             else:
                 return ""
 
+            if partner is None or opp1 is None or opp2 is None:
+                return ""
+
             return build_match_explorer_link(
                 ctx="OVERALL",
                 me=int(pid),
