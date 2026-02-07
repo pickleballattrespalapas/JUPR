@@ -30,6 +30,7 @@ PLAYER_BADGES_OPTIONAL_COLUMNS = [
     "revoked_by",
     "revoke_reason",
 ]
+MERGED_PLAYER_MARKER = "(MERGED into "
 
 
 def _missing_player_badges_columns(exc: APIError) -> set[str]:
@@ -90,6 +91,20 @@ def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, st
     return df_player_badges, schema_degraded, schema_degraded_reason
 
 
+def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "name" not in df.columns:
+        return df
+    merged_mask = (
+        df["name"]
+        .fillna("")
+        .astype(str)
+        .str.contains(MERGED_PLAYER_MARKER, case=False, regex=False)
+    )
+    if not merged_mask.any():
+        return df
+    return df.loc[~merged_mask].copy()
+
+
 def load_data(supabase, club_id: str, match_limit: int = 5000):
     """
     Loads club-scoped tables and returns:
@@ -118,6 +133,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_players_all = pd.DataFrame(p_resp.data or [])
 
             df_players_all = add_activity_columns(df_players_all)
+            df_players_all = _drop_merged_players(df_players_all)
 
             # Active players (inactive_at is authoritative when present)
             if not df_players_all.empty and "inactive_at" in df_players_all.columns:
