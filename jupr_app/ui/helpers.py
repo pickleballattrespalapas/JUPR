@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 import urllib.parse
 
@@ -151,6 +152,14 @@ def build_badge_story(player_row: dict | pd.Series, earned_badges: list[dict]) -
         games_str = f"{games} game" + ("s" if games != 1 else "")
         return f"Active this season with {games_str} logged."
     return story
+
+
+def sanitize_story_text(raw: str | None) -> str:
+    text = "" if raw is None else str(raw)
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 def _row_value(row: dict | pd.Series, keys: list[str]):

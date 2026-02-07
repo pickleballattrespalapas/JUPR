@@ -1,6 +1,6 @@
 import pandas as pd
 
-from jupr_app.ui.helpers import build_badge_story
+from jupr_app.ui.helpers import build_badge_story, sanitize_story_text
 
 
 def test_build_badge_story_with_badges_and_stats():
@@ -45,3 +45,8 @@ def test_build_badge_story_no_badges_active():
         story
         == "Active this season with 12 games logged—badges will start appearing as the reel fills."
     )
+
+
+def test_sanitize_story_text_strips_html():
+    text = sanitize_story_text("<div>Hello<br>World</div>")
+    assert text == "Hello World"

@@ -12,7 +12,7 @@ from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
-from jupr_app.ui.helpers import build_badge_story
+from jupr_app.ui.helpers import build_badge_story, sanitize_story_text
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.domain.story_stats import (
     build_best_partner_map,
@@ -1290,8 +1290,9 @@ def render(ctx):
                         inserts.append(_build_partner_story(partner, id_to_name))
                 if inserts:
                     story_text = f"{story_text} {' '.join(inserts)}".strip()
-            safe_story_text = _safe_text(story_text)
-            story_text_html = f'<div class="lb-story-text">{safe_story_text}</div>'
+            story_text = sanitize_story_text(story_text)
+            safe_story_html = html.escape(story_text)
+            story_text_html = f'<div class="lb-story-text">{safe_story_html}</div>'
             card_html = f"""
             <div class="lb-standings-card">
                 <div class="lb-standings-top">
