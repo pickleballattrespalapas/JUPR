@@ -610,10 +610,6 @@ def render(ctx):
 
     st.session_state.setdefault("lb_league", available_leagues[default_idx])
     st.session_state.setdefault("lb_view_mode", "Story View")
-    target_league = st.session_state.get("lb_league", available_leagues[default_idx])
-    if target_league not in available_leagues:
-        target_league = available_leagues[default_idx]
-        st.session_state["lb_league"] = target_league
 
     qp_player = (qp_get("player", "") or "").strip()
     qp_pid_raw = (qp_get("pid", "") or "").strip()
@@ -629,14 +625,65 @@ def render(ctx):
         if "id" in ctx.df_players_active.columns:
             active_ids = set(ctx.df_players_active["id"].astype(int).tolist())
 
-    # Keep URL in sync
+    target_league = st.session_state.get("lb_league", available_leagues[default_idx])
+    if target_league not in available_leagues:
+        target_league = available_leagues[default_idx]
+        st.session_state["lb_league"] = target_league
+
+    view_mode = st.session_state.get("lb_view_mode", "Story View")
+
+    # -------------------------
+    # Controls
+    # -------------------------
+    st.markdown("### Full Standings")
+    control_cols = st.columns([2.2, 1.2, 1.2])
+    with control_cols[0]:
+        try:
+            target_league = st.segmented_control(
+                "League",
+                available_leagues,
+                default=target_league,
+                key="lb_league",
+            )
+        except Exception:
+            target_league = st.radio(
+                "League",
+                available_leagues,
+                index=available_leagues.index(target_league),
+                horizontal=True,
+                key="lb_league",
+            )
+    with control_cols[1]:
+        try:
+            view_mode = st.segmented_control(
+                "View",
+                ["Story View", "Stats View"],
+                default=view_mode,
+                key="lb_view_mode",
+            )
+        except Exception:
+            view_mode = st.radio(
+                "View",
+                ["Story View", "Stats View"],
+                index=0 if view_mode == "Story View" else 1,
+                horizontal=True,
+                key="lb_view_mode",
+            )
+    with control_cols[2]:
+        st.text_input("Find player", key="lb_search")
+
+    target_league = st.session_state.get("lb_league", "OVERALL")
+    if target_league not in available_leagues:
+        target_league = available_leagues[default_idx]
+        st.session_state["lb_league"] = target_league
+    view_mode = st.session_state.get("lb_view_mode", "Story View")
+
     try:
         st.query_params["page"] = "leaderboards"
         st.query_params["league"] = target_league
         if PUBLIC_MODE:
             st.query_params["public"] = "1"
         else:
-            # Avoid leaving stale public=1 around in admin mode
             try:
                 st.query_params.pop("public", None)
             except Exception:
@@ -808,47 +855,6 @@ def render(ctx):
     final_view["Rank"] = final_view["RankNum"].astype(int).astype(str)
     final_view["Gap"] = (final_view["rating"].shift(1) - final_view["rating"]) / 400.0
 
-    view_mode = st.session_state.get("lb_view_mode", "Story View")
-
-    # -------------------------
-    # Controls
-    # -------------------------
-    st.markdown("### Full Standings")
-    control_cols = st.columns([2.2, 1.2, 1.2])
-    with control_cols[0]:
-        try:
-            target_league = st.segmented_control(
-                "League",
-                available_leagues,
-                default=target_league,
-                key="lb_league",
-            )
-        except Exception:
-            target_league = st.radio(
-                "League",
-                available_leagues,
-                index=available_leagues.index(target_league),
-                horizontal=True,
-                key="lb_league",
-            )
-    with control_cols[1]:
-        try:
-            view_mode = st.segmented_control(
-                "View",
-                ["Story View", "Stats View"],
-                default=view_mode,
-                key="lb_view_mode",
-            )
-        except Exception:
-            view_mode = st.radio(
-                "View",
-                ["Story View", "Stats View"],
-                index=0 if view_mode == "Story View" else 1,
-                horizontal=True,
-                key="lb_view_mode",
-            )
-    with control_cols[2]:
-        st.text_input("Find player", key="lb_search")
     # -------------------------
     # Share link + open button (ADMIN ONLY)
     # -------------------------
