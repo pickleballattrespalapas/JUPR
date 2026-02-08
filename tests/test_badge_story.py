@@ -45,6 +45,8 @@ def test_build_badge_story_no_badges_active():
         story
         == "Active this season with 12 games logged—badges will start appearing as the reel fills."
     )
+    assert "<" not in sanitize_story_text(story)
+    assert ">" not in sanitize_story_text(story)
 
 
 def test_sanitize_story_text_strips_html():
