@@ -134,6 +134,51 @@ def _extract_story_from_row(row: pd.Series | dict) -> tuple[str | None, str | No
     return None, None
 
 
+def _build_story_text_for_row(
+    row: pd.Series | dict,
+    story_badges: list[dict],
+    story_rivals_by_player: dict[int, dict],
+    story_partners_by_player: dict[int, dict],
+    id_to_name: dict[int, str],
+    admin_logged_in: bool,
+) -> tuple[str, str]:
+    df_story, df_source = _extract_story_from_row(row)
+    player_id = row.get("_pid") if hasattr(row, "get") else None
+    if df_story and _story_has_html(df_story):
+        _log_story_html_warning(df_story, player_id, f"source={df_source}", admin_logged_in)
+        df_story = None
+        df_source = None
+
+    story_text = build_badge_story(row, story_badges)
+    story_source = "source=build_badge_story"
+    if not story_text:
+        story_text = build_badge_story(row, [])
+        story_source = "source=build_badge_story:fallback"
+
+    if df_story:
+        story_text = df_story
+        story_source = f"source={df_source}"
+
+    if pd.notna(player_id):
+        try:
+            pid_int = int(player_id)
+        except Exception:
+            pid_int = None
+        inserts = []
+        if pid_int is not None:
+            rival = story_rivals_by_player.get(pid_int)
+            if rival:
+                inserts.append(_build_rival_story(rival, id_to_name))
+            partner = story_partners_by_player.get(pid_int)
+            if partner:
+                inserts.append(_build_partner_story(partner, id_to_name))
+        if inserts:
+            story_text = f"{story_text} {' '.join(inserts)}".strip()
+            story_source = f"{story_source}+rival_partner" if story_source else "source=rival_partner"
+
+    return story_text, story_source
+
+
 def _player_profile_url(pid, public_mode, ctx):
     if pd.isna(pid):
         return None
@@ -904,6 +949,9 @@ def render(ctx):
 
     final_view["Rank"] = final_view["RankNum"].astype(int).astype(str)
     final_view["Gap"] = (final_view["rating"].shift(1) - final_view["rating"]) / 400.0
+    for legacy_col in ("story", "story_text", "story_html"):
+        if legacy_col in final_view.columns:
+            del final_view[legacy_col]
 
     # -------------------------
     # Share link + open button (ADMIN ONLY)
@@ -1330,35 +1378,20 @@ def render(ctx):
                 story_badges_html = (
                     '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
                 )
-            story_text = None
-            story_source = None
-            df_story, df_source = _extract_story_from_row(row)
-            if df_story:
-                story_text = df_story
-                story_source = f"source={df_source}"
-            else:
-                story_text = build_badge_story(row, story_badges)
-                story_source = "source=build_badge_story"
-                if not story_text:
-                    story_text = build_badge_story(row, [])
-                    story_source = "source=build_badge_story:fallback"
-            if pd.notna(player_id):
-                try:
-                    pid_int = int(player_id)
-                except Exception:
-                    pid_int = None
-                inserts = []
-                if pid_int is not None:
-                    rival = story_rivals_by_player.get(pid_int)
-                    if rival:
-                        inserts.append(_build_rival_story(rival, id_to_name))
-                    partner = story_partners_by_player.get(pid_int)
-                    if partner:
-                        inserts.append(_build_partner_story(partner, id_to_name))
-                if inserts:
-                    story_text = f"{story_text} {' '.join(inserts)}".strip()
-                    story_source = f"{story_source}+rival_partner" if story_source else "source=rival_partner"
-            _log_story_html_warning(story_text, player_id, story_source or "source=unknown", admin_logged_in)
+            story_text, story_source = _build_story_text_for_row(
+                row,
+                story_badges,
+                story_rivals_by_player,
+                story_partners_by_player,
+                id_to_name,
+                admin_logged_in,
+            )
+            _log_story_html_warning(
+                story_text,
+                player_id,
+                story_source or "source=unknown",
+                admin_logged_in,
+            )
             story_text = sanitize_story_text(story_text)
             safe_story_html = html.escape(story_text)
             story_text_html = f'<div class="lb-story-text">{safe_story_html}</div>'
