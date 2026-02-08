@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from postgrest.exceptions import APIError
 
-from jupr_app.domain.recaps.weekly_recap import compute_weekly_recap, get_spotlight_candidates
+from jupr_app.domain.recaps.weekly_recap import (
+    DEFAULT_AWARD_DESCRIPTIONS,
+    compute_weekly_recap,
+    get_spotlight_candidates,
+)
 from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.url import qp_get
@@ -52,6 +56,12 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
     recap = deepcopy(generated_json or {})
     if not recap:
         return recap
+
+    base_desc = generated_json.get("award_descriptions") or DEFAULT_AWARD_DESCRIPTIONS
+    edited_desc = edits_json.get("award_descriptions") or {}
+    merged_desc = dict(base_desc)
+    merged_desc.update(edited_desc)
+    recap["award_descriptions"] = merged_desc
 
     looking_ahead = edits_json.get("looking_ahead")
     if looking_ahead:
@@ -103,6 +113,9 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
     order_map = edits_json.get("spotlight_order", {})
     if order_map:
         updated.sort(key=lambda item: order_map.get(item.get("key"), 999))
+
+    for item in updated:
+        item["description"] = merged_desc.get(item.get("key", ""), "")
 
     recap["spotlight"] = updated
     return recap
@@ -164,6 +177,11 @@ def render(ctx):
     edits_json = row.get("edits_json") or {}
     candidates = get_spotlight_candidates(ctx, week_start, tz_name=tz_name, allow_ties=allow_ties)
 
+    base_desc = generated_json.get("award_descriptions") or DEFAULT_AWARD_DESCRIPTIONS
+    edited_desc = edits_json.get("award_descriptions") or {}
+    merged_desc = dict(base_desc)
+    merged_desc.update(edited_desc)
+
     st.subheader("Edit Draft")
 
     default_looking = edits_json.get("looking_ahead") or generated_json.get("looking_ahead") or ["", "", ""]
@@ -176,6 +194,23 @@ def render(ctx):
     spotlight = generated_json.get("spotlight", [])
     spotlight_keys = [item.get("key") for item in spotlight if item.get("key")]
     spotlight_by_key = {item.get("key"): item for item in spotlight if item.get("key")}
+
+    st.subheader("Award Descriptions")
+    award_desc_edits = edits_json.get("award_descriptions") or {}
+    for key in spotlight_keys:
+        label = key
+        options = candidates.get(key, [])
+        if options:
+            label = options[0].get("label", key)
+        else:
+            label = spotlight_by_key.get(key, {}).get("label", key)
+        award_desc_edits[key] = st.text_area(
+            f"{label} description",
+            value=merged_desc.get(key, ""),
+            height=120,
+            key=f"award_desc_{key}",
+        )
+    edits_json["award_descriptions"] = award_desc_edits
 
     st.markdown("**Spotlight Reel Overrides**")
     overrides = edits_json.get("spotlight_overrides", {})
