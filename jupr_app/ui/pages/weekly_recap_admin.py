@@ -92,6 +92,7 @@ def render(ctx):
     tz_name = "America/Mazatlan"
 
     week_start = st.date_input("Week start (Monday)", value=_get_default_week_start(tz_name))
+    allow_ties = st.checkbox("Allow ties (show 2 players when tied)", value=True)
 
     try:
         row = _load_weekly_row(supabase, club_id, week_start)
@@ -105,7 +106,7 @@ def render(ctx):
 
     if st.button("Generate Draft"):
         with st.spinner("Generating weekly recap..."):
-            recap = compute_weekly_recap(ctx, week_start, tz_name=tz_name)
+            recap = compute_weekly_recap(ctx, week_start, tz_name=tz_name, allow_ties=allow_ties)
             payload = {
                 "club_id": club_id,
                 "week_start": week_start.isoformat(),
@@ -130,7 +131,7 @@ def render(ctx):
 
     generated_json = row.get("generated_json") or {}
     edits_json = row.get("edits_json") or {}
-    candidates = get_spotlight_candidates(ctx, week_start, tz_name=tz_name)
+    candidates = get_spotlight_candidates(ctx, week_start, tz_name=tz_name, allow_ties=allow_ties)
 
     st.subheader("Edit Draft")
 

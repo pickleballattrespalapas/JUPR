@@ -26,20 +26,38 @@ def get_week_bounds(week_start: date, tz_name: str) -> tuple[datetime, datetime]
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-def compute_weekly_recap(ctx, week_start: date, *, tz_name: str = "America/Mazatlan") -> dict:
-    recap, _ = _compute_weekly_recap_payload(ctx, week_start, tz_name=tz_name)
+def compute_weekly_recap(
+    ctx,
+    week_start: date,
+    *,
+    tz_name: str = "America/Mazatlan",
+    allow_ties: bool = True,
+) -> dict:
+    recap, _ = _compute_weekly_recap_payload(ctx, week_start, tz_name=tz_name, allow_ties=allow_ties)
     return recap
 
 
-def get_spotlight_candidates(ctx, week_start: date, *, tz_name: str = "America/Mazatlan") -> dict[str, list[dict]]:
-    _, candidates = _compute_weekly_recap_payload(ctx, week_start, tz_name=tz_name)
+def get_spotlight_candidates(
+    ctx,
+    week_start: date,
+    *,
+    tz_name: str = "America/Mazatlan",
+    allow_ties: bool = True,
+) -> dict[str, list[dict]]:
+    _, candidates = _compute_weekly_recap_payload(ctx, week_start, tz_name=tz_name, allow_ties=allow_ties)
     return {
         key: [candidate.__dict__ for candidate in items]
         for key, items in candidates.items()
     }
 
 
-def _compute_weekly_recap_payload(ctx, week_start: date, *, tz_name: str) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
+def _compute_weekly_recap_payload(
+    ctx,
+    week_start: date,
+    *,
+    tz_name: str,
+    allow_ties: bool = True,
+) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
     club_id = str(ctx.club_id)
     supabase = getattr(ctx, "supabase", None)
     df_matches = getattr(ctx, "df_matches", pd.DataFrame())
@@ -59,7 +77,7 @@ def _compute_weekly_recap_payload(ctx, week_start: date, *, tz_name: str) -> tup
     spotlight_candidates = _build_spotlight_candidates(
         stats, giant_slayer_candidates, id_to_name
     )
-    spotlight = _select_spotlight_items(spotlight_candidates)
+    spotlight = _select_spotlight_items(spotlight_candidates, allow_ties=allow_ties)
 
     numbers = _build_numbers(df_week, stats, event_meta, supabase, club_id, start_dt_utc, end_dt_utc)
 
@@ -82,6 +100,7 @@ def _compute_weekly_recap_payload(ctx, week_start: date, *, tz_name: str) -> tup
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "tz_name": tz_name,
+            "allow_ties": allow_ties,
         },
     }
     return recap, spotlight_candidates
@@ -491,7 +510,61 @@ def _build_spotlight_candidates(
     return candidates
 
 
-def _select_spotlight_items(candidates: dict[str, list[SpotlightCandidate]]) -> list[SpotlightCandidate]:
+def _float_equal(a: float | None, b: float | None, eps: float = 1e-9) -> bool:
+    if a is None or b is None:
+        return a is b
+    return abs(float(a) - float(b)) <= eps
+
+
+def _metric_key_for_candidate(key: str, candidate: SpotlightCandidate) -> tuple | None:
+    values = candidate.value_json or {}
+    if key == "TOP_PERFORMER_WEEK":
+        wins = int(values.get("wins", 0))
+        losses = int(values.get("losses", 0))
+        avg_opp = values.get("avg_opponent_rating")
+        return (wins - losses, float(avg_opp) if avg_opp is not None else None)
+    if key == "BIGGEST_JUMP_WEEK":
+        return (float(values.get("delta_jupr", 0.0)),)
+    if key == "GRIND_WEEK":
+        return (int(values.get("games", 0)),)
+    if key == "PERFECT_RUN":
+        return (int(values.get("wins", 0)),)
+    if key == "GIANT_SLAYER_WEEK":
+        return (float(values.get("gap_jupr", 0.0)),)
+    return None
+
+
+def _make_tie_candidate(key: str, candidate: SpotlightCandidate, other: SpotlightCandidate) -> SpotlightCandidate:
+    def split_display(display: str) -> tuple[str, str | None]:
+        parts = display.split("—", 1)
+        name = parts[0].strip()
+        suffix = parts[1].strip() if len(parts) > 1 else None
+        return name, suffix
+
+    name1, suffix = split_display(candidate.display)
+    name2, _ = split_display(other.display)
+    combined_name = f"{name1} + {name2}"
+    display = f"{combined_name} — {suffix}" if suffix else combined_name
+    player_ids = list(dict.fromkeys(candidate.player_ids + other.player_ids))
+    value_json = dict(candidate.value_json or {})
+    value_json["tied"] = True
+    return SpotlightCandidate(
+        candidate_id=f"tie:{key}:{'+'.join(str(pid) for pid in player_ids)}",
+        key=key,
+        label=candidate.label,
+        display=display,
+        player_ids=player_ids,
+        event_key=None,
+        value_json=value_json,
+        band=None,
+    )
+
+
+def _select_spotlight_items(
+    candidates: dict[str, list[SpotlightCandidate]],
+    *,
+    allow_ties: bool = True,
+) -> list[SpotlightCandidate]:
     selected: list[SpotlightCandidate] = []
     used_events: set[tuple[str, str]] = set()
     bands: set[str] = set()
@@ -522,6 +595,32 @@ def _select_spotlight_items(candidates: dict[str, list[SpotlightCandidate]]) -> 
             if banded:
                 options = banded
         choice = options[0]
+        if allow_ties and key in {
+            "TOP_PERFORMER_WEEK",
+            "BIGGEST_JUMP_WEEK",
+            "GIANT_SLAYER_WEEK",
+            "GRIND_WEEK",
+            "PERFECT_RUN",
+        }:
+            metric_key = _metric_key_for_candidate(key, choice)
+            if metric_key is not None:
+                for candidate in options[1:]:
+                    other_key = _metric_key_for_candidate(key, candidate)
+                    if other_key is None or len(other_key) != len(metric_key):
+                        continue
+                    matches = True
+                    for left, right in zip(metric_key, other_key):
+                        if isinstance(left, float) or isinstance(right, float):
+                            if not _float_equal(left, right):
+                                matches = False
+                                break
+                        else:
+                            if left != right:
+                                matches = False
+                                break
+                    if matches:
+                        choice = _make_tie_candidate(key, choice, candidate)
+                        break
         selected.append(choice)
         if choice.event_key is not None:
             used_events.add(choice.event_key)
