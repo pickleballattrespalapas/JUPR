@@ -329,10 +329,45 @@ def build_weekly_recap_html(
             }}
           }}
           @media print {{
+            /* ---- WeasyPrint/PDF safety: avoid CSS Grid (can collapse to text flow) ---- */
+            .numbers-strip {{
+              display: flex !important;
+              flex-wrap: wrap !important;
+              gap: 10px !important;
+            }}
+            .number-card {{
+              flex: 1 1 calc(20% - 10px) !important;
+              min-width: 120px !important;
+            }}
+
+            .award-grid,
+            .event-grid {{
+              display: flex !important;
+              flex-wrap: wrap !important;
+              gap: 10px !important;
+            }}
+            .award-card,
+            .event-card,
+            .section-card {{
+              box-sizing: border-box !important;
+            }}
+            .award-card,
+            .event-card {{
+              flex: 1 1 calc(50% - 10px) !important;
+              min-width: 280px !important;
+            }}
+
+            /* If the page width is narrow, fall back to single column */
+            @page {{
+              size: Letter;
+            }}
+
             .award-grid {{
+              /* legacy rule kept for browsers, but flex overrides above handle PDF */
               grid-template-columns: 1fr 1fr;
             }}
             .event-grid {{
+              /* legacy rule kept for browsers, but flex overrides above handle PDF */
               grid-template-columns: 1fr 1fr;
             }}
             /* ---- Pagination safety: prevent cards/sections from splitting across pages ---- */
@@ -378,6 +413,13 @@ def build_weekly_recap_html(
             ul.compact li {{
               margin-bottom: 4px;
               font-size: 12.5px;
+            }}
+          }}
+          @media print and (max-width: 640px) {{
+            .award-card,
+            .event-card {{
+              flex: 1 1 100% !important;
+              min-width: 0 !important;
             }}
           }}
           .looking-ahead li {{
