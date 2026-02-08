@@ -431,7 +431,10 @@ def build_weekly_recap_html(
 
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
     html = build_weekly_recap_html(recap, print_view=print_view, title_override=title_override)
-    components.html(html, height=None, scrolling=False)
+    if print_view:
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        components.html(html, height=2400, scrolling=True)
 
 
 def _render_award_card(item: dict, *, theme: str) -> str:
