@@ -5,15 +5,34 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+from postgrest.exceptions import APIError
 
 from jupr_app.domain.recaps.weekly_recap import compute_weekly_recap, get_spotlight_candidates
 from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.url import qp_get
 
 
 def _get_default_week_start(tz_name: str) -> date:
     today = datetime.now(ZoneInfo(tz_name)).date()
     return today - timedelta(days=today.weekday())
+
+
+def _get_api_error_code(exc: APIError) -> str | None:
+    code = getattr(exc, "code", None)
+    if code:
+        return code
+    if exc.args and isinstance(exc.args[0], dict):
+        return exc.args[0].get("code")
+    return None
+
+
+def _handle_missing_table(exc: APIError) -> bool:
+    code = _get_api_error_code(exc)
+    if code in {"PGRST205", "42P01"}:
+        st.error("Weekly recaps table not found. Apply migration migrations/20260207_weekly_recaps.sql in Supabase.")
+        return True
+    return False
 
 
 def _load_weekly_row(supabase, club_id: str, week_start: date) -> dict | None:
@@ -62,6 +81,8 @@ def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🗞️ Weekly Recap Admin", "Generate, edit, and publish the weekly recap.", mode_label=mode_label)
 
+    print_mode = qp_get("print", "0").lower() in ("1", "true", "yes", "y")
+
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")
         st.stop()
@@ -72,7 +93,12 @@ def render(ctx):
 
     week_start = st.date_input("Week start (Monday)", value=_get_default_week_start(tz_name))
 
-    row = _load_weekly_row(supabase, club_id, week_start)
+    try:
+        row = _load_weekly_row(supabase, club_id, week_start)
+    except APIError as exc:
+        if _handle_missing_table(exc):
+            return
+        raise
     status = row.get("status") if row else "draft"
 
     st.write(f"Status: **{status}**")
@@ -89,9 +115,14 @@ def render(ctx):
                 "edits_json": {},
                 "final_json": recap,
             }
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            try:
+                supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            except APIError as exc:
+                if _handle_missing_table(exc):
+                    return
+                raise
             st.success("Draft generated.")
-            row = _load_weekly_row(supabase, club_id, week_start)
+            st.rerun()
 
     if not row:
         st.info("No draft yet. Generate a draft to begin editing.")
@@ -156,15 +187,22 @@ def render(ctx):
             "edits_json": edits_json,
             "final_json": final_json,
         }
-        supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        try:
+            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        except APIError as exc:
+            if _handle_missing_table(exc):
+                return
+            raise
         st.success("Draft saved.")
-        row = _load_weekly_row(supabase, club_id, week_start)
+        st.rerun()
 
-    preview = st.checkbox("Preview (Print View)", value=False)
+    st.markdown("<div class='no-print'>", unsafe_allow_html=True)
+    preview = st.checkbox("Preview (Print View)", value=print_mode)
     if preview:
         final_json = _apply_edits(generated_json, edits_json, candidates)
         st.caption("Tip: use browser print to PDF for a bulletin-ready copy.")
         render_weekly_recap(final_json, print_view=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("Publish"):
         final_json = _apply_edits(generated_json, edits_json, candidates)
@@ -179,9 +217,14 @@ def render(ctx):
             "published_at": datetime.now(timezone.utc).isoformat(),
             "published_by": "admin",
         }
-        supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        try:
+            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        except APIError as exc:
+            if _handle_missing_table(exc):
+                return
+            raise
         st.success("Published.")
-        row = _load_weekly_row(supabase, club_id, week_start)
+        st.rerun()
 
     if st.button("Unpublish"):
         payload = {
@@ -195,5 +238,11 @@ def render(ctx):
             "published_at": None,
             "published_by": None,
         }
-        supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        try:
+            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        except APIError as exc:
+            if _handle_missing_table(exc):
+                return
+            raise
         st.success("Unpublished.")
+        st.rerun()
