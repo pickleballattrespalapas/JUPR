@@ -4,6 +4,7 @@ from datetime import datetime
 from html import escape
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from jupr_app.domain.recaps.weekly_recap import (
     DEFAULT_AROUND_LEAGUE_DESCRIPTION,
@@ -430,7 +431,7 @@ def build_weekly_recap_html(
 
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
     html = build_weekly_recap_html(recap, print_view=print_view, title_override=title_override)
-    st.markdown(html, unsafe_allow_html=True)
+    components.html(html, height=None, scrolling=False)
 
 
 def _render_award_card(item: dict, *, theme: str) -> str:
