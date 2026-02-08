@@ -19,6 +19,8 @@ from . import admin_guide
 from . import moneyball
 from . import league_results
 from . import league_printout
+from . import weekly_recap
+from . import weekly_recap_admin
 from . import theme_gallery
 from . import tournaments
 from . import tournament_manager
@@ -41,6 +43,8 @@ __all__ = [
     "moneyball",
     "league_results",
     "league_printout",
+    "weekly_recap",
+    "weekly_recap_admin",
     "theme_gallery",
     "tournaments",
     "tournament_manager",
