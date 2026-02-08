@@ -27,6 +27,22 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     league_items = around.get("leagues", []) or []
     rr_items = around.get("round_robins", []) or []
 
+    spotlight_html = "".join(
+        f"<li><strong>{item.get('label')}</strong>: {item.get('display')}</li>"
+        for item in spotlight
+    )
+    leagues_html = "".join(
+        _render_event_block(item.get("league_name", "League"), item.get("highlights", []))
+        for item in league_items
+    )
+    rr_html = "".join(
+        _render_event_block(item.get("event_name", "Pop-Up Event"), item.get("highlights", []))
+        for item in rr_items
+    )
+    looking_ahead_html = "".join(
+        f"<li>{item}</li>" for item in looking_ahead if str(item).strip() != ""
+    )
+
     html = f"""
     <style>
       .weekly-recap {{
@@ -140,24 +156,24 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
       <div class=\"section\">
         <h3>Spotlight Reel</h3>
         <ul class=\"compact\">
-          {''.join(f\"<li><strong>{item.get('label')}</strong>: {item.get('display')}</li>\" for item in spotlight)}
+          {spotlight_html}
         </ul>
       </div>
       <div class=\"section\">
         <h3>Around the Club</h3>
         <div class=\"subsection\">
           <h4>Leagues</h4>
-          {''.join(_render_event_block(item['league_name'], item.get('highlights', [])) for item in league_items)}
+          {leagues_html}
         </div>
         <div class=\"subsection\">
           <h4>Round Robins</h4>
-          {''.join(_render_event_block(item.get('event_name', 'Pop-Up Event'), item.get('highlights', [])) for item in rr_items)}
+          {rr_html}
         </div>
       </div>
       <div class=\"section\">
         <h3>Looking Ahead</h3>
         <ul class=\"compact looking-ahead\">
-          {''.join(f\"<li>{item}</li>\" for item in looking_ahead if str(item).strip() != '')}
+          {looking_ahead_html}
         </ul>
       </div>
     </div>
@@ -167,5 +183,8 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
 
 
 def _render_event_block(name: str, highlights: list[dict]) -> str:
-    items = "".join(f\"<li>{h.get('display')}</li>\" for h in highlights)
-    return f\"<div class='event-block'><div class='event-name'>{name}</div><ul class='compact'>{items}</ul></div>\"
+    items = "".join(f"<li>{h.get('display')}</li>" for h in highlights)
+    return (
+        f"<div class='event-block'><div class='event-name'>{name}</div>"
+        f"<ul class='compact'>{items}</ul></div>"
+    )
