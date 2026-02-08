@@ -1,5 +1,6 @@
 import html
 import logging
+import re
 import textwrap
 import urllib.parse
 import streamlit as st
@@ -22,6 +23,10 @@ from jupr_app.domain.story_stats import (
 
 logger = logging.getLogger(__name__)
 MAX_STORY_BADGES = 2
+_STORY_HTML_RE = re.compile(
+    r"</?(div|span|br|p|ul|li|strong|em|a|img|table|tr|td|th)\b",
+    re.IGNORECASE,
+)
 
 
 def _safe_text(value: object) -> str:
@@ -82,6 +87,51 @@ def _build_partner_story(partner: dict, id_to_name: dict[int, str]) -> str:
         f"Best partner: {partner_name} ({games} games, {win_pct_str}). "
         f"Your best results come with {partner_name}: {win_pct_str} over {games} games."
     )
+
+
+def _story_has_html(raw: str | None) -> bool:
+    if not raw:
+        return False
+    return bool(_STORY_HTML_RE.search(str(raw)))
+
+
+def _log_story_html_warning(
+    raw_story: str | None,
+    player_id: object,
+    source: str,
+    admin_logged_in: bool,
+) -> None:
+    if not admin_logged_in or not raw_story:
+        return
+    if not _story_has_html(raw_story):
+        return
+    snippet = re.sub(r"\s+", " ", str(raw_story).strip())[:120]
+    logger.warning(
+        "Leaderboards story HTML detected (player_id=%s, %s): %s",
+        player_id,
+        source,
+        snippet,
+    )
+
+
+def _extract_story_from_row(row: pd.Series | dict) -> tuple[str | None, str | None]:
+    for key in ("story", "story_text", "story_html"):
+        try:
+            if key not in row:
+                continue
+            value = row.get(key)
+        except Exception:
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except Exception:
+            if value is None:
+                continue
+        text = str(value).strip()
+        if text:
+            return text, f"df_column:{key}"
+    return None, None
 
 
 def _player_profile_url(pid, public_mode, ctx):
@@ -1167,6 +1217,14 @@ def render(ctx):
             limit = 50
             st.session_state["lb_limit"] = 50
 
+        if admin_logged_in:
+            if st.button("Refresh leaderboard cache", key="lb_refresh_cache"):
+                try:
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                except Exception:
+                    logger.exception("Failed to clear leaderboard caches")
+
         story_badges_by_player = {}
         story_badges_df = pd.DataFrame()
         story_player_ids = []
@@ -1272,9 +1330,18 @@ def render(ctx):
                 story_badges_html = (
                     '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
                 )
-            story_text = build_badge_story(row, story_badges)
-            if not story_text:
-                story_text = build_badge_story(row, [])
+            story_text = None
+            story_source = None
+            df_story, df_source = _extract_story_from_row(row)
+            if df_story:
+                story_text = df_story
+                story_source = f"source={df_source}"
+            else:
+                story_text = build_badge_story(row, story_badges)
+                story_source = "source=build_badge_story"
+                if not story_text:
+                    story_text = build_badge_story(row, [])
+                    story_source = "source=build_badge_story:fallback"
             if pd.notna(player_id):
                 try:
                     pid_int = int(player_id)
@@ -1290,6 +1357,8 @@ def render(ctx):
                         inserts.append(_build_partner_story(partner, id_to_name))
                 if inserts:
                     story_text = f"{story_text} {' '.join(inserts)}".strip()
+                    story_source = f"{story_source}+rival_partner" if story_source else "source=rival_partner"
+            _log_story_html_warning(story_text, player_id, story_source or "source=unknown", admin_logged_in)
             story_text = sanitize_story_text(story_text)
             safe_story_html = html.escape(story_text)
             story_text_html = f'<div class="lb-story-text">{safe_story_html}</div>'

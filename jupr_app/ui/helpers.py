@@ -158,6 +158,7 @@ def sanitize_story_text(raw: str | None) -> str:
     text = "" if raw is None else str(raw)
     text = html.unescape(text)
     text = re.sub(r"<[^>]+>", " ", text)
+    text = text.replace("<", " ").replace(">", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
