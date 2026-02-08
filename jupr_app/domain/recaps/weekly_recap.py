@@ -29,6 +29,13 @@ DEFAULT_AWARD_DESCRIPTIONS = {
     ),
 }
 
+DEFAULT_AROUND_LEAGUE_DESCRIPTION = (
+    "Weekly highlights from this league — top performer and biggest jump based on matches recorded this week."
+)
+DEFAULT_AROUND_RR_DESCRIPTION = (
+    "Pop-up results from this event — highlights based on matches recorded this week."
+)
+
 
 @dataclass
 class SpotlightCandidate:
@@ -110,6 +117,7 @@ def _compute_weekly_recap_payload(
         id_to_name,
         supabase,
     )
+    around_descriptions = apply_around_descriptions(around_club, None)
 
     week_end = week_start + timedelta(days=6)
     recap = {
@@ -120,6 +128,7 @@ def _compute_weekly_recap_payload(
         "spotlight": [item.__dict__ for item in spotlight],
         "award_descriptions": dict(DEFAULT_AWARD_DESCRIPTIONS),
         "around_club": around_club,
+        "around_descriptions": around_descriptions,
         "looking_ahead": ["", "", ""],
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -772,6 +781,43 @@ def _build_around_club(
         )
 
     return {"leagues": league_items, "round_robins": rr_items}
+
+
+def build_around_descriptions(around_club: dict) -> dict[str, str]:
+    descriptions: dict[str, str] = {}
+    for league_item in around_club.get("leagues", []) or []:
+        league_name = str(league_item.get("league_name", "") or "").strip()
+        if league_name:
+            descriptions[f"LEAGUE:{league_name}"] = DEFAULT_AROUND_LEAGUE_DESCRIPTION
+    for rr_item in around_club.get("round_robins", []) or []:
+        event_id = str(rr_item.get("event_id", "") or "").strip()
+        if event_id:
+            descriptions[f"RR:{event_id}"] = DEFAULT_AROUND_RR_DESCRIPTION
+    return descriptions
+
+
+def apply_around_descriptions(around_club: dict, around_descriptions: dict | None) -> dict[str, str]:
+    defaults = build_around_descriptions(around_club)
+    merged = dict(defaults)
+    merged.update(around_descriptions or {})
+
+    for league_item in around_club.get("leagues", []) or []:
+        league_name = str(league_item.get("league_name", "") or "").strip()
+        if not league_name:
+            continue
+        desc_key = f"LEAGUE:{league_name}"
+        league_item["desc_key"] = desc_key
+        league_item["description"] = merged.get(desc_key, defaults.get(desc_key, DEFAULT_AROUND_LEAGUE_DESCRIPTION))
+
+    for rr_item in around_club.get("round_robins", []) or []:
+        event_id = str(rr_item.get("event_id", "") or "").strip()
+        if not event_id:
+            continue
+        desc_key = f"RR:{event_id}"
+        rr_item["desc_key"] = desc_key
+        rr_item["description"] = merged.get(desc_key, defaults.get(desc_key, DEFAULT_AROUND_RR_DESCRIPTION))
+
+    return merged
 
 
 def _event_highlights(

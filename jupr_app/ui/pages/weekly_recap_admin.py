@@ -9,6 +9,10 @@ from postgrest.exceptions import APIError
 
 from jupr_app.domain.recaps.weekly_recap import (
     DEFAULT_AWARD_DESCRIPTIONS,
+    DEFAULT_AROUND_LEAGUE_DESCRIPTION,
+    DEFAULT_AROUND_RR_DESCRIPTION,
+    apply_around_descriptions,
+    build_around_descriptions,
     compute_weekly_recap,
     get_spotlight_candidates,
 )
@@ -65,7 +69,17 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
     edited_desc = edits_json.get("award_descriptions") or {}
     merged_desc = dict(base_desc)
     merged_desc.update(edited_desc)
+
     recap["award_descriptions"] = merged_desc
+
+    base_around_desc = generated_json.get("around_descriptions") or build_around_descriptions(
+        recap.get("around_club") or {}
+    )
+    edited_around_desc = edits_json.get("around_descriptions") or {}
+    merged_around_desc = dict(base_around_desc)
+    merged_around_desc.update(edited_around_desc)
+    recap["around_descriptions"] = merged_around_desc
+    apply_around_descriptions(recap.get("around_club") or {}, merged_around_desc)
 
     looking_ahead = edits_json.get("looking_ahead")
     if looking_ahead:
@@ -186,6 +200,13 @@ def render(ctx):
     merged_desc = dict(base_desc)
     merged_desc.update(edited_desc)
 
+    base_around_desc = generated_json.get("around_descriptions") or build_around_descriptions(
+        generated_json.get("around_club") or {}
+    )
+    edits_around_desc = edits_json.get("around_descriptions") or {}
+    merged_around_desc = dict(base_around_desc)
+    merged_around_desc.update(edits_around_desc)
+
     st.subheader("Edit Draft")
 
     default_looking = edits_json.get("looking_ahead") or generated_json.get("looking_ahead") or ["", "", ""]
@@ -215,6 +236,37 @@ def render(ctx):
             key=f"award_desc_{key}",
         )
     edits_json["award_descriptions"] = award_desc_edits
+
+    st.subheader("Around the Club Descriptions")
+    around_desc_edits = edits_json.get("around_descriptions") or {}
+    leagues = (generated_json.get("around_club") or {}).get("leagues") or []
+    round_robins = (generated_json.get("around_club") or {}).get("round_robins") or []
+    for league_item in leagues:
+        league_name = str(league_item.get("league_name", "") or "").strip()
+        if not league_name:
+            continue
+        key = f"LEAGUE:{league_name}"
+        default_text = base_around_desc.get(key, DEFAULT_AROUND_LEAGUE_DESCRIPTION)
+        around_desc_edits[key] = st.text_area(
+            f"League: {league_name}",
+            value=merged_around_desc.get(key, default_text),
+            height=100,
+            key=f"around_desc_{key}",
+        )
+    for rr_item in round_robins:
+        event_id = str(rr_item.get("event_id", "") or "").strip()
+        if not event_id:
+            continue
+        key = f"RR:{event_id}"
+        label = rr_item.get("event_name", "Pop-Up Event") or "Pop-Up Event"
+        default_text = base_around_desc.get(key, DEFAULT_AROUND_RR_DESCRIPTION)
+        around_desc_edits[key] = st.text_area(
+            f"Round Robin: {label}",
+            value=merged_around_desc.get(key, default_text),
+            height=100,
+            key=f"around_desc_{key}",
+        )
+    edits_json["around_descriptions"] = around_desc_edits
 
     st.markdown("**Spotlight Reel Overrides**")
     overrides = edits_json.get("spotlight_overrides", {})

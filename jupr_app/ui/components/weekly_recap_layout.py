@@ -5,6 +5,11 @@ from html import escape
 
 import streamlit as st
 
+from jupr_app.domain.recaps.weekly_recap import (
+    DEFAULT_AROUND_LEAGUE_DESCRIPTION,
+    DEFAULT_AROUND_RR_DESCRIPTION,
+    build_around_descriptions,
+)
 
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
     week_start = recap.get("week_start")
@@ -24,6 +29,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     numbers = recap.get("numbers", {})
     spotlight = recap.get("spotlight", [])
     around = recap.get("around_club", {})
+    around_descriptions = recap.get("around_descriptions") or build_around_descriptions(around)
     looking_ahead = recap.get("looking_ahead", []) or []
 
     league_items = around.get("leagues", []) or []
@@ -34,19 +40,34 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         for item in (spotlight or [])
         if isinstance(item, dict)
     )
-    leagues_html = "".join(
-        _render_event_block((item or {}).get("league_name", "League"), (item or {}).get("highlights", []))
+    around_cards_html = "".join(
+        _render_event_card(
+            title=(item or {}).get("league_name", "League"),
+            description=_resolve_around_description(item or {}, around_descriptions, kind="league"),
+            highlights=(item or {}).get("highlights", []),
+            kind="league",
+        )
         for item in (league_items or [])
         if isinstance(item, dict)
     )
-    rr_html = "".join(
-        _render_event_block((item or {}).get("event_name", "Pop-Up Event"), (item or {}).get("highlights", []))
+    around_cards_html += "".join(
+        _render_event_card(
+            title=(item or {}).get("event_name", "Pop-Up Event"),
+            description=_resolve_around_description(item or {}, around_descriptions, kind="rr"),
+            highlights=(item or {}).get("highlights", []),
+            kind="rr",
+        )
         for item in (rr_items or [])
         if isinstance(item, dict)
     )
     looking_ahead_html = "".join(
-        f"<li>{item}</li>" for item in (looking_ahead or [])
+        f"<li>{escape(str(item))}</li>" for item in (looking_ahead or [])
         if str(item).strip() != ""
+    )
+    looking_card_html = _render_simple_card(
+        title="Looking Ahead",
+        body_html=f"<ul class='compact looking-ahead'>{looking_ahead_html}</ul>",
+        accent_class="accent-sunset",
     )
 
     print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
@@ -189,12 +210,51 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         grid-template-columns: 1fr;
         gap: 10px;
       }}
+      .event-grid {{
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }}
       .award-card {{
         border: 1px solid var(--border, #e5e7eb);
         border-left: 6px solid var(--accent, #111827);
         border-radius: 12px;
         background: var(--card, #ffffff);
         padding: 12px;
+      }}
+      .event-card,
+      .section-card {{
+        border: 1px solid var(--border, #e5e7eb);
+        border-left: 5px solid var(--accent, #111827);
+        border-radius: 12px;
+        background: var(--card, #ffffff);
+        padding: 12px;
+      }}
+      .event-card--rr {{
+        border-left-color: var(--accent2, var(--accent));
+      }}
+      .section-card.accent-sunset {{
+        border-left-color: var(--sunset, var(--accent2, var(--accent)));
+      }}
+      .section-card.accent-ocean {{
+        border-left-color: var(--ocean, var(--accent));
+      }}
+      .event-card__title,
+      .section-card__title {{
+        font-weight: 700;
+        font-size: 14px;
+      }}
+      .event-card__desc {{
+        margin-top: 6px;
+        color: var(--muted, #475569);
+        font-size: 12.5px;
+        line-height: 1.35;
+      }}
+      .event-card__body,
+      .section-card__body {{
+        margin-top: 8px;
+        font-size: 13px;
+        line-height: 1.45;
       }}
       .award-card__title {{
         font-weight: 800;
@@ -227,9 +287,15 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         .award-grid {{
           grid-template-columns: 1fr 1fr;
         }}
+        .event-grid {{
+          grid-template-columns: 1fr 1fr;
+        }}
       }}
       @media print {{
         .award-grid {{
+          grid-template-columns: 1fr 1fr;
+        }}
+        .event-grid {{
           grid-template-columns: 1fr 1fr;
         }}
       }}
@@ -268,20 +334,12 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
       </div>
       <div class=\"section\">
         <h3>Around the Club</h3>
-        <div class=\"subsection\">
-          <h4>Leagues</h4>
-          {leagues_html}
-        </div>
-        <div class=\"subsection\">
-          <h4>Round Robins</h4>
-          {rr_html}
+        <div class=\"event-grid\">
+          {around_cards_html}
         </div>
       </div>
       <div class=\"section\">
-        <h3>Looking Ahead</h3>
-        <ul class=\"compact looking-ahead\">
-          {looking_ahead_html}
-        </ul>
+        {looking_card_html}
       </div>
     </div>
     """
@@ -313,10 +371,43 @@ def _render_award_card(item: dict, *, theme: str) -> str:
     )
 
 
-def _render_event_block(name: str, highlights: list[dict]) -> str:
+def _resolve_around_description(item: dict, around_descriptions: dict[str, str], *, kind: str) -> str:
+    description = str(item.get("description", "") or "").strip()
+    if description:
+        return description
+    if kind == "league":
+        name = str(item.get("league_name", "") or "").strip()
+        desc_key = item.get("desc_key") or f"LEAGUE:{name}"
+        return around_descriptions.get(desc_key, DEFAULT_AROUND_LEAGUE_DESCRIPTION)
+    event_id = str(item.get("event_id", "") or "").strip()
+    desc_key = item.get("desc_key") or f"RR:{event_id}"
+    return around_descriptions.get(desc_key, DEFAULT_AROUND_RR_DESCRIPTION)
+
+
+def _render_event_card(title: str, description: str, highlights: list[dict], *, kind: str) -> str:
     safe = [h for h in (highlights or []) if isinstance(h, dict)]
-    items = "".join(f"<li>{h.get('display','')}</li>" for h in safe if str(h.get("display","")).strip() != "")
-    return f"<div class='event-block'><div class='event-name'>{name}</div><ul class='compact'>{items}</ul></div>"
+    items = "".join(
+        f"<li>{escape(str(h.get('display', '')))}</li>"
+        for h in safe
+        if str(h.get("display", "")).strip() != ""
+    )
+    desc_html = f"<div class='event-card__desc'>{escape(description)}</div>" if description else ""
+    return (
+        f"<div class='event-card event-card--{kind}'>"
+        f"<div class='event-card__title'>{escape(title)}</div>"
+        f"{desc_html}"
+        f"<div class='event-card__body'><ul class='compact'>{items}</ul></div>"
+        "</div>"
+    )
+
+
+def _render_simple_card(title: str, body_html: str, *, accent_class: str) -> str:
+    return (
+        f"<div class='section-card {accent_class}'>"
+        f"<div class='section-card__title'>{escape(title)}</div>"
+        f"<div class='section-card__body'>{body_html}</div>"
+        "</div>"
+    )
 
 
 def _css_tokens_baja_v2() -> str:
@@ -352,6 +443,12 @@ def _css_tokens_baja_v2() -> str:
       .weekly-recap.theme-baja_v2 .award-card.accent-sunset {
         background: rgba(255, 106, 61, 0.06);
       }
+      .weekly-recap.theme-baja_v2 .event-card {
+        background: rgba(246, 231, 198, 0.35);
+      }
+      .weekly-recap.theme-baja_v2 .section-card {
+        background: rgba(255, 255, 255, 0.85);
+      }
     """
 
 
@@ -371,6 +468,10 @@ def _css_tokens_newsletter_sep() -> str:
       }
       .weekly-recap.theme-newsletter_sep .award-card.accent-ocean,
       .weekly-recap.theme-newsletter_sep .award-card.accent-sunset {
+        background: var(--soft, rgba(29, 78, 216, 0.06));
+      }
+      .weekly-recap.theme-newsletter_sep .event-card,
+      .weekly-recap.theme-newsletter_sep .section-card {
         background: var(--soft, rgba(29, 78, 216, 0.06));
       }
     """
