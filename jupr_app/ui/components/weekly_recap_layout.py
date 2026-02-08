@@ -11,7 +11,12 @@ from jupr_app.domain.recaps.weekly_recap import (
     build_around_descriptions,
 )
 
-def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
+def build_weekly_recap_html(
+    recap: dict,
+    *,
+    print_view: bool,
+    title_override: str | None = None,
+) -> str:
     week_start = recap.get("week_start")
     week_end = recap.get("week_end")
     title = title_override or "Tres Palapas Weekly Recap"
@@ -79,291 +84,306 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     print_view_css = ".no-print { display: none !important; }" if print_view else ""
 
     html = f"""
-    <style>
-      {print_view_css}
-      {_css_common_print()}
-      {_css_tokens_baja_v2()}
-      {_css_tokens_newsletter_sep()}
-      {_css_layout_overrides_for_theme(theme)}
-      .weekly-recap {{
-        font-family: 'Inter', sans-serif;
-        color: var(--ink);
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 16px 20px 24px;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: var(--card);
-        --ink: #111827;
-        --muted: #475569;
-        --border: #e5e7eb;
-        --bg: #ffffff;
-        --card: #ffffff;
-        --accent: #111827;
-        --accent2: #6b7280;
-        --stat-bg: #f3f4f6;
-        --pill-bg: #f3f4f6;
-      }}
-      .weekly-hero {{
-        margin-bottom: 12px;
-      }}
-      .weekly-hero__bar {{
-        display: none;
-        height: 6px;
-        border-radius: 999px;
-        margin-bottom: 10px;
-        background: linear-gradient(90deg, var(--accent), var(--accent2));
-      }}
-      .weekly-header {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 3px solid var(--accent);
-        padding-bottom: 10px;
-        gap: 12px;
-      }}
-      .weekly-title {{
-        font-size: 28px;
-        font-weight: 700;
-      }}
-      .weekly-subtitle {{
-        font-size: 12.5px;
-        color: var(--muted);
-        margin-top: 4px;
-      }}
-      .weekly-range-pill {{
-        font-size: 12px;
-        font-weight: 600;
-        padding: 6px 12px;
-        border-radius: 999px;
-        background: var(--pill-bg);
-        color: var(--ink);
-        border: 1px solid var(--border);
-        white-space: nowrap;
-      }}
-      .numbers-strip {{
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 10px;
-        margin-bottom: 16px;
-      }}
-      .number-card {{
-        background: var(--stat-bg);
-        padding: 10px 8px;
-        border-radius: 10px;
-        text-align: center;
-        border: 1px solid var(--border);
-        border-top: 4px solid var(--accent);
-        box-shadow: none;
-      }}
-      .number-value {{
-        font-size: 20px;
-        font-weight: 700;
-      }}
-      .number-label {{
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
-      }}
-      .section {{
-        margin-top: 14px;
-      }}
-      .section h3 {{
-        font-size: 18px;
-        margin: 0 0 8px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }}
-      .section h3::before {{
-        content: "";
-        width: 10px;
-        height: 10px;
-        background: var(--accent2);
-        border-radius: 3px;
-        display: inline-block;
-      }}
-      .subsection h4 {{
-        font-size: 13px;
-        margin: 10px 0 4px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--muted);
-      }}
-      .event-block {{
-        margin-bottom: 8px;
-      }}
-      .event-name {{
-        font-weight: 600;
-        font-size: 13px;
-      }}
-      ul.compact {{
-        margin: 6px 0 8px 18px;
-        padding: 0;
-      }}
-      ul.compact li {{
-        margin-bottom: 6px;
-        font-size: 13px;
-      }}
-      .award-desc {{
-        color: var(--muted);
-        font-size: 12.5px;
-      }}
-      .award-grid {{
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 10px;
-      }}
-      .event-grid {{
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 10px;
-      }}
-      .award-card {{
-        border: 1px solid var(--border, #e5e7eb);
-        border-left: 6px solid var(--accent, #111827);
-        border-radius: 12px;
-        background: var(--card, #ffffff);
-        padding: 12px;
-      }}
-      .event-card {{
-        border: 1px solid var(--border, #e5e7eb);
-        border-left: 6px solid var(--accent, #111827);
-        border-radius: 12px;
-        background: var(--card, #ffffff);
-        padding: 12px;
-      }}
-      .section-card.accent-sunset {{
-        border-left-color: var(--sunset, var(--accent2, var(--accent)));
-      }}
-      .section-card.accent-ocean {{
-        border-left-color: var(--ocean, var(--accent));
-      }}
-      .section-card.accent-sand {{
-        border-left-color: var(--sand-accent, var(--accent));
-      }}
-      .section-card {{
-        border: 1px solid var(--border, #e5e7eb);
-        border-left: 5px solid var(--accent, #111827);
-        border-radius: 12px;
-        background: var(--card, #ffffff);
-        padding: 12px;
-      }}
-      .event-card__title,
-      .section-card__title {{
-        font-weight: 700;
-        font-size: 14px;
-      }}
-      .event-card__desc {{
-        margin-top: 6px;
-        color: var(--muted, #475569);
-        font-size: 12.5px;
-        line-height: 1.35;
-      }}
-      .event-card__body,
-      .section-card__body {{
-        margin-top: 8px;
-        font-size: 13px;
-        line-height: 1.45;
-      }}
-      .award-card__title {{
-        font-weight: 800;
-        font-size: 14px;
-      }}
-      .award-card__desc {{
-        margin-top: 6px;
-        color: var(--muted, #475569);
-        font-size: 12.5px;
-        line-height: 1.35;
-      }}
-      .award-card__body {{
-        margin-top: 10px;
-        font-size: 13px;
-        line-height: 1.45;
-      }}
-      .award-card.accent-ocean {{
-        border-left-color: var(--ocean, var(--accent));
-      }}
-      .award-card.accent-sunset {{
-        border-left-color: var(--sunset, var(--accent2, var(--accent)));
-      }}
-      .award-card.accent-ink {{
-        border-left-color: var(--ink, #111827);
-      }}
-      .award-card.accent-sand {{
-        border-left-color: var(--sand-accent, var(--accent));
-      }}
-      .event-card.accent-ocean {{
-        border-left-color: var(--ocean, var(--accent));
-      }}
-      .event-card.accent-sunset {{
-        border-left-color: var(--sunset, var(--accent2, var(--accent)));
-      }}
-      .event-card.accent-ink {{
-        border-left-color: var(--ink, #111827);
-      }}
-      @media (min-width: 820px) {{
-        .award-grid {{
-          grid-template-columns: 1fr 1fr;
-        }}
-        .event-grid {{
-          grid-template-columns: 1fr 1fr;
-        }}
-      }}
-      @media print {{
-        .award-grid {{
-          grid-template-columns: 1fr 1fr;
-        }}
-        .event-grid {{
-          grid-template-columns: 1fr 1fr;
-        }}
-      }}
-      .looking-ahead li {{
-        font-size: 13px;
-      }}
-      a {{
-        color: var(--accent);
-        text-decoration: underline;
-      }}
-    </style>
-    {print_mode_notice}
-    <div class=\"weekly-recap theme-{theme}\">
-      <div class=\"weekly-hero\">
-        <div class=\"weekly-hero__bar\"></div>
-        <div class=\"weekly-header\">
-          <div>
-            <div class=\"weekly-title\">{title}</div>
-            <div class=\"weekly-subtitle\">Tres Palapas Baja Pickleball Resort • Los Barriles, BCS</div>
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{escape(title)}</title>
+        <style>
+          {print_view_css}
+          {_css_pdf_safe()}
+          {_css_common_print()}
+          {_css_tokens_baja_v2()}
+          {_css_tokens_newsletter_sep()}
+          {_css_layout_overrides_for_theme(theme)}
+          .weekly-recap {{
+            font-family: 'Inter', sans-serif;
+            color: var(--ink);
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 16px 20px 24px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--card);
+            --ink: #111827;
+            --muted: #475569;
+            --border: #e5e7eb;
+            --bg: #ffffff;
+            --card: #ffffff;
+            --accent: #111827;
+            --accent2: #6b7280;
+            --stat-bg: #f3f4f6;
+            --pill-bg: #f3f4f6;
+          }}
+          .weekly-hero {{
+            margin-bottom: 12px;
+          }}
+          .weekly-hero__bar {{
+            display: none;
+            height: 6px;
+            border-radius: 999px;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+          }}
+          .weekly-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 3px solid var(--accent);
+            padding-bottom: 10px;
+            gap: 12px;
+          }}
+          .weekly-title {{
+            font-size: 28px;
+            font-weight: 700;
+          }}
+          .weekly-subtitle {{
+            font-size: 12.5px;
+            color: var(--muted);
+            margin-top: 4px;
+          }}
+          .weekly-range-pill {{
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: var(--pill-bg);
+            color: var(--ink);
+            border: 1px solid var(--border);
+            white-space: nowrap;
+          }}
+          .numbers-strip {{
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin-bottom: 16px;
+          }}
+          .number-card {{
+            background: var(--stat-bg);
+            padding: 10px 8px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid var(--border);
+            border-top: 4px solid var(--accent);
+            box-shadow: none;
+          }}
+          .number-value {{
+            font-size: 20px;
+            font-weight: 700;
+          }}
+          .number-label {{
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+          }}
+          .section {{
+            margin-top: 14px;
+          }}
+          .section h3 {{
+            font-size: 18px;
+            margin: 0 0 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          }}
+          .section h3::before {{
+            content: "";
+            width: 10px;
+            height: 10px;
+            background: var(--accent2);
+            border-radius: 3px;
+            display: inline-block;
+          }}
+          .subsection h4 {{
+            font-size: 13px;
+            margin: 10px 0 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+          }}
+          .event-block {{
+            margin-bottom: 8px;
+          }}
+          .event-name {{
+            font-weight: 600;
+            font-size: 13px;
+          }}
+          ul.compact {{
+            margin: 6px 0 8px 18px;
+            padding: 0;
+          }}
+          ul.compact li {{
+            margin-bottom: 6px;
+            font-size: 13px;
+          }}
+          .award-desc {{
+            color: var(--muted);
+            font-size: 12.5px;
+          }}
+          .award-grid {{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }}
+          .event-grid {{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }}
+          .award-card {{
+            border: 1px solid var(--border, #e5e7eb);
+            border-left: 6px solid var(--accent, #111827);
+            border-radius: 12px;
+            background: var(--card, #ffffff);
+            padding: 12px;
+          }}
+          .event-card {{
+            border: 1px solid var(--border, #e5e7eb);
+            border-left: 6px solid var(--accent, #111827);
+            border-radius: 12px;
+            background: var(--card, #ffffff);
+            padding: 12px;
+          }}
+          .section-card.accent-sunset {{
+            border-left-color: var(--sunset, var(--accent2, var(--accent)));
+          }}
+          .section-card.accent-ocean {{
+            border-left-color: var(--ocean, var(--accent));
+          }}
+          .section-card.accent-sand {{
+            border-left-color: var(--sand-accent, var(--accent));
+          }}
+          .section-card {{
+            border: 1px solid var(--border, #e5e7eb);
+            border-left: 5px solid var(--accent, #111827);
+            border-radius: 12px;
+            background: var(--card, #ffffff);
+            padding: 12px;
+          }}
+          .event-card__title,
+          .section-card__title {{
+            font-weight: 700;
+            font-size: 14px;
+          }}
+          .event-card__desc {{
+            margin-top: 6px;
+            color: var(--muted, #475569);
+            font-size: 12.5px;
+            line-height: 1.35;
+          }}
+          .event-card__body,
+          .section-card__body {{
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.45;
+          }}
+          .award-card__title {{
+            font-weight: 800;
+            font-size: 14px;
+          }}
+          .award-card__desc {{
+            margin-top: 6px;
+            color: var(--muted, #475569);
+            font-size: 12.5px;
+            line-height: 1.35;
+          }}
+          .award-card__body {{
+            margin-top: 10px;
+            font-size: 13px;
+            line-height: 1.45;
+          }}
+          .award-card.accent-ocean {{
+            border-left-color: var(--ocean, var(--accent));
+          }}
+          .award-card.accent-sunset {{
+            border-left-color: var(--sunset, var(--accent2, var(--accent)));
+          }}
+          .award-card.accent-ink {{
+            border-left-color: var(--ink, #111827);
+          }}
+          .award-card.accent-sand {{
+            border-left-color: var(--sand-accent, var(--accent));
+          }}
+          .event-card.accent-ocean {{
+            border-left-color: var(--ocean, var(--accent));
+          }}
+          .event-card.accent-sunset {{
+            border-left-color: var(--sunset, var(--accent2, var(--accent)));
+          }}
+          .event-card.accent-ink {{
+            border-left-color: var(--ink, #111827);
+          }}
+          @media (min-width: 820px) {{
+            .award-grid {{
+              grid-template-columns: 1fr 1fr;
+            }}
+            .event-grid {{
+              grid-template-columns: 1fr 1fr;
+            }}
+          }}
+          @media print {{
+            .award-grid {{
+              grid-template-columns: 1fr 1fr;
+            }}
+            .event-grid {{
+              grid-template-columns: 1fr 1fr;
+            }}
+          }}
+          .looking-ahead li {{
+            font-size: 13px;
+          }}
+          a {{
+            color: var(--accent);
+            text-decoration: underline;
+          }}
+        </style>
+      </head>
+      <body>
+        {print_mode_notice}
+        <div class="weekly-recap theme-{theme}">
+          <div class="weekly-hero">
+            <div class="weekly-hero__bar"></div>
+            <div class="weekly-header">
+              <div>
+                <div class="weekly-title">{title}</div>
+                <div class="weekly-subtitle">Tres Palapas Baja Pickleball Resort • Los Barriles, BCS</div>
+              </div>
+              <div class="weekly-range-pill">{date_label}</div>
+            </div>
           </div>
-          <div class=\"weekly-range-pill\">{date_label}</div>
+          <div class="numbers-strip">
+            <div class="number-card"><div class="number-value">{numbers.get('matches', 0)}</div><div class="number-label">Matches</div></div>
+            <div class="number-card"><div class="number-value">{numbers.get('players', 0)}</div><div class="number-label">Players</div></div>
+            <div class="number-card"><div class="number-value">{numbers.get('leagues', 0)}</div><div class="number-label">Leagues</div></div>
+            <div class="number-card"><div class="number-value">{numbers.get('round_robins', 0)}</div><div class="number-label">Pop-Ups</div></div>
+            <div class="number-card"><div class="number-value">{numbers.get('new_faces', 0)}</div><div class="number-label">New Faces</div></div>
+          </div>
+          <div class="section">
+            <h3>Spotlight Reel</h3>
+            <div class="award-grid">
+              {spotlight_cards_html}
+            </div>
+          </div>
+          <div class="section">
+            <h3>Around the Club</h3>
+            <div class="event-grid">
+              {around_cards_html}
+            </div>
+          </div>
+          <div class="section">
+            {looking_card_html}
+          </div>
         </div>
-      </div>
-      <div class=\"numbers-strip\">
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('matches', 0)}</div><div class=\"number-label\">Matches</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('players', 0)}</div><div class=\"number-label\">Players</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('leagues', 0)}</div><div class=\"number-label\">Leagues</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('round_robins', 0)}</div><div class=\"number-label\">Pop-Ups</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('new_faces', 0)}</div><div class=\"number-label\">New Faces</div></div>
-      </div>
-      <div class=\"section\">
-        <h3>Spotlight Reel</h3>
-        <div class=\"award-grid\">
-          {spotlight_cards_html}
-        </div>
-      </div>
-      <div class=\"section\">
-        <h3>Around the Club</h3>
-        <div class=\"event-grid\">
-          {around_cards_html}
-        </div>
-      </div>
-      <div class=\"section\">
-        {looking_card_html}
-      </div>
-    </div>
+      </body>
+    </html>
     """
+    return html
 
+
+def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
+    html = build_weekly_recap_html(recap, print_view=print_view, title_override=title_override)
     st.markdown(html, unsafe_allow_html=True)
 
 
@@ -534,6 +554,19 @@ def _css_common_print() -> str:
         .no-print {
           display: none !important;
         }
+      }
+    """
+
+
+def _css_pdf_safe() -> str:
+    return """
+      @page {
+        size: Letter;
+        margin: 0.5in;
+      }
+      html,
+      body {
+        background: #fff;
       }
     """
 
