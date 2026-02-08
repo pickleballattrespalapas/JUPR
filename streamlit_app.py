@@ -405,6 +405,7 @@ def main():
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
         ADMIN_ONLY_LABELS = {
+            "🖨️ League Night Printout",
             "🏟️ League Manager",
             "📝 Match Uploader",
             "📝 Match Log",
@@ -431,7 +432,6 @@ def main():
         PUBLIC_NAV_KEYS = [
             "leaderboards",
             "league_results",
-            "league_printout",
             "weekly_recap",
             "match_explorer",
             "players",

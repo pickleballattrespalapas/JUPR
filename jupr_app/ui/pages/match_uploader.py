@@ -3,7 +3,6 @@
 import time
 import re
 from datetime import datetime
-from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -27,29 +26,9 @@ def _parse_week_num(week_tag: str) -> int | None:
         return None
 
 
-def _render_printout_link_notice() -> None:
-    payload = st.session_state.get("mu_last_printout")
-    if not isinstance(payload, dict):
-        return
-    league = str(payload.get("league", "")).strip()
-    week_tag = payload.get("week_tag", "")
-    week_num = _parse_week_num(week_tag)
-    if not league or week_num is None:
-        return
-    base_url = st.session_state.get("base_url", "")
-    if not base_url:
-        return
-    url = f"{base_url}/?page=league_printout&public=1&league={quote(league)}&week={week_num}"
-    st.success("League scores posted. Share the public League Night Printout with members.")
-    st.link_button("Open Public Printout", url)
-    st.code(url)
-    st.session_state.pop("mu_last_printout", None)
-
-
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("📝 Match Uploader", "Quick entry for pop-up or league matches.", mode_label=mode_label)
-    _render_printout_link_notice()
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin only.")
@@ -217,8 +196,6 @@ def render(ctx):
                 df_leagues=df_leagues,
                 df_meta=df_meta,
             )
-            if not is_popup:
-                st.session_state["mu_last_printout"] = {"league": selected_league, "week_tag": week_tag}
             st.success("✅ Processed!")
             time.sleep(0.8)
             st.rerun()
@@ -530,11 +507,6 @@ def render(ctx):
                             st.error("Failed to submit matches.")
                             st.exception(e)
                             st.stop()
-                        if not bool(st.session_state.mu_active_is_popup):
-                            st.session_state["mu_last_printout"] = {
-                                "league": st.session_state.mu_active_lg,
-                                "week_tag": st.session_state.mu_active_wk,
-                            }
                         st.success(
                             f"Inserted {res.get('inserted', 0)} • "
                             f"Skipped incomplete {res.get('skipped_incomplete', 0)} • "

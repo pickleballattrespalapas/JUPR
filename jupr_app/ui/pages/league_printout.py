@@ -359,8 +359,11 @@ def _build_printout_txt(league_name: str, week_num: int, weekly_rating: pd.DataF
 
 
 def render(ctx):
-    PUBLIC_MODE = bool(getattr(ctx, "public_mode", False))
-    mode_label = "Public" if PUBLIC_MODE else "Admin"
+    if bool(getattr(ctx, "public_mode", False)) or not bool(getattr(ctx, "admin_logged_in", False)):
+        st.error("This page is only available to admins.")
+        return
+
+    mode_label = "Admin"
     page_shell("🖨️ League Night Printout", "Shareable weekly + season summary.", mode_label=mode_label)
 
     df_matches = getattr(ctx, "df_matches", None)
@@ -461,7 +464,7 @@ def render(ctx):
     txt_text = _build_printout_txt(selected_league, int(selected_week), weekly_rating, weekly_wins, awards)
 
     st.markdown("### Export")
-    ex1, ex2, ex3 = st.columns([1, 1, 2])
+    ex1, ex2 = st.columns(2)
     ex1.download_button(
         "Download HTML",
         data=html_text,
@@ -476,8 +479,3 @@ def render(ctx):
         mime="text/plain",
         use_container_width=True,
     )
-
-    base_url = st.session_state.get("base_url", "")
-    public_url = f"{base_url}/?page=league_printout&public=1&league={quote(selected_league)}&week={int(selected_week)}"
-    ex3.caption("Public share link")
-    ex3.code(public_url)
