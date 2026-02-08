@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+import streamlit as st
+
+from jupr_app.domain.recaps.weekly_recap import compute_weekly_recap, get_spotlight_candidates
+from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
+from jupr_app.ui.layout import page_shell
+
+
+def _get_default_week_start(tz_name: str) -> date:
+    today = datetime.now(ZoneInfo(tz_name)).date()
+    return today - timedelta(days=today.weekday())
+
+
+def _load_weekly_row(supabase, club_id: str, week_start: date) -> dict | None:
+    response = (
+        supabase.table("weekly_recaps")
+        .select("*")
+        .eq("club_id", club_id)
+        .eq("week_start", week_start.isoformat())
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+    return None
+
+
+def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, list[dict]]) -> dict:
+    recap = deepcopy(generated_json or {})
+    if not recap:
+        return recap
+
+    looking_ahead = edits_json.get("looking_ahead")
+    if looking_ahead:
+        recap["looking_ahead"] = looking_ahead
+
+    spotlight = recap.get("spotlight", []) or []
+    spotlight_by_key = {item.get("key"): item for item in spotlight}
+    overrides = edits_json.get("spotlight_overrides", {})
+    for key, candidate_id in overrides.items():
+        options = {item.get("candidate_id"): item for item in candidates.get(key, [])}
+        selected = options.get(candidate_id)
+        if selected:
+            spotlight_by_key[key] = selected
+
+    dropped = set(edits_json.get("spotlight_drop", []))
+    updated = [item for key, item in spotlight_by_key.items() if key not in dropped]
+
+    order_map = edits_json.get("spotlight_order", {})
+    if order_map:
+        updated.sort(key=lambda item: order_map.get(item.get("key"), 999))
+
+    recap["spotlight"] = updated
+    return recap
+
+
+def render(ctx):
+    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
+    page_shell("🗞️ Weekly Recap Admin", "Generate, edit, and publish the weekly recap.", mode_label=mode_label)
+
+    if not bool(getattr(ctx, "admin_logged_in", False)):
+        st.error("Admin login required.")
+        st.stop()
+
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+    tz_name = "America/Mazatlan"
+
+    week_start = st.date_input("Week start (Monday)", value=_get_default_week_start(tz_name))
+
+    row = _load_weekly_row(supabase, club_id, week_start)
+    status = row.get("status") if row else "draft"
+
+    st.write(f"Status: **{status}**")
+
+    if st.button("Generate Draft"):
+        with st.spinner("Generating weekly recap..."):
+            recap = compute_weekly_recap(ctx, week_start, tz_name=tz_name)
+            payload = {
+                "club_id": club_id,
+                "week_start": week_start.isoformat(),
+                "week_end": recap.get("week_end"),
+                "status": "draft",
+                "generated_json": recap,
+                "edits_json": {},
+                "final_json": recap,
+            }
+            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            st.success("Draft generated.")
+            row = _load_weekly_row(supabase, club_id, week_start)
+
+    if not row:
+        st.info("No draft yet. Generate a draft to begin editing.")
+        return
+
+    generated_json = row.get("generated_json") or {}
+    edits_json = row.get("edits_json") or {}
+    candidates = get_spotlight_candidates(ctx, week_start, tz_name=tz_name)
+
+    st.subheader("Edit Draft")
+
+    default_looking = edits_json.get("looking_ahead") or generated_json.get("looking_ahead") or ["", "", ""]
+    looking_inputs = []
+    for idx in range(3):
+        looking_inputs.append(st.text_input(f"Looking Ahead #{idx + 1}", value=default_looking[idx] if idx < len(default_looking) else ""))
+
+    edits_json["looking_ahead"] = looking_inputs
+
+    spotlight = generated_json.get("spotlight", [])
+    spotlight_keys = [item.get("key") for item in spotlight if item.get("key")]
+
+    st.markdown("**Spotlight Reel Overrides**")
+    overrides = edits_json.get("spotlight_overrides", {})
+    order_map = edits_json.get("spotlight_order", {})
+    drop_list = set(edits_json.get("spotlight_drop", []))
+
+    for idx, key in enumerate(spotlight_keys):
+        options = candidates.get(key, [])
+        if not options:
+            continue
+        label = options[0].get("label", key)
+        option_labels = {item.get("candidate_id"): item.get("display", "") for item in options}
+        current = overrides.get(key)
+        if current not in option_labels:
+            current = options[0].get("candidate_id")
+        selection = st.selectbox(
+            f"{label} candidate",
+            options=list(option_labels.keys()),
+            format_func=lambda opt: option_labels.get(opt, opt),
+            index=list(option_labels.keys()).index(current) if current in option_labels else 0,
+        )
+        overrides[key] = selection
+        order_map[key] = st.number_input(f"Order for {label}", min_value=1, max_value=10, value=int(order_map.get(key, idx + 1)))
+        include = st.checkbox(f"Include {label}", value=key not in drop_list)
+        if not include:
+            drop_list.add(key)
+        else:
+            drop_list.discard(key)
+
+    edits_json["spotlight_overrides"] = overrides
+    edits_json["spotlight_order"] = order_map
+    edits_json["spotlight_drop"] = list(drop_list)
+
+    if st.button("Save Draft"):
+        final_json = _apply_edits(generated_json, edits_json, candidates)
+        payload = {
+            "club_id": club_id,
+            "week_start": week_start.isoformat(),
+            "week_end": generated_json.get("week_end"),
+            "status": "draft",
+            "generated_json": generated_json,
+            "edits_json": edits_json,
+            "final_json": final_json,
+        }
+        supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        st.success("Draft saved.")
+        row = _load_weekly_row(supabase, club_id, week_start)
+
+    preview = st.checkbox("Preview (Print View)", value=False)
+    if preview:
+        final_json = _apply_edits(generated_json, edits_json, candidates)
+        st.caption("Tip: use browser print to PDF for a bulletin-ready copy.")
+        render_weekly_recap(final_json, print_view=True)
+
+    if st.button("Publish"):
+        final_json = _apply_edits(generated_json, edits_json, candidates)
+        payload = {
+            "club_id": club_id,
+            "week_start": week_start.isoformat(),
+            "week_end": generated_json.get("week_end"),
+            "status": "published",
+            "generated_json": generated_json,
+            "edits_json": edits_json,
+            "final_json": final_json,
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "published_by": "admin",
+        }
+        supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        st.success("Published.")
+        row = _load_weekly_row(supabase, club_id, week_start)
+
+    if st.button("Unpublish"):
+        payload = {
+            "club_id": club_id,
+            "week_start": week_start.isoformat(),
+            "week_end": generated_json.get("week_end"),
+            "status": "draft",
+            "generated_json": generated_json,
+            "edits_json": edits_json,
+            "final_json": _apply_edits(generated_json, edits_json, candidates),
+            "published_at": None,
+            "published_by": None,
+        }
+        supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+        st.success("Unpublished.")
