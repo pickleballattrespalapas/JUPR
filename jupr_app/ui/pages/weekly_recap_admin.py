@@ -16,7 +16,7 @@ from jupr_app.domain.recaps.weekly_recap import (
     compute_weekly_recap,
     get_spotlight_candidates,
 )
-from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
+from jupr_app.ui.components.weekly_recap_layout import build_weekly_recap_html, render_weekly_recap
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.url import qp_get
 
@@ -137,6 +137,19 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
 
     recap["spotlight"] = updated
     return recap
+
+
+@st.cache_data(show_spinner=False)
+def _pdf_for_recap(html: str) -> bytes:
+    from weasyprint import HTML
+
+    return HTML(string=html).write_pdf()
+
+
+def _pdf_filename(final_json: dict) -> str:
+    week_start = final_json.get("week_start") or "week_start"
+    week_end = final_json.get("week_end") or "week_end"
+    return f"weekly_recap_{week_start}_to_{week_end}.pdf"
 
 
 def render(ctx):
@@ -369,10 +382,19 @@ def render(ctx):
     selected_label = st.selectbox("Bulletin style", options=labels, index=values.index(current_theme))
     edits_json["print_theme"] = theme_options[selected_label]
     preview = st.checkbox("Preview (Print View)", value=print_mode)
+    final_json = _apply_edits(generated_json, edits_json, candidates)
     if preview:
-        final_json = _apply_edits(generated_json, edits_json, candidates)
         st.caption("Tip: use browser print to PDF for a bulletin-ready copy.")
         render_weekly_recap(final_json, print_view=True)
+    st.subheader("Download PDF")
+    html = build_weekly_recap_html(final_json, print_view=True)
+    pdf_bytes = _pdf_for_recap(html)
+    st.download_button(
+        "Download PDF",
+        data=pdf_bytes,
+        file_name=_pdf_filename(final_json),
+        mime="application/pdf",
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("Publish"):

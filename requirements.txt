@@ -1,3 +1,4 @@
 streamlit
 pandas
 supabase
+weasyprint==61.2
