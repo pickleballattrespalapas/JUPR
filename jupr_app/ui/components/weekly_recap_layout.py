@@ -64,10 +64,15 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         f"<li>{escape(str(item))}</li>" for item in (looking_ahead or [])
         if str(item).strip() != ""
     )
+    looking_ahead_accent = "accent-sunset"
+    if theme == "baja_v2":
+        looking_ahead_accent = "accent-sand"
+    elif theme == "newsletter_sep":
+        looking_ahead_accent = "accent-ocean"
     looking_card_html = _render_simple_card(
         title="Looking Ahead",
         body_html=f"<ul class='compact looking-ahead'>{looking_ahead_html}</ul>",
-        accent_class="accent-sunset",
+        accent_class=looking_ahead_accent,
     )
 
     print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
@@ -222,22 +227,28 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         background: var(--card, #ffffff);
         padding: 12px;
       }}
-      .event-card,
-      .section-card {{
+      .event-card {{
         border: 1px solid var(--border, #e5e7eb);
-        border-left: 5px solid var(--accent, #111827);
+        border-left: 6px solid var(--accent, #111827);
         border-radius: 12px;
         background: var(--card, #ffffff);
         padding: 12px;
-      }}
-      .event-card--rr {{
-        border-left-color: var(--accent2, var(--accent));
       }}
       .section-card.accent-sunset {{
         border-left-color: var(--sunset, var(--accent2, var(--accent)));
       }}
       .section-card.accent-ocean {{
         border-left-color: var(--ocean, var(--accent));
+      }}
+      .section-card.accent-sand {{
+        border-left-color: var(--sand-accent, var(--accent));
+      }}
+      .section-card {{
+        border: 1px solid var(--border, #e5e7eb);
+        border-left: 5px solid var(--accent, #111827);
+        border-radius: 12px;
+        background: var(--card, #ffffff);
+        padding: 12px;
       }}
       .event-card__title,
       .section-card__title {{
@@ -282,6 +293,15 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
       }}
       .award-card.accent-sand {{
         border-left-color: var(--sand-accent, var(--accent));
+      }}
+      .event-card.accent-ocean {{
+        border-left-color: var(--ocean, var(--accent));
+      }}
+      .event-card.accent-sunset {{
+        border-left-color: var(--sunset, var(--accent2, var(--accent)));
+      }}
+      .event-card.accent-ink {{
+        border-left-color: var(--ink, #111827);
       }}
       @media (min-width: 820px) {{
         .award-grid {{
@@ -391,9 +411,15 @@ def _render_event_card(title: str, description: str, highlights: list[dict], *, 
         for h in safe
         if str(h.get("display", "")).strip() != ""
     )
+    if kind == "league":
+        accent_class = "accent-ocean"
+    elif kind == "rr":
+        accent_class = "accent-sunset"
+    else:
+        accent_class = "accent-ink"
     desc_html = f"<div class='event-card__desc'>{escape(description)}</div>" if description else ""
     return (
-        f"<div class='event-card event-card--{kind}'>"
+        f"<div class='event-card {accent_class}'>"
         f"<div class='event-card__title'>{escape(title)}</div>"
         f"{desc_html}"
         f"<div class='event-card__body'><ul class='compact'>{items}</ul></div>"
@@ -443,8 +469,11 @@ def _css_tokens_baja_v2() -> str:
       .weekly-recap.theme-baja_v2 .award-card.accent-sunset {
         background: rgba(255, 106, 61, 0.06);
       }
-      .weekly-recap.theme-baja_v2 .event-card {
-        background: rgba(246, 231, 198, 0.35);
+      .weekly-recap.theme-baja_v2 .event-card.accent-ocean {
+        background: rgba(14, 165, 164, 0.05);
+      }
+      .weekly-recap.theme-baja_v2 .event-card.accent-sunset {
+        background: rgba(255, 106, 61, 0.05);
       }
       .weekly-recap.theme-baja_v2 .section-card {
         background: rgba(255, 255, 255, 0.85);
@@ -470,7 +499,10 @@ def _css_tokens_newsletter_sep() -> str:
       .weekly-recap.theme-newsletter_sep .award-card.accent-sunset {
         background: var(--soft, rgba(29, 78, 216, 0.06));
       }
-      .weekly-recap.theme-newsletter_sep .event-card,
+      .weekly-recap.theme-newsletter_sep .event-card.accent-ocean,
+      .weekly-recap.theme-newsletter_sep .event-card.accent-sunset {
+        background: var(--soft, rgba(29, 78, 216, 0.06));
+      }
       .weekly-recap.theme-newsletter_sep .section-card {
         background: var(--soft, rgba(29, 78, 216, 0.06));
       }
