@@ -118,6 +118,12 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
         item["description"] = merged_desc.get(item.get("key", ""), "")
 
     recap["spotlight"] = updated
+    theme = edits_json.get("print_theme", "Baja Flyer")
+    meta = recap.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+    meta["print_theme"] = theme
+    recap["meta"] = meta
     return recap
 
 
@@ -300,6 +306,13 @@ def render(ctx):
         st.rerun()
 
     st.markdown("<div class='no-print'>", unsafe_allow_html=True)
+    theme_default = edits_json.get("print_theme", "Baja Flyer")
+    theme_choice = st.selectbox(
+        "Bulletin style",
+        options=["Classic", "Baja Flyer"],
+        index=["Classic", "Baja Flyer"].index(theme_default) if theme_default in {"Classic", "Baja Flyer"} else 1,
+    )
+    edits_json["print_theme"] = theme_choice
     preview = st.checkbox("Preview (Print View)", value=print_mode)
     if preview:
         final_json = _apply_edits(generated_json, edits_json, candidates)

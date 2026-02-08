@@ -10,6 +10,8 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     week_start = recap.get("week_start")
     week_end = recap.get("week_end")
     title = title_override or "Tres Palapas Weekly Recap"
+    theme = (recap.get("meta", {}) or {}).get("print_theme", "Classic")
+    is_baja = theme == "Baja Flyer"
 
     date_label = ""
     if week_start and week_end:
@@ -35,13 +37,22 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         label = (item or {}).get("label", "")
         display = (item or {}).get("display", "")
         description = (item or {}).get("description", "") or ""
-        desc_html = f"<span class=\"award-desc\">{escape(description)}</span><br/>" if description else ""
-        spotlight_items.append(
-            "<li>"
-            f"<strong>{label}</strong>: {desc_html}"
-            f"{display}"
-            "</li>"
-        )
+        if is_baja:
+            spotlight_items.append(
+                "<li class=\"spotlight-card\">"
+                f"<div class=\"spotlight-label\">{label}</div>"
+                f"<div class=\"spotlight-desc\">{escape(description)}</div>"
+                f"<div class=\"spotlight-winners\">{display}</div>"
+                "</li>"
+            )
+        else:
+            desc_html = f"<span class=\"award-desc\">{escape(description)}</span><br/>" if description else ""
+            spotlight_items.append(
+                "<li>"
+                f"<strong>{label}</strong>: {desc_html}"
+                f"{display}"
+                "</li>"
+            )
     spotlight_html = "".join(spotlight_items)
     leagues_html = "".join(
         _render_event_block((item or {}).get("league_name", "League"), (item or {}).get("highlights", []))
@@ -60,6 +71,139 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
 
     print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
     print_view_css = ".no-print { display: none !important; }" if print_view else ""
+    theme_class = " theme-baja" if is_baja else ""
+    header_html = (
+        f"""
+        <div class=\"hero-bar\"></div>
+        <div class=\"weekly-header\">
+          <div class=\"weekly-title-group\">
+            <div class=\"weekly-title\">{title}</div>
+            <div class=\"weekly-subtitle\">Tres Palapas Baja Pickleball Resort • Los Barriles, BCS</div>
+          </div>
+          <div class=\"weekly-range\">{date_label}</div>
+        </div>
+        """
+        if is_baja
+        else f"""
+        <div class=\"weekly-header\">
+          <div class=\"weekly-title\">{title}</div>
+          <div class=\"weekly-range\">{date_label}</div>
+        </div>
+        """
+    )
+    baja_theme_css = """
+      .theme-baja {
+        --baja-sunset: #FF6A3D;
+        --baja-ocean: #0EA5A4;
+        --baja-sand: #F6E7C6;
+        --ink: #111827;
+        --muted: #475569;
+        --border: #E5E7EB;
+        color: var(--ink);
+      }
+      .theme-baja .hero-bar {
+        height: 6px;
+        border-radius: 999px;
+        margin-bottom: 10px;
+        background: linear-gradient(90deg, var(--baja-sunset), var(--baja-ocean));
+      }
+      .theme-baja .weekly-header {
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 10px;
+        margin-bottom: 14px;
+      }
+      .theme-baja .weekly-title {
+        font-size: 32px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+      .theme-baja .weekly-title-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .theme-baja .weekly-subtitle {
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .theme-baja .weekly-range {
+        font-size: 12px;
+        font-weight: 700;
+        background: var(--baja-sand);
+        border: 1px solid var(--baja-ocean);
+        padding: 4px 10px;
+        border-radius: 999px;
+        color: var(--ink);
+      }
+      .theme-baja .numbers-strip {
+        gap: 10px;
+      }
+      .theme-baja .number-card {
+        background: var(--baja-sand);
+        border: 1px solid var(--baja-ocean);
+        border-radius: 999px;
+        padding: 10px 6px;
+      }
+      .theme-baja .number-label {
+        color: var(--muted);
+      }
+      .theme-baja .section h3 {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding-left: 10px;
+        border-left: 4px solid var(--baja-sunset);
+        color: var(--ink);
+      }
+      .theme-baja .spotlight-list {
+        list-style: none;
+        margin-left: 0;
+        padding-left: 0;
+      }
+      .theme-baja .spotlight-card {
+        background: var(--baja-sand);
+        border: 1px solid var(--border);
+        border-left: 4px solid var(--baja-ocean);
+        border-radius: 10px;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+      }
+      .theme-baja .spotlight-label {
+        font-weight: 700;
+      }
+      .theme-baja .spotlight-desc {
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .theme-baja .spotlight-winners {
+        margin-top: 4px;
+        font-size: 13px;
+      }
+      .theme-baja .event-name {
+        font-variant: small-caps;
+        letter-spacing: 0.05em;
+        border-bottom: 2px solid var(--baja-ocean);
+        display: inline-block;
+        padding-bottom: 2px;
+      }
+      .theme-baja a {
+        text-decoration: underline;
+      }
+      @media print {
+        .theme-baja {
+          background: #ffffff;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        .weekly-recap.theme-baja {
+          box-shadow: none;
+          background: #ffffff;
+          border: 1px solid var(--border);
+        }
+      }
+    """
+    theme_css = baja_theme_css if is_baja else ""
 
     html = f"""
     <style>
@@ -163,13 +307,11 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
           display: none !important;
         }}
       }}
+      {theme_css}
     </style>
     {print_mode_notice}
-    <div class=\"weekly-recap\">
-      <div class=\"weekly-header\">
-        <div class=\"weekly-title\">{title}</div>
-        <div class=\"weekly-range\">{date_label}</div>
-      </div>
+    <div class=\"weekly-recap{theme_class}\">
+      {header_html}
       <div class=\"numbers-strip\">
         <div class=\"number-card\"><div class=\"number-value\">{numbers.get('matches', 0)}</div><div class=\"number-label\">Matches</div></div>
         <div class=\"number-card\"><div class=\"number-value\">{numbers.get('players', 0)}</div><div class=\"number-label\">Players</div></div>
@@ -179,7 +321,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
       </div>
       <div class=\"section\">
         <h3>Spotlight Reel</h3>
-        <ul class=\"compact\">
+        <ul class=\"compact spotlight-list\">
           {spotlight_html}
         </ul>
       </div>
