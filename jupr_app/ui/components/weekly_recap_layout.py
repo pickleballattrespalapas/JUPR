@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape
 
 import streamlit as st
 
@@ -27,11 +28,21 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     league_items = around.get("leagues", []) or []
     rr_items = around.get("round_robins", []) or []
 
-    spotlight_html = "".join(
-        f"<li><strong>{(item or {}).get('label','')}</strong>: {(item or {}).get('display','')}</li>"
-        for item in (spotlight or [])
-        if isinstance(item, dict)
-    )
+    spotlight_items = []
+    for item in (spotlight or []):
+        if not isinstance(item, dict):
+            continue
+        label = (item or {}).get("label", "")
+        display = (item or {}).get("display", "")
+        description = (item or {}).get("description", "") or ""
+        desc_html = f"<span class=\"award-desc\">{escape(description)}</span><br/>" if description else ""
+        spotlight_items.append(
+            "<li>"
+            f"<strong>{label}</strong>: {desc_html}"
+            f"{display}"
+            "</li>"
+        )
+    spotlight_html = "".join(spotlight_items)
     leagues_html = "".join(
         _render_event_block((item or {}).get("league_name", "League"), (item or {}).get("highlights", []))
         for item in (league_items or [])
@@ -130,6 +141,10 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
       ul.compact li {{
         margin-bottom: 3px;
         font-size: 13px;
+      }}
+      .award-desc {{
+        color: #374151;
+        font-size: 12.5px;
       }}
       .looking-ahead li {{
         font-size: 13px;

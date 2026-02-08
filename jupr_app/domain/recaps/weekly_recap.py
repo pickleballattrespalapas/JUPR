@@ -6,6 +6,29 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+DEFAULT_AWARD_DESCRIPTIONS = {
+    "TOP_PERFORMER_WEEK": (
+        "The strongest overall performance of the week, based on win–loss results across multiple matches. "
+        "This award highlights players who consistently showed up, competed well, and delivered results."
+    ),
+    "BIGGEST_JUMP_WEEK": (
+        "The largest JUPR rating improvement during the week. "
+        "This reflects meaningful progress against competition — not just wins, but growth."
+    ),
+    "GIANT_SLAYER_WEEK": (
+        "A standout win against a significantly higher-rated opponent or team. "
+        "This award celebrates fearless play and capitalizing on tough matchups."
+    ),
+    "GRIND_WEEK": (
+        "The players who logged the most matches during the week. "
+        "Consistency, availability, and willingness to compete are what earn this one."
+    ),
+    "PERFECT_RUN": (
+        "An undefeated week with a meaningful number of matches played. "
+        "No losses, no shortcuts — just clean execution start to finish."
+    ),
+}
+
 
 @dataclass
 class SpotlightCandidate:
@@ -95,6 +118,7 @@ def _compute_weekly_recap_payload(
         "week_end": week_end.isoformat(),
         "numbers": numbers,
         "spotlight": [item.__dict__ for item in spotlight],
+        "award_descriptions": dict(DEFAULT_AWARD_DESCRIPTIONS),
         "around_club": around_club,
         "looking_ahead": ["", "", ""],
         "meta": {
