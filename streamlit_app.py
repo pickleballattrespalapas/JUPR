@@ -340,6 +340,8 @@ def main():
             theme_gallery,
             tournaments,
             tournament_manager,
+            weekly_recap,
+            weekly_recap_admin,
         )
 
         # ---- Router ----
@@ -366,6 +368,10 @@ def main():
             "🎨 Theme QA": theme_gallery,
             "🏆 Tournaments": tournaments,
             "🏆 Tournament Manager": tournament_manager,
+            "🗞️ Weekly Recap": weekly_recap,
+
+            # Admin-only
+            "🗞️ Weekly Recap Admin": weekly_recap_admin,
         }
 
         PAGE_KEY_TO_LABEL = {
@@ -391,6 +397,10 @@ def main():
             "theme_qa": "🎨 Theme QA",
             "tournaments": "🏆 Tournaments",
             "tournament_manager": "🏆 Tournament Manager",
+            "weekly_recap": "🗞️ Weekly Recap",
+
+            # Admin-only deep links
+            "weekly_recap_admin": "🗞️ Weekly Recap Admin",
         }
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
@@ -407,6 +417,7 @@ def main():
             "🏆 Tournaments",
             "🏆 Tournament Manager",
             "🧪 Badge Debug",
+            "🗞️ Weekly Recap Admin",
         }
 
         # Visible labels based on auth
@@ -421,6 +432,7 @@ def main():
             "leaderboards",
             "league_results",
             "league_printout",
+            "weekly_recap",
             "match_explorer",
             "players",
             "badge_codex",

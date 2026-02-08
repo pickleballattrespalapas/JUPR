@@ -28,23 +28,31 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     rr_items = around.get("round_robins", []) or []
 
     spotlight_html = "".join(
-        f"<li><strong>{item.get('label')}</strong>: {item.get('display')}</li>"
-        for item in spotlight
+        f"<li><strong>{(item or {}).get('label','')}</strong>: {(item or {}).get('display','')}</li>"
+        for item in (spotlight or [])
+        if isinstance(item, dict)
     )
     leagues_html = "".join(
-        _render_event_block(item.get("league_name", "League"), item.get("highlights", []))
-        for item in league_items
+        _render_event_block((item or {}).get("league_name", "League"), (item or {}).get("highlights", []))
+        for item in (league_items or [])
+        if isinstance(item, dict)
     )
     rr_html = "".join(
-        _render_event_block(item.get("event_name", "Pop-Up Event"), item.get("highlights", []))
-        for item in rr_items
+        _render_event_block((item or {}).get("event_name", "Pop-Up Event"), (item or {}).get("highlights", []))
+        for item in (rr_items or [])
+        if isinstance(item, dict)
     )
     looking_ahead_html = "".join(
-        f"<li>{item}</li>" for item in looking_ahead if str(item).strip() != ""
+        f"<li>{item}</li>" for item in (looking_ahead or [])
+        if str(item).strip() != ""
     )
+
+    print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
+    print_view_css = ".no-print { display: none !important; }" if print_view else ""
 
     html = f"""
     <style>
+      {print_view_css}
       .weekly-recap {{
         font-family: 'Inter', sans-serif;
         color: #111827;
@@ -141,6 +149,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         }}
       }}
     </style>
+    {print_mode_notice}
     <div class=\"weekly-recap\">
       <div class=\"weekly-header\">
         <div class=\"weekly-title\">{title}</div>
@@ -183,8 +192,6 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
 
 
 def _render_event_block(name: str, highlights: list[dict]) -> str:
-    items = "".join(f"<li>{h.get('display')}</li>" for h in highlights)
-    return (
-        f"<div class='event-block'><div class='event-name'>{name}</div>"
-        f"<ul class='compact'>{items}</ul></div>"
-    )
+    safe = [h for h in (highlights or []) if isinstance(h, dict)]
+    items = "".join(f"<li>{h.get('display','')}</li>" for h in safe if str(h.get("display","")).strip() != "")
+    return f"<div class='event-block'><div class='event-name'>{name}</div><ul class='compact'>{items}</ul></div>"
