@@ -72,9 +72,14 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
             continue
 
         display_parts = [item.get("display", "") for item in selected_items]
-        if len(display_parts) >= 2 and spotlight_counts.get(key) == 3:
+        count_value = spotlight_counts.get(key)
+        count_value = int(count_value) if count_value in {1, 2, 3} else len(display_parts)
+        if count_value == 3:
             display_parts = [f"{idx + 1}) {display}" for idx, display in enumerate(display_parts)]
-        display = "<br/>".join(display_parts)
+        if count_value >= 2:
+            display = "<br/>".join(display_parts)
+        else:
+            display = display_parts[0] if display_parts else ""
 
         seen_player_ids = set()
         combined_player_ids = []
@@ -183,6 +188,7 @@ def render(ctx):
         if not options:
             continue
         label = options[0].get("label", key)
+        option_ids = [item.get("candidate_id") for item in options if item.get("candidate_id")]
         option_labels = {item.get("candidate_id"): item.get("display", "") for item in options}
         current = overrides.get(key)
         if isinstance(current, str):
@@ -191,39 +197,41 @@ def render(ctx):
             current_list = list(current or [])
         current_list = [candidate for candidate in current_list if candidate in option_labels]
 
-        count_default = spotlight_counts.get(key)
-        if count_default is None:
-            count_default = max(1, min(3, len(current_list)))
-        count_default = int(count_default) if count_default in {1, 2, 3} else 1
+        generated_item = spotlight_by_key.get(key, {})
+        generated_player_ids = generated_item.get("player_ids") or []
+        default_count = 2 if len(generated_player_ids) >= 2 else 1
+        count_default = spotlight_counts.get(key, default_count)
+        count_default = int(count_default) if count_default in {1, 2, 3} else default_count
 
         highlight_count = st.selectbox(
-            f"{label} — How many to highlight",
+            f"{label} — How many to recognize",
             options=[1, 2, 3],
             index=[1, 2, 3].index(count_default),
         )
         spotlight_counts[key] = highlight_count
 
         if not current_list:
-            generated_item = spotlight_by_key.get(key, {})
-            generated_player_ids = set(generated_item.get("player_ids") or [])
-            if generated_player_ids:
-                current_list = [
-                    item.get("candidate_id")
-                    for item in options
-                    if generated_player_ids.issuperset(set(item.get("player_ids") or []))
-                ]
-            if not current_list:
-                current_list = [options[0].get("candidate_id")]
+            if highlight_count in {2, 3}:
+                current_list = option_ids[:highlight_count]
+            else:
+                generated_candidate_id = generated_item.get("candidate_id")
+                if generated_candidate_id in option_labels:
+                    current_list = [generated_candidate_id]
+                elif option_ids:
+                    current_list = [option_ids[0]]
 
         current_list = current_list[:highlight_count]
         selection = st.multiselect(
             f"{label} winners",
-            options=list(option_labels.keys()),
+            options=option_ids,
             format_func=lambda opt: option_labels.get(opt, opt),
             default=current_list,
             max_selections=highlight_count,
         )
-        overrides[key] = selection
+        selection_ordered = [candidate for candidate in option_ids if candidate in selection]
+        if not selection_ordered:
+            selection_ordered = current_list or option_ids[:highlight_count]
+        overrides[key] = selection_ordered[:highlight_count]
         order_map[key] = st.number_input(f"Order for {label}", min_value=1, max_value=10, value=int(order_map.get(key, idx + 1)))
         include = st.checkbox(f"Include {label}", value=key not in drop_list)
         if not include:
