@@ -57,6 +57,10 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
     if not recap:
         return recap
 
+    if "print_theme" in edits_json:
+        meta = recap.setdefault("meta", {})
+        meta["print_theme"] = edits_json.get("print_theme")
+
     base_desc = generated_json.get("award_descriptions") or DEFAULT_AWARD_DESCRIPTIONS
     edited_desc = edits_json.get("award_descriptions") or {}
     merged_desc = dict(base_desc)
@@ -300,6 +304,18 @@ def render(ctx):
         st.rerun()
 
     st.markdown("<div class='no-print'>", unsafe_allow_html=True)
+    theme_options = {
+        "Baja Flair V2 (Flyer)": "baja_v2",
+        "September Newsletter": "newsletter_sep",
+        "Classic (Neutral)": "classic",
+    }
+    current_theme = edits_json.get("print_theme") or "baja_v2"
+    if current_theme not in theme_options.values():
+        current_theme = "baja_v2"
+    labels = list(theme_options.keys())
+    values = list(theme_options.values())
+    selected_label = st.selectbox("Bulletin style", options=labels, index=values.index(current_theme))
+    edits_json["print_theme"] = theme_options[selected_label]
     preview = st.checkbox("Preview (Print View)", value=print_mode)
     if preview:
         final_json = _apply_edits(generated_json, edits_json, candidates)
