@@ -431,12 +431,8 @@ def build_weekly_recap_html(
 
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
     html = build_weekly_recap_html(recap, print_view=print_view, title_override=title_override)
-    # Admin preview uses iframe to prevent Streamlit escaping <style>.
-    render_mode = st.session_state.get("weekly_recap_render_mode", "")
-    if render_mode == "iframe":
-        components.html(html, height=2600, scrolling=True)
-    else:
-        st.markdown(html, unsafe_allow_html=True)
+    height = 2600 if not print_view else 3000
+    components.html(html, height=height, scrolling=True)
 
 
 def _render_award_card(item: dict, *, theme: str) -> str:
