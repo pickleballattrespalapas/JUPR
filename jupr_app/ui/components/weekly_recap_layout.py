@@ -74,11 +74,15 @@ def build_weekly_recap_html(
         looking_ahead_accent = "accent-sand"
     elif theme == "newsletter_sep":
         looking_ahead_accent = "accent-ocean"
-    looking_card_html = _render_simple_card(
-        title="Looking Ahead",
-        body_html=f"<ul class='compact looking-ahead'>{looking_ahead_html}</ul>",
-        accent_class=looking_ahead_accent,
-    )
+    # Only render "Looking Ahead" when there is at least one non-empty bullet.
+    looking_card_html = ""
+    if looking_ahead_html.strip():
+        looking_card_html = _render_simple_card(
+            title="Looking Ahead",
+            body_html=f"<ul class='compact looking-ahead'>{looking_ahead_html}</ul>",
+            accent_class=looking_ahead_accent,
+        )
+    looking_section_html = f"<div class='section'>{looking_card_html}</div>" if looking_card_html else ""
 
     print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
     print_view_css = ".no-print { display: none !important; }" if print_view else ""
@@ -330,6 +334,50 @@ def build_weekly_recap_html(
             .event-grid {{
               grid-template-columns: 1fr 1fr;
             }}
+            /* ---- Pagination safety: prevent cards/sections from splitting across pages ---- */
+            .section,
+            .award-card,
+            .event-card,
+            .section-card,
+            .number-card {{
+              break-inside: avoid;
+              page-break-inside: avoid;
+            }}
+
+            /* ---- Print tightening: Spotlight cards become more bulletin-friendly ---- */
+            .weekly-recap {{
+              padding: 0.35in 0.45in;
+            }}
+            .section {{
+              margin-top: 10px;
+            }}
+            .award-grid,
+            .event-grid {{
+              gap: 8px;
+            }}
+            .award-card,
+            .event-card,
+            .section-card {{
+              padding: 10px;
+            }}
+            .award-card__desc {{
+              font-size: 11.5px;
+              line-height: 1.25;
+              /* Clamp long descriptions so Spotlight doesn't bloat the print/PDF */
+              display: -webkit-box;
+              -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical;
+              overflow: hidden;
+            }}
+            .award-card__body {{
+              margin-top: 6px;
+              font-size: 12.5px;
+              line-height: 1.35;
+            }}
+            ul.compact li {{
+              margin-bottom: 4px;
+              font-size: 12.5px;
+            }}
           }}
           .looking-ahead li {{
             font-size: 13px;
@@ -372,9 +420,7 @@ def build_weekly_recap_html(
               {around_cards_html}
             </div>
           </div>
-          <div class="section">
-            {looking_card_html}
-          </div>
+          {looking_section_html}
         </div>
       </body>
     </html>
