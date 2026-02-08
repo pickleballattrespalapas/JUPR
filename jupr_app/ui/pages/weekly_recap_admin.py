@@ -385,7 +385,13 @@ def render(ctx):
     final_json = _apply_edits(generated_json, edits_json, candidates)
     if preview:
         st.caption("Tip: use browser print to PDF for a bulletin-ready copy.")
-        render_weekly_recap(final_json, print_view=True)
+        # Admin preview: render via iframe to avoid Streamlit escaping <style> and showing raw CSS.
+        st.session_state["weekly_recap_render_mode"] = "iframe"
+        try:
+            render_weekly_recap(final_json, print_view=True)
+        finally:
+            # Clean up so public/print-friendly rendering keeps using direct DOM.
+            st.session_state.pop("weekly_recap_render_mode", None)
     st.subheader("Download PDF")
     html = build_weekly_recap_html(final_json, print_view=True)
     pdf_bytes = _pdf_for_recap(html)
