@@ -10,13 +10,6 @@ from collections.abc import Mapping
 import streamlit as st
 import pandas as pd  # kept because pages may rely on it
 
-from jupr_app.data.client import make_supabase
-from jupr_app.data.load import load_data
-from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
-from jupr_app.ui.context import AppContext
-from jupr_app.ui.theme_clean import apply_clean_theme
-from jupr_app.ui.url import qp_get
-
 
 # -------------------------
 # CONFIG
@@ -127,6 +120,8 @@ def get_supabase():
     admin_password = "..."  # your chosen admin login password
     admin_session_secret = "..."  # used to sign short-lived admin sessions
     """
+    from jupr_app.data.client import make_supabase
+
     url = get_secret(["supabase", "url"], "")
     key = get_secret(["supabase", "anon_key"], "") or get_secret(["supabase", "key"], "")
 
@@ -156,6 +151,8 @@ def get_supabase():
 
 @st.cache_data(ttl=30)
 def get_data(club_id: str):
+    from jupr_app.data.load import load_data
+
     supabase = get_supabase()
     return load_data(supabase, club_id, match_limit=5000)
 
@@ -203,6 +200,10 @@ def main():
     Main Streamlit entrypoint. Keep this deterministic for reloads.
     """
     try:
+        from jupr_app.ui.context import AppContext
+        from jupr_app.ui.theme_clean import apply_clean_theme
+        from jupr_app.ui.url import qp_get
+
         st.set_page_config(
             page_title="JUPR Leagues",
             layout="wide",
@@ -304,6 +305,8 @@ def main():
             )
 
         if df_player_badges is not None and df_player_badges.empty:
+            from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+
             player_ids = []
             if df_players_all is not None and not df_players_all.empty and "id" in df_players_all.columns:
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
