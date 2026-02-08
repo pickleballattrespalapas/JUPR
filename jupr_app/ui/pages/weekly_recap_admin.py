@@ -60,11 +60,37 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
     spotlight = recap.get("spotlight", []) or []
     spotlight_by_key = {item.get("key"): item for item in spotlight}
     overrides = edits_json.get("spotlight_overrides", {})
+    spotlight_counts = edits_json.get("spotlight_counts", {})
     for key, candidate_id in overrides.items():
+        if isinstance(candidate_id, str):
+            candidate_ids = [candidate_id]
+        else:
+            candidate_ids = list(candidate_id or [])
         options = {item.get("candidate_id"): item for item in candidates.get(key, [])}
-        selected = options.get(candidate_id)
-        if selected:
-            spotlight_by_key[key] = selected
+        selected_items = [options[candidate] for candidate in candidate_ids if candidate in options]
+        if not selected_items:
+            continue
+
+        display_parts = [item.get("display", "") for item in selected_items]
+        if len(display_parts) >= 2 and spotlight_counts.get(key) == 3:
+            display_parts = [f"{idx + 1}) {display}" for idx, display in enumerate(display_parts)]
+        display = "<br/>".join(display_parts)
+
+        seen_player_ids = set()
+        combined_player_ids = []
+        for item in selected_items:
+            for player_id in item.get("player_ids", []) or []:
+                if player_id not in seen_player_ids:
+                    combined_player_ids.append(player_id)
+                    seen_player_ids.add(player_id)
+
+        spotlight_by_key[key] = {
+            "key": key,
+            "label": selected_items[0].get("label"),
+            "player_ids": combined_player_ids,
+            "candidate_id": f"multi:{'|'.join(candidate_ids)}",
+            "display": display,
+        }
 
     dropped = set(edits_json.get("spotlight_drop", []))
     updated = [item for key, item in spotlight_by_key.items() if key not in dropped]
@@ -144,9 +170,11 @@ def render(ctx):
 
     spotlight = generated_json.get("spotlight", [])
     spotlight_keys = [item.get("key") for item in spotlight if item.get("key")]
+    spotlight_by_key = {item.get("key"): item for item in spotlight if item.get("key")}
 
     st.markdown("**Spotlight Reel Overrides**")
     overrides = edits_json.get("spotlight_overrides", {})
+    spotlight_counts = edits_json.get("spotlight_counts", {})
     order_map = edits_json.get("spotlight_order", {})
     drop_list = set(edits_json.get("spotlight_drop", []))
 
@@ -157,13 +185,43 @@ def render(ctx):
         label = options[0].get("label", key)
         option_labels = {item.get("candidate_id"): item.get("display", "") for item in options}
         current = overrides.get(key)
-        if current not in option_labels:
-            current = options[0].get("candidate_id")
-        selection = st.selectbox(
-            f"{label} candidate",
+        if isinstance(current, str):
+            current_list = [current]
+        else:
+            current_list = list(current or [])
+        current_list = [candidate for candidate in current_list if candidate in option_labels]
+
+        count_default = spotlight_counts.get(key)
+        if count_default is None:
+            count_default = max(1, min(3, len(current_list)))
+        count_default = int(count_default) if count_default in {1, 2, 3} else 1
+
+        highlight_count = st.selectbox(
+            f"{label} — How many to highlight",
+            options=[1, 2, 3],
+            index=[1, 2, 3].index(count_default),
+        )
+        spotlight_counts[key] = highlight_count
+
+        if not current_list:
+            generated_item = spotlight_by_key.get(key, {})
+            generated_player_ids = set(generated_item.get("player_ids") or [])
+            if generated_player_ids:
+                current_list = [
+                    item.get("candidate_id")
+                    for item in options
+                    if generated_player_ids.issuperset(set(item.get("player_ids") or []))
+                ]
+            if not current_list:
+                current_list = [options[0].get("candidate_id")]
+
+        current_list = current_list[:highlight_count]
+        selection = st.multiselect(
+            f"{label} winners",
             options=list(option_labels.keys()),
             format_func=lambda opt: option_labels.get(opt, opt),
-            index=list(option_labels.keys()).index(current) if current in option_labels else 0,
+            default=current_list,
+            max_selections=highlight_count,
         )
         overrides[key] = selection
         order_map[key] = st.number_input(f"Order for {label}", min_value=1, max_value=10, value=int(order_map.get(key, idx + 1)))
@@ -174,6 +232,7 @@ def render(ctx):
             drop_list.discard(key)
 
     edits_json["spotlight_overrides"] = overrides
+    edits_json["spotlight_counts"] = spotlight_counts
     edits_json["spotlight_order"] = order_map
     edits_json["spotlight_drop"] = list(drop_list)
 
