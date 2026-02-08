@@ -134,49 +134,50 @@ def _extract_story_from_row(row: pd.Series | dict) -> tuple[str | None, str | No
     return None, None
 
 
-def _build_story_text_for_row(
+def _compute_story_text(
     row: pd.Series | dict,
-    story_badges: list[dict],
-    story_rivals_by_player: dict[int, dict],
-    story_partners_by_player: dict[int, dict],
+    earned_badges: list[dict],
     id_to_name: dict[int, str],
+    rival_map: dict[int, dict],
+    partner_map: dict[int, dict],
     admin_logged_in: bool,
-) -> tuple[str, str]:
-    df_story, df_source = _extract_story_from_row(row)
-    player_id = row.get("_pid") if hasattr(row, "get") else None
-    if df_story and _story_has_html(df_story):
-        _log_story_html_warning(df_story, player_id, f"source={df_source}", admin_logged_in)
-        df_story = None
-        df_source = None
+) -> tuple[str, str | None]:
+    raw, source = _extract_story_from_row(row)
+    player_id = None
+    if hasattr(row, "get"):
+        player_id = row.get("_pid") or row.get("id") or row.get("player_id")
+    if raw and _story_has_html(raw):
+        _log_story_html_warning(raw, player_id, source or "df_column:unknown", admin_logged_in)
+        raw = None
+        source = None
+    if not raw:
+        raw = build_badge_story(row, earned_badges or [])
+        source = "generated:build_badge_story"
+        if not raw:
+            raw = build_badge_story(row, [])
+            if raw:
+                source = "generated:build_badge_story:fallback"
 
-    story_text = build_badge_story(row, story_badges)
-    story_source = "source=build_badge_story"
-    if not story_text:
-        story_text = build_badge_story(row, [])
-        story_source = "source=build_badge_story:fallback"
-
-    if df_story:
-        story_text = df_story
-        story_source = f"source={df_source}"
-
+    inserts = []
     if pd.notna(player_id):
         try:
             pid_int = int(player_id)
         except Exception:
             pid_int = None
-        inserts = []
         if pid_int is not None:
-            rival = story_rivals_by_player.get(pid_int)
+            rival = rival_map.get(pid_int) if rival_map else None
             if rival:
                 inserts.append(_build_rival_story(rival, id_to_name))
-            partner = story_partners_by_player.get(pid_int)
+            partner = partner_map.get(pid_int) if partner_map else None
             if partner:
                 inserts.append(_build_partner_story(partner, id_to_name))
-        if inserts:
-            story_text = f"{story_text} {' '.join(inserts)}".strip()
-            story_source = f"{story_source}+rival_partner" if story_source else "source=rival_partner"
+    if inserts:
+        base = raw or ""
+        raw = f"{base} {' '.join(inserts)}".strip()
+        source = f"{source}+rival_partner" if source else "generated:rival_partner"
 
-    return story_text, story_source
+    raw = sanitize_story_text(raw or "")
+    return raw, source
 
 
 def _player_profile_url(pid, public_mode, ctx):
@@ -951,7 +952,7 @@ def render(ctx):
     final_view["Gap"] = (final_view["rating"].shift(1) - final_view["rating"]) / 400.0
     for legacy_col in ("story", "story_text", "story_html"):
         if legacy_col in final_view.columns:
-            del final_view[legacy_col]
+            final_view = final_view.drop(columns=[legacy_col])
 
     # -------------------------
     # Share link + open button (ADMIN ONLY)
@@ -1002,6 +1003,7 @@ def render(ctx):
         else:
             st.info("No matching player found.")
 
+    selected_story_snapshot = None
     if selected_row is not None:
         link_params = {"league": target_league}
         if selected_pid is not None:
@@ -1017,45 +1019,7 @@ def render(ctx):
         )
 
         if view_mode == "Story View":
-            win_pct_display = _format_win_pct(selected_row["Win %"])
-            gain_value = float(selected_row["Gain"]) if pd.notna(selected_row["Gain"]) else 0.0
-            gain_color = _delta_color(gain_value, delta_up, delta_flat, delta_down)
-            st.markdown("#### My Snapshot")
-            st.markdown(
-                f"""
-                <div class="lb-card">
-                    <div class="lb-row" style="align-items:center; justify-content:space-between;">
-                        <div>
-                            <div class="lb-title">{_build_player_link(selected_row['_pid'], selected_row['name'], PUBLIC_MODE, ctx)}</div>
-                            <div class="lb-subtitle">Rank {int(selected_row['RankNum'])}</div>
-                        </div>
-                        <div style="font-size:20px; font-weight:700;">
-                            {float(selected_row['JUPR']):.3f}
-                            <div class="lb-muted" style="font-size:12px; font-weight:500;">JUPR</div>
-                        </div>
-                    </div>
-                    <div class="lb-row" style="margin-top:12px;">
-                        <div class="lb-kpi">
-                            <div class="lb-kpi-label">Δ Rating</div>
-                            <div class="lb-kpi-value" style="color:{gain_color};">{gain_value:+.3f}</div>
-                        </div>
-                        <div class="lb-kpi">
-                            <div class="lb-kpi-label">Win %</div>
-                            <div class="lb-kpi-value">{win_pct_display}</div>
-                        </div>
-                        <div class="lb-kpi">
-                            <div class="lb-kpi-label">Games</div>
-                            <div class="lb-kpi-value">{int(selected_row['matches_played'])}</div>
-                        </div>
-                        <div class="lb-kpi">
-                            <div class="lb-kpi-label">W-L</div>
-                            <div class="lb-kpi-value">{int(selected_row['wins'])}-{int(selected_row['losses'])}</div>
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            selected_story_snapshot = selected_row
         else:
             st.markdown("#### Player Snapshot")
             player_url = (
@@ -1120,6 +1084,7 @@ def render(ctx):
                 ctx=ctx,
             )
 
+    story_debug_rows = []
     if view_mode == "Stats View":
         st.markdown("#### Standings Table")
         table_df = standings.copy()
@@ -1332,6 +1297,76 @@ def render(ctx):
                     )
                 st.session_state["lb_story_sanity_logged"] = True
 
+        if selected_story_snapshot is not None:
+            story_badges = []
+            snapshot_player_id = selected_story_snapshot.get("_pid")
+            if pd.notna(snapshot_player_id):
+                try:
+                    story_badges = story_badges_by_player.get(int(snapshot_player_id), [])
+                except Exception:
+                    story_badges = []
+            story_text, story_source = _compute_story_text(
+                selected_story_snapshot,
+                story_badges,
+                id_to_name,
+                story_rivals_by_player,
+                story_partners_by_player,
+                admin_logged_in,
+            )
+            safe_story = html.escape(story_text)
+            story_html = f'<div class="lb-story-text">{safe_story}</div>'
+            win_pct_display = _format_win_pct(selected_story_snapshot["Win %"])
+            gain_value = (
+                float(selected_story_snapshot["Gain"])
+                if pd.notna(selected_story_snapshot["Gain"])
+                else 0.0
+            )
+            gain_color = _delta_color(gain_value, delta_up, delta_flat, delta_down)
+            st.markdown("#### My Snapshot")
+            card_html = f"""
+                <div class="lb-card">
+                    <div class="lb-row" style="align-items:center; justify-content:space-between;">
+                        <div>
+                            <div class="lb-title">{_build_player_link(selected_story_snapshot['_pid'], selected_story_snapshot['name'], PUBLIC_MODE, ctx)}</div>
+                            <div class="lb-subtitle">Rank {int(selected_story_snapshot['RankNum'])}</div>
+                        </div>
+                        <div style="font-size:20px; font-weight:700;">
+                            {float(selected_story_snapshot['JUPR']):.3f}
+                            <div class="lb-muted" style="font-size:12px; font-weight:500;">JUPR</div>
+                        </div>
+                    </div>
+                    <div class="lb-row" style="margin-top:12px;">
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">Δ Rating</div>
+                            <div class="lb-kpi-value" style="color:{gain_color};">{gain_value:+.3f}</div>
+                        </div>
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">Win %</div>
+                            <div class="lb-kpi-value">{win_pct_display}</div>
+                        </div>
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">Games</div>
+                            <div class="lb-kpi-value">{int(selected_story_snapshot['matches_played'])}</div>
+                        </div>
+                        <div class="lb-kpi">
+                            <div class="lb-kpi-label">W-L</div>
+                            <div class="lb-kpi-value">{int(selected_story_snapshot['wins'])}-{int(selected_story_snapshot['losses'])}</div>
+                        </div>
+                    </div>
+                    {story_html}
+                </div>
+                """
+            st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
+            story_debug_rows.append(
+                {
+                    "pid": snapshot_player_id,
+                    "name": selected_story_snapshot.get("name", ""),
+                    "story_source": story_source or "",
+                    "story_has_html": _story_has_html(story_text),
+                    "story_preview": story_text[:120],
+                }
+            )
+
         for _, row in standings.head(limit).iterrows():
             gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
             gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
@@ -1378,23 +1413,16 @@ def render(ctx):
                 story_badges_html = (
                     '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
                 )
-            story_text, story_source = _build_story_text_for_row(
+            story_text, story_source = _compute_story_text(
                 row,
                 story_badges,
+                id_to_name,
                 story_rivals_by_player,
                 story_partners_by_player,
-                id_to_name,
                 admin_logged_in,
             )
-            _log_story_html_warning(
-                story_text,
-                player_id,
-                story_source or "source=unknown",
-                admin_logged_in,
-            )
-            story_text = sanitize_story_text(story_text)
-            safe_story_html = html.escape(story_text)
-            story_text_html = f'<div class="lb-story-text">{safe_story_html}</div>'
+            safe_story = html.escape(story_text)
+            story_text_html = f'<div class="lb-story-text">{safe_story}</div>'
             card_html = f"""
             <div class="lb-standings-card">
                 <div class="lb-standings-top">
@@ -1413,10 +1441,40 @@ def render(ctx):
             </div>
             """
             st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
+            story_debug_rows.append(
+                {
+                    "pid": player_id,
+                    "name": row.get("name", ""),
+                    "story_source": story_source or "",
+                    "story_has_html": _story_has_html(story_text),
+                    "story_preview": story_text[:120],
+                }
+            )
 
         if len(standings) > limit:
             if st.button("Load more", key="lb_load_more"):
                 st.session_state["lb_limit"] = limit + 50
+
+    if admin_logged_in:
+        with st.expander("Story Debug"):
+            debug_df = pd.DataFrame(
+                story_debug_rows,
+                columns=[
+                    "pid",
+                    "name",
+                    "story_source",
+                    "story_has_html",
+                    "story_preview",
+                ],
+            )
+            st.dataframe(debug_df, use_container_width=True)
+        try:
+            import subprocess
+
+            sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+        except Exception:
+            sha = "unknown"
+        st.caption(f"Build: {sha}")
 
     # Keep URL in sync with selected player
     try:

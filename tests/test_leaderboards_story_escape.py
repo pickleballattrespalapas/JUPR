@@ -42,16 +42,44 @@ def test_story_html_in_row_is_regenerated_without_html():
         }
     )
 
-    story_text, _ = leaderboards._build_story_text_for_row(
+    story_text, _ = leaderboards._compute_story_text(
         row,
-        story_badges=[],
-        story_rivals_by_player={},
-        story_partners_by_player={},
+        earned_badges=[],
         id_to_name={},
+        rival_map={},
+        partner_map={},
         admin_logged_in=False,
     )
-    story_text = leaderboards.sanitize_story_text(story_text)
-    escaped_story = leaderboards.html.escape(story_text)
 
-    assert "<div" not in escaped_story
-    assert "lb-row" not in escaped_story
+    assert "<div" not in story_text
+    assert "lb-row" not in story_text
+
+
+def test_rendered_story_is_escaped():
+    row = pd.Series(
+        {
+            "_pid": 202,
+            "name": "Escape Player",
+            "matches_played": 5,
+            "wins": 3,
+            "losses": 2,
+            "rating_gain": 0.2,
+            "JUPR": 2.8,
+            "Win %": 0.6,
+            "story_text": "Active & steady.",
+        }
+    )
+
+    story_text, _ = leaderboards._compute_story_text(
+        row,
+        earned_badges=[],
+        id_to_name={},
+        rival_map={},
+        partner_map={},
+        admin_logged_in=False,
+    )
+    safe_story = leaderboards.html.escape(story_text)
+    story_html = f'<div class="lb-story-text">{safe_story}</div>'
+
+    assert "&amp;" in story_html
+    assert "Active & steady." not in story_html
