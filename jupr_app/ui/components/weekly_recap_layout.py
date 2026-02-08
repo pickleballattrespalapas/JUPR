@@ -29,21 +29,11 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     league_items = around.get("leagues", []) or []
     rr_items = around.get("round_robins", []) or []
 
-    spotlight_items = []
-    for item in (spotlight or []):
-        if not isinstance(item, dict):
-            continue
-        label = (item or {}).get("label", "")
-        display = (item or {}).get("display", "")
-        description = (item or {}).get("description", "") or ""
-        desc_html = f"<span class=\"award-desc\">{escape(description)}</span><br/>" if description else ""
-        spotlight_items.append(
-            "<li>"
-            f"<strong>{label}</strong>: {desc_html}"
-            f"{display}"
-            "</li>"
-        )
-    spotlight_html = "".join(spotlight_items)
+    spotlight_cards_html = "".join(
+        _render_award_card(item, theme=theme)
+        for item in (spotlight or [])
+        if isinstance(item, dict)
+    )
     leagues_html = "".join(
         _render_event_block((item or {}).get("league_name", "League"), (item or {}).get("highlights", []))
         for item in (league_items or [])
@@ -194,6 +184,55 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         color: var(--muted);
         font-size: 12.5px;
       }}
+      .award-grid {{
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }}
+      .award-card {{
+        border: 1px solid var(--border, #e5e7eb);
+        border-left: 6px solid var(--accent, #111827);
+        border-radius: 12px;
+        background: var(--card, #ffffff);
+        padding: 12px;
+      }}
+      .award-card__title {{
+        font-weight: 800;
+        font-size: 14px;
+      }}
+      .award-card__desc {{
+        margin-top: 6px;
+        color: var(--muted, #475569);
+        font-size: 12.5px;
+        line-height: 1.35;
+      }}
+      .award-card__body {{
+        margin-top: 10px;
+        font-size: 13px;
+        line-height: 1.45;
+      }}
+      .award-card.accent-ocean {{
+        border-left-color: var(--ocean, var(--accent));
+      }}
+      .award-card.accent-sunset {{
+        border-left-color: var(--sunset, var(--accent2, var(--accent)));
+      }}
+      .award-card.accent-ink {{
+        border-left-color: var(--ink, #111827);
+      }}
+      .award-card.accent-sand {{
+        border-left-color: var(--sand-accent, var(--accent));
+      }}
+      @media (min-width: 820px) {{
+        .award-grid {{
+          grid-template-columns: 1fr 1fr;
+        }}
+      }}
+      @media print {{
+        .award-grid {{
+          grid-template-columns: 1fr 1fr;
+        }}
+      }}
       .looking-ahead li {{
         font-size: 13px;
       }}
@@ -223,9 +262,9 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
       </div>
       <div class=\"section\">
         <h3>Spotlight Reel</h3>
-        <ul class=\"compact\">
-          {spotlight_html}
-        </ul>
+        <div class=\"award-grid\">
+          {spotlight_cards_html}
+        </div>
       </div>
       <div class=\"section\">
         <h3>Around the Club</h3>
@@ -250,6 +289,30 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     st.markdown(html, unsafe_allow_html=True)
 
 
+def _render_award_card(item: dict, *, theme: str) -> str:
+    label = escape(item.get("label", ""))
+    desc = escape(item.get("description", "") or "")
+    body = item.get("display", "")
+    key = item.get("key", "")
+    accent_class = {
+        "TOP_PERFORMER_WEEK": "accent-ocean",
+        "BIGGEST_JUMP_WEEK": "accent-sunset",
+        "GIANT_SLAYER_WEEK": "accent-ink",
+        "GRIND_WEEK": "accent-sand",
+        "PERFECT_RUN": "accent-ocean",
+    }.get(key, "accent-ink")
+    desc_html = f"<div class='award-card__desc'>{desc}</div>" if desc else ""
+    return (
+        f"<div class='award-card {accent_class}'>"
+        "<div class='award-card__head'>"
+        f"<div class='award-card__title'>{label}</div>"
+        f"{desc_html}"
+        "</div>"
+        f"<div class='award-card__body'>{body}</div>"
+        "</div>"
+    )
+
+
 def _render_event_block(name: str, highlights: list[dict]) -> str:
     safe = [h for h in (highlights or []) if isinstance(h, dict)]
     items = "".join(f"<li>{h.get('display','')}</li>" for h in safe if str(h.get("display","")).strip() != "")
@@ -267,6 +330,7 @@ def _css_tokens_baja_v2() -> str:
         --sand: #f6e7c6;
         --ocean: #0ea5a4;
         --sunset: #ff6a3d;
+        --sand-accent: #d7a648;
         --accent: var(--ocean);
         --accent2: var(--sunset);
         --stat-bg: var(--sand);
@@ -278,6 +342,15 @@ def _css_tokens_baja_v2() -> str:
       }
       .weekly-recap.theme-baja_v2 .weekly-range-pill {
         background: #fff7ed;
+      }
+      .weekly-recap.theme-baja_v2 .award-card.accent-sand {
+        background: rgba(246, 231, 198, 0.55);
+      }
+      .weekly-recap.theme-baja_v2 .award-card.accent-ocean {
+        background: rgba(14, 165, 164, 0.06);
+      }
+      .weekly-recap.theme-baja_v2 .award-card.accent-sunset {
+        background: rgba(255, 106, 61, 0.06);
       }
     """
 
@@ -295,6 +368,10 @@ def _css_tokens_newsletter_sep() -> str:
         --soft: rgba(29, 78, 216, 0.08);
         --stat-bg: var(--soft);
         --pill-bg: var(--soft);
+      }
+      .weekly-recap.theme-newsletter_sep .award-card.accent-ocean,
+      .weekly-recap.theme-newsletter_sep .award-card.accent-sunset {
+        background: var(--soft, rgba(29, 78, 216, 0.06));
       }
     """
 
