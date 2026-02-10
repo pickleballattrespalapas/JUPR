@@ -43,7 +43,7 @@ def apply_filters(query, club_col, club_id, time_col, since_iso):
 def fetch_all_rows(
     client: Client,
     table: str,
-    club_col: str,
+    club_col: Optional[str],
     club_id: str,
     time_col: Optional[str],
     since_iso: str,
@@ -69,11 +69,15 @@ def fetch_all_rows(
 def delete_slice(
     client: Client,
     table: str,
-    club_col: str,
+    club_col: Optional[str],
     club_id: str,
     time_col: Optional[str],
     since_iso: str,
 ) -> int:
+    # PostgREST forbids DELETE without WHERE
+    if not club_col and not time_col:
+        return 0
+
     query = client.table(table).delete(count="exact")
     query = apply_filters(query, club_col, club_id, time_col, since_iso)
     response = query.execute()
@@ -96,7 +100,7 @@ def process_table(
     prod: Client,
     staging: Client,
     table: str,
-    club_col: str,
+    club_col: Optional[str],
     club_id: str,
     time_col: Optional[str],
     since_iso: str,
