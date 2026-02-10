@@ -8,6 +8,7 @@ import streamlit as st
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.pages.leaderboards import _build_player_link
+from jupr_app.ui.url import qp_get
 
 try:
     import altair as alt
@@ -486,7 +487,8 @@ def render(ctx):
         st.info("No leagues found.")
         return
 
-    default_league = leagues[0]
+    requested_league = (qp_get("league", "") or "").strip()
+    default_league = requested_league if requested_league in leagues else leagues[0]
     league_name = st.selectbox("Select league", leagues, index=leagues.index(default_league))
 
     league_matches = _filter_league_matches(df_matches, league_name)

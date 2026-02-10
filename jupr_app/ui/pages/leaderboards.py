@@ -491,8 +491,6 @@ def render_top_performers_cards(
 def render(ctx):
     # Always use 4-space indentation in this file.
     df_players_all = ctx.df_players_all
-    df_leagues = ctx.df_leagues
-    df_meta = ctx.df_meta
     id_to_name = ctx.id_to_name
     supabase = ctx.supabase
     PUBLIC_MODE = bool(ctx.public_mode)
@@ -503,7 +501,7 @@ def render(ctx):
     )
 
     mode_label = "Public" if PUBLIC_MODE else "Admin"
-    page_shell("Leaderboards", "Standings and standout moments by league.", mode_label=mode_label)
+    page_shell("Leaderboards", "Overall standings and standout moments.", mode_label=mode_label)
 
     view_choice = st.radio("Show", ["Active", "See all"], index=0, horizontal=True)
 
@@ -715,37 +713,18 @@ def render(ctx):
     delta_flat = "var(--delta-zero)"
     delta_down = "var(--delta-neg)"
 
-    # -------------------------
-    # Available leagues
-    # -------------------------
-    available_leagues = ["OVERALL"]
+    legacy_league = (qp_get("league", "") or "").strip()
+    if legacy_league and legacy_league.upper() != "OVERALL":
+        results_query = urllib.parse.urlencode(
+            {"page": "league_results", "league": legacy_league},
+            quote_via=urllib.parse.quote_plus,
+        )
+        callout("info", "League standings moved", "League standings moved to League Results.")
+        try:
+            st.link_button("Open League Results", f"/?{results_query}")
+        except Exception:
+            st.markdown(f"[Open League Results](/?{results_query})")
 
-    try:
-        if df_meta is not None and not df_meta.empty and "is_active" in df_meta.columns:
-            meta = df_meta.copy()
-            if "league_name" in meta.columns:
-                meta["league_name"] = meta["league_name"].fillna("").astype(str).str.strip()
-                active_meta = meta[meta["is_active"] == True].copy()
-                leagues = (
-                    active_meta["league_name"]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .unique()
-                    .tolist()
-                )
-                leagues = [x for x in leagues if x and x.upper() != "OVERALL"]
-                available_leagues = ["OVERALL"] + sorted(leagues)
-    except Exception:
-        available_leagues = ["OVERALL"]
-
-    # Preselect league from URL if present
-    pre = (st.session_state.get("preselect_league", "") or qp_get("league", "") or "").strip()
-    default_idx = 0
-    if pre and pre in available_leagues:
-        default_idx = available_leagues.index(pre)
-
-    st.session_state.setdefault("lb_league", available_leagues[default_idx])
     st.session_state.setdefault("lb_view_mode", "Trophy View")
 
     qp_player = (qp_get("player", "") or "").strip()
@@ -757,40 +736,14 @@ def render(ctx):
     if qp_player and not st.session_state.get("lb_search"):
         st.session_state["lb_search"] = qp_player
 
-    active_ids = None
-    if getattr(ctx, "df_players_active", None) is not None and not ctx.df_players_active.empty:
-        if "id" in ctx.df_players_active.columns:
-            active_ids = set(ctx.df_players_active["id"].astype(int).tolist())
-
-    target_league = st.session_state.get("lb_league", available_leagues[default_idx])
-    if target_league not in available_leagues:
-        target_league = available_leagues[default_idx]
-        st.session_state["lb_league"] = target_league
-
     view_mode = st.session_state.get("lb_view_mode", "Trophy View")
 
     # -------------------------
     # Controls
     # -------------------------
     st.markdown("### Full Standings")
-    control_cols = st.columns([2.2, 1.2, 1.2])
+    control_cols = st.columns([1.2, 1.2])
     with control_cols[0]:
-        try:
-            target_league = st.segmented_control(
-                "League",
-                available_leagues,
-                default=target_league,
-                key="lb_league",
-            )
-        except Exception:
-            target_league = st.radio(
-                "League",
-                available_leagues,
-                index=available_leagues.index(target_league),
-                horizontal=True,
-                key="lb_league",
-            )
-    with control_cols[1]:
         try:
             view_mode = st.segmented_control(
                 "View",
@@ -806,18 +759,14 @@ def render(ctx):
                 horizontal=True,
                 key="lb_view_mode",
             )
-    with control_cols[2]:
+    with control_cols[1]:
         st.text_input("Find player", key="lb_search")
 
-    target_league = st.session_state.get("lb_league", "OVERALL")
-    if target_league not in available_leagues:
-        target_league = available_leagues[default_idx]
-        st.session_state["lb_league"] = target_league
     view_mode = st.session_state.get("lb_view_mode", "Trophy View")
 
     try:
         st.query_params["page"] = "leaderboards"
-        st.query_params["league"] = target_league
+        st.query_params.pop("league", None)
         if PUBLIC_MODE:
             st.query_params["public"] = "1"
         else:
@@ -829,97 +778,21 @@ def render(ctx):
         pass
 
     # -------------------------
-    # Min games requirement (league views only)
-    # -------------------------
-    min_games_req = 0
-    if target_league != "OVERALL":
-        try:
-            if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
-                cfg = df_meta.copy()
-                cfg["league_name"] = cfg["league_name"].fillna("").astype(str).str.strip()
-                hit = cfg[cfg["league_name"] == str(target_league).strip()]
-                if not hit.empty:
-                    min_games_req = int(hit.iloc[0].get("min_games", 0) or 0)
-        except Exception:
-            min_games_req = 0
-
-    inactive_hidden = 0
-    inactive_notice = None
-
-    # -------------------------
     # Build display_df
     # -------------------------
-    display_df = None
+    display_df = df_players.copy() if df_players is not None else pd.DataFrame()
 
-    if target_league == "OVERALL":
-        display_df = df_players.copy() if df_players is not None else pd.DataFrame()
+    # Normalize expected columns
+    if not display_df.empty:
+        if "name" not in display_df.columns and "id" in display_df.columns:
+            display_df["name"] = display_df["id"].map(id_to_name)
 
-        # Normalize expected columns
-        if not display_df.empty:
-            if "name" not in display_df.columns and "id" in display_df.columns:
-                display_df["name"] = display_df["id"].map(id_to_name)
+        if "starting_rating" not in display_df.columns:
+            display_df["starting_rating"] = display_df.get("rating", 1200.0)
 
-            if "starting_rating" not in display_df.columns:
-                display_df["starting_rating"] = display_df.get("rating", 1200.0)
-
-            for c in ["wins", "losses", "matches_played", "rating"]:
-                if c not in display_df.columns:
-                    display_df[c] = 0
-
-    else:
-        # League-specific view: prefer df_leagues (preloaded), else fetch league_ratings
-        display_df = pd.DataFrame()
-
-        if df_leagues is not None and not df_leagues.empty and "league_name" in df_leagues.columns:
-            tmp = df_leagues.copy()
-            tmp["league_name"] = tmp["league_name"].fillna("").astype(str).str.strip()
-            display_df = tmp[tmp["league_name"] == str(target_league).strip()].copy()
-
-        if display_df.empty:
-            try:
-                lr_resp = (
-                    supabase.table("league_ratings")
-                    .select("player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active")
-                    .eq("club_id", club_id)
-                    .eq("league_name", str(target_league).strip())
-                    .execute()
-                )
-                display_df = pd.DataFrame(lr_resp.data or [])
-            except Exception as e:
-                if (not PUBLIC_MODE) and admin_logged_in:
-                    st.warning(f"Could not fetch league_ratings for {target_league}: {e}")
-                display_df = pd.DataFrame()
-
-        # Per-league inactive filtering if available
-        if not display_df.empty:
-            if "is_active" in display_df.columns:
-                try:
-                    inactive_hidden = int((display_df["is_active"] == False).sum())
-                except Exception:
-                    inactive_hidden = 0
-                if PUBLIC_MODE:
-                    display_df = display_df[display_df["is_active"] == True].copy()
-
-            if view_choice == "Active" and active_ids is not None and "player_id" in display_df.columns:
-                before = len(display_df)
-                display_df = display_df[display_df["player_id"].astype(int).isin(active_ids)].copy()
-                inactive_hidden += max(0, before - len(display_df))
-
-            if "name" not in display_df.columns:
-                display_df["name"] = display_df["player_id"].map(id_to_name)
-
-            if "starting_rating" not in display_df.columns:
-                display_df["starting_rating"] = display_df.get("rating", 1200.0)
-
-            for c in ["wins", "losses", "matches_played", "rating"]:
-                if c not in display_df.columns:
-                    display_df[c] = 0
-
-        # ADMIN ONLY message (never show in public mode)
-        if inactive_hidden > 0 and (not PUBLIC_MODE):
-            inactive_notice = (
-                f"{inactive_hidden} inactive player(s) hidden from standings for this league."
-            )
+        for c in ["wins", "losses", "matches_played", "rating"]:
+            if c not in display_df.columns:
+                display_df[c] = 0
 
     # -------------------------
     # Render guard
@@ -930,12 +803,7 @@ def render(ctx):
 
     # Defensive numeric conversions + canonical columns
     display_df = display_df.copy()
-    if target_league == "OVERALL":
-        display_df["_pid"] = display_df["id"].astype(int) if ("id" in display_df.columns) else None
-    else:
-        display_df["_pid"] = (
-            display_df["player_id"].astype(int) if ("player_id" in display_df.columns) else None
-        )
+    display_df["_pid"] = display_df["id"].astype(int) if ("id" in display_df.columns) else None
 
     if "name" in display_df.columns:
         display_df["name"] = display_df["name"].astype(str)
@@ -972,20 +840,6 @@ def render(ctx):
         axis=1,
     )
 
-    if target_league != "OVERALL":
-        if "matches_played" in display_df.columns:
-            try:
-                display_df["Qualified"] = display_df["matches_played"].astype(int) >= int(
-                    min_games_req or 0
-                )
-            except Exception:
-                display_df["Qualified"] = False
-        else:
-            display_df["Qualified"] = False
-
-    if target_league != "OVERALL" and "Qualified" not in display_df.columns:
-        display_df["Qualified"] = False
-
     final_view = display_df.sort_values("rating", ascending=False, kind="mergesort").copy()
     final_view["RankNum"] = range(1, len(final_view) + 1)
 
@@ -998,16 +852,13 @@ def render(ctx):
     # -------------------------
     # Share link + open button (ADMIN ONLY)
     # -------------------------
-    public_url = build_public_url(page="leaderboards", params={"league": target_league})
+    public_url = build_public_url(page="leaderboards")
     if not PUBLIC_MODE:
         with st.container(border=True):
             st.markdown("#### Public standings")
             st.caption("Share this link with players.")
             st.text_input("", value=public_url, label_visibility="collapsed")
             public_link_button("Open Public Standings", public_url)
-    if inactive_notice and not PUBLIC_MODE:
-        callout("info", "Heads up", inactive_notice)
-
     # -------------------------
     # Standings list
     # -------------------------
@@ -1046,7 +897,7 @@ def render(ctx):
 
     selected_story_snapshot = None
     if selected_row is not None:
-        link_params = {"league": target_league}
+        link_params = {}
         if selected_pid is not None:
             link_params["pid"] = str(selected_pid)
         else:
@@ -1090,12 +941,6 @@ def render(ctx):
             metric_cols[3].metric("Games", int(selected_row["matches_played"]))
 
     standings = final_view.copy()
-    if target_league != "OVERALL":
-        if "Qualified" not in standings.columns:
-            standings["Qualified"] = False
-    if "Qualified" in standings.columns:
-        standings["Qualified"] = standings["Qualified"].fillna(False).astype(bool)
-
     for col, default in {
         "wins": 0,
         "losses": 0,
@@ -1106,24 +951,6 @@ def render(ctx):
     }.items():
         if col not in standings.columns:
             standings[col] = default
-
-    min_games_for_awards = 0
-    if target_league != "OVERALL":
-        min_games_for_awards = int(min_games_req or 0)
-
-    if target_league != "OVERALL" and min_games_for_awards > 0:
-        qualified_df = standings[standings["matches_played"] >= min_games_for_awards].copy()
-        top_perf_title = f"Top Performers (Min {min_games_for_awards} Games)"
-        if qualified_df.empty:
-            st.markdown(f"### {top_perf_title}")
-            st.caption("Not enough games recorded yet for awards.")
-        else:
-            render_top_performers_cards(
-                qualified_df=qualified_df,
-                title=top_perf_title,
-                public_mode=PUBLIC_MODE,
-                ctx=ctx,
-            )
 
     story_debug_rows = []
     if view_mode == "Stats View":
@@ -1239,9 +1066,8 @@ def render(ctx):
         )
         st.altair_chart(rating_hist, use_container_width=True)
 
-        min_games_chart = int(min_games_req or 0)
         top_candidates = standings.copy()
-        top_candidates = top_candidates[top_candidates["matches_played"] >= max(min_games_chart, 1)]
+        top_candidates = top_candidates[top_candidates["matches_played"] >= 1]
         top_candidates = top_candidates[pd.notna(top_candidates["Win %"])]
         top_candidates = top_candidates.sort_values("Win %", ascending=False).head(10)
         if not top_candidates.empty:
@@ -1346,8 +1172,6 @@ def render(ctx):
             gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
             gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
             status_badges = []
-            if target_league != "OVERALL" and not row.get("Qualified", True):
-                status_badges.append("Min games not met")
             is_active_value = row.get("is_active")
             if pd.notna(is_active_value) and not bool(is_active_value):
                 status_badges.append("Inactive")
