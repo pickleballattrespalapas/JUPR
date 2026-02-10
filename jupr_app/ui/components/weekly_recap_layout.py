@@ -36,6 +36,7 @@ def build_weekly_recap_html(
     spotlight = recap.get("spotlight", [])
     around = recap.get("around_club", {})
     around_descriptions = recap.get("around_descriptions") or build_around_descriptions(around)
+    challenge_ladder = recap.get("challenge_ladder") or {}
     looking_ahead = recap.get("looking_ahead", []) or []
 
     league_items = around.get("leagues", []) or []
@@ -66,6 +67,26 @@ def build_weekly_recap_html(
         for item in (rr_items or [])
         if isinstance(item, dict)
     )
+    challenge_ladder_count = int(challenge_ladder.get("count") or 0)
+    challenge_ladder_highlights = [
+        item for item in (challenge_ladder.get("highlights") or []) if isinstance(item, dict)
+    ]
+    challenge_ladder_items = "".join(
+        f"<li>{escape(str(item.get('display', '')))}</li>"
+        for item in challenge_ladder_highlights
+        if str(item.get("display", "")).strip() != ""
+    )
+    challenge_ladder_section_html = ""
+    if challenge_ladder_count > 0 and challenge_ladder_items.strip():
+        challenge_ladder_section_html = (
+            "<div class='section'>"
+            + _render_simple_card(
+                title="Challenge Ladder",
+                body_html=f"<ul class='compact'>{challenge_ladder_items}</ul>",
+                accent_class="accent-ink",
+            )
+            + "</div>"
+        )
     looking_ahead_html = "".join(
         f"<li>{escape(str(item))}</li>" for item in (looking_ahead or [])
         if str(item).strip() != ""
@@ -463,6 +484,7 @@ def build_weekly_recap_html(
               {around_cards_html}
             </div>
           </div>
+          {challenge_ladder_section_html}
           {looking_section_html}
         </div>
       </body>

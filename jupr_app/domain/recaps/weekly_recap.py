@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from postgrest.exceptions import APIError
 
 DEFAULT_AWARD_DESCRIPTIONS = {
     "TOP_PERFORMER_WEEK": (
@@ -118,6 +119,13 @@ def _compute_weekly_recap_payload(
         supabase,
     )
     around_descriptions = apply_around_descriptions(around_club, None)
+    challenge_ladder = _fetch_challenge_ladder_week_summary(
+        supabase,
+        club_id,
+        start_dt_utc,
+        end_dt_utc,
+        id_to_name,
+    )
 
     week_end = week_start + timedelta(days=6)
     recap = {
@@ -129,6 +137,7 @@ def _compute_weekly_recap_payload(
         "award_descriptions": dict(DEFAULT_AWARD_DESCRIPTIONS),
         "around_club": around_club,
         "around_descriptions": around_descriptions,
+        "challenge_ladder": challenge_ladder,
         "looking_ahead": ["", "", ""],
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -876,3 +885,104 @@ def _fetch_rr_event_names(supabase, rr_events: list[str]) -> dict[str, str]:
         return {}
     response = supabase.table("events").select("id,name").in_("id", ids).execute()
     return {row["id"]: row.get("name") or "Pop-Up Event" for row in (response.data or [])}
+
+
+def _empty_challenge_ladder_summary() -> dict:
+    return {"count": 0, "by_tier": [], "highlights": []}
+
+
+def _summarize_challenge_ladder_rows(rows: list[dict], id_to_name: dict[int, str]) -> dict:
+    completed_rows: list[dict] = []
+    for row in rows or []:
+        winner_id = _safe_int(row.get("winner_id"))
+        if winner_id is None:
+            continue
+        completed_rows.append(row)
+
+    if not completed_rows:
+        return _empty_challenge_ladder_summary()
+
+    tier_counts: dict[str, int] = {}
+    highlights: list[dict] = []
+    for row in completed_rows:
+        tier_id = str(row.get("tier_id") or "Unknown")
+        tier_counts[tier_id] = tier_counts.get(tier_id, 0) + 1
+
+        if len(highlights) >= 6:
+            continue
+
+        challenge_id = row.get("id")
+        winner_id = _safe_int(row.get("winner_id"))
+        challenger_id = _safe_int(row.get("challenger_id"))
+        defender_id = _safe_int(row.get("defender_id"))
+        if winner_id is None:
+            continue
+
+        if winner_id == challenger_id:
+            loser_id = defender_id
+            outcome = "Challenger win"
+        elif winner_id == defender_id:
+            loser_id = challenger_id
+            outcome = "Defended"
+        else:
+            loser_id = challenger_id if challenger_id is not None else defender_id
+            outcome = "Completed"
+
+        winner_name = id_to_name.get(winner_id, f"#{winner_id}")
+        loser_name = id_to_name.get(loser_id, f"#{loser_id}") if loser_id is not None else "Unknown"
+        highlights.append(
+            {
+                "display": (
+                    f"{tier_id} • {winner_name} beat {loser_name} "
+                    f"({outcome}) • #{challenge_id}"
+                )
+            }
+        )
+
+    by_tier = [{"tier_id": tier_id, "count": count} for tier_id, count in sorted(tier_counts.items())]
+    return {
+        "count": len(completed_rows),
+        "by_tier": by_tier,
+        "highlights": highlights,
+    }
+
+
+def _fetch_challenge_ladder_week_summary(
+    supabase,
+    club_id: str,
+    start_dt_utc: datetime,
+    end_dt_utc: datetime,
+    id_to_name: dict[int, str],
+) -> dict:
+    if supabase is None:
+        return _empty_challenge_ladder_summary()
+
+    select_cols = "id,tier_id,challenger_id,defender_id,winner_id,status,completed_at"
+    try:
+        response = (
+            supabase.table("ladder_challenges")
+            .select(select_cols)
+            .eq("club_id", club_id)
+            .gte("completed_at", start_dt_utc.isoformat())
+            .lte("completed_at", end_dt_utc.isoformat())
+            .not_.is_("winner_id", "null")
+            .execute()
+        )
+        rows = response.data or []
+    except APIError:
+        return _empty_challenge_ladder_summary()
+    except Exception:
+        try:
+            fallback_response = (
+                supabase.table("ladder_challenges")
+                .select(select_cols)
+                .eq("club_id", club_id)
+                .gte("completed_at", start_dt_utc.isoformat())
+                .lte("completed_at", end_dt_utc.isoformat())
+                .execute()
+            )
+            rows = fallback_response.data or []
+        except APIError:
+            return _empty_challenge_ladder_summary()
+
+    return _summarize_challenge_ladder_rows(rows, id_to_name)
