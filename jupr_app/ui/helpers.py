@@ -156,8 +156,20 @@ def build_badge_story(player_row: dict | pd.Series, earned_badges: list[dict]) -
 
 def sanitize_story_text(raw: str | None) -> str:
     text = "" if raw is None else str(raw)
-    text = html.unescape(text)
-    text = re.sub(r"<[^>]+>", " ", text)
+    for _ in range(3):
+        new_text = html.unescape(text)
+        if new_text == text:
+            break
+        text = new_text
+    text = re.sub(r"<[^>\n]*>", " ", text)
+    text = re.sub(r"^\s*</?\w+[^<>\n]*?(?=[A-Za-z0-9])", " ", text)
+    for _ in range(3):
+        updated = re.sub(r'^\s*\w+\s*=\s*([\'"]).*?\1\s*', " ", text)
+        if updated == text:
+            break
+        text = updated
+    text = re.sub(r"</?\w+[^>\n]*$", " ", text)
+    text = text.replace("&lt;", " ").replace("&gt;", " ")
     text = text.replace("<", " ").replace(">", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
