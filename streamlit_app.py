@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import time
 import traceback
 from collections.abc import Mapping
 
 import streamlit as st
 import pandas as pd  # kept because pages may rely on it
+from streamlit.errors import StreamlitSecretNotFoundError
 
 
 # -------------------------
@@ -25,22 +27,39 @@ PUBLIC_BASE_URL = "https://8lkemld946rmtwwptk2gcs.streamlit.app"
 # -------------------------
 def get_secret(path: list[str], default=None):
     """
-    Safe nested secret getter that works with Streamlit's secrets object.
-    Never raises KeyError.
+    Safe nested secret getter.
+    Priority: environment variables (Fly) -> st.secrets (Streamlit Cloud) -> default.
+    Never raises when secrets.toml is missing.
     """
+    env_var_map = {
+        ("supabase", "url"): "SUPABASE_URL",
+        ("supabase", "anon_key"): "SUPABASE_ANON_KEY",
+        ("supabase", "key"): "SUPABASE_KEY",
+        ("supabase", "service_role_key"): "SUPABASE_SERVICE_ROLE_KEY",
+        ("supabase", "admin_password"): "SUPABASE_ADMIN_PASSWORD",
+        ("supabase", "admin_session_secret"): "SUPABASE_ADMIN_SESSION_SECRET",
+        ("admin_session_secret",): "ADMIN_SESSION_SECRET",
+    }
+
+    env_var = env_var_map.get(tuple(path))
+    if env_var:
+        env_value = os.getenv(env_var)
+        if env_value:
+            return env_value
+
     try:
         cur: object = st.secrets
+        for k in path:
+            if not isinstance(cur, Mapping):
+                return default
+            if k not in cur:
+                return default
+            cur = cur[k]
+        return cur
+    except StreamlitSecretNotFoundError:
+        return default
     except Exception:
         return default
-
-    for k in path:
-        if not isinstance(cur, Mapping):
-            return default
-        if k not in cur:
-            return default
-        cur = cur[k]
-
-    return cur
 
 
 # -------------------------
