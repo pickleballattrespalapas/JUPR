@@ -473,12 +473,15 @@ def render_top_performers_cards(
             f'<span class="tp-list-name">{entry.get("name_html", html.escape(entry["name"]))}</span></div>'
             for entry in secondary
         )
+        list_items_html = ""
+        if list_items.strip():
+            list_items_html = f'<div class="tp-list">{list_items}</div>'
         card_html = f"""
         <div class="tp-card" style="--tp-accent: {accent};">
             <div class="tp-label">{html.escape(str(card.get("label", "")))}</div>
             <div class="tp-value">{html.escape(primary["value"])}</div>
             <div class="tp-name">{primary.get("name_html", html.escape(primary["name"]))}</div>
-            <div class="tp-list">{list_items}</div>
+            {list_items_html}
         </div>
         """
         with col:
@@ -1407,31 +1410,30 @@ def render(ctx):
             """
             st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
 
-            actions_cols = st.columns([1, 1])
             player_url = _player_profile_url(player_id, PUBLIC_MODE, ctx)
-            with actions_cols[0]:
+            preview_key = f"lb_story_open_{int(player_id)}" if pd.notna(player_id) else None
+            preview_source = "preview:not_loaded"
+            preview_has_html = False
+            preview_text = ""
+            with st.expander("Trophy Room / Story", expanded=False):
                 if player_url:
                     try:
                         st.link_button("View Trophy Room", player_url, key=f"lb_trophy_link_{int(player_id)}")
                     except Exception:
                         st.markdown(f"[View Trophy Room]({player_url})")
-            preview_key = f"lb_story_open_{int(player_id)}" if pd.notna(player_id) else None
-            with actions_cols[1]:
+
                 if preview_key and st.button("Load story", key=f"lb_story_btn_{int(player_id)}"):
                     st.session_state[preview_key] = True
 
-            preview_source = "preview:not_loaded"
-            preview_has_html = False
-            preview_text = ""
-            if preview_key and st.session_state.get(preview_key):
-                preview_df = fetch_story_preview(supabase, club_id, int(player_id), limit=3)
-                preview_html = _story_preview_html(preview_df, limit=3)
-                st.markdown(preview_html, unsafe_allow_html=True)
-                preview_source = "preview:player_stories"
-                preview_text = " ".join(
-                    sanitize_story_text(r.get("body"))
-                    for _, r in preview_df.head(3).iterrows()
-                )[:120]
+                if preview_key and st.session_state.get(preview_key):
+                    preview_df = fetch_story_preview(supabase, club_id, int(player_id), limit=3)
+                    preview_html = _story_preview_html(preview_df, limit=3)
+                    st.markdown(preview_html, unsafe_allow_html=True)
+                    preview_source = "preview:player_stories"
+                    preview_text = " ".join(
+                        sanitize_story_text(r.get("body"))
+                        for _, r in preview_df.head(3).iterrows()
+                    )[:120]
             story_debug_rows.append(
                 {
                     "pid": player_id,
