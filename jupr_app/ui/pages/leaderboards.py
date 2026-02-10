@@ -1,6 +1,5 @@
 import html
 import logging
-import re
 import textwrap
 import urllib.parse
 import streamlit as st
@@ -13,16 +12,11 @@ from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
-from jupr_app.ui.helpers import build_badge_story, sanitize_story_text
 from jupr_app.domain.gamification.requirements import load_requirements_map
 
 
 logger = logging.getLogger(__name__)
 MAX_STORY_BADGES = 2
-_STORY_HTML_RE = re.compile(
-    r"</?(div|span|br|p|ul|li|strong|em|a|img|table|tr|td|th)\b",
-    re.IGNORECASE,
-)
 
 
 def _safe_text(value: object) -> str:
@@ -50,130 +44,6 @@ def _format_win_pct(value):
     if pd.notna(value):
         return f"{float(value):.1f}%"
     return "—"
-
-
-def _format_pct(value: float | None) -> str:
-    if value is None:
-        return "—"
-    try:
-        return f"{float(value) * 100.0:.1f}%"
-    except Exception:
-        return "—"
-
-
-def _build_rival_story(rival: dict, id_to_name: dict[int, str]) -> str:
-    rival_id = rival.get("opponent_id")
-    rival_name = id_to_name.get(int(rival_id), f"#{rival_id}") if rival_id is not None else "Unknown"
-    games = int(rival.get("games", 0))
-    win_pct = float(rival.get("win_pct", 0.0))
-    win_pct_str = _format_pct(win_pct)
-    loss_pct_str = _format_pct(1.0 - win_pct if games else 0.0)
-    return (
-        f"Rival: {rival_name} ({games} games, {win_pct_str} win%). "
-        f"You and {rival_name} are {win_pct_str}-{loss_pct_str} over {games} games."
-    )
-
-
-def _build_partner_story(partner: dict, id_to_name: dict[int, str]) -> str:
-    partner_id = partner.get("partner_id")
-    partner_name = id_to_name.get(int(partner_id), f"#{partner_id}") if partner_id is not None else "Unknown"
-    games = int(partner.get("games", 0))
-    win_pct_str = _format_pct(partner.get("win_pct", 0.0))
-    return (
-        f"Best partner: {partner_name} ({games} games, {win_pct_str}). "
-        f"Your best results come with {partner_name}: {win_pct_str} over {games} games."
-    )
-
-
-def _story_has_html(raw: str | None) -> bool:
-    if not raw:
-        return False
-    return bool(_STORY_HTML_RE.search(str(raw)))
-
-
-def _log_story_html_warning(
-    raw_story: str | None,
-    player_id: object,
-    source: str,
-    admin_logged_in: bool,
-) -> None:
-    if not admin_logged_in or not raw_story:
-        return
-    if not _story_has_html(raw_story):
-        return
-    snippet = re.sub(r"\s+", " ", str(raw_story).strip())[:120]
-    logger.warning(
-        "Leaderboards story HTML detected (player_id=%s, %s): %s",
-        player_id,
-        source,
-        snippet,
-    )
-
-
-def _extract_story_from_row(row: pd.Series | dict) -> tuple[str | None, str | None]:
-    for key in ("story", "story_text", "story_html"):
-        try:
-            if key not in row:
-                continue
-            value = row.get(key)
-        except Exception:
-            continue
-        try:
-            if pd.isna(value):
-                continue
-        except Exception:
-            if value is None:
-                continue
-        text = str(value).strip()
-        if text:
-            return text, f"df_column:{key}"
-    return None, None
-
-
-def _compute_story_text(
-    row: pd.Series | dict,
-    earned_badges: list[dict],
-    id_to_name: dict[int, str],
-    rival_map: dict[int, dict],
-    partner_map: dict[int, dict],
-    admin_logged_in: bool,
-) -> tuple[str, str | None]:
-    raw, source = _extract_story_from_row(row)
-    player_id = None
-    if hasattr(row, "get"):
-        player_id = row.get("_pid") or row.get("id") or row.get("player_id")
-    if raw and _story_has_html(raw):
-        _log_story_html_warning(raw, player_id, source or "df_column:unknown", admin_logged_in)
-        raw = None
-        source = None
-    if not raw:
-        raw = build_badge_story(row, earned_badges or [])
-        source = "generated:build_badge_story"
-        if not raw:
-            raw = build_badge_story(row, [])
-            if raw:
-                source = "generated:build_badge_story:fallback"
-
-    inserts = []
-    if pd.notna(player_id):
-        try:
-            pid_int = int(player_id)
-        except Exception:
-            pid_int = None
-        if pid_int is not None:
-            rival = rival_map.get(pid_int) if rival_map else None
-            if rival:
-                inserts.append(_build_rival_story(rival, id_to_name))
-            partner = partner_map.get(pid_int) if partner_map else None
-            if partner:
-                inserts.append(_build_partner_story(partner, id_to_name))
-    if inserts:
-        base = raw or ""
-        raw = f"{base} {' '.join(inserts)}".strip()
-        source = f"{source}+rival_partner" if source else "generated:rival_partner"
-
-    raw = sanitize_story_text(raw or "")
-    return raw, source
 
 
 def _player_profile_url(pid, public_mode, ctx):
@@ -307,48 +177,6 @@ def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[dict]]:
         )
 
     return badges_by_player
-
-
-@st.cache_data(ttl=60)
-def fetch_story_preview(_supabase, club_id: str, pid: int, limit: int = 3) -> pd.DataFrame:
-    try:
-        response = (
-            _supabase.table("player_stories")
-            .select("story_type,created_at,title,body,importance")
-            .eq("club_id", str(club_id))
-            .eq("player_id", int(pid))
-            .order("created_at", desc=True)
-            .limit(max(int(limit), 1) * 3)
-            .execute()
-        )
-    except Exception:
-        logger.exception("Failed to fetch story preview for player_id=%s", pid)
-        return pd.DataFrame(columns=["story_type", "created_at", "title", "body", "importance"])
-
-    data = response.data or []
-    if not data:
-        return pd.DataFrame(columns=["story_type", "created_at", "title", "body", "importance"])
-    return pd.DataFrame(data)
-
-
-
-
-def _story_preview_html(story_df: pd.DataFrame, limit: int = 3) -> str:
-    if story_df is None or story_df.empty:
-        return '<div class="lb-story-text">No story preview yet.</div>'
-
-    rows = []
-    for _, story_row in story_df.head(max(int(limit), 1)).iterrows():
-        title = sanitize_story_text(story_row.get("title")) or "Story"
-        body = sanitize_story_text(story_row.get("body"))
-        safe_title = html.escape(title)
-        safe_body = html.escape(body)
-        row_html = f'<div class="lb-story-text"><strong>{safe_title}</strong>'
-        if safe_body:
-            row_html += f'<br>{safe_body}'
-        row_html += "</div>"
-        rows.append(row_html)
-    return "".join(rows) if rows else '<div class="lb-story-text">No story preview yet.</div>'
 
 
 def _verify_story_badges(badges_by_player, story_player_ids, badges_df, admin_logged_in):
@@ -492,9 +320,7 @@ def render(ctx):
     # Always use 4-space indentation in this file.
     df_players_all = ctx.df_players_all
     id_to_name = ctx.id_to_name
-    supabase = ctx.supabase
     PUBLIC_MODE = bool(ctx.public_mode)
-    club_id = str(ctx.club_id)
 
     admin_logged_in = bool(
         getattr(ctx, "admin_logged_in", st.session_state.get("admin_logged_in", False))
@@ -643,11 +469,6 @@ def render(ctx):
             flex-wrap: wrap;
             gap: 8px;
         }
-        .lb-story-text {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            margin-top: 6px;
-        }
         .lb-badge {
             font-size: 11px;
             padding: 2px 8px;
@@ -763,8 +584,6 @@ def render(ctx):
         except Exception:
             st.markdown(f"[Open League Results](/?{results_query})")
 
-    st.session_state["lb_view_mode"] = "Trophy View"
-
     qp_player = (qp_get("player", "") or "").strip()
     qp_pid_raw = (qp_get("pid", "") or "").strip()
     selected_pid_param = None
@@ -774,8 +593,6 @@ def render(ctx):
     if qp_player and not st.session_state.get("lb_search"):
         st.session_state["lb_search"] = qp_player
 
-    view_mode = "Trophy View"
-
     # -------------------------
     # Controls
     # -------------------------
@@ -783,8 +600,6 @@ def render(ctx):
     control_cols = st.columns([1, 1])
     with control_cols[0]:
         st.text_input("Find player", key="lb_search")
-
-    view_mode = "Trophy View"
 
     try:
         st.query_params["page"] = "leaderboards"
@@ -932,35 +747,7 @@ def render(ctx):
             label_visibility="collapsed",
         )
 
-        if view_mode == "Trophy View":
-            selected_story_snapshot = selected_row
-        else:
-            st.markdown("#### Player Snapshot")
-            player_url = (
-                _player_profile_url(int(selected_pid), PUBLIC_MODE, ctx)
-                if selected_pid is not None
-                else None
-            )
-            header_cols = st.columns([3, 1])
-            with header_cols[0]:
-                st.markdown(f"**{selected_row['name']}** (Rank {int(selected_row['RankNum'])})")
-            with header_cols[1]:
-                if player_url:
-                    try:
-                        st.link_button("Open profile", player_url)
-                    except Exception:
-                        st.markdown(f"[Open profile]({player_url})")
-            metric_cols = st.columns(4)
-            metric_cols[0].metric("JUPR", f"{float(selected_row['JUPR']):.3f}")
-            metric_cols[1].metric(
-                "Rating Δ",
-                f"{float(selected_row['Gain']):+.3f}" if pd.notna(selected_row["Gain"]) else "—",
-            )
-            metric_cols[2].metric(
-                "Win %",
-                _format_win_pct(selected_row["Win %"]),
-            )
-            metric_cols[3].metric("Games", int(selected_row["matches_played"]))
+        selected_story_snapshot = selected_row
 
     standings = final_view.copy()
     for col, default in {
@@ -974,8 +761,7 @@ def render(ctx):
         if col not in standings.columns:
             standings[col] = default
 
-    story_debug_rows = []
-    if view_mode == "Stats View":
+    if False:
         st.markdown("#### Standings Table")
         table_df = standings.copy()
         table_df["Rank"] = table_df["RankNum"].astype(int)
@@ -1138,7 +924,6 @@ def render(ctx):
         )
 
         if selected_story_snapshot is not None:
-            snapshot_player_id = selected_story_snapshot.get("_pid")
             win_pct_display = _format_win_pct(selected_story_snapshot["Win %"])
             gain_value = (
                 float(selected_story_snapshot["Gain"])
@@ -1180,15 +965,6 @@ def render(ctx):
                 </div>
                 """
             st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
-            story_debug_rows.append(
-                {
-                    "pid": snapshot_player_id,
-                    "name": selected_story_snapshot.get("name", ""),
-                    "story_source": "snapshot:trophy_only",
-                    "story_has_html": False,
-                    "story_preview": "",
-                }
-            )
 
         for _, row in standings.head(limit).iterrows():
             gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
@@ -1278,57 +1054,11 @@ def render(ctx):
             """
             st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
 
-            player_url = _player_profile_url(player_id, PUBLIC_MODE, ctx)
-            preview_key = f"lb_story_open_{int(player_id)}" if pd.notna(player_id) else None
-            preview_source = "preview:not_loaded"
-            preview_has_html = False
-            preview_text = ""
-            with st.expander("Trophy Room / Story", expanded=False):
-                if player_url:
-                    try:
-                        st.link_button("View Trophy Room", player_url, key=f"lb_trophy_link_{int(player_id)}")
-                    except Exception:
-                        st.markdown(f"[View Trophy Room]({player_url})")
-
-                if preview_key and st.button("Load story", key=f"lb_story_btn_{int(player_id)}"):
-                    st.session_state[preview_key] = True
-
-                if preview_key and st.session_state.get(preview_key):
-                    preview_df = fetch_story_preview(supabase, club_id, int(player_id), limit=3)
-                    preview_html = _story_preview_html(preview_df, limit=3)
-                    st.markdown(preview_html, unsafe_allow_html=True)
-                    preview_source = "preview:player_stories"
-                    preview_text = " ".join(
-                        sanitize_story_text(r.get("body"))
-                        for _, r in preview_df.head(3).iterrows()
-                    )[:120]
-            story_debug_rows.append(
-                {
-                    "pid": player_id,
-                    "name": row.get("name", ""),
-                    "story_source": preview_source,
-                    "story_has_html": preview_has_html,
-                    "story_preview": preview_text,
-                }
-            )
-
         if len(standings) > limit:
             if st.button("Load more", key="lb_load_more"):
                 st.session_state["lb_limit"] = limit + 50
 
     if admin_logged_in:
-        with st.expander("Story Debug"):
-            debug_df = pd.DataFrame(
-                story_debug_rows,
-                columns=[
-                    "pid",
-                    "name",
-                    "story_source",
-                    "story_has_html",
-                    "story_preview",
-                ],
-            )
-            st.dataframe(debug_df, use_container_width=True)
         try:
             import subprocess
 
