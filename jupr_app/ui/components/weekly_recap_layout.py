@@ -67,22 +67,33 @@ def build_weekly_recap_html(
         for item in (rr_items or [])
         if isinstance(item, dict)
     )
-    challenge_ladder_count = int(challenge_ladder.get("count") or 0)
-    challenge_ladder_highlights = [
-        item for item in (challenge_ladder.get("highlights") or []) if isinstance(item, dict)
+    challenge_ladder_tiers = [
+        item for item in (challenge_ladder.get("by_tier") or []) if isinstance(item, dict)
     ]
-    challenge_ladder_items = "".join(
-        f"<li>{escape(str(item.get('display', '')))}</li>"
-        for item in challenge_ladder_highlights
-        if str(item.get("display", "")).strip() != ""
-    )
+    challenge_ladder_tier_sections: list[str] = []
+    for tier_item in challenge_ladder_tiers:
+        tier_label = str(tier_item.get("tier") or "").strip()
+        lines = [
+            str(line).strip()
+            for line in (tier_item.get("lines") or [])
+            if str(line).strip() != ""
+        ]
+        if not tier_label or not lines:
+            continue
+        tier_lines_html = "".join(f"<li>{escape(line)}</li>" for line in lines)
+        challenge_ladder_tier_sections.append(
+            f"<div class='muted-label'>{escape(tier_label)}:</div><ul class='compact'>{tier_lines_html}</ul>"
+        )
+
     challenge_ladder_section_html = ""
-    if challenge_ladder_count > 0 and challenge_ladder_items.strip():
+    if challenge_ladder_tier_sections:
+        title = str(challenge_ladder.get("title") or "Match Results")
+        body = f"<div class='muted-label'>{escape(title)}</div>{''.join(challenge_ladder_tier_sections)}"
         challenge_ladder_section_html = (
             "<div class='section'>"
             + _render_simple_card(
                 title="Challenge Ladder",
-                body_html=f"<ul class='compact'>{challenge_ladder_items}</ul>",
+                body_html=body,
                 accent_class="accent-ink",
             )
             + "</div>"

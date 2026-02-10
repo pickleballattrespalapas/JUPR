@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from postgrest.exceptions import APIError
 
+from jupr_app.domain.challenge_ladder import normalize_tier_id, tier_idx, tier_title
+
 DEFAULT_AWARD_DESCRIPTIONS = {
     "TOP_PERFORMER_WEEK": (
         "The strongest overall performance of the week, based on win–loss results across multiple matches. "
@@ -888,62 +890,66 @@ def _fetch_rr_event_names(supabase, rr_events: list[str]) -> dict[str, str]:
 
 
 def _empty_challenge_ladder_summary() -> dict:
-    return {"count": 0, "by_tier": [], "highlights": []}
+    return {"title": "Match Results", "by_tier": []}
+
+
+def _format_rank(rank_value) -> str:
+    rank_int = _safe_int(rank_value)
+    return f"#{rank_int}" if rank_int is not None else "#?"
+
+
+def _tier_label_for_recap(tier_id: str) -> str:
+    normalized_tier_id = normalize_tier_id(tier_id)
+    label = str(tier_title(normalized_tier_id) or normalized_tier_id)
+    primary_label = label.split("—", 1)[0].strip()
+    if not primary_label:
+        primary_label = normalized_tier_id or "Unknown"
+    if not primary_label.lower().endswith("tier"):
+        primary_label = f"{primary_label} Tier"
+    return primary_label
 
 
 def _summarize_challenge_ladder_rows(rows: list[dict], id_to_name: dict[int, str]) -> dict:
-    completed_rows: list[dict] = []
+    grouped_lines: dict[str, list[str]] = {}
+    tier_sort_values: dict[str, int] = {}
+
     for row in rows or []:
-        winner_id = _safe_int(row.get("winner_id"))
-        if winner_id is None:
-            continue
-        completed_rows.append(row)
-
-    if not completed_rows:
-        return _empty_challenge_ladder_summary()
-
-    tier_counts: dict[str, int] = {}
-    highlights: list[dict] = []
-    for row in completed_rows:
-        tier_id = str(row.get("tier_id") or "Unknown")
-        tier_counts[tier_id] = tier_counts.get(tier_id, 0) + 1
-
-        if len(highlights) >= 6:
-            continue
-
-        challenge_id = row.get("id")
         winner_id = _safe_int(row.get("winner_id"))
         challenger_id = _safe_int(row.get("challenger_id"))
         defender_id = _safe_int(row.get("defender_id"))
-        if winner_id is None:
+        status = str(row.get("status") or "").strip().upper()
+        if status != "COMPLETED" or winner_id is None:
             continue
 
+        normalized_tier_id = normalize_tier_id(str(row.get("tier_id") or ""))
+        tier_label = _tier_label_for_recap(normalized_tier_id)
+        tier_sort_values[tier_label] = tier_idx(normalized_tier_id)
+
+        challenger_name = id_to_name.get(challenger_id, f"#{challenger_id}") if challenger_id is not None else "Unknown"
+        defender_name = id_to_name.get(defender_id, f"#{defender_id}") if defender_id is not None else "Unknown"
+        challenger_rank = _format_rank(row.get("challenger_rank_at_create"))
+        defender_rank = _format_rank(row.get("defender_rank_at_create"))
+
         if winner_id == challenger_id:
-            loser_id = defender_id
-            outcome = "Challenger win"
-        elif winner_id == defender_id:
-            loser_id = challenger_id
-            outcome = "Defended"
+            line = f"{challenger_rank} {challenger_name} beat {defender_rank} {defender_name}"
         else:
-            loser_id = challenger_id if challenger_id is not None else defender_id
-            outcome = "Completed"
+            line = f"{defender_rank} {defender_name} defended vs {challenger_rank} {challenger_name}"
 
-        winner_name = id_to_name.get(winner_id, f"#{winner_id}")
-        loser_name = id_to_name.get(loser_id, f"#{loser_id}") if loser_id is not None else "Unknown"
-        highlights.append(
-            {
-                "display": (
-                    f"{tier_id} • {winner_name} beat {loser_name} "
-                    f"({outcome}) • #{challenge_id}"
-                )
-            }
+        grouped_lines.setdefault(tier_label, []).append(line)
+
+    if not grouped_lines:
+        return _empty_challenge_ladder_summary()
+
+    by_tier = [
+        {"tier": tier, "lines": lines}
+        for tier, lines in sorted(
+            grouped_lines.items(),
+            key=lambda item: (tier_sort_values.get(item[0], 999), item[0]),
         )
-
-    by_tier = [{"tier_id": tier_id, "count": count} for tier_id, count in sorted(tier_counts.items())]
+    ]
     return {
-        "count": len(completed_rows),
+        "title": "Match Results",
         "by_tier": by_tier,
-        "highlights": highlights,
     }
 
 
@@ -957,7 +963,10 @@ def _fetch_challenge_ladder_week_summary(
     if supabase is None:
         return _empty_challenge_ladder_summary()
 
-    select_cols = "id,tier_id,challenger_id,defender_id,winner_id,status,completed_at"
+    select_cols = (
+        "id,tier_id,challenger_id,defender_id,winner_id,status,completed_at,"
+        "challenger_rank_at_create,defender_rank_at_create"
+    )
     try:
         response = (
             supabase.table("ladder_challenges")
