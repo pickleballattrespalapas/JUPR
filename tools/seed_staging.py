@@ -14,7 +14,7 @@ PAGE_SIZE = 1000
 
 
 TABLE_CONFIG = [
-    {"name": "badges", "club_col": "club_id", "time_col": None},
+    {"name": "badges", "club_col": None, "time_col": None},
     {"name": "players", "club_col": "club_id", "time_col": None},
     {"name": "leagues", "club_col": "club_id", "time_col": None},
     {"name": "meta", "club_col": "club_id", "time_col": None},
