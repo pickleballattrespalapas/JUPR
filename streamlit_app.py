@@ -18,8 +18,8 @@ from streamlit.errors import StreamlitSecretNotFoundError
 # -------------------------
 CLUB_ID = "tres_palapas"
 
-# Public base URL used for share links + link buttons (Streamlit Cloud)
-PUBLIC_BASE_URL = "https://8lkemld946rmtwwptk2gcs.streamlit.app"
+# Local/dev fallback for share links + link buttons.
+LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
 # -------------------------
@@ -39,6 +39,7 @@ def get_secret(path: list[str], default=None):
         ("supabase", "admin_password"): "SUPABASE_ADMIN_PASSWORD",
         ("supabase", "admin_session_secret"): "SUPABASE_ADMIN_SESSION_SECRET",
         ("admin_session_secret",): "ADMIN_SESSION_SECRET",
+        ("public_base_url",): "PUBLIC_BASE_URL",
     }
 
     env_var = env_var_map.get(tuple(path))
@@ -240,7 +241,11 @@ def main():
 
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
-        st.session_state["base_url"] = PUBLIC_BASE_URL
+        # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
+        # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ADMIN_PASSWORD,
+        # and SUPABASE_ADMIN_SESSION_SECRET.
+        base_url = get_secret(["public_base_url"], LOCAL_PUBLIC_BASE_URL_DEFAULT)
+        st.session_state["base_url"] = str(base_url)
 
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
