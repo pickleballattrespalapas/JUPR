@@ -20,6 +20,7 @@ jobs:
       - name: Set Fly secrets (staging)
         run: |
           flyctl secrets set \
+            PUBLIC_BASE_URL="${{ secrets.PUBLIC_BASE_URL }}" \
             SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
             SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}" \
             SUPABASE_SERVICE_ROLE_KEY="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
