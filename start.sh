@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
-mkdir -p "$HOME/.streamlit"
-cat > "$HOME/.streamlit/config.toml" <<EOT
+mkdir -p ~/.streamlit
+
+cat > ~/.streamlit/config.toml <<EOF
 [server]
-port = ${PORT}
+port = $PORT
 address = "0.0.0.0"
 enableCORS = false
 enableXsrfProtection = false
-EOT
+EOF
 
-streamlit run app.py
+exec streamlit run app.py
