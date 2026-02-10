@@ -578,7 +578,21 @@ def render(ctx):
             display: flex;
             justify-content: space-between;
             gap: 12px;
-            align-items: center;
+            align-items: flex-start;
+        }
+        .lb-standings-left {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+        .lb-standings-right {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 6px;
+            flex: 0 0 auto;
         }
         .lb-standings-rank {
             font-weight: 700;
@@ -600,11 +614,27 @@ def render(ctx):
         .lb-standings-name a {
             color: inherit;
         }
-        .lb-standings-rating {
-            font-size: 16px;
-            font-weight: 700;
-            text-align: right;
-            flex: 0 0 72px;
+        .lb-scoreboard {
+            display:flex;
+            gap:14px;
+            justify-content:flex-end;
+            align-items:flex-end;
+        }
+        .lb-kpi-block {
+            text-align:right;
+            min-width:92px;
+        }
+        .lb-kpi-label {
+            font-size:11px;
+            letter-spacing:.06em;
+            text-transform:uppercase;
+            color:var(--text-muted);
+        }
+        .lb-kpi-value {
+            font-size:20px;
+            font-weight:800;
+            color:var(--text-primary);
+            line-height:1.05;
         }
         .lb-standings-stats {
             font-size: 12px;
@@ -700,6 +730,14 @@ def render(ctx):
                 -webkit-line-clamp: 2;
                 -webkit-box-orient: vertical;
             }
+            .lb-standings-top,
+            .lb-standings-left,
+            .lb-scoreboard {
+                flex-wrap: wrap;
+            }
+            .lb-kpi-block {
+                min-width: 0;
+            }
             .stButton > button,
             .stLinkButton > a {
                 width: 100% !important;
@@ -725,7 +763,7 @@ def render(ctx):
         except Exception:
             st.markdown(f"[Open League Results](/?{results_query})")
 
-    st.session_state.setdefault("lb_view_mode", "Trophy View")
+    st.session_state["lb_view_mode"] = "Trophy View"
 
     qp_player = (qp_get("player", "") or "").strip()
     qp_pid_raw = (qp_get("pid", "") or "").strip()
@@ -736,33 +774,17 @@ def render(ctx):
     if qp_player and not st.session_state.get("lb_search"):
         st.session_state["lb_search"] = qp_player
 
-    view_mode = st.session_state.get("lb_view_mode", "Trophy View")
+    view_mode = "Trophy View"
 
     # -------------------------
     # Controls
     # -------------------------
     st.markdown("### Full Standings")
-    control_cols = st.columns([1.2, 1.2])
+    control_cols = st.columns([1, 1])
     with control_cols[0]:
-        try:
-            view_mode = st.segmented_control(
-                "View",
-                ["Trophy View", "Stats View"],
-                default=view_mode,
-                key="lb_view_mode",
-            )
-        except Exception:
-            view_mode = st.radio(
-                "View",
-                ["Trophy View", "Stats View"],
-                index=0 if view_mode == "Trophy View" else 1,
-                horizontal=True,
-                key="lb_view_mode",
-            )
-    with control_cols[1]:
         st.text_input("Find player", key="lb_search")
 
-    view_mode = st.session_state.get("lb_view_mode", "Trophy View")
+    view_mode = "Trophy View"
 
     try:
         st.query_params["page"] = "leaderboards"
@@ -1171,6 +1193,13 @@ def render(ctx):
         for _, row in standings.head(limit).iterrows():
             gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else 0.0
             gain_color = _delta_color(gain_val, delta_up, delta_flat, delta_down)
+            wins = int(row["wins"])
+            losses = int(row["losses"])
+            wl_display = f"{wins}–{losses}"
+            rating_display = f"{float(row['JUPR']):.3f}"
+            games_display = int(row["matches_played"])
+            win_pct_display = _format_win_pct(row["Win %"])
+            delta_display = f"{gain_val:+.3f}"
             status_badges = []
             is_active_value = row.get("is_active")
             if pd.notna(is_active_value) and not bool(is_active_value):
@@ -1219,14 +1248,29 @@ def render(ctx):
             card_html = f"""
             <div class="lb-standings-card">
                 <div class="lb-standings-top">
-                    <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
-                    <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
-                    <div class="lb-standings-rating">{float(row['JUPR']):.3f}</div>
-                </div>
-                <div class="lb-standings-stats">
-                    <span>{int(row['matches_played'])} games</span>
-                    <span>{_format_win_pct(row['Win %'])} win %</span>
-                    <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
+                    <div class="lb-standings-left">
+                        <div class="lb-standings-rank">#{int(row['RankNum'])}</div>
+                        <div class="lb-standings-name">{_build_player_link(row['_pid'], row['name'], PUBLIC_MODE, ctx)}</div>
+                    </div>
+                    <div class="lb-standings-right">
+                        <div class="lb-scoreboard">
+                            <div class="lb-kpi-block">
+                                <div class="lb-kpi-label">W–L</div>
+                                <div class="lb-kpi-value">{wl_display}</div>
+                            </div>
+                            <div class="lb-kpi-block">
+                                <div class="lb-kpi-label">Rating</div>
+                                <div class="lb-kpi-value">{rating_display}</div>
+                            </div>
+                        </div>
+                        <div class="lb-standings-stats">
+                            <span>{games_display} games</span>
+                            <span>•</span>
+                            <span>{win_pct_display} win</span>
+                            <span>•</span>
+                            <span style="color:{gain_color};">{delta_display} Δ</span>
+                        </div>
+                    </div>
                 </div>
                 {story_badges_html}
                 {badge_row_html}
