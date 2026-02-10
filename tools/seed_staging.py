@@ -31,11 +31,13 @@ def get_required_env(name: str) -> str:
     return value
 
 
-def apply_filters(query: Any, club_col: str, club_id: str, time_col: Optional[str], since_iso: str) -> Any:
-    query = query.eq(club_col, club_id)
+def apply_filters(query, club_col, club_id, time_col, since_iso):
+    if club_col:
+        query = query.eq(club_col, club_id)
     if time_col:
         query = query.gte(time_col, since_iso)
     return query
+
 
 
 def fetch_all_rows(
