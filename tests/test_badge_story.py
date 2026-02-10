@@ -52,3 +52,23 @@ def test_build_badge_story_no_badges_active():
 def test_sanitize_story_text_strips_html():
     text = sanitize_story_text("<div>Hello<br>World</div>")
     assert text == "Hello World"
+
+
+def test_sanitize_story_text_unescapes_wrapped_html_entities():
+    text = sanitize_story_text("&lt;div class='x'&gt;Hello&lt;/div&gt;")
+    assert text == "Hello"
+
+
+def test_sanitize_story_text_unescapes_double_encoded_html_entities():
+    text = sanitize_story_text("&amp;lt;div&amp;gt;Hello&amp;lt;/div&amp;gt;")
+    assert text == "Hello"
+
+
+def test_sanitize_story_text_strips_dangling_tag_fragment_entities():
+    text = sanitize_story_text("&lt;div class='x' Hello")
+    assert text == "Hello"
+
+
+def test_sanitize_story_text_strips_dangling_tag_fragment_raw():
+    text = sanitize_story_text("<div>Hello")
+    assert text == "Hello"

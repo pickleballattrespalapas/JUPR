@@ -15,6 +15,7 @@ from jupr_app.ui.helpers import (
     qp_get,
     build_match_explorer_link,
     display_requirement_text,
+    sanitize_story_text,
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
@@ -1508,8 +1509,10 @@ def render(ctx):
                         st.caption("No highlights yet.")
                     else:
                         for _, row in highlights.iterrows():
-                            title = html.escape(str(row.get("title") or "Highlight"))
-                            body = html.escape(str(row.get("body") or ""))
+                            title = sanitize_story_text(row.get("title")) or "Highlight"
+                            body = sanitize_story_text(row.get("body"))
+                            title = html.escape(title)
+                            body = html.escape(body)
                             st.markdown(f"**{title}**")
                             st.caption(body)
                 with foreshadow_col:
@@ -1518,8 +1521,10 @@ def render(ctx):
                         st.caption("No foreshadowing yet.")
                     else:
                         for _, row in foreshadow.iterrows():
-                            title = html.escape(str(row.get("title") or "Foreshadowing"))
-                            body = html.escape(str(row.get("body") or ""))
+                            title = sanitize_story_text(row.get("title")) or "Foreshadowing"
+                            body = sanitize_story_text(row.get("body"))
+                            title = html.escape(title)
+                            body = html.escape(body)
                             st.markdown(f"**{title}**")
                             st.caption(body)
 
