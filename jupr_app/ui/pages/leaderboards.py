@@ -1353,6 +1353,11 @@ def render(ctx):
             badge_html = "".join(
                 f'<span class="lb-badge">{html.escape(b)}</span>' for b in status_badges
             )
+            badge_row_html = ""
+            if badge_html.strip():
+                badge_row_html = (
+                    f'<div class="lb-row" style="gap:6px; margin-top:8px;">{badge_html}</div>'
+                )
 
             story_badges_html = ""
             player_id = row.get("_pid")
@@ -1397,7 +1402,7 @@ def render(ctx):
                     <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
                 </div>
                 {story_badges_html}
-                <div class="lb-row" style="gap:6px; margin-top:8px;">{badge_html}</div>
+                {badge_row_html}
             </div>
             """
             st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
