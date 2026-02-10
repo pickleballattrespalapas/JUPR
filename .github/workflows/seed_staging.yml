@@ -1,0 +1,45 @@
+name: Seed Staging from Production (Manual)
+
+# WARNING: This workflow copies selected data from PROD Supabase into STAGING Supabase.
+# It is intentionally manual-only (workflow_dispatch) for safety.
+on:
+  workflow_dispatch:
+    inputs:
+      club_id:
+        description: "Club to seed from production"
+        required: false
+        default: "tres_palapas"
+      days:
+        description: "Only copy rows from the last N days for time-windowed tables"
+        required: false
+        default: "180"
+
+jobs:
+  seed-staging:
+    name: Seed Staging (PROD -> STAGING)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install supabase pandas
+
+      - name: Run seed script
+        # WARNING: This step writes production data into staging.
+        env:
+          PROD_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          PROD_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.PROD_SUPABASE_SERVICE_ROLE_KEY }}
+          STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          CLUB_ID: ${{ inputs.club_id }}
+          DAYS: ${{ inputs.days }}
+        run: python tools/seed_staging.py
