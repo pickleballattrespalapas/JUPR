@@ -232,9 +232,10 @@ def main():
         )
         apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
         st.markdown(
-            "<!-- JUPR_THEME_ACTIVE_2026_01_22 -->",  # TODO: remove after deployment verification
+            "<!-- JUPR_DEPLOY_PING_2026_02_11 -->",
             unsafe_allow_html=True,
         )
+
                                 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
