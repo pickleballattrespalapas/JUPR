@@ -5,11 +5,21 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
+from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
+
+
+def _get_api_error_code(exc: APIError) -> str | None:
+    code = getattr(exc, "code", None)
+    if code:
+        return str(code)
+    if exc.args and isinstance(exc.args[0], dict):
+        return exc.args[0].get("code")
+    return None
 
 
 def _exec_with_retry(fn, *, retries: int = 6, base_sleep: float = 0.5):
@@ -232,24 +242,28 @@ def replay_history(
     total = len(matches_to_update)
     chunk_size = 500
     completed = 0
-    use_conflict = "club_id,id"
     for chunk_index, start in enumerate(range(0, total, chunk_size), start=1):
         chunk = matches_to_update[start : start + chunk_size]
 
-        def do_upsert(conflict_key: str):
-            return supabase.table("matches").upsert(chunk, on_conflict=conflict_key).execute()
+        def do_upsert():
+            return supabase.table("matches").upsert(chunk, on_conflict="club_id,id").execute()
 
         try:
             try:
-                _exec_with_retry(lambda: do_upsert(use_conflict))
-            except Exception as exc:
-                msg = str(exc)
-                conflict_invalid = "on_conflict" in msg or "conflict" in msg
-                if use_conflict == "club_id,id" and conflict_invalid:
-                    use_conflict = "id"
-                    _exec_with_retry(lambda: do_upsert(use_conflict))
-                else:
+                _exec_with_retry(do_upsert)
+            except APIError as exc:
+                if _get_api_error_code(exc) != "42P10":
                     raise
+                for row in chunk:
+                    row_id = int(row["id"])
+                    payload = {k: v for k, v in row.items() if k not in {"id", "club_id"}}
+                    _exec_with_retry(
+                        lambda row_id=row_id, payload=payload: supabase.table("matches")
+                        .update(payload)
+                        .eq("club_id", club_id)
+                        .eq("id", row_id)
+                        .execute()
+                    )
         except Exception as exc:
             raise RuntimeError(f"Failed matches upsert chunk {chunk_index}: {exc}") from exc
 
