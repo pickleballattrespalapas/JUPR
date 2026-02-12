@@ -1,13 +1,39 @@
 from __future__ import annotations
 
+import random
+import time
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
+from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
+
+
+def _get_api_error_code(exc: APIError) -> str | None:
+    code = getattr(exc, "code", None)
+    if code:
+        return str(code)
+    if exc.args and isinstance(exc.args[0], dict):
+        return exc.args[0].get("code")
+    return None
+
+
+def _exec_with_retry(fn, *, retries: int = 6, base_sleep: float = 0.5):
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt >= retries:
+                raise
+            msg = str(exc)
+            if "Resource temporarily unavailable" not in msg and "ReadError" not in msg:
+                raise
+            delay = base_sleep * (2**attempt) + random.uniform(0.0, 0.2)
+            time.sleep(delay)
 
 
 def replay_history(
@@ -165,9 +191,13 @@ def replay_history(
     if str(target_reset).strip() == FULL_RESET_LABEL:
         players_updated = True
         for pid, s in p_map.items():
-            supabase.table("players").update(
-                {"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]}
-            ).eq("club_id", club_id).eq("id", int(pid)).execute()
+            _exec_with_retry(
+                lambda pid=pid, s=s: supabase.table("players")
+                .update({"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]})
+                .eq("club_id", club_id)
+                .eq("id", int(pid))
+                .execute()
+            )
 
     # Rebuild league_ratings
     if str(target_reset).strip() != FULL_RESET_LABEL:
@@ -202,15 +232,45 @@ def replay_history(
             )
 
     for i in range(0, len(new_rows), 1000):
-        supabase.table("league_ratings").insert(new_rows[i : i + 1000]).execute()
+        chunk = new_rows[i : i + 1000]
+        _exec_with_retry(lambda chunk=chunk: supabase.table("league_ratings").insert(chunk).execute())
 
     # Rewrite match snapshots
-    total = max(1, len(matches_to_update))
-    for i, u in enumerate(matches_to_update):
-        supabase.table("matches").update(u).eq("club_id", club_id).eq("id", int(u["id"])).execute()
+    for u in matches_to_update:
+        u["club_id"] = club_id
+
+    total = len(matches_to_update)
+    chunk_size = 500
+    completed = 0
+    for chunk_index, start in enumerate(range(0, total, chunk_size), start=1):
+        chunk = matches_to_update[start : start + chunk_size]
+
+        def do_upsert():
+            return supabase.table("matches").upsert(chunk, on_conflict="club_id,id").execute()
+
+        try:
+            try:
+                _exec_with_retry(do_upsert)
+            except APIError as exc:
+                if _get_api_error_code(exc) != "42P10":
+                    raise
+                for row in chunk:
+                    row_id = int(row["id"])
+                    payload = {k: v for k, v in row.items() if k not in {"id", "club_id"}}
+                    _exec_with_retry(
+                        lambda row_id=row_id, payload=payload: supabase.table("matches")
+                        .update(payload)
+                        .eq("club_id", club_id)
+                        .eq("id", row_id)
+                        .execute()
+                    )
+        except Exception as exc:
+            raise RuntimeError(f"Failed matches upsert chunk {chunk_index}: {exc}") from exc
+
+        completed += len(chunk)
         if progress_cb is not None:
             try:
-                progress_cb((i + 1) / total)
+                progress_cb(completed / max(1, total))
             except Exception:
                 pass
 

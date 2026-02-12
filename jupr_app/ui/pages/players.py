@@ -1861,7 +1861,10 @@ def render(ctx):
             show["Result"] = show["Result"].map(result_badge)
             show["Overall Δ"] = show.apply(lambda row: delta_span(row["Overall Δ"], row["delta_raw"]), axis=1)
             show["Explain"] = show["Explain"].map(
-                lambda url: f"<a href='{url}' target='_self'>Explain</a>" if url else ""
+                lambda url: (
+                    f"<a href=\"{html.escape(str(url), quote=True)}\" "
+                    f"target=\"_blank\" rel=\"noopener noreferrer\">Explain</a>"
+                ) if url else ""
             )
 
             show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "Explain"]]

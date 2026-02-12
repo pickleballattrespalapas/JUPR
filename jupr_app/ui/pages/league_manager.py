@@ -740,16 +740,16 @@ def render(ctx):
         if st.session_state.ladder_state == "CONFIRM_MOVEMENT":
             st.markdown("#### Round Results & Movement")
 
-            preview_df = st.session_state.get("ladder_movement_preview", pd.DataFrame())
-            if preview_df is None or preview_df.empty:
+            movement_df = st.session_state.get("ladder_movement_preview", pd.DataFrame())
+            if movement_df is None or movement_df.empty:
                 st.error("No movement preview found.")
                 st.session_state.ladder_state = "PLAY_ROUND"
                 st.rerun()
 
             # Display per court
-            for c_num in sorted(preview_df["court"].astype(int).unique()):
+            for c_num in sorted(movement_df["court"].astype(int).unique()):
                 st.markdown(f"### Court {int(c_num)} Results")
-                c_players = preview_df[preview_df["court"].astype(int) == int(c_num)]
+                c_players = movement_df[movement_df["court"].astype(int) == int(c_num)]
 
                 for _, p in c_players.iterrows():
                     move = "➖"
@@ -765,7 +765,7 @@ def render(ctx):
             st.markdown("#### 🛠️ Manual Override")
             st.info("If the arrows look right, click Start Next Round. Otherwise edit Proposed Court below.")
 
-            edit_view = preview_df[["player_id", "name", "rating", "court", "Proposed Court"]].copy()
+            edit_view = movement_df[["player_id", "name", "rating", "court", "Proposed Court"]].copy()
             editor_df = st.data_editor(
                 edit_view,
                 column_config={
@@ -822,6 +822,14 @@ def render(ctx):
             if st.session_state.get("ladder_show_roster_change_dialog", False):
                 @st.dialog("Roster Changes (Next Round)")
                 def roster_changes_dialog() -> None:
+                    required_cols = {"name", "player_id", "rating"}
+                    if movement_df is None or movement_df.empty or not required_cols.issubset(set(movement_df.columns)):
+                        st.error(
+                            "Roster changes are unavailable because the movement preview is missing required data "
+                            "(name, player_id, rating). Please regenerate movement preview and try again."
+                        )
+                        st.stop()
+
                     next_round = int(current_r + 1)
                     final_round = int(total_r)
                     tabs_rc = st.tabs(["Substitute", "Add Player"])
@@ -856,14 +864,14 @@ def render(ctx):
 
                     with tabs_rc[0]:
                         st.markdown("Replace player (active roster):")
-                        active_names = preview_df["name"].astype(str).tolist()
+                        active_names = movement_df["name"].astype(str).tolist()
                         active_map = {
                             str(r["name"]): {
                                 "id": int(r["player_id"]),
                                 "name": str(r["name"]),
                                 "rating": float(r.get("rating", 1200.0)),
                             }
-                            for _, r in preview_df.iterrows()
+                            for _, r in movement_df.iterrows()
                         }
                         replaced_name = st.selectbox("Replace player", active_names, key="ladder_sub_out")
                         replace_info = active_map.get(replaced_name, {})
