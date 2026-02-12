@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import time
 import traceback
 from collections.abc import Mapping
 
 import streamlit as st
 import pandas as pd  # kept because pages may rely on it
+from streamlit.errors import StreamlitSecretNotFoundError
 
 
 # -------------------------
@@ -16,8 +18,8 @@ import pandas as pd  # kept because pages may rely on it
 # -------------------------
 CLUB_ID = "tres_palapas"
 
-# Public base URL used for share links + link buttons (Streamlit Cloud)
-PUBLIC_BASE_URL = "https://8lkemld946rmtwwptk2gcs.streamlit.app"
+# Local/dev fallback for share links + link buttons.
+LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
 # -------------------------
@@ -25,22 +27,40 @@ PUBLIC_BASE_URL = "https://8lkemld946rmtwwptk2gcs.streamlit.app"
 # -------------------------
 def get_secret(path: list[str], default=None):
     """
-    Safe nested secret getter that works with Streamlit's secrets object.
-    Never raises KeyError.
+    Safe nested secret getter.
+    Priority: environment variables (Fly) -> st.secrets (Streamlit Cloud) -> default.
+    Never raises when secrets.toml is missing.
     """
+    env_var_map = {
+        ("supabase", "url"): "SUPABASE_URL",
+        ("supabase", "anon_key"): "SUPABASE_ANON_KEY",
+        ("supabase", "key"): "SUPABASE_KEY",
+        ("supabase", "service_role_key"): "SUPABASE_SERVICE_ROLE_KEY",
+        ("supabase", "admin_password"): "SUPABASE_ADMIN_PASSWORD",
+        ("supabase", "admin_session_secret"): "SUPABASE_ADMIN_SESSION_SECRET",
+        ("admin_session_secret",): "ADMIN_SESSION_SECRET",
+        ("public_base_url",): "PUBLIC_BASE_URL",
+    }
+
+    env_var = env_var_map.get(tuple(path))
+    if env_var:
+        env_value = os.getenv(env_var)
+        if env_value:
+            return env_value
+
     try:
         cur: object = st.secrets
+        for k in path:
+            if not isinstance(cur, Mapping):
+                return default
+            if k not in cur:
+                return default
+            cur = cur[k]
+        return cur
+    except StreamlitSecretNotFoundError:
+        return default
     except Exception:
         return default
-
-    for k in path:
-        if not isinstance(cur, Mapping):
-            return default
-        if k not in cur:
-            return default
-        cur = cur[k]
-
-    return cur
 
 
 # -------------------------
@@ -212,16 +232,21 @@ def main():
         )
         apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
         st.markdown(
-            "<!-- JUPR_THEME_ACTIVE_2026_01_22 -->",  # TODO: remove after deployment verification
+            "<!-- JUPR_DEPLOY_PING_2026_02_11 -->",
             unsafe_allow_html=True,
         )
+
                                 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
 
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
-        st.session_state["base_url"] = PUBLIC_BASE_URL
+        # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
+        # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ADMIN_PASSWORD,
+        # and SUPABASE_ADMIN_SESSION_SECRET.
+        base_url = get_secret(["public_base_url"], LOCAL_PUBLIC_BASE_URL_DEFAULT)
+        st.session_state["base_url"] = str(base_url)
 
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)

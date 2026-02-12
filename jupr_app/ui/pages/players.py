@@ -10,7 +10,9 @@ import pandas as pd
 from streamlit.components.v1 import html as st_html
 
 from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
+from jupr_app.domain import stories as story_domain
 from jupr_app.ui.components.badge_cards import render_inline_badge_text
+from jupr_app.ui.components.story_cards import render_story_cards
 from jupr_app.ui.helpers import (
     qp_get,
     build_match_explorer_link,
@@ -150,24 +152,6 @@ def fetch_badge_definitions(_supabase) -> pd.DataFrame:
         return df
     except Exception:
         logger.exception("Failed to load badge definitions")
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=60)
-def fetch_player_stories(_supabase, club_id: str, pid: int, limit: int = 6) -> pd.DataFrame:
-    try:
-        resp = (
-            _supabase.table("player_stories")
-            .select("story_type,context_id,created_at,title,body,importance,match_id")
-            .eq("club_id", str(club_id))
-            .eq("player_id", int(pid))
-            .order("created_at", desc=True)
-            .limit(int(limit) * 3)
-            .execute()
-        )
-        return pd.DataFrame(resp.data or [])
-    except Exception:
-        logger.exception("Failed to load player stories")
         return pd.DataFrame()
 
 
@@ -1494,39 +1478,10 @@ def render(ctx):
                                     },
                                 )
             st.subheader("Story Cards")
-            story_df = fetch_player_stories(_supabase, club_id, pid, limit=6)
-            if story_df.empty:
-                st.caption("No new stories in the tape room yet.")
-            else:
-                story_df = story_df.drop_duplicates(subset=["story_type", "context_id"], keep="first")
-                story_df = story_df.sort_values("created_at", ascending=False)
-                highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
-                foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
-                highlight_col, foreshadow_col = st.columns(2)
-                with highlight_col:
-                    st.markdown("**Highlights**")
-                    if highlights.empty:
-                        st.caption("No highlights yet.")
-                    else:
-                        for _, row in highlights.iterrows():
-                            title = sanitize_story_text(row.get("title")) or "Highlight"
-                            body = sanitize_story_text(row.get("body"))
-                            title = html.escape(title)
-                            body = html.escape(body)
-                            st.markdown(f"**{title}**")
-                            st.caption(body)
-                with foreshadow_col:
-                    st.markdown("**Foreshadowing**")
-                    if foreshadow.empty:
-                        st.caption("No foreshadowing yet.")
-                    else:
-                        for _, row in foreshadow.iterrows():
-                            title = sanitize_story_text(row.get("title")) or "Foreshadowing"
-                            body = sanitize_story_text(row.get("body"))
-                            title = html.escape(title)
-                            body = html.escape(body)
-                            st.markdown(f"**{title}**")
-                            st.caption(body)
+            story_df = story_domain.fetch_player_stories(_supabase, club_id, pid, limit=6)
+            story_df = story_domain.normalize_stories(story_df, limit=6)
+            story_df = story_domain.safe_story_fields(story_df)
+            render_story_cards(story_df)
 
     def render_ratings_tab():
         # -------------------------
