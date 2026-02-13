@@ -66,10 +66,12 @@ def submit_match(
         idempotency_key=idempotency_key,
     )
     rating_result = _apply_rating_engine_stub(match_payload=match_payload)
-    hooks_result = _run_context_hooks_stub(
+    hooks_result = _run_context_hooks(
+        club_id=club_id,
         context_type=context_type,
         context_id=context_id,
         match_payload=match_payload,
+        rating_result=rating_result,
     )
 
     return {
@@ -131,26 +133,146 @@ def _insert_match_record(
 
 def _apply_rating_engine_stub(match_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Stub: placeholder for future rating engine application (currently no-op)."""
-    _ = match_payload
+    participants: list[dict[str, Any]] = []
+    for slot in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+        pid = match_payload.get(slot)
+        if pid is None:
+            continue
+        end_key = f"{slot}_r_end"
+        start_key = f"{slot}_r"
+        participants.append(
+            {
+                "player_id": int(pid),
+                "new_rating": match_payload.get(end_key),
+                "starting_rating": match_payload.get(start_key),
+            }
+        )
     return {
         "stub": True,
         "name": "apply_rating_engine",
         "action": "noop",
         "details": "No rating changes applied.",
+        "participants": participants,
     }
 
 
-def _run_context_hooks_stub(
+def _run_context_hooks(
+    club_id: str,
     context_type: str,
     context_id: Optional[str],
     match_payload: Dict[str, Any],
+    rating_result: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Stub: placeholder for context-specific hooks (currently no-op)."""
-    _ = (context_id, match_payload)
+    """Run context-specific hooks after insert + rating stages."""
+    if context_type == "league":
+        return _league_hook(
+            club_id=club_id,
+            league_id=str(context_id or match_payload.get("league") or "").strip(),
+            match_payload=match_payload,
+            rating_result=rating_result,
+        )
+
+    _ = (context_id, match_payload, rating_result)
     return {
         "stub": True,
         "name": "run_context_hooks",
         "context_type": context_type,
         "action": "noop",
         "details": "No context hook executed.",
+    }
+
+
+def _league_hook(
+    club_id: str,
+    league_id: str,
+    match_payload: Dict[str, Any],
+    rating_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Update league standings rows from pipeline-produced rating_result."""
+    if not league_id:
+        return {
+            "stub": True,
+            "name": "league_hook",
+            "action": "skipped",
+            "details": "League context_id was empty.",
+        }
+
+    participants = rating_result.get("participants") or []
+    if not participants:
+        return {
+            "stub": True,
+            "name": "league_hook",
+            "action": "skipped",
+            "details": "No participants in rating_result.",
+        }
+
+    score_t1 = int(match_payload.get("score_t1", 0) or 0)
+    score_t2 = int(match_payload.get("score_t2", 0) or 0)
+    winner_team = None
+    if score_t1 != score_t2:
+        winner_team = 1 if score_t1 > score_t2 else 2
+
+    team_for_slot = {"t1_p1": 1, "t1_p2": 1, "t2_p1": 2, "t2_p2": 2}
+    supabase = get_supabase_client()
+    updated_rows = 0
+
+    for slot, team in team_for_slot.items():
+        pid = match_payload.get(slot)
+        if pid is None:
+            continue
+        participant = next((p for p in participants if int(p.get("player_id", -1)) == int(pid)), None)
+        if not participant or participant.get("new_rating") is None:
+            continue
+
+        existing = (
+            supabase.table("league_ratings")
+            .select("id,wins,losses,matches_played,starting_rating")
+            .eq("club_id", club_id)
+            .eq("league_name", league_id)
+            .eq("player_id", int(pid))
+            .limit(1)
+            .execute()
+        )
+        existing_row = ((getattr(existing, "data", None) or [None])[0])
+
+        wins_add = int(winner_team == team)
+        losses_add = int(winner_team is not None and winner_team != team)
+
+        if existing_row:
+            payload = {
+                "rating": float(participant["new_rating"]),
+                "wins": int(existing_row.get("wins", 0) or 0) + wins_add,
+                "losses": int(existing_row.get("losses", 0) or 0) + losses_add,
+                "matches_played": int(existing_row.get("matches_played", 0) or 0) + 1,
+                "is_active": True,
+                "inactive_at": None,
+            }
+            supabase.table("league_ratings").update(payload).eq("id", int(existing_row["id"])).eq("club_id", club_id).execute()
+            updated_rows += 1
+            continue
+
+        start_rating = participant.get("starting_rating")
+        if start_rating is None:
+            start_rating = participant["new_rating"]
+        payload = {
+            "club_id": club_id,
+            "league_name": league_id,
+            "player_id": int(pid),
+            "rating": float(participant["new_rating"]),
+            "starting_rating": float(start_rating),
+            "wins": wins_add,
+            "losses": losses_add,
+            "matches_played": 1,
+            "is_active": True,
+            "inactive_at": None,
+        }
+        supabase.table("league_ratings").insert(payload).execute()
+        updated_rows += 1
+
+    return {
+        "stub": False,
+        "name": "league_hook",
+        "action": "updated",
+        "league_id": league_id,
+        "rows_updated": int(updated_rows),
     }
