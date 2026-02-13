@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from jupr_app.ui.components.command_center_alerts import render_alerts_html
 from jupr_app.ui.theme import MATCH_COLORS
 
 
@@ -120,6 +121,91 @@ def _inject_command_center_css(theme_mode: str) -> None:
             color: #fff;
             background: {MATCH_COLORS['win']};
           }}
+
+          .cc-alerts {{
+            grid-column: 1 / -1;
+            border: 1px solid var(--cc-border);
+            background: var(--cc-panel);
+            box-shadow: var(--cc-shadow);
+            border-radius: 16px;
+            color: var(--cc-text);
+            padding: 1rem 1.2rem 1.2rem;
+          }}
+
+          .cc-alerts-header h3 {{
+            margin: 0;
+            font-size: 1.1rem;
+          }}
+
+          .cc-alerts-header p {{
+            margin: 0.35rem 0 0;
+            color: var(--cc-muted);
+            font-size: 0.85rem;
+          }}
+
+          .cc-alert-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.95rem;
+          }}
+
+          .cc-alert-card {{
+            border: 1px solid var(--cc-border);
+            border-radius: 12px;
+            padding: 0.8rem 0.9rem;
+            background: var(--cc-bg);
+          }}
+
+          .cc-alert-top {{
+            display: flex;
+            justify-content: space-between;
+            gap: 0.5rem;
+            align-items: baseline;
+          }}
+
+          .cc-alert-title {{
+            margin: 0;
+            font-size: 0.83rem;
+            letter-spacing: 0.01em;
+            color: var(--cc-muted);
+          }}
+
+          .cc-alert-count {{
+            margin: 0;
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: var(--cc-text);
+            line-height: 1;
+          }}
+
+          .cc-alert-subtitle {{
+            margin: 0.5rem 0 0.65rem;
+            font-size: 0.84rem;
+            color: var(--cc-muted);
+          }}
+
+          .cc-alert-link {{
+            font-size: 0.83rem;
+            font-weight: 700;
+            text-decoration: none;
+            color: var(--cc-text);
+          }}
+
+          .cc-alert-warning {{
+            border-color: color-mix(in srgb, {MATCH_COLORS['draw']} 48%, var(--cc-border));
+            background: color-mix(in srgb, {MATCH_COLORS['draw']} 20%, var(--cc-bg));
+          }}
+
+          .cc-alert-danger {{
+            border-color: color-mix(in srgb, {MATCH_COLORS['loss']} 48%, var(--cc-border));
+            background: color-mix(in srgb, {MATCH_COLORS['loss']} 18%, var(--cc-bg));
+          }}
+
+          .cc-alert-info {{
+            border-color: var(--cc-accent-border);
+            background: var(--cc-accent-soft);
+          }}
         </style>
 
         <div class="cc-root" data-theme="{theme_mode}">
@@ -142,6 +228,8 @@ def _inject_command_center_css(theme_mode: str) -> None:
               <p>Placeholder hero card for the upcoming guided result entry workflow.</p>
               <span class="cc-pill">Coming soon</span>
             </div>
+
+            {render_alerts_html()}
           </div>
         </div>
         """,
