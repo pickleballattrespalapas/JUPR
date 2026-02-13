@@ -370,10 +370,12 @@ def main():
             tournament_manager,
             weekly_recap,
             weekly_recap_admin,
+            command_center,
         )
 
         # ---- Router ----
         PAGES = {
+            "🧭 Command Center": command_center,
             "🏆 Leaderboards": leaderboards,
             "📊 League Results": league_results,
             "🖨️ League Night Printout": league_printout,
@@ -403,6 +405,8 @@ def main():
         }
 
         PAGE_KEY_TO_LABEL = {
+            "command_center": "🧭 Command Center",
+            "admin": "🧭 Command Center",
             "leaderboards": "🏆 Leaderboards",
             "league_results": "📊 League Results",
             "league_printout": "🖨️ League Night Printout",
@@ -433,6 +437,7 @@ def main():
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
         ADMIN_ONLY_LABELS = {
+            "🧭 Command Center",
             "🖨️ League Night Printout",
             "🏟️ League Manager",
             "📝 Match Uploader",
@@ -494,7 +499,12 @@ def main():
 
             # Ensure valid selection
             if "main_nav" not in st.session_state or st.session_state["main_nav"] not in visible_labels:
-                st.session_state["main_nav"] = visible_labels[0]
+                st.session_state["main_nav"] = "🧭 Command Center" if admin_logged_in else visible_labels[0]
+
+            prev_admin_logged_in = bool(st.session_state.get("prev_admin_logged_in", False))
+            if admin_logged_in and not prev_admin_logged_in:
+                st.session_state["main_nav"] = "🧭 Command Center"
+            st.session_state["prev_admin_logged_in"] = admin_logged_in
 
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
                 get_data.clear()

@@ -24,6 +24,7 @@ from . import weekly_recap_admin
 from . import theme_gallery
 from . import tournaments
 from . import tournament_manager
+from . import command_center
 
 __all__ = [
     "leaderboards",
@@ -48,4 +49,5 @@ __all__ = [
     "theme_gallery",
     "tournaments",
     "tournament_manager",
+    "command_center",
 ]
