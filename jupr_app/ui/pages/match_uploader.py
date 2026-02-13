@@ -43,8 +43,9 @@ def _as_player_id(value, name_to_id: dict[str, int]) -> int | None:
     return int(resolved) if resolved is not None else None
 
 
-def _idempotency_key(club_id: str, player_ids: list[int], s1: int, s2: int, ts_bucket: int) -> str:
-    seed = f"{club_id}|{'-'.join(str(pid) for pid in player_ids)}|{s1}-{s2}|{ts_bucket}"
+def _idempotency_key(club_id: str, league_id: str, player_ids: list[int], s1: int, s2: int) -> str:
+    ordered = sorted(int(pid) for pid in player_ids)
+    seed = f"{club_id}|{league_id.strip()}|{'-'.join(str(pid) for pid in ordered)}|{s1}-{s2}"
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
 
@@ -212,7 +213,6 @@ def render(ctx):
             submitted = 0
             skipped_incomplete = 0
             skipped_empty = 0
-            ts_bucket = int(time.time() // 60)
             for match in valid_batch:
                 p1 = _as_player_id(match.get("t1_p1"), name_to_id)
                 p2 = _as_player_id(match.get("t1_p2"), name_to_id)
@@ -245,11 +245,20 @@ def render(ctx):
                 if match.get("context_id"):
                     payload["context_id"] = match.get("context_id")
 
-                idem_key = _idempotency_key(str(club_id), [int(p1), int(p2), int(p3), int(p4)], s1, s2, ts_bucket)
+                league_id = str(match.get("league") or "")
+                idem_key = _idempotency_key(
+                    str(club_id),
+                    league_id,
+                    [int(p1), int(p2), int(p3), int(p4)],
+                    s1,
+                    s2,
+                )
+                context_type = "league" if league_id and league_id.upper() != "POPUP" else "admin"
+                context_id = league_id if context_type == "league" else None
                 submit_match(
                     club_id=str(club_id),
-                    context_type="admin",
-                    context_id=None,
+                    context_type=context_type,
+                    context_id=context_id,
                     match_payload=payload,
                     idempotency_key=idem_key,
                 )
@@ -560,7 +569,6 @@ def render(ctx):
                             submitted = 0
                             skipped_incomplete = 0
                             skipped_empty = 0
-                            ts_bucket = int(time.time() // 60)
                             for match in payload:
                                 p1 = _as_player_id(match.get("t1_p1"), name_to_id)
                                 p2 = _as_player_id(match.get("t1_p2"), name_to_id)
@@ -593,17 +601,20 @@ def render(ctx):
                                 if match.get("context_id"):
                                     match_payload["context_id"] = match.get("context_id")
 
+                                league_id = str(match.get("league") or "")
                                 idem_key = _idempotency_key(
                                     str(club_id),
+                                    league_id,
                                     [int(p1), int(p2), int(p3), int(p4)],
                                     s1,
                                     s2,
-                                    ts_bucket,
                                 )
+                                context_type = "league" if league_id and league_id.upper() != "POPUP" else "admin"
+                                context_id = league_id if context_type == "league" else None
                                 submit_match(
                                     club_id=str(club_id),
-                                    context_type="admin",
-                                    context_id=None,
+                                    context_type=context_type,
+                                    context_id=context_id,
                                     match_payload=match_payload,
                                     idempotency_key=idem_key,
                                 )
