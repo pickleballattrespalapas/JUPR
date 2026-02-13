@@ -6,13 +6,33 @@ contexts.
 
 Constraints for this initial infrastructure PR:
 - Additive only: no integration with existing flows.
-- No behavior changes to current application paths.
-- Internal helpers are explicit stubs and perform no database writes.
+- No behavior changes to current application paths beyond canonical match insert.
+- Non-insert helpers remain explicit stubs.
 """
 
+from __future__ import annotations
+
+import os
 from typing import Any, Dict, Literal, Optional
 
+from jupr_app.data.client import make_supabase
+
 _ALLOWED_CONTEXT_TYPES = {"league", "ladder", "tournament", "admin"}
+
+
+def get_supabase_client() -> Any:
+    """Build a Supabase client from environment credentials."""
+    supabase_url = os.getenv("SUPABASE_URL", "")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv(
+        "SUPABASE_KEY", ""
+    )
+
+    if not supabase_url or not supabase_key:
+        raise ValueError(
+            "Supabase credentials are missing. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY)."
+        )
+
+    return make_supabase(supabase_url, supabase_key)
 
 
 def submit_match(
@@ -22,11 +42,10 @@ def submit_match(
     match_payload: Dict[str, Any],
     idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Validate input and route to no-op pipeline stubs.
+    """Validate input and route to canonical pipeline steps.
 
-    This function is intentionally non-invasive and currently performs no writes
-    or side effects. It exists as a canonical entry point for future
-    consolidation.
+    The canonical insert step writes to Supabase and enforces idempotency when
+    an idempotency key is provided. Other downstream stages remain no-op stubs.
     """
     if not club_id or not isinstance(club_id, str):
         raise ValueError("club_id must be a non-empty string")
@@ -39,7 +58,7 @@ def submit_match(
     if not isinstance(match_payload, dict):
         raise ValueError("match_payload must be a dict")
 
-    insert_result = _insert_match_stub(
+    insert_result = _insert_match_record(
         club_id=club_id,
         context_type=context_type,
         context_id=context_id,
@@ -55,8 +74,8 @@ def submit_match(
 
     return {
         "ok": True,
-        "status": "stub_noop",
-        "message": "Canonical submit_match pipeline stub executed; no writes performed.",
+        "status": "inserted_with_stubbed_post_steps",
+        "message": "Canonical submit_match pipeline executed. Insert is live; downstream steps are currently stubs.",
         "club_id": club_id,
         "context_type": context_type,
         "context_id": context_id,
@@ -67,21 +86,47 @@ def submit_match(
     }
 
 
-def _insert_match_stub(
+def _insert_match_record(
     club_id: str,
     context_type: str,
     context_id: Optional[str],
     match_payload: Dict[str, Any],
     idempotency_key: Optional[str],
 ) -> Dict[str, Any]:
-    """Stub: placeholder for future match insert logic (currently no-op)."""
-    _ = (club_id, context_type, context_id, match_payload, idempotency_key)
-    return {
-        "stub": True,
-        "name": "insert_match",
-        "action": "noop",
-        "details": "No database operation performed.",
-    }
+    """Insert a match row, returning the existing row when idempotency matches.
+
+    This function checks for an existing `(club_id, idempotency_key)` match
+    before insert. If one exists, it is returned directly and no insert is
+    performed.
+    """
+    supabase = get_supabase_client()
+
+    if idempotency_key:
+        existing_response = (
+            supabase.table("matches")
+            .select("*")
+            .eq("club_id", club_id)
+            .eq("idempotency_key", idempotency_key)
+            .limit(1)
+            .execute()
+        )
+        existing_rows = getattr(existing_response, "data", None) or []
+        if existing_rows:
+            return dict(existing_rows[0])
+
+    payload: Dict[str, Any] = dict(match_payload)
+    payload["club_id"] = club_id
+    payload["context_type"] = context_type
+    payload["context_id"] = context_id
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
+
+    insert_response = supabase.table("matches").insert(payload).execute()
+    inserted_rows = getattr(insert_response, "data", None) or []
+    if not inserted_rows:
+        raise RuntimeError("Supabase insert returned no row data for matches insert")
+
+    return dict(inserted_rows[0])
 
 
 def _apply_rating_engine_stub(match_payload: Dict[str, Any]) -> Dict[str, Any]:
