@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import streamlit as st
 
+from jupr_app.ui.components.command_center_alerts import render_alerts_html
 from jupr_app.ui.components.theme_toggle import render_theme_toggle
+from jupr_app.ui.components.weekly_recaps_ui import render_weekly_recap_builder_html
 from jupr_app.ui.theme import MATCH_COLORS
 from jupr_app.ui.theme_tokens import get_theme_tokens
 
@@ -198,6 +200,85 @@ def _inject_command_center_css(theme_mode: str) -> None:
             border-color: var(--cc-accent-border);
             background: var(--cc-accent-soft);
           }}
+
+          .cc-recap {{
+            grid-column: 1 / -1;
+            border: 1px solid var(--cc-border);
+            background: var(--cc-panel);
+            box-shadow: var(--cc-shadow);
+            border-radius: 16px;
+            color: var(--cc-text);
+            padding: 1rem 1.2rem 1.2rem;
+          }}
+
+          .cc-recap-header h3 {{
+            margin: 0;
+            font-size: 1.1rem;
+          }}
+
+          .cc-recap-header p {{
+            margin: 0.35rem 0 0;
+            color: var(--cc-muted);
+            font-size: 0.85rem;
+          }}
+
+          .cc-recap-status-wrap {{
+            margin-top: 0.95rem;
+            border: 1px solid var(--cc-border);
+            background: var(--cc-bg);
+            border-radius: 12px;
+            padding: 0.75rem 0.9rem;
+          }}
+
+          .cc-recap-status-label {{
+            margin: 0;
+            font-size: 0.78rem;
+            color: var(--cc-muted);
+            letter-spacing: 0.01em;
+          }}
+
+          .cc-recap-status-value {{
+            margin: 0.35rem 0 0;
+            font-size: 1.02rem;
+            font-weight: 700;
+            color: var(--cc-text);
+          }}
+
+          .cc-recap-actions {{
+            margin-top: 0.95rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+          }}
+
+          .cc-recap-btn {{
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 0.82rem;
+            border-radius: 10px;
+            border: 1px solid var(--cc-border);
+            color: var(--cc-text);
+            background: var(--cc-bg);
+            padding: 0.5rem 0.75rem;
+            transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+          }}
+
+          .cc-recap-btn:hover {{
+            border-color: var(--cc-accent-border);
+            background: color-mix(in srgb, var(--cc-accent-soft) 75%, var(--cc-bg));
+            transform: translateY(-1px);
+          }}
+
+          .cc-recap-btn:focus-visible {{
+            outline: 2px solid var(--cc-accent-border);
+            outline-offset: 2px;
+          }}
+
+          .cc-recap-btn-primary {{
+            border-color: var(--cc-accent-border);
+            background: var(--cc-accent-soft);
+          }}
+
         </style>
 
         <div class="cc-root" data-theme="{theme_mode}">
@@ -222,6 +303,7 @@ def _inject_command_center_css(theme_mode: str) -> None:
             </div>
 
             {render_alerts_html()}
+            {render_weekly_recap_builder_html()}
           </div>
         </div>
         """,
