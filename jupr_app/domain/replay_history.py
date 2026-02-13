@@ -1,25 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import random
 import time
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
-from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from services.match_pipeline import submit_match
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
-
-
-def _get_api_error_code(exc: APIError) -> str | None:
-    code = getattr(exc, "code", None)
-    if code:
-        return str(code)
-    if exc.args and isinstance(exc.args[0], dict):
-        return exc.args[0].get("code")
-    return None
 
 
 def _exec_with_retry(fn, *, retries: int = 6, base_sleep: float = 0.5):
@@ -66,6 +59,12 @@ def replay_history(
         .execute()
         .data
     ) or []
+    row_by_id: Dict[int, Dict[str, Any]] = {}
+    for row in all_matches:
+        try:
+            row_by_id[int(row["id"])] = dict(row)
+        except Exception:
+            continue
 
     # K map from df_meta (league_name -> k_factor)
     k_map: Dict[str, int] = {}
@@ -239,33 +238,81 @@ def replay_history(
     for u in matches_to_update:
         u["club_id"] = club_id
 
+    allowed_context_types = {"league", "ladder", "tournament", "admin"}
+
+    def resolve_context_type(match_row: Dict[str, Any]) -> str:
+        raw_context_type = str(match_row.get("context_type", "") or "").strip().lower()
+        if raw_context_type in allowed_context_types:
+            return raw_context_type
+        if match_row.get("tournament_id") or match_row.get("tournament_game_id"):
+            return "tournament"
+        if str(match_row.get("league", "") or "").strip():
+            return "league"
+        return "admin"
+
+    def resolve_context_id(match_row: Dict[str, Any], context_type: str) -> Optional[str]:
+        raw_context_id = match_row.get("context_id")
+        if raw_context_id is not None and str(raw_context_id).strip() != "":
+            return str(raw_context_id)
+        if context_type == "league":
+            lg = str(match_row.get("league", "") or "").strip()
+            return lg or None
+        if context_type == "tournament":
+            tournament_id = match_row.get("tournament_id")
+            if tournament_id is not None and str(tournament_id).strip() != "":
+                return str(tournament_id)
+        return None
+
+    def build_replay_idempotency_key(match_row: Dict[str, Any]) -> str:
+        original_match_id = match_row.get("id")
+        signature_payload = {
+            "club_id": str(club_id),
+            "source": "replay_history",
+            "original_match_id": int(original_match_id) if original_match_id is not None else None,
+            "date": str(match_row.get("date") or ""),
+            "league": str(match_row.get("league") or ""),
+            "t1_p1": int(match_row.get("t1_p1") or 0),
+            "t1_p2": int(match_row.get("t1_p2") or 0),
+            "t2_p1": int(match_row.get("t2_p1") or 0),
+            "t2_p2": int(match_row.get("t2_p2") or 0),
+            "score_t1": int(match_row.get("score_t1") or 0),
+            "score_t2": int(match_row.get("score_t2") or 0),
+        }
+        normalized = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"replay:{club_id}:{original_match_id}:{digest}"
+
     total = len(matches_to_update)
     chunk_size = 500
     completed = 0
     for chunk_index, start in enumerate(range(0, total, chunk_size), start=1):
         chunk = matches_to_update[start : start + chunk_size]
 
-        def do_upsert():
-            return supabase.table("matches").upsert(chunk, on_conflict="club_id,id").execute()
-
         try:
-            try:
-                _exec_with_retry(do_upsert)
-            except APIError as exc:
-                if _get_api_error_code(exc) != "42P10":
-                    raise
-                for row in chunk:
-                    row_id = int(row["id"])
-                    payload = {k: v for k, v in row.items() if k not in {"id", "club_id"}}
-                    _exec_with_retry(
-                        lambda row_id=row_id, payload=payload: supabase.table("matches")
-                        .update(payload)
-                        .eq("club_id", club_id)
-                        .eq("id", row_id)
-                        .execute()
+            for row in chunk:
+                existing = row_by_id.get(int(row["id"]))
+                if existing is None:
+                    continue
+
+                merged_payload = dict(existing)
+                merged_payload.update(row)
+
+                context_type = resolve_context_type(merged_payload)
+                context_id = resolve_context_id(merged_payload, context_type)
+                idempotency_key = build_replay_idempotency_key(merged_payload)
+                merged_payload["idempotency_key"] = idempotency_key
+
+                _exec_with_retry(
+                    lambda merged_payload=merged_payload, context_type=context_type, context_id=context_id, idempotency_key=idempotency_key: submit_match(
+                        club_id=str(club_id),
+                        context_type=context_type,
+                        context_id=context_id,
+                        match_payload=merged_payload,
+                        idempotency_key=idempotency_key,
                     )
+                )
         except Exception as exc:
-            raise RuntimeError(f"Failed matches upsert chunk {chunk_index}: {exc}") from exc
+            raise RuntimeError(f"Failed matches submit chunk {chunk_index}: {exc}") from exc
 
         completed += len(chunk)
         if progress_cb is not None:
