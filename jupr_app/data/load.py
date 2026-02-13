@@ -1,4 +1,6 @@
 import time
+import json
+import hashlib
 import pandas as pd
 
 from jupr_app.domain.player_activity import add_activity_columns
@@ -6,6 +8,7 @@ from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_M
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
+from services.match_pipeline import submit_match
 import re
 from postgrest.exceptions import APIError
 
@@ -31,6 +34,82 @@ PLAYER_BADGES_OPTIONAL_COLUMNS = [
     "revoke_reason",
 ]
 MERGED_PLAYER_MARKER = "(MERGED into "
+
+
+def _resolve_loader_context(match_row: dict) -> tuple[str, str | None]:
+    context_type = str(match_row.get("context_type") or "").strip().lower()
+    if context_type not in {"league", "ladder", "tournament", "admin"}:
+        if match_row.get("league"):
+            context_type = "league"
+        elif match_row.get("tournament_id"):
+            context_type = "tournament"
+        else:
+            context_type = "admin"
+
+    context_id = match_row.get("context_id")
+    if context_id is not None and str(context_id).strip() != "":
+        return context_type, str(context_id)
+    if context_type == "league":
+        league = str(match_row.get("league") or "").strip()
+        return context_type, (league or None)
+    if context_type == "tournament":
+        tournament_id = match_row.get("tournament_id")
+        if tournament_id is not None and str(tournament_id).strip() != "":
+            return context_type, str(tournament_id)
+    return context_type, None
+
+
+def _loader_idempotency_key(club_id: str, match_row: dict) -> str:
+    original_id = match_row.get("id", match_row.get("match_id"))
+    external_id = match_row.get("external_id", match_row.get("source_match_id"))
+    signature_payload = {
+        "club_id": str(club_id),
+        "source": "data_loader",
+        "original_id": str(original_id) if original_id is not None else None,
+        "external_id": str(external_id) if external_id is not None else None,
+        "date": str(match_row.get("date") or match_row.get("created_at") or ""),
+        "league": str(match_row.get("league") or ""),
+        "context_type": str(match_row.get("context_type") or ""),
+        "context_id": str(match_row.get("context_id") or ""),
+        "t1_p1": int(match_row.get("t1_p1") or 0),
+        "t1_p2": int(match_row.get("t1_p2") or 0),
+        "t2_p1": int(match_row.get("t2_p1") or 0),
+        "t2_p2": int(match_row.get("t2_p2") or 0),
+        "score_t1": int(match_row.get("score_t1") or 0),
+        "score_t2": int(match_row.get("score_t2") or 0),
+    }
+    normalized = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"loader:{club_id}:{original_id}:{digest}"
+
+
+def submit_matches_from_loader(supabase, club_id: str, matches: list[dict], chunk_size: int = 500) -> int:
+    _ = supabase
+    club_id = str(club_id)
+    submitted = 0
+
+    for chunk_index, start in enumerate(range(0, len(matches), max(1, int(chunk_size))), start=1):
+        chunk = matches[start : start + max(1, int(chunk_size))]
+        try:
+            for row in chunk:
+                match_row = dict(row)
+                context_type, context_id = _resolve_loader_context(match_row)
+                idempotency_key = _loader_idempotency_key(club_id, match_row)
+                match_row["idempotency_key"] = idempotency_key
+                match_row["club_id"] = club_id
+
+                submit_match(
+                    club_id=club_id,
+                    context_type=context_type,
+                    context_id=context_id,
+                    match_payload=match_row,
+                    idempotency_key=idempotency_key,
+                )
+                submitted += 1
+        except Exception as exc:
+            raise RuntimeError(f"Failed loader matches submit chunk {chunk_index}: {exc}") from exc
+
+    return submitted
 
 
 def _missing_player_badges_columns(exc: APIError) -> set[str]:
