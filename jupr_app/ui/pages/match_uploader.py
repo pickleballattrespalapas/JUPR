@@ -2,6 +2,7 @@
 
 import time
 import re
+import hashlib
 from datetime import datetime
 
 import pandas as pd
@@ -9,9 +10,9 @@ import streamlit as st
 
 from jupr_app.domain.events import upsert_or_get_active_event
 from jupr_app.domain.schedule import get_match_schedule
-from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.ui.layout import page_shell
+from services.match_pipeline import submit_match
 
 
 def _parse_week_num(week_tag: str) -> int | None:
@@ -24,6 +25,27 @@ def _parse_week_num(week_tag: str) -> int | None:
         return int(match.group(1))
     except Exception:
         return None
+
+
+def _as_player_id(value, name_to_id: dict[str, int]) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+
+    resolved = name_to_id.get(text)
+    return int(resolved) if resolved is not None else None
+
+
+def _idempotency_key(club_id: str, player_ids: list[int], s1: int, s2: int, ts_bucket: int) -> str:
+    seed = f"{club_id}|{'-'.join(str(pid) for pid in player_ids)}|{s1}-{s2}|{ts_bucket}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
 
 def render(ctx):
@@ -187,16 +209,57 @@ def render(ctx):
                 st.warning("No valid rows found. Add at least T1_P1, T2_P1, and a non-zero score.")
                 return
 
-            process_matches(
-                valid_batch,
-                supabase=supabase,
-                club_id=str(club_id),
-                name_to_id=name_to_id,
-                df_players_all=df_players_all,
-                df_leagues=df_leagues,
-                df_meta=df_meta,
+            submitted = 0
+            skipped_incomplete = 0
+            skipped_empty = 0
+            ts_bucket = int(time.time() // 60)
+            for match in valid_batch:
+                p1 = _as_player_id(match.get("t1_p1"), name_to_id)
+                p2 = _as_player_id(match.get("t1_p2"), name_to_id)
+                p3 = _as_player_id(match.get("t2_p1"), name_to_id)
+                p4 = _as_player_id(match.get("t2_p2"), name_to_id)
+                s1 = int(match.get("s1", 0) or 0)
+                s2 = int(match.get("s2", 0) or 0)
+
+                if any(pid is None for pid in (p1, p2, p3, p4)):
+                    skipped_incomplete += 1
+                    continue
+                if s1 == 0 and s2 == 0:
+                    skipped_empty += 1
+                    continue
+
+                payload = {
+                    "date": match.get("date"),
+                    "league": match.get("league"),
+                    "t1_p1": int(p1),
+                    "t1_p2": int(p2),
+                    "t2_p1": int(p3),
+                    "t2_p2": int(p4),
+                    "score_t1": s1,
+                    "score_t2": s2,
+                    "match_type": match.get("match_type"),
+                    "week_tag": match.get("week_tag"),
+                }
+                if match.get("context_type"):
+                    payload["context_type"] = match.get("context_type")
+                if match.get("context_id"):
+                    payload["context_id"] = match.get("context_id")
+
+                idem_key = _idempotency_key(str(club_id), [int(p1), int(p2), int(p3), int(p4)], s1, s2, ts_bucket)
+                submit_match(
+                    club_id=str(club_id),
+                    context_type="admin",
+                    context_id=None,
+                    match_payload=payload,
+                    idempotency_key=idem_key,
+                )
+                submitted += 1
+
+            st.success(
+                f"Inserted {submitted} • "
+                f"Skipped incomplete {skipped_incomplete} • "
+                f"Skipped empty {skipped_empty}"
             )
-            st.success("✅ Processed!")
             time.sleep(0.8)
             st.rerun()
 
@@ -494,25 +557,67 @@ def render(ctx):
 
                     if payload:
                         try:
-                            res = process_matches(
-                                payload,
-                                supabase=supabase,
-                                club_id=str(club_id),
-                                name_to_id=name_to_id,
-                                df_players_all=df_players_all,
-                                df_leagues=df_leagues,
-                                df_meta=df_meta,
-                            )
+                            submitted = 0
+                            skipped_incomplete = 0
+                            skipped_empty = 0
+                            ts_bucket = int(time.time() // 60)
+                            for match in payload:
+                                p1 = _as_player_id(match.get("t1_p1"), name_to_id)
+                                p2 = _as_player_id(match.get("t1_p2"), name_to_id)
+                                p3 = _as_player_id(match.get("t2_p1"), name_to_id)
+                                p4 = _as_player_id(match.get("t2_p2"), name_to_id)
+                                s1 = int(match.get("s1", 0) or 0)
+                                s2 = int(match.get("s2", 0) or 0)
+
+                                if any(pid is None for pid in (p1, p2, p3, p4)):
+                                    skipped_incomplete += 1
+                                    continue
+                                if s1 == 0 and s2 == 0:
+                                    skipped_empty += 1
+                                    continue
+
+                                match_payload = {
+                                    "date": match.get("date"),
+                                    "league": match.get("league"),
+                                    "t1_p1": int(p1),
+                                    "t1_p2": int(p2),
+                                    "t2_p1": int(p3),
+                                    "t2_p2": int(p4),
+                                    "score_t1": s1,
+                                    "score_t2": s2,
+                                    "match_type": match.get("match_type"),
+                                    "week_tag": match.get("week_tag"),
+                                }
+                                if match.get("context_type"):
+                                    match_payload["context_type"] = match.get("context_type")
+                                if match.get("context_id"):
+                                    match_payload["context_id"] = match.get("context_id")
+
+                                idem_key = _idempotency_key(
+                                    str(club_id),
+                                    [int(p1), int(p2), int(p3), int(p4)],
+                                    s1,
+                                    s2,
+                                    ts_bucket,
+                                )
+                                submit_match(
+                                    club_id=str(club_id),
+                                    context_type="admin",
+                                    context_id=None,
+                                    match_payload=match_payload,
+                                    idempotency_key=idem_key,
+                                )
+                                submitted += 1
                         except Exception as e:
                             st.error("Failed to submit matches.")
                             st.exception(e)
                             st.stop()
                         st.success(
-                            f"Inserted {res.get('inserted', 0)} • "
-                            f"Skipped incomplete {res.get('skipped_incomplete', 0)} • "
-                            f"Skipped empty {res.get('skipped_empty', 0)}"
+                            f"Inserted {submitted} • "
+                            f"Skipped incomplete {skipped_incomplete} • "
+                            f"Skipped empty {skipped_empty}"
                         )
-                        if res.get("skipped_incomplete", 0) > 0:
+                        if skipped_incomplete > 0:
                             with st.expander("Unmapped names in submitted matches", expanded=False):
                                 if unmapped_rows:
                                     st.table(pd.DataFrame(unmapped_rows))
