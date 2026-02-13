@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -12,6 +14,7 @@ from jupr_app.domain.player_activity import (
     max_activity_time,
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from services.match_pipeline import submit_match
 
 
 def process_matches(
@@ -53,6 +56,44 @@ def process_matches(
     skipped_incomplete = 0
     skipped_empty = 0
     has_non_popup_match = False
+    allowed_context_types = {"league", "ladder", "tournament", "admin"}
+
+    def resolve_context_type(match_row: dict[str, Any], league_name: str) -> str:
+        raw_context_type = str(match_row.get("context_type", "") or "").strip().lower()
+        if raw_context_type in allowed_context_types:
+            return raw_context_type
+        if match_row.get("tournament_id") or match_row.get("tournament_game_id"):
+            return "tournament"
+        if league_name:
+            return "league"
+        return "admin"
+
+    def resolve_context_id(match_row: dict[str, Any], context_type: str, league_name: str) -> str | None:
+        raw_context_id = match_row.get("context_id")
+        if raw_context_id is not None and str(raw_context_id).strip() != "":
+            return str(raw_context_id)
+        if context_type == "league" and league_name:
+            return str(league_name)
+        if context_type == "tournament":
+            tournament_id = match_row.get("tournament_id")
+            if tournament_id is not None and str(tournament_id).strip() != "":
+                return str(tournament_id)
+        return None
+
+    def build_idempotency_key(match_row: dict[str, Any]) -> str:
+        signature_payload = {
+            "club_id": str(club_id),
+            "date": str(match_row.get("date") or ""),
+            "t1_p1": int(match_row.get("t1_p1") or 0),
+            "t1_p2": int(match_row.get("t1_p2") or 0),
+            "t2_p1": int(match_row.get("t2_p1") or 0),
+            "t2_p2": int(match_row.get("t2_p2") or 0),
+            "score_t1": int(match_row.get("score_t1") or 0),
+            "score_t2": int(match_row.get("score_t2") or 0),
+        }
+        normalized = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"batch:{digest}"
 
     def get_k(league_name: str) -> int:
         if df_meta is None or getattr(df_meta, "empty", True):
@@ -281,7 +322,19 @@ def process_matches(
         CHUNK_M = 300
         for i in range(0, len(db_matches), CHUNK_M):
             chunk = db_matches[i : i + CHUNK_M]
-            sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
+            for match_row in chunk:
+                context_type = resolve_context_type(match_row, str(match_row.get("league") or "").strip())
+                context_id = resolve_context_id(match_row, context_type, str(match_row.get("league") or "").strip())
+                idempotency_key = build_idempotency_key(match_row)
+                sb_retry(
+                    lambda match_row=match_row, context_type=context_type, context_id=context_id, idempotency_key=idempotency_key: submit_match(
+                        club_id=str(club_id),
+                        context_type=context_type,
+                        context_id=context_id,
+                        match_payload=match_row,
+                        idempotency_key=idempotency_key,
+                    )
+                )
 
         if supabase is not None and has_non_popup_match:
             enqueue_badge_eval(
