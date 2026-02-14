@@ -507,6 +507,205 @@ def _step_2_placeholder(tokens: dict[str, str]) -> None:
         st.button("Submit (coming soon)", type="primary", disabled=True)
 
 
+def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
+    st.markdown("### Step 2 · Challenge Ladder result")
+    st.caption("Select a pending challenge. Players are auto-filled from the challenge record.")
+
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "").strip()
+    if not supabase or not club_id:
+        st.error("Challenge Ladder submission requires club and database context.")
+        return
+
+    try:
+        response = (
+            supabase.table("ladder_challenges")
+            .select("id,challenger_id,defender_id,status,accepted_at,play_by,created_at,tier_id")
+            .eq("club_id", club_id)
+            .in_("status", ["ACCEPTED", "ACCEPTED_SCHEDULING"])
+            .is_("winner_id", "null")
+            .is_("completed_at", "null")
+            .order("created_at", desc=False)
+            .limit(500)
+            .execute()
+        )
+        pending_rows = getattr(response, "data", None) or []
+    except Exception as exc:
+        st.error(f"Could not load pending challenges: {exc}")
+        pending_rows = []
+
+    if not pending_rows:
+        st.info("No pending accepted challenges available to record.")
+        controls = st.columns([1, 4])
+        with controls[0]:
+            if st.button("← Back", key="rm_step2_back_challenge_empty"):
+                st.session_state[WIZARD_STEP_KEY] = 1
+                st.rerun()
+        return
+
+    id_to_name = getattr(ctx, "id_to_name", None) or {}
+
+    def player_name(pid: Any) -> str:
+        try:
+            parsed = int(pid)
+        except Exception:
+            return "Unknown"
+        return str(id_to_name.get(parsed) or f"Player #{parsed}")
+
+    challenge_rows: list[dict[str, Any]] = []
+    for raw in pending_rows:
+        try:
+            ch_id = int(raw.get("id"))
+            challenger_id = int(raw.get("challenger_id"))
+            defender_id = int(raw.get("defender_id"))
+        except Exception:
+            continue
+        challenge_rows.append(
+            {
+                "challenge_id": ch_id,
+                "challenger_id": challenger_id,
+                "defender_id": defender_id,
+                "challenger": player_name(challenger_id),
+                "defender": player_name(defender_id),
+                "status": str(raw.get("status") or ""),
+                "play_by": raw.get("play_by"),
+                "tier": str(raw.get("tier_id") or ""),
+            }
+        )
+
+    if not challenge_rows:
+        st.warning("Pending challenge rows are missing required players.")
+        return
+
+    st.dataframe(
+        pd.DataFrame(challenge_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    challenge_options = {
+        f"#{row['challenge_id']} · {row['challenger']} vs {row['defender']} ({row['status']})": row
+        for row in challenge_rows
+    }
+    selected_label = st.selectbox(
+        "Select pending challenge",
+        options=list(challenge_options.keys()),
+        key="record_match_challenge_selector",
+    )
+    selected_challenge = challenge_options[selected_label]
+
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: {tokens['card_bg']};
+            padding: 14px;
+            color: {tokens['text_primary']};
+            margin: 0.25rem 0 0.75rem 0;
+        ">
+            <strong>Challenge:</strong> #{selected_challenge['challenge_id']}<br/>
+            <strong>Challenger:</strong> {selected_challenge['challenger']} (#{selected_challenge['challenger_id']})<br/>
+            <strong>Defender:</strong> {selected_challenge['defender']} (#{selected_challenge['defender_id']})<br/>
+            <strong>Tier:</strong> {selected_challenge['tier'] or 'N/A'}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    score_cols = st.columns(2)
+    score_t1 = score_cols[0].number_input(
+        "Challenger score",
+        min_value=0,
+        max_value=99,
+        value=0,
+        step=1,
+        key="rm_cl_s1",
+    )
+    score_t2 = score_cols[1].number_input(
+        "Defender score",
+        min_value=0,
+        max_value=99,
+        value=0,
+        step=1,
+        key="rm_cl_s2",
+    )
+
+    has_score = int(score_t1) + int(score_t2) > 0
+    if not has_score:
+        st.error("Enter a non-zero score before confirming.")
+
+    controls = st.columns([1, 1, 4])
+    with controls[0]:
+        if st.button("← Back", key="rm_step2_back_challenge"):
+            st.session_state[WIZARD_STEP_KEY] = 1
+            st.rerun()
+    with controls[1]:
+        if st.button(
+            "Confirm & Submit",
+            type="primary",
+            disabled=not has_score,
+            key="rm_cl_submit",
+        ):
+            match_date = datetime.utcnow().isoformat()
+            idem_key = _deterministic_idempotency_key(
+                club_id=club_id,
+                league_id=f"challenge:{selected_challenge['challenge_id']}",
+                player_ids=[selected_challenge["challenger_id"], selected_challenge["defender_id"]],
+                score_t1=int(score_t1),
+                score_t2=int(score_t2),
+                match_date=match_date,
+            )
+
+            payload = {
+                "date": match_date,
+                "league": "OVERALL",
+                "match_type": "ChallengeLadder",
+                "t1_p1": int(selected_challenge["challenger_id"]),
+                "t1_p2": None,
+                "t2_p1": int(selected_challenge["defender_id"]),
+                "t2_p2": None,
+                "score_t1": int(score_t1),
+                "score_t2": int(score_t2),
+                "s1": int(score_t1),
+                "s2": int(score_t2),
+            }
+
+            try:
+                result = submit_match(
+                    club_id=club_id,
+                    context_type="ladder",
+                    context_id=str(selected_challenge["challenge_id"]),
+                    match_payload=payload,
+                    idempotency_key=idem_key,
+                )
+                st.session_state["record_match_last_submit"] = {
+                    "challenge": selected_challenge,
+                    "score": f"{int(score_t1)} - {int(score_t2)}",
+                    "idempotency_key": idem_key,
+                    "result": result,
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Submit failed: {exc}")
+
+    last_submit = st.session_state.get("record_match_last_submit")
+    if isinstance(last_submit, dict) and isinstance(last_submit.get("challenge"), dict):
+        challenge = last_submit["challenge"]
+        st.markdown(
+            (
+                "<div class='record-match-success-card'>"
+                "<h4 style='margin:0 0 6px 0;'>✅ Challenge result submitted</h4>"
+                f"<div><strong>Challenge:</strong> #{challenge.get('challenge_id')}</div>"
+                f"<div><strong>Players:</strong> {challenge.get('challenger')} vs {challenge.get('defender')}</div>"
+                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
+                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def render(ctx) -> None:
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell("🧾 Record Match", "Unified wizard for recording results across competition types.", mode_label=mode_label)
@@ -527,5 +726,7 @@ def render(ctx) -> None:
     selected_id = selected.get("id") if isinstance(selected, dict) else None
     if selected_id == "ladder_league":
         _step_2_ladder_league(ctx, tokens)
+    elif selected_id == "challenge_ladder":
+        _step_2_challenge_ladder(ctx, tokens)
     else:
         _step_2_placeholder(tokens)
