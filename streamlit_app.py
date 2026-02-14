@@ -371,6 +371,7 @@ def main():
             weekly_recap,
             weekly_recap_admin,
             command_center,
+            record_match,
         )
 
         # ---- Router ----
@@ -389,6 +390,7 @@ def main():
             # Admin-only
             "🏟️ League Manager": league_manager,
             "📝 Match Uploader": match_uploader,
+            "🧾 Record Match": record_match,
             "📝 Match Log": match_log,
             "👥 Player Editor": player_editor,
             "⚙️ Admin Tools": admin_tools,
@@ -420,6 +422,7 @@ def main():
             # Admin-only deep links
             "league_manager": "🏟️ League Manager",
             "match_uploader": "📝 Match Uploader",
+            "record_match": "🧾 Record Match",
             "match_log": "📝 Match Log",
             "player_editor": "👥 Player Editor",
             "admin_tools": "⚙️ Admin Tools",
@@ -441,6 +444,7 @@ def main():
             "🖨️ League Night Printout",
             "🏟️ League Manager",
             "📝 Match Uploader",
+            "🧾 Record Match",
             "📝 Match Log",
             "👥 Player Editor",
             "⚙️ Admin Tools",

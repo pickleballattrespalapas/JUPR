@@ -25,6 +25,7 @@ from . import theme_gallery
 from . import tournaments
 from . import tournament_manager
 from . import command_center
+from . import record_match
 
 __all__ = [
     "leaderboards",
@@ -50,4 +51,5 @@ __all__ = [
     "tournaments",
     "tournament_manager",
     "command_center",
+    "record_match",
 ]
