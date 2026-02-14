@@ -4,6 +4,7 @@ import streamlit as st
 
 from jupr_app.ui.components.active_competitions_ui import render_active_competitions_html
 from jupr_app.ui.components.command_center_alerts import render_alerts_html
+from jupr_app.ui.components.command_center_public_nav import render_public_navigation_html
 from jupr_app.ui.components.leaderboards_snapshot_ui import render_leaderboards_snapshot_html
 from jupr_app.ui.components.theme_toggle import render_theme_toggle
 from jupr_app.ui.components.weekly_recaps_ui import render_weekly_recap_builder_html
@@ -495,6 +496,78 @@ def _inject_command_center_css(theme_mode: str) -> None:
             background: color-mix(in srgb, #6b7280 14%, var(--cc-bg));
           }}
 
+          .cc-public-nav {{
+            grid-column: 1 / -1;
+            border: 1px solid var(--cc-border);
+            background: color-mix(in srgb, var(--cc-bg) 86%, var(--cc-panel));
+            box-shadow: var(--cc-shadow);
+            border-radius: 16px;
+            color: var(--cc-text);
+            padding: 1rem 1.2rem 1.2rem;
+          }}
+
+          .cc-public-header h3 {{
+            margin: 0;
+            font-size: 1.1rem;
+          }}
+
+          .cc-public-header p {{
+            margin: 0.35rem 0 0;
+            color: var(--cc-muted);
+            font-size: 0.85rem;
+          }}
+
+          .cc-public-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.95rem;
+          }}
+
+          .cc-public-card {{
+            border: 1px solid var(--cc-border);
+            border-radius: 12px;
+            background: color-mix(in srgb, var(--cc-bg) 92%, var(--cc-panel));
+            padding: 0.8rem 0.9rem;
+          }}
+
+          .cc-public-card h4 {{
+            margin: 0;
+            font-size: 0.95rem;
+          }}
+
+          .cc-public-card p {{
+            margin: 0.45rem 0 0;
+            color: var(--cc-muted);
+            font-size: 0.82rem;
+            min-height: 2.4rem;
+          }}
+
+          .cc-public-link {{
+            display: inline-flex;
+            margin-top: 0.7rem;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 0.79rem;
+            border-radius: 10px;
+            border: 1px solid var(--cc-border);
+            color: var(--cc-text);
+            background: var(--cc-bg);
+            padding: 0.42rem 0.62rem;
+            transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+          }}
+
+          .cc-public-link:hover {{
+            border-color: var(--cc-accent-border);
+            background: color-mix(in srgb, var(--cc-accent-soft) 75%, var(--cc-bg));
+            transform: translateY(-1px);
+          }}
+
+          .cc-public-link:focus-visible {{
+            outline: 2px solid var(--cc-accent-border);
+            outline-offset: 2px;
+          }}
+
         </style>
 
         <div class="cc-root" data-theme="{theme_mode}">
@@ -522,6 +595,7 @@ def _inject_command_center_css(theme_mode: str) -> None:
             {render_weekly_recap_builder_html()}
             {render_active_competitions_html()}
             {render_leaderboards_snapshot_html()}
+            {render_public_navigation_html()}
           </div>
         </div>
         """,
