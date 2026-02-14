@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from jupr_app.ui.components.active_competitions_ui import render_active_competitions_html
 from jupr_app.ui.components.command_center_alerts import render_alerts_html
 from jupr_app.ui.components.theme_toggle import render_theme_toggle
 from jupr_app.ui.components.weekly_recaps_ui import render_weekly_recap_builder_html
@@ -279,6 +280,114 @@ def _inject_command_center_css(theme_mode: str) -> None:
             background: var(--cc-accent-soft);
           }}
 
+          .cc-competitions {{
+            grid-column: 1 / -1;
+            border: 1px solid var(--cc-border);
+            background: var(--cc-panel);
+            box-shadow: var(--cc-shadow);
+            border-radius: 16px;
+            color: var(--cc-text);
+            padding: 1rem 1.2rem 1.2rem;
+          }}
+
+          .cc-competitions-header h3 {{
+            margin: 0;
+            font-size: 1.1rem;
+          }}
+
+          .cc-competitions-header p {{
+            margin: 0.35rem 0 0;
+            color: var(--cc-muted);
+            font-size: 0.85rem;
+          }}
+
+          .cc-competition-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.95rem;
+          }}
+
+          .cc-competition-card {{
+            border: 1px solid var(--cc-border);
+            border-radius: 12px;
+            background: var(--cc-bg);
+            padding: 0.8rem 0.9rem;
+          }}
+
+          .cc-competition-top {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.6rem;
+          }}
+
+          .cc-competition-top h4 {{
+            margin: 0;
+            font-size: 0.95rem;
+          }}
+
+          .cc-competition-status {{
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 0.18rem 0.55rem;
+            font-size: 0.72rem;
+            font-weight: 700;
+            border: 1px solid var(--cc-border);
+            color: var(--cc-text);
+          }}
+
+          .cc-competition-status-active {{
+            border-color: color-mix(in srgb, {MATCH_COLORS['win']} 45%, var(--cc-border));
+            background: color-mix(in srgb, {MATCH_COLORS['win']} 16%, var(--cc-bg));
+          }}
+
+          .cc-competition-status-upcoming {{
+            border-color: color-mix(in srgb, {MATCH_COLORS['draw']} 45%, var(--cc-border));
+            background: color-mix(in srgb, {MATCH_COLORS['draw']} 16%, var(--cc-bg));
+          }}
+
+          .cc-competition-status-closed {{
+            border-color: color-mix(in srgb, #6b7280 45%, var(--cc-border));
+            background: color-mix(in srgb, #6b7280 16%, var(--cc-bg));
+          }}
+
+          .cc-competition-actions {{
+            margin-top: 0.7rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+          }}
+
+          .cc-competition-btn {{
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 0.79rem;
+            border-radius: 10px;
+            border: 1px solid var(--cc-border);
+            color: var(--cc-text);
+            background: var(--cc-bg);
+            padding: 0.42rem 0.62rem;
+            transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+          }}
+
+          .cc-competition-btn:hover {{
+            border-color: var(--cc-accent-border);
+            background: color-mix(in srgb, var(--cc-accent-soft) 75%, var(--cc-bg));
+            transform: translateY(-1px);
+          }}
+
+          .cc-competition-btn:focus-visible {{
+            outline: 2px solid var(--cc-accent-border);
+            outline-offset: 2px;
+          }}
+
+          .cc-competition-btn-primary {{
+            border-color: var(--cc-accent-border);
+            background: var(--cc-accent-soft);
+          }}
+
         </style>
 
         <div class="cc-root" data-theme="{theme_mode}">
@@ -304,6 +413,7 @@ def _inject_command_center_css(theme_mode: str) -> None:
 
             {render_alerts_html()}
             {render_weekly_recap_builder_html()}
+            {render_active_competitions_html()}
           </div>
         </div>
         """,
