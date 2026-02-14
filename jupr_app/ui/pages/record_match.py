@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from datetime import datetime
+from typing import Any
+
+import pandas as pd
 import streamlit as st
 
+from jupr_app.domain.leagues import get_league_meta_row
+from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_tokens import get_theme_tokens
+from services.match_pipeline import submit_match
 
 
 WIZARD_STEP_KEY = "record_match_wizard_step"
@@ -85,6 +94,14 @@ def _step_1_competition_type(tokens: dict[str, str]) -> None:
             font-size: 0.9rem;
             line-height: 1.35;
         }}
+        .record-match-success-card {{
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: {tokens['card_bg']};
+            padding: 14px;
+            margin-top: 0.8rem;
+            color: {tokens['text_primary']};
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -122,12 +139,345 @@ def _step_1_competition_type(tokens: dict[str, str]) -> None:
             st.rerun()
 
 
+def _clean_divisions(meta_row: dict[str, Any] | None) -> list[str]:
+    if not meta_row:
+        return []
+    rules_cfg = meta_row.get("rules_config")
+    parsed: dict[str, Any] = {}
+    if isinstance(rules_cfg, dict):
+        parsed = rules_cfg
+    elif isinstance(rules_cfg, str) and rules_cfg.strip():
+        try:
+            parsed = json.loads(rules_cfg)
+        except Exception:
+            parsed = {}
+
+    overview = parsed.get("overview") if isinstance(parsed, dict) else {}
+    divisions = overview.get("divisions") if isinstance(overview, dict) else []
+    if not isinstance(divisions, list):
+        return []
+    cleaned = [str(d).strip() for d in divisions if str(d).strip()]
+    return cleaned
+
+
+def _league_options(ctx) -> list[str]:
+    league_names: set[str] = set()
+    df_meta = getattr(ctx, "df_meta", None)
+    if isinstance(df_meta, pd.DataFrame) and not df_meta.empty and "league_name" in df_meta.columns:
+        league_names |= {
+            str(x).strip()
+            for x in df_meta["league_name"].dropna().astype(str).tolist()
+            if str(x).strip() and str(x).strip().upper() != "OVERALL"
+        }
+
+    df_leagues = getattr(ctx, "df_leagues", None)
+    if isinstance(df_leagues, pd.DataFrame) and not df_leagues.empty and "league_name" in df_leagues.columns:
+        league_names |= {
+            str(x).strip()
+            for x in df_leagues["league_name"].dropna().astype(str).tolist()
+            if str(x).strip() and str(x).strip().upper() != "OVERALL"
+        }
+
+    return sorted(league_names)
+
+
+def _player_options_for_league(ctx, league_name: str) -> list[tuple[str, int]]:
+    df_players = getattr(ctx, "df_players_active", None)
+    if not isinstance(df_players, pd.DataFrame) or df_players.empty:
+        df_players = getattr(ctx, "df_players", None)
+
+    if not isinstance(df_players, pd.DataFrame) or df_players.empty:
+        return []
+
+    player_ids: set[int] = set()
+    df_leagues = getattr(ctx, "df_leagues", None)
+    if isinstance(df_leagues, pd.DataFrame) and not df_leagues.empty and {"league_name", "player_id"}.issubset(df_leagues.columns):
+        scoped = df_leagues[df_leagues["league_name"].astype(str).str.strip() == str(league_name).strip()].copy()
+        for pid in scoped["player_id"].dropna().tolist():
+            try:
+                player_ids.add(int(pid))
+            except Exception:
+                pass
+
+    if player_ids and "id" in df_players.columns:
+        active = df_players[df_players["id"].apply(lambda x: str(x).isdigit() and int(x) in player_ids)].copy()
+    else:
+        active = df_players.copy()
+
+    if active.empty or "name" not in active.columns or "id" not in active.columns:
+        return []
+
+    rows: list[tuple[str, int]] = []
+    for _, row in active.iterrows():
+        try:
+            pid = int(row.get("id"))
+        except Exception:
+            continue
+        name = str(row.get("name") or "").strip() or f"Player {pid}"
+        rows.append((f"{name} (#{pid})", pid))
+    rows.sort(key=lambda item: item[0].lower())
+    return rows
+
+
+def _league_rating_map(ctx, league_name: str) -> dict[int, float]:
+    df_leagues = getattr(ctx, "df_leagues", None)
+    if not isinstance(df_leagues, pd.DataFrame) or df_leagues.empty:
+        return {}
+    needed = {"league_name", "player_id", "rating"}
+    if not needed.issubset(df_leagues.columns):
+        return {}
+
+    scoped = df_leagues[df_leagues["league_name"].astype(str).str.strip() == str(league_name).strip()].copy()
+    if scoped.empty:
+        return {}
+
+    ratings: dict[int, float] = {}
+    for _, row in scoped.iterrows():
+        try:
+            ratings[int(row.get("player_id"))] = float(row.get("rating") or 1200.0)
+        except Exception:
+            continue
+    return ratings
+
+
+def _fallback_overall_rating_map(ctx) -> dict[int, float]:
+    df_players = getattr(ctx, "df_players_all", None)
+    if not isinstance(df_players, pd.DataFrame) or df_players.empty or "id" not in df_players.columns:
+        return {}
+    rating_col = None
+    for col in ("rating", "jupr", "overall_rating"):
+        if col in df_players.columns:
+            rating_col = col
+            break
+
+    ratings: dict[int, float] = {}
+    for _, row in df_players.iterrows():
+        try:
+            pid = int(row.get("id"))
+        except Exception:
+            continue
+        if rating_col is None:
+            ratings[pid] = 1200.0
+            continue
+        try:
+            ratings[pid] = float(row.get(rating_col) or 1200.0)
+        except Exception:
+            ratings[pid] = 1200.0
+    return ratings
+
+
+def _deterministic_idempotency_key(
+    *,
+    club_id: str,
+    league_id: str,
+    player_ids: list[int],
+    score_t1: int,
+    score_t2: int,
+    match_date: str,
+) -> str:
+    seed = "|".join(
+        [
+            str(club_id).strip(),
+            str(league_id).strip(),
+            "-".join(str(int(pid)) for pid in player_ids),
+            f"{int(score_t1)}-{int(score_t2)}",
+            str(match_date).strip(),
+        ]
+    )
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
+    st.markdown("### Step 2 · Ladder League details")
+    st.caption("Select league/division, assign teams, enter score, then review rating projection before confirming.")
+
+    leagues = _league_options(ctx)
+    if not leagues:
+        st.warning("No leagues found. Create a league first in League Manager.")
+        controls = st.columns([1, 4])
+        with controls[0]:
+            if st.button("← Back", key="rm_step2_back_no_league"):
+                st.session_state[WIZARD_STEP_KEY] = 1
+                st.rerun()
+        return
+
+    selected_league = st.selectbox("Select League", leagues, key="record_match_ll_league")
+    meta_row = get_league_meta_row(getattr(ctx, "df_meta", None), selected_league)
+    divisions = _clean_divisions(meta_row)
+
+    selected_division: str | None = None
+    if divisions:
+        division_options = ["All divisions"] + divisions
+        selected_division = st.selectbox("Select Division", division_options, key="record_match_ll_division")
+
+    player_options = _player_options_for_league(ctx, selected_league)
+    if not player_options:
+        st.warning("No eligible players found for this league.")
+        return
+
+    labels = [label for label, _ in player_options]
+    label_to_pid = {label: pid for label, pid in player_options}
+
+    st.markdown("#### Teams")
+    c1, c2 = st.columns(2)
+    with c1:
+        t1_p1_label = st.selectbox("Team 1 · Player 1", labels, key="rm_ll_t1_p1")
+        t1_p2_label = st.selectbox("Team 1 · Player 2", labels, key="rm_ll_t1_p2")
+    with c2:
+        t2_p1_label = st.selectbox("Team 2 · Player 1", labels, key="rm_ll_t2_p1")
+        t2_p2_label = st.selectbox("Team 2 · Player 2", labels, key="rm_ll_t2_p2")
+
+    score_cols = st.columns(2)
+    score_t1 = score_cols[0].number_input("Team 1 Score", min_value=0, max_value=99, value=0, step=1, key="rm_ll_s1")
+    score_t2 = score_cols[1].number_input("Team 2 Score", min_value=0, max_value=99, value=0, step=1, key="rm_ll_s2")
+
+    t1_p1 = label_to_pid[t1_p1_label]
+    t1_p2 = label_to_pid[t1_p2_label]
+    t2_p1 = label_to_pid[t2_p1_label]
+    t2_p2 = label_to_pid[t2_p2_label]
+
+    selected_ids = [t1_p1, t1_p2, t2_p1, t2_p2]
+    unique_ids = len(set(selected_ids)) == 4
+    has_score = int(score_t1) + int(score_t2) > 0
+
+    ratings_map = _league_rating_map(ctx, selected_league)
+    if not ratings_map:
+        ratings_map = _fallback_overall_rating_map(ctx)
+
+    def r(pid: int) -> float:
+        return float(ratings_map.get(int(pid), 1200.0))
+
+    d_t1, d_t2 = calculate_hybrid_elo(
+        (r(t1_p1) + r(t1_p2)) / 2.0,
+        (r(t2_p1) + r(t2_p2)) / 2.0,
+        int(score_t1),
+        int(score_t2),
+    )
+
+    projections = [
+        (t1_p1_label, t1_p1, r(t1_p1), r(t1_p1) + float(d_t1)),
+        (t1_p2_label, t1_p2, r(t1_p2), r(t1_p2) + float(d_t1)),
+        (t2_p1_label, t2_p1, r(t2_p1), r(t2_p1) + float(d_t2)),
+        (t2_p2_label, t2_p2, r(t2_p2), r(t2_p2) + float(d_t2)),
+    ]
+
+    st.markdown("### Step 3 · Rating preview & confirmation")
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: {tokens['card_bg']};
+            padding: 14px;
+            color: {tokens['text_primary']};
+            margin: 0.25rem 0 0.75rem 0;
+        ">
+            <strong>League:</strong> {selected_league}<br/>
+            <strong>Division:</strong> {selected_division or 'N/A'}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    preview_df = pd.DataFrame(
+        [
+            {
+                "Player": label,
+                "Current": round(current, 2),
+                "Projected": round(projected, 2),
+                "Δ": round(projected - current, 2),
+            }
+            for label, _pid, current, projected in projections
+        ]
+    )
+    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+    if not unique_ids:
+        st.error("Select 4 distinct players (2 per team).")
+    if not has_score:
+        st.error("Enter a non-zero score before confirming.")
+
+    can_submit = unique_ids and has_score and bool(getattr(ctx, "club_id", None))
+
+    controls = st.columns([1, 1, 4])
+    with controls[0]:
+        if st.button("← Back", key="rm_step2_back"):
+            st.session_state[WIZARD_STEP_KEY] = 1
+            st.rerun()
+    with controls[1]:
+        if st.button("Confirm & Submit", type="primary", disabled=not can_submit, key="rm_ll_submit"):
+            club_id = str(getattr(ctx, "club_id", "")).strip()
+            match_date = datetime.utcnow().isoformat()
+            idem_key = _deterministic_idempotency_key(
+                club_id=club_id,
+                league_id=selected_league,
+                player_ids=[t1_p1, t1_p2, t2_p1, t2_p2],
+                score_t1=int(score_t1),
+                score_t2=int(score_t2),
+                match_date=match_date,
+            )
+
+            payload = {
+                "date": match_date,
+                "league": selected_league,
+                "division": selected_division if selected_division and selected_division != "All divisions" else None,
+                "t1_p1": int(t1_p1),
+                "t1_p2": int(t1_p2),
+                "t2_p1": int(t2_p1),
+                "t2_p2": int(t2_p2),
+                "score_t1": int(score_t1),
+                "score_t2": int(score_t2),
+                "t1_p1_r": float(r(t1_p1)),
+                "t1_p2_r": float(r(t1_p2)),
+                "t2_p1_r": float(r(t2_p1)),
+                "t2_p2_r": float(r(t2_p2)),
+                "t1_p1_r_end": float(r(t1_p1) + float(d_t1)),
+                "t1_p2_r_end": float(r(t1_p2) + float(d_t1)),
+                "t2_p1_r_end": float(r(t2_p1) + float(d_t2)),
+                "t2_p2_r_end": float(r(t2_p2) + float(d_t2)),
+            }
+
+            try:
+                result = submit_match(
+                    club_id=club_id,
+                    context_type="league",
+                    context_id=selected_league,
+                    match_payload=payload,
+                    idempotency_key=idem_key,
+                )
+                st.session_state["record_match_last_submit"] = {
+                    "league": selected_league,
+                    "division": selected_division,
+                    "score": f"{int(score_t1)} - {int(score_t2)}",
+                    "idempotency_key": idem_key,
+                    "result": result,
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Submit failed: {exc}")
+
+    last_submit = st.session_state.get("record_match_last_submit")
+    if isinstance(last_submit, dict):
+        st.markdown(
+            (
+                "<div class='record-match-success-card'>"
+                "<h4 style='margin:0 0 6px 0;'>✅ Match submitted</h4>"
+                f"<div><strong>League:</strong> {last_submit.get('league')}</div>"
+                f"<div><strong>Division:</strong> {last_submit.get('division') or 'N/A'}</div>"
+                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
+                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def _step_2_placeholder(tokens: dict[str, str]) -> None:
     selected = st.session_state.get(SELECTED_TYPE_KEY)
     selected_label = selected["title"] if isinstance(selected, dict) else "Not selected"
 
     st.markdown("### Step 2 · Match details")
-    st.caption("Scaffold only: match inputs and submission wiring will be added in follow-up tasks.")
+    st.caption("Scaffold only: non-Ladder-League flows are intentionally pending.")
 
     st.markdown(
         f"""
@@ -141,7 +491,7 @@ def _step_2_placeholder(tokens: dict[str, str]) -> None:
         ">
             <strong>Selected competition type:</strong> {selected_label}<br/>
             <span style="color: {tokens['text_secondary']};">
-                This step intentionally omits submission logic for now.
+                This flow is currently implemented only for Ladder League.
             </span>
         </div>
         """,
@@ -171,5 +521,11 @@ def render(ctx) -> None:
     step = int(st.session_state.get(WIZARD_STEP_KEY, 1))
     if step <= 1:
         _step_1_competition_type(tokens)
+        return
+
+    selected = st.session_state.get(SELECTED_TYPE_KEY)
+    selected_id = selected.get("id") if isinstance(selected, dict) else None
+    if selected_id == "ladder_league":
+        _step_2_ladder_league(ctx, tokens)
     else:
         _step_2_placeholder(tokens)
