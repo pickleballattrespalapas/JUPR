@@ -1358,6 +1358,194 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
         )
 
 
+def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
+    st.markdown("### Step 2 · Moneyball result")
+    st.caption("Select an active Moneyball event, assign players, set score + bonus, then confirm.")
+
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "").strip()
+    if not supabase or not club_id:
+        st.error("Moneyball submission requires club and database context.")
+        return
+
+    try:
+        events_resp = (
+            supabase.table("events")
+            .select("id,name,event_type,is_active,created_at")
+            .eq("club_id", club_id)
+            .eq("is_active", True)
+            .in_("event_type", ["moneyball", "Moneyball", "popup_rr"])
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+        active_events = getattr(events_resp, "data", None) or []
+    except Exception as exc:
+        st.error(f"Could not load active Moneyball events: {exc}")
+        active_events = []
+
+    if not active_events:
+        st.info("No active Moneyball event found.")
+        controls = st.columns([1, 4])
+        with controls[0]:
+            if st.button("← Back", key="rm_step2_back_moneyball_empty"):
+                st.session_state[WIZARD_STEP_KEY] = 1
+                st.rerun()
+        return
+
+    event_options = {
+        f"{row.get('name') or 'Moneyball'} (#{row.get('id')})": row for row in active_events
+    }
+    selected_event_label = st.selectbox(
+        "Active Moneyball event",
+        options=list(event_options.keys()),
+        key="record_match_moneyball_event_selector",
+    )
+    selected_event = event_options[selected_event_label]
+    event_id = str(selected_event.get("id") or "").strip()
+
+    player_options = _player_options_for_league(ctx, "OVERALL")
+    if not player_options:
+        st.warning("No active players available for Moneyball entry.")
+        return
+
+    labels = [label for label, _ in player_options]
+    label_to_pid = {label: pid for label, pid in player_options}
+
+    st.markdown("#### Players")
+    c1, c2 = st.columns(2)
+    with c1:
+        t1_p1_label = st.selectbox("Team 1 · Player 1", labels, key="rm_mb_t1_p1")
+        t1_p2_label = st.selectbox("Team 1 · Player 2", labels, key="rm_mb_t1_p2")
+    with c2:
+        t2_p1_label = st.selectbox("Team 2 · Player 1", labels, key="rm_mb_t2_p1")
+        t2_p2_label = st.selectbox("Team 2 · Player 2", labels, key="rm_mb_t2_p2")
+
+    st.markdown("#### Score + Moneyball bonus")
+    score_cols = st.columns(2)
+    score_t1 = score_cols[0].number_input("Team 1 Score", min_value=0, max_value=99, value=0, step=1, key="rm_mb_s1")
+    score_t2 = score_cols[1].number_input("Team 2 Score", min_value=0, max_value=99, value=0, step=1, key="rm_mb_s2")
+
+    bonus_cols = st.columns(2)
+    bonus_t1 = bonus_cols[0].number_input("Team 1 Bonus", min_value=0, max_value=30, value=0, step=1, key="rm_mb_bonus_t1")
+    bonus_t2 = bonus_cols[1].number_input("Team 2 Bonus", min_value=0, max_value=30, value=0, step=1, key="rm_mb_bonus_t2")
+
+    total_t1 = int(score_t1) + int(bonus_t1)
+    total_t2 = int(score_t2) + int(bonus_t2)
+    total_delta = int(total_t1) - int(total_t2)
+
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: {tokens['card_bg']};
+            padding: 14px;
+            color: {tokens['text_primary']};
+            margin: 0.25rem 0 0.75rem 0;
+        ">
+            <strong>Event:</strong> {selected_event.get('name') or 'Moneyball'}<br/>
+            <strong>Raw score:</strong> {int(score_t1)} - {int(score_t2)}<br/>
+            <strong>Bonus:</strong> +{int(bonus_t1)} / +{int(bonus_t2)}<br/>
+            <strong>Total points impact:</strong> {int(total_t1)} - {int(total_t2)} (Δ {int(total_delta):+d})
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    t1_p1 = label_to_pid[t1_p1_label]
+    t1_p2 = label_to_pid[t1_p2_label]
+    t2_p1 = label_to_pid[t2_p1_label]
+    t2_p2 = label_to_pid[t2_p2_label]
+
+    selected_ids = [t1_p1, t1_p2, t2_p1, t2_p2]
+    unique_ids = len(set(selected_ids)) == 4
+    has_score = int(total_t1) + int(total_t2) > 0
+
+    if not unique_ids:
+        st.error("Select 4 distinct players (2 per team).")
+    if not has_score:
+        st.error("Enter score/bonus points before confirming.")
+
+    controls = st.columns([1, 1, 4])
+    with controls[0]:
+        if st.button("← Back", key="rm_step2_back_moneyball"):
+            st.session_state[WIZARD_STEP_KEY] = 1
+            st.rerun()
+    with controls[1]:
+        if st.button(
+            "Confirm & Submit",
+            type="primary",
+            disabled=not (unique_ids and has_score and bool(event_id)),
+            key="rm_moneyball_submit",
+        ):
+            match_date = datetime.utcnow().isoformat()
+            idem_key = _deterministic_idempotency_key(
+                club_id=club_id,
+                league_id=f"moneyball:{event_id}",
+                player_ids=[t1_p1, t1_p2, t2_p1, t2_p2],
+                score_t1=int(total_t1),
+                score_t2=int(total_t2),
+                match_date=match_date,
+            )
+
+            payload = {
+                "date": match_date,
+                "league": str(selected_event.get("name") or "Moneyball"),
+                "week_tag": f"Moneyball {event_id}",
+                "match_type": "Moneyball",
+                "is_popup": True,
+                "t1_p1": int(t1_p1),
+                "t1_p2": int(t1_p2),
+                "t2_p1": int(t2_p1),
+                "t2_p2": int(t2_p2),
+                "score_t1": int(total_t1),
+                "score_t2": int(total_t2),
+                "s1": int(total_t1),
+                "s2": int(total_t2),
+                "notes": (
+                    f"moneyball_raw_score={int(score_t1)}-{int(score_t2)};"
+                    f"moneyball_bonus={int(bonus_t1)}-{int(bonus_t2)}"
+                ),
+            }
+
+            try:
+                result = submit_match(
+                    club_id=club_id,
+                    context_type="moneyball",
+                    context_id=event_id,
+                    match_payload=payload,
+                    idempotency_key=idem_key,
+                )
+                st.session_state["record_match_last_submit"] = {
+                    "event": selected_event,
+                    "score": f"{int(total_t1)} - {int(total_t2)}",
+                    "raw_score": f"{int(score_t1)} - {int(score_t2)}",
+                    "bonus": f"+{int(bonus_t1)} / +{int(bonus_t2)}",
+                    "idempotency_key": idem_key,
+                    "result": result,
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Submit failed: {exc}")
+
+    last_submit = st.session_state.get("record_match_last_submit")
+    if isinstance(last_submit, dict) and isinstance(last_submit.get("event"), dict):
+        st.markdown(
+            (
+                "<div class='record-match-success-card'>"
+                "<h4 style='margin:0 0 6px 0;'>✅ Moneyball result submitted</h4>"
+                f"<div><strong>Event:</strong> {last_submit['event'].get('name')}</div>"
+                f"<div><strong>Raw score:</strong> {last_submit.get('raw_score')}</div>"
+                f"<div><strong>Bonus:</strong> {last_submit.get('bonus')}</div>"
+                f"<div><strong>Submitted total:</strong> {last_submit.get('score')}</div>"
+                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def render(ctx) -> None:
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell("🧾 Record Match", "Unified wizard for recording results across competition types.", mode_label=mode_label)
@@ -1384,5 +1572,7 @@ def render(ctx) -> None:
         _step_2_tournament(ctx, tokens)
     elif selected_id == "round_robin":
         _step_2_round_robin(ctx, tokens)
+    elif selected_id == "moneyball":
+        _step_2_moneyball(ctx, tokens)
     else:
         _step_2_placeholder(tokens)

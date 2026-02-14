@@ -17,7 +17,7 @@ from typing import Any, Dict, Literal, Optional
 
 from jupr_app.data.client import make_supabase
 
-_ALLOWED_CONTEXT_TYPES = {"league", "ladder", "tournament", "round_robin", "admin"}
+_ALLOWED_CONTEXT_TYPES = {"league", "ladder", "tournament", "round_robin", "moneyball", "admin"}
 
 
 def get_supabase_client() -> Any:
@@ -37,7 +37,7 @@ def get_supabase_client() -> Any:
 
 def submit_match(
     club_id: str,
-    context_type: Literal["league", "ladder", "tournament", "round_robin", "admin"],
+    context_type: Literal["league", "ladder", "tournament", "round_robin", "moneyball", "admin"],
     context_id: Optional[str],
     match_payload: Dict[str, Any],
     idempotency_key: Optional[str] = None,
@@ -52,7 +52,7 @@ def submit_match(
 
     if context_type not in _ALLOWED_CONTEXT_TYPES:
         raise ValueError(
-            "context_type must be one of: league, ladder, tournament, round_robin, admin"
+            "context_type must be one of: league, ladder, tournament, round_robin, moneyball, admin"
         )
 
     if not isinstance(match_payload, dict):
