@@ -18,6 +18,8 @@ from services.match_pipeline import submit_match
 
 WIZARD_STEP_KEY = "record_match_wizard_step"
 SELECTED_TYPE_KEY = "record_match_competition_type"
+BULK_UPLOAD_STATE_KEY = "record_match_bulk_upload"
+BULK_CHUNK_SIZE = 200
 
 COMPETITION_TYPES: list[dict[str, str]] = [
     {
@@ -286,6 +288,243 @@ def _deterministic_idempotency_key(
         ]
     )
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def _normalize_bulk_columns(df: pd.DataFrame) -> pd.DataFrame:
+    renamed = {
+        col: str(col).strip().lower().replace(" ", "_") for col in df.columns
+    }
+    out = df.rename(columns=renamed).copy()
+    alias_map = {
+        "s1": "score_t1",
+        "s2": "score_t2",
+        "date_utc": "date",
+        "match_date": "date",
+        "league_name": "league",
+    }
+    for src, dst in alias_map.items():
+        if src in out.columns and dst not in out.columns:
+            out[dst] = out[src]
+    return out
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return int(float(text))
+
+
+def _coerce_required_int(value: Any, field: str, row_number: int) -> int:
+    try:
+        parsed = _coerce_optional_int(value)
+    except Exception as exc:
+        raise ValueError(f"row {row_number}: invalid {field} ({exc})") from exc
+    if parsed is None:
+        raise ValueError(f"row {row_number}: missing required field '{field}'")
+    return int(parsed)
+
+
+def _step_2_bulk_match_entry(ctx, tokens: dict[str, str]) -> None:
+    st.markdown("### Step 2 · Bulk Match Entry")
+    st.caption("Upload CSV, validate rows, then submit in chunks via submit_match().")
+
+    club_id = str(getattr(ctx, "club_id", "") or "").strip()
+    if not club_id:
+        st.error("Bulk Match Entry requires a valid club context.")
+        return
+
+    st.markdown(
+        (
+            f"<div style='border:1px solid {tokens['border_subtle']};border-radius:12px;"
+            f"background:{tokens['card_bg']};padding:12px;margin-bottom:0.75rem;'>"
+            "<strong>Required CSV columns:</strong> "
+            "<code>league,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2</code><br/>"
+            "<span style='font-size:0.9rem;'>Optional: <code>date,match_type,week_tag,division,notes,context_type,context_id</code>.</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload match CSV",
+        type=["csv"],
+        key="record_match_bulk_csv",
+        help="One row per match. Player fields should be numeric player IDs.",
+    )
+
+    parsed_rows: list[dict[str, Any]] = []
+    structure_errors: list[str] = []
+    preview_df = pd.DataFrame()
+
+    if uploaded_file is not None:
+        try:
+            uploaded_file.seek(0)
+            raw_df = pd.read_csv(uploaded_file)
+            normalized_df = _normalize_bulk_columns(raw_df)
+        except Exception as exc:
+            st.error(f"Could not parse CSV: {exc}")
+            normalized_df = pd.DataFrame()
+
+        required_cols = ["league", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"]
+        missing_cols = [c for c in required_cols if c not in normalized_df.columns]
+        if missing_cols:
+            structure_errors.append(f"Missing required columns: {', '.join(missing_cols)}")
+
+        if not normalized_df.empty and not missing_cols:
+            for idx, row in normalized_df.iterrows():
+                row_number = int(idx) + 2
+                try:
+                    league = str(row.get("league") or "").strip()
+                    if not league:
+                        raise ValueError(f"row {row_number}: missing required field 'league'")
+
+                    parsed = {
+                        "row_number": row_number,
+                        "league": league,
+                        "t1_p1": _coerce_required_int(row.get("t1_p1"), "t1_p1", row_number),
+                        "t1_p2": _coerce_required_int(row.get("t1_p2"), "t1_p2", row_number),
+                        "t2_p1": _coerce_required_int(row.get("t2_p1"), "t2_p1", row_number),
+                        "t2_p2": _coerce_required_int(row.get("t2_p2"), "t2_p2", row_number),
+                        "score_t1": _coerce_required_int(row.get("score_t1"), "score_t1", row_number),
+                        "score_t2": _coerce_required_int(row.get("score_t2"), "score_t2", row_number),
+                        "date": str(row.get("date") or "").strip() or datetime.utcnow().isoformat(),
+                        "match_type": str(row.get("match_type") or "").strip() or "BulkEntry",
+                        "week_tag": str(row.get("week_tag") or "").strip() or None,
+                        "division": str(row.get("division") or "").strip() or None,
+                        "notes": str(row.get("notes") or "").strip() or None,
+                        "context_type": str(row.get("context_type") or "").strip() or "league",
+                        "context_id": str(row.get("context_id") or "").strip() or None,
+                    }
+                    if parsed["score_t1"] == 0 and parsed["score_t2"] == 0:
+                        raise ValueError(f"row {row_number}: both scores cannot be zero")
+                    if len({parsed["t1_p1"], parsed["t1_p2"], parsed["t2_p1"], parsed["t2_p2"]}) != 4:
+                        raise ValueError(f"row {row_number}: players must be 4 distinct IDs")
+                    parsed_rows.append(parsed)
+                except Exception as exc:
+                    structure_errors.append(str(exc))
+
+        preview_cols = [
+            "row_number",
+            "league",
+            "t1_p1",
+            "t1_p2",
+            "t2_p1",
+            "t2_p2",
+            "score_t1",
+            "score_t2",
+            "date",
+            "context_type",
+            "context_id",
+        ]
+        if parsed_rows:
+            preview_df = pd.DataFrame(parsed_rows)[preview_cols]
+            st.session_state[BULK_UPLOAD_STATE_KEY] = parsed_rows
+        else:
+            st.session_state[BULK_UPLOAD_STATE_KEY] = []
+
+    if not preview_df.empty:
+        st.markdown("#### Preview")
+        st.dataframe(preview_df.head(200), hide_index=True, use_container_width=True)
+        if len(preview_df) > 200:
+            st.caption(f"Showing first 200 of {len(preview_df)} parsed rows.")
+
+    if structure_errors:
+        st.error("CSV validation failed for one or more rows.")
+        for message in structure_errors[:50]:
+            st.caption(f"• {message}")
+        if len(structure_errors) > 50:
+            st.caption(f"… plus {len(structure_errors) - 50} more validation errors.")
+
+    valid_rows = st.session_state.get(BULK_UPLOAD_STATE_KEY) or []
+    can_submit = bool(valid_rows) and not structure_errors
+
+    controls = st.columns([1, 1, 4])
+    with controls[0]:
+        if st.button("← Back", key="rm_step2_back_bulk"):
+            st.session_state[WIZARD_STEP_KEY] = 1
+            st.rerun()
+    with controls[1]:
+        confirm = st.button("Confirm & Submit", type="primary", disabled=not can_submit, key="rm_bulk_submit")
+
+    if confirm:
+        success_count = 0
+        error_rows: list[str] = []
+        total_rows = len(valid_rows)
+        progress = st.progress(0.0)
+
+        for chunk_start in range(0, total_rows, BULK_CHUNK_SIZE):
+            chunk = valid_rows[chunk_start : chunk_start + BULK_CHUNK_SIZE]
+            for row in chunk:
+                context_type = str(row.get("context_type") or "league").strip().lower() or "league"
+                if context_type not in {"league", "ladder", "tournament", "round_robin", "moneyball", "admin"}:
+                    context_type = "admin"
+                context_id = row.get("context_id") or (row.get("league") if context_type == "league" else None)
+                row_seed_date = str(row.get("date") or "").strip()
+                idem_key = _deterministic_idempotency_key(
+                    club_id=club_id,
+                    league_id=f"{row.get('league')}|{row.get('row_number')}",
+                    player_ids=[row["t1_p1"], row["t1_p2"], row["t2_p1"], row["t2_p2"]],
+                    score_t1=int(row["score_t1"]),
+                    score_t2=int(row["score_t2"]),
+                    match_date=row_seed_date,
+                )
+                payload = {
+                    "date": row_seed_date,
+                    "league": row["league"],
+                    "division": row.get("division"),
+                    "match_type": row.get("match_type"),
+                    "week_tag": row.get("week_tag"),
+                    "notes": row.get("notes"),
+                    "t1_p1": int(row["t1_p1"]),
+                    "t1_p2": int(row["t1_p2"]),
+                    "t2_p1": int(row["t2_p1"]),
+                    "t2_p2": int(row["t2_p2"]),
+                    "score_t1": int(row["score_t1"]),
+                    "score_t2": int(row["score_t2"]),
+                    "s1": int(row["score_t1"]),
+                    "s2": int(row["score_t2"]),
+                }
+                try:
+                    submit_match(
+                        club_id=club_id,
+                        context_type=context_type,
+                        context_id=str(context_id) if context_id is not None else None,
+                        match_payload=payload,
+                        idempotency_key=idem_key,
+                    )
+                    success_count += 1
+                except Exception as exc:
+                    error_rows.append(f"row {row.get('row_number')}: {exc}")
+
+                processed = success_count + len(error_rows)
+                progress.progress(min(1.0, processed / max(total_rows, 1)))
+
+        st.session_state["record_match_last_submit"] = {
+            "bulk_summary": {
+                "total": total_rows,
+                "success": success_count,
+                "errors": error_rows,
+            }
+        }
+        st.rerun()
+
+    last_submit = st.session_state.get("record_match_last_submit")
+    summary = (last_submit or {}).get("bulk_summary") if isinstance(last_submit, dict) else None
+    if isinstance(summary, dict):
+        total = int(summary.get("total") or 0)
+        success = int(summary.get("success") or 0)
+        errors = summary.get("errors") or []
+        st.markdown("### Submission summary")
+        st.success(f"Submitted successfully: {success} / {total}")
+        if errors:
+            st.error(f"Failed rows: {len(errors)}")
+            for err in errors[:50]:
+                st.caption(f"• {err}")
+            if len(errors) > 50:
+                st.caption(f"… plus {len(errors) - 50} more errors.")
 
 
 def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
@@ -1574,5 +1813,7 @@ def render(ctx) -> None:
         _step_2_round_robin(ctx, tokens)
     elif selected_id == "moneyball":
         _step_2_moneyball(ctx, tokens)
+    elif selected_id == "bulk_match_entry":
+        _step_2_bulk_match_entry(ctx, tokens)
     else:
         _step_2_placeholder(tokens)
