@@ -4,6 +4,7 @@ import streamlit as st
 
 from jupr_app.ui.components.active_competitions_ui import render_active_competitions_html
 from jupr_app.ui.components.command_center_alerts import render_alerts_html
+from jupr_app.ui.components.leaderboards_snapshot_ui import render_leaderboards_snapshot_html
 from jupr_app.ui.components.theme_toggle import render_theme_toggle
 from jupr_app.ui.components.weekly_recaps_ui import render_weekly_recap_builder_html
 from jupr_app.ui.theme import MATCH_COLORS
@@ -388,6 +389,112 @@ def _inject_command_center_css(theme_mode: str) -> None:
             background: var(--cc-accent-soft);
           }}
 
+          .cc-leaderboards {{
+            grid-column: 1 / -1;
+            border: 1px solid var(--cc-border);
+            background: var(--cc-panel);
+            box-shadow: var(--cc-shadow);
+            border-radius: 16px;
+            color: var(--cc-text);
+            padding: 1rem 1.2rem 1.2rem;
+          }}
+
+          .cc-leaderboards-header h3 {{
+            margin: 0;
+            font-size: 1.1rem;
+          }}
+
+          .cc-leaderboards-header p {{
+            margin: 0.35rem 0 0;
+            color: var(--cc-muted);
+            font-size: 0.85rem;
+          }}
+
+          .cc-lb-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.95rem;
+          }}
+
+          .cc-lb-row {{
+            border: 1px solid var(--cc-border);
+            border-radius: 12px;
+            background: var(--cc-bg);
+            padding: 0.75rem 0.85rem;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            gap: 0.6rem;
+          }}
+
+          .cc-lb-player-wrap {{
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            min-width: 0;
+          }}
+
+          .cc-lb-rank {{
+            font-size: 0.84rem;
+            font-weight: 800;
+            color: var(--cc-muted);
+            min-width: 2.2rem;
+          }}
+
+          .cc-lb-player {{
+            margin: 0;
+            font-size: 0.94rem;
+            font-weight: 700;
+            color: var(--cc-text);
+            line-height: 1.25;
+          }}
+
+          .cc-lb-meta {{
+            margin: 0.22rem 0 0;
+            font-size: 0.79rem;
+            color: var(--cc-muted);
+          }}
+
+          .cc-lb-right {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            justify-content: flex-end;
+          }}
+
+          .cc-lb-division,
+          .cc-lb-move {{
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            border: 1px solid var(--cc-border);
+            padding: 0.16rem 0.5rem;
+            font-size: 0.72rem;
+            font-weight: 700;
+            line-height: 1.25;
+          }}
+
+          .cc-lb-division {{
+            color: var(--cc-muted);
+            background: color-mix(in srgb, var(--cc-bg) 82%, var(--cc-panel));
+          }}
+
+          .cc-lb-move-up {{
+            border-color: color-mix(in srgb, {MATCH_COLORS['win']} 45%, var(--cc-border));
+            background: color-mix(in srgb, {MATCH_COLORS['win']} 18%, var(--cc-bg));
+          }}
+
+          .cc-lb-move-down {{
+            border-color: color-mix(in srgb, {MATCH_COLORS['loss']} 45%, var(--cc-border));
+            background: color-mix(in srgb, {MATCH_COLORS['loss']} 16%, var(--cc-bg));
+          }}
+
+          .cc-lb-move-flat {{
+            border-color: color-mix(in srgb, #6b7280 45%, var(--cc-border));
+            background: color-mix(in srgb, #6b7280 14%, var(--cc-bg));
+          }}
+
         </style>
 
         <div class="cc-root" data-theme="{theme_mode}">
@@ -414,6 +521,7 @@ def _inject_command_center_css(theme_mode: str) -> None:
             {render_alerts_html()}
             {render_weekly_recap_builder_html()}
             {render_active_competitions_html()}
+            {render_leaderboards_snapshot_html()}
           </div>
         </div>
         """,
