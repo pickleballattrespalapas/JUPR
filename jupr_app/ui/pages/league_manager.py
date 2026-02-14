@@ -25,7 +25,6 @@ from jupr_app.domain.leagues import (
     mint_top_performer_badges,
     normalize_league_status,
 )
-from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.roster import (
     compress_courts,
     courts_to_roster_df,
@@ -694,45 +693,9 @@ def render(ctx):
                 submitted = st.form_submit_button("Submit Round & Calculate Movement")
 
             if submitted:
-                # Build match payload
-                valid_matches = []
-                for r in all_results:
-                    if r["s1"] > 0 or r["s2"] > 0:
-                        valid_matches.append({
-                            **r,
-                            "date": _utc_iso_now(),
-                            "league": st.session_state.get("saved_ladder_lg", ""),
-                            "match_type": "Live Match",
-                            "week_tag": st.session_state.get("saved_ladder_wk", ""),
-                            "is_popup": False,
-                        })
-
-                if not valid_matches:
-                    st.warning("No scores entered (all matches 0–0).")
-                    st.stop()
-
-                # Save matches (refactored signature)
-                res = process_matches(
-                    valid_matches,
-                    supabase=ctx.supabase,
-                    club_id=str(ctx.club_id),
-                    name_to_id=name_to_id,
-                    df_players_all=ctx.df_players_all,
-                    df_leagues=ctx.df_leagues,
-                    df_meta=ctx.df_meta,
-                )
-                st.success(f"Matches saved ({res['inserted']}). Skipped incomplete: {res['skipped_incomplete']}.")
-
-                # Compute movement preview
-                roster_pids = roster_now["player_id"].astype(int).tolist()
-                stats = compute_round_stats(valid_matches, roster_pids)
-                max_court = int(roster_now["court"].max())
-                preview = build_movement_preview(roster_now, stats, max_court=max_court)
-
-                st.session_state.ladder_movement_preview = preview
-                st.session_state.ladder_state = "CONFIRM_MOVEMENT"
-                st.session_state.pop("current_schedule", None)
-                st.rerun()
+                st.warning("Round result submission moved to the unified Record Match Result wizard.")
+                st.link_button("Open Record Match Result", "/?page=record_match", use_container_width=True)
+                st.stop()
 
         # -------------------------
         # 5) CONFIRM MOVEMENT

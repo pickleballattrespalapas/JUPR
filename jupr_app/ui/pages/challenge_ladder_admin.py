@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, Tuple
 import pandas as pd
 import streamlit as st
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
-from jupr_app.domain.match_processing import process_matches
 
 from jupr_app.domain.challenge_ladder import (
     TIER_ORDER,
@@ -787,50 +786,9 @@ def render(ctx):
                             match_b_total_s1 = sum(s1 for s1, _ in match_b_games)
                             match_b_total_s2 = sum(s2 for _, s2 in match_b_games)
 
-                            match_iso = str(draft.get("match_iso"))
-                            match_a = {
-                                "date": match_iso,
-                                "league": "OVERALL",
-                                "match_type": "ChallengeLadder",
-                                "is_popup": True,
-                                "t1_p1": int(chal_id),
-                                "t1_p2": int(p.get("a_chal")),
-                                "t2_p1": int(def_id),
-                                "t2_p2": int(p.get("a_def")),
-                                "s1": int(match_a_total_s1),
-                                "s2": int(match_a_total_s2),
-                                "context_type": "challenge_ladder",
-                                "context_id": int(ch_id),
-                            }
-                            match_b = {
-                                "date": match_iso,
-                                "league": "OVERALL",
-                                "match_type": "ChallengeLadder",
-                                "is_popup": True,
-                                "t1_p1": int(chal_id),
-                                "t1_p2": int(p.get("b_chal")),
-                                "t2_p1": int(def_id),
-                                "t2_p2": int(p.get("b_def")),
-                                "s1": int(match_b_total_s1),
-                                "s2": int(match_b_total_s2),
-                                "context_type": "challenge_ladder",
-                                "context_id": int(ch_id),
-                            }
-
-                            try:
-                                pm_result = process_matches(
-                                    [match_a, match_b],
-                                    supabase=ctx.supabase,
-                                    club_id=str(ctx.club_id),
-                                    name_to_id=ctx.name_to_id,
-                                    df_players_all=ctx.df_players_all,
-                                    df_leagues=ctx.df_leagues,
-                                    df_meta=ctx.df_meta,
-                                    sb_retry=sb_retry,
-                                )
-                            except Exception as e:
-                                st.error(f"Could not process challenge matches: {e}")
-                                st.stop()
+                            st.warning("Challenge result submission moved to the unified Record Match Result wizard.")
+                            st.link_button("Open Record Match Result", "/?page=record_match", use_container_width=True)
+                            st.stop()
 
                             computed_name = challenger_name if computed_side == "challenger" else defender_name
                             final_name = ladder_nm(final_winner_id, id_to_name)
@@ -878,10 +836,6 @@ def render(ctx):
                             )
 
                             st.session_state.pop(draft_key, None)
-                            if int(pm_result.get("inserted", 0)) != 2:
-                                st.warning(f"Expected 2 inserted matches; got {pm_result}.")
-                            else:
-                                st.success("Challenge result recorded. 2 matches inserted and OVERALL ratings updated.")
                             st.rerun()
 
     # -------------------------

@@ -20,9 +20,9 @@ def render(ctx):
 5) **Movement:** Review auto movement; override if needed  
 6) **Next round:** Confirm and continue
 
-### 📝 Match Uploader (Quick / Pop-Up)
-- Use for paper sheets, quick manual entry, or pop-up socials  
-- PopUps should **not** affect league ratings (if you enforce that policy)
+### 🧾 Record Match (Unified Wizard)
+- Use this wizard for all match entry workflows (league, challenge ladder, tournaments, round robin, and moneyball)
+- Legacy quick-entry tools have been retired to keep one canonical match writer
 
 ### 📝 Match Log
 - Filter matches, scan duplicates, bulk delete
