@@ -995,6 +995,369 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
         )
 
 
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _first_int(row: dict[str, Any], keys: list[str]) -> int | None:
+    for key in keys:
+        if key in row:
+            parsed = _safe_int(row.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _round_robin_team_ids(match_row: dict[str, Any], prefix: str) -> tuple[int | None, int | None]:
+    p1 = _first_int(match_row, [f"{prefix}_p1_id", f"{prefix}_player1_id", f"{prefix}1_id"])
+    p2 = _first_int(match_row, [f"{prefix}_p2_id", f"{prefix}_player2_id", f"{prefix}2_id"])
+    return p1, p2
+
+
+def _round_robin_team_label(match_row: dict[str, Any], prefix: str, id_to_name: dict[int, str]) -> str:
+    p1, p2 = _round_robin_team_ids(match_row, prefix)
+    if p1 is None and p2 is None:
+        return "TBD"
+    left = id_to_name.get(int(p1), f"#{p1}") if p1 is not None else "TBD"
+    right = id_to_name.get(int(p2), f"#{p2}") if p2 is not None else "TBD"
+    return f"{left} / {right}"
+
+
+def _compute_round_robin_pool_standings(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    standings: dict[int, dict[str, Any]] = {}
+
+    def ensure(pid: int) -> dict[str, Any]:
+        if pid not in standings:
+            standings[pid] = {
+                "player_id": int(pid),
+                "wins": 0,
+                "losses": 0,
+                "ties": 0,
+                "matches_played": 0,
+                "points_for": 0,
+                "points_against": 0,
+                "point_diff": 0,
+            }
+        return standings[pid]
+
+    for match in matches:
+        score_a = _safe_int(match.get("score_a"))
+        score_b = _safe_int(match.get("score_b"))
+        if score_a is None or score_b is None:
+            continue
+
+        a1, a2 = _round_robin_team_ids(match, "team_a")
+        b1, b2 = _round_robin_team_ids(match, "team_b")
+        team_a_ids = [pid for pid in (a1, a2) if pid is not None]
+        team_b_ids = [pid for pid in (b1, b2) if pid is not None]
+        if not team_a_ids or not team_b_ids:
+            continue
+
+        for pid in team_a_ids:
+            row = ensure(pid)
+            row["matches_played"] += 1
+            row["points_for"] += int(score_a)
+            row["points_against"] += int(score_b)
+            if score_a > score_b:
+                row["wins"] += 1
+            elif score_a < score_b:
+                row["losses"] += 1
+            else:
+                row["ties"] += 1
+
+        for pid in team_b_ids:
+            row = ensure(pid)
+            row["matches_played"] += 1
+            row["points_for"] += int(score_b)
+            row["points_against"] += int(score_a)
+            if score_b > score_a:
+                row["wins"] += 1
+            elif score_b < score_a:
+                row["losses"] += 1
+            else:
+                row["ties"] += 1
+
+    for row in standings.values():
+        row["point_diff"] = int(row["points_for"]) - int(row["points_against"])
+
+    return sorted(
+        standings.values(),
+        key=lambda row: (
+            -int(row["wins"]),
+            -int(row["point_diff"]),
+            -int(row["points_for"]),
+            int(row["player_id"]),
+        ),
+    )
+
+
+def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
+    st.markdown("### Step 2 · Round Robin match entry")
+    st.caption("Select an active session, choose a pool, pick a pairing, then submit score.")
+
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "").strip()
+    if not supabase or not club_id:
+        st.error("Round Robin submission requires club and database context.")
+        return
+
+    try:
+        sessions_resp = (
+            supabase.table("round_robin_sessions")
+            .select("id,name,status,created_at")
+            .eq("club_id", club_id)
+            .in_("status", ["ACTIVE", "IN_PROGRESS"])
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+        sessions = getattr(sessions_resp, "data", None) or []
+    except Exception as exc:
+        st.error(f"Could not load active round robin sessions: {exc}")
+        sessions = []
+
+    if not sessions:
+        st.info("No active Round Robin session found.")
+        controls = st.columns([1, 4])
+        with controls[0]:
+            if st.button("← Back", key="rm_step2_back_rr_empty"):
+                st.session_state[WIZARD_STEP_KEY] = 1
+                st.rerun()
+        return
+
+    session_options = {
+        f"{row.get('name') or 'Round Robin'} · {row.get('status')} (#{row.get('id')})": row
+        for row in sessions
+    }
+    selected_session_label = st.selectbox(
+        "Active Round Robin session",
+        options=list(session_options.keys()),
+        key="record_match_rr_session_selector",
+    )
+    selected_session = session_options[selected_session_label]
+    session_id = str(selected_session.get("id"))
+
+    pools_resp = (
+        supabase.table("round_robin_pools")
+        .select("id,name,pool_number")
+        .eq("session_id", session_id)
+        .order("pool_number", desc=False)
+        .order("name", desc=False)
+        .execute()
+    )
+    pools = getattr(pools_resp, "data", None) or []
+    if not pools:
+        st.warning("No pools found for this session.")
+        return
+
+    pool_options = {
+        f"Pool {row.get('pool_number') or '?'} · {row.get('name') or 'Unnamed'} (#{row.get('id')})": row
+        for row in pools
+    }
+    selected_pool_label = st.selectbox(
+        "Pool",
+        options=list(pool_options.keys()),
+        key=f"record_match_rr_pool_selector_{session_id}",
+    )
+    selected_pool = pool_options[selected_pool_label]
+    pool_id = str(selected_pool.get("id"))
+
+    matches_resp = (
+        supabase.table("round_robin_matches")
+        .select("*")
+        .eq("pool_id", pool_id)
+        .order("match_number", desc=False)
+        .order("created_at", desc=False)
+        .execute()
+    )
+    pool_matches = getattr(matches_resp, "data", None) or []
+    if not pool_matches:
+        st.info("No matches generated yet for this pool.")
+        return
+
+    id_to_name = getattr(ctx, "id_to_name", None) or {}
+    pending_matches: list[dict[str, Any]] = []
+    table_rows: list[dict[str, Any]] = []
+    for match in pool_matches:
+        score_a = _safe_int(match.get("score_a"))
+        score_b = _safe_int(match.get("score_b"))
+        done = bool(match.get("finalized_at")) or (score_a is not None and score_b is not None)
+        if not done:
+            pending_matches.append(match)
+        table_rows.append(
+            {
+                "Match": match.get("match_number") or match.get("id"),
+                "Team A": _round_robin_team_label(match, "team_a", id_to_name),
+                "Team B": _round_robin_team_label(match, "team_b", id_to_name),
+                "Score": f"{score_a} - {score_b}" if done and score_a is not None and score_b is not None else "Pending",
+                "Status": "Final" if done else "Pending",
+            }
+        )
+
+    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+    if not pending_matches:
+        st.success("All pairings in this pool already have scores.")
+        return
+
+    pairing_options: dict[str, dict[str, Any]] = {}
+    for match in pending_matches:
+        match_id = match.get("id")
+        pairing_options[
+            f"#{match.get('match_number') or match_id} · {_round_robin_team_label(match, 'team_a', id_to_name)} vs {_round_robin_team_label(match, 'team_b', id_to_name)}"
+        ] = match
+
+    selected_pairing_label = st.selectbox(
+        "Match pairing",
+        options=list(pairing_options.keys()),
+        key=f"record_match_rr_pairing_selector_{pool_id}",
+    )
+    selected_pairing = pairing_options[selected_pairing_label]
+
+    score_cols = st.columns(2)
+    score_t1 = score_cols[0].number_input(
+        "Team A score",
+        min_value=0,
+        max_value=99,
+        value=0,
+        step=1,
+        key=f"rm_rr_s1_{selected_pairing['id']}",
+    )
+    score_t2 = score_cols[1].number_input(
+        "Team B score",
+        min_value=0,
+        max_value=99,
+        value=0,
+        step=1,
+        key=f"rm_rr_s2_{selected_pairing['id']}",
+    )
+
+    has_score = int(score_t1) + int(score_t2) > 0
+    if not has_score:
+        st.error("Enter a non-zero score before confirming.")
+
+    controls = st.columns([1, 1, 4])
+    with controls[0]:
+        if st.button("← Back", key="rm_step2_back_round_robin"):
+            st.session_state[WIZARD_STEP_KEY] = 1
+            st.rerun()
+    with controls[1]:
+        if st.button(
+            "Confirm & Submit",
+            type="primary",
+            disabled=not has_score,
+            key="rm_round_robin_submit",
+        ):
+            team_a_p1, team_a_p2 = _round_robin_team_ids(selected_pairing, "team_a")
+            team_b_p1, team_b_p2 = _round_robin_team_ids(selected_pairing, "team_b")
+            if None in (team_a_p1, team_a_p2, team_b_p1, team_b_p2):
+                st.error("Selected pairing is missing one or more player assignments.")
+                return
+
+            match_date = datetime.utcnow().isoformat()
+            idem_key = _deterministic_idempotency_key(
+                club_id=club_id,
+                league_id=f"round_robin:{session_id}:pool:{pool_id}:match:{selected_pairing['id']}",
+                player_ids=[int(team_a_p1), int(team_a_p2), int(team_b_p1), int(team_b_p2)],
+                score_t1=int(score_t1),
+                score_t2=int(score_t2),
+                match_date=match_date,
+            )
+
+            payload = {
+                "date": match_date,
+                "league": selected_session.get("name") or "Round Robin",
+                "match_type": "Round Robin",
+                "week_tag": f"Round Robin Session {session_id}",
+                "is_popup": True,
+                "round_robin_session_id": session_id,
+                "round_robin_pool_id": pool_id,
+                "round_robin_match_id": selected_pairing["id"],
+                "t1_p1": int(team_a_p1),
+                "t1_p2": int(team_a_p2),
+                "t2_p1": int(team_b_p1),
+                "t2_p2": int(team_b_p2),
+                "score_t1": int(score_t1),
+                "score_t2": int(score_t2),
+                "s1": int(score_t1),
+                "s2": int(score_t2),
+            }
+
+            try:
+                result = submit_match(
+                    club_id=club_id,
+                    context_type="round_robin",
+                    context_id=session_id,
+                    match_payload=payload,
+                    idempotency_key=idem_key,
+                )
+
+                update_payload = {
+                    "score_a": int(score_t1),
+                    "score_b": int(score_t2),
+                    "winner_side": "A" if int(score_t1) > int(score_t2) else ("B" if int(score_t2) > int(score_t1) else "TIE"),
+                    "updated_at": datetime.utcnow().isoformat(),
+                    "finalized_at": datetime.utcnow().isoformat(),
+                }
+                supabase.table("round_robin_matches").update(update_payload).eq("id", selected_pairing["id"]).execute()
+
+                refreshed_matches_resp = supabase.table("round_robin_matches").select("*").eq("pool_id", pool_id).execute()
+                refreshed_matches = getattr(refreshed_matches_resp, "data", None) or []
+                standings_rows = _compute_round_robin_pool_standings(refreshed_matches)
+                for rank, row in enumerate(standings_rows, start=1):
+                    upsert_payload = {
+                        "session_id": session_id,
+                        "pool_id": pool_id,
+                        "player_id": int(row["player_id"]),
+                        "rank": int(rank),
+                        "wins": int(row["wins"]),
+                        "losses": int(row["losses"]),
+                        "ties": int(row["ties"]),
+                        "matches_played": int(row["matches_played"]),
+                        "points_for": int(row["points_for"]),
+                        "points_against": int(row["points_against"]),
+                        "point_diff": int(row["point_diff"]),
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                    supabase.table("round_robin_standings").upsert(
+                        upsert_payload,
+                        on_conflict="session_id,pool_id,player_id",
+                    ).execute()
+
+                st.session_state["record_match_last_submit"] = {
+                    "session": selected_session,
+                    "pool": selected_pool,
+                    "pairing": selected_pairing_label,
+                    "score": f"{int(score_t1)} - {int(score_t2)}",
+                    "idempotency_key": idem_key,
+                    "result": result,
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Submit failed: {exc}")
+
+    last_submit = st.session_state.get("record_match_last_submit")
+    if isinstance(last_submit, dict) and isinstance(last_submit.get("session"), dict):
+        session = last_submit.get("session") or {}
+        pool = last_submit.get("pool") or {}
+        st.markdown(
+            (
+                "<div class='record-match-success-card'>"
+                "<h4 style='margin:0 0 6px 0;'>✅ Round Robin match submitted</h4>"
+                f"<div><strong>Session:</strong> {session.get('name')}</div>"
+                f"<div><strong>Pool:</strong> {pool.get('name') or pool.get('pool_number')}</div>"
+                f"<div><strong>Pairing:</strong> {last_submit.get('pairing')}</div>"
+                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
+                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def render(ctx) -> None:
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell("🧾 Record Match", "Unified wizard for recording results across competition types.", mode_label=mode_label)
@@ -1019,5 +1382,7 @@ def render(ctx) -> None:
         _step_2_challenge_ladder(ctx, tokens)
     elif selected_id == "tournament":
         _step_2_tournament(ctx, tokens)
+    elif selected_id == "round_robin":
+        _step_2_round_robin(ctx, tokens)
     else:
         _step_2_placeholder(tokens)
