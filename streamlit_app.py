@@ -215,6 +215,38 @@ def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> 
     return sel
 
 
+def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> str:
+    taxonomy = [
+        ("Command Center", ["🧭 Command Center"]),
+        ("Competitions", ["🪜 Challenge Ladder", "🏆 Tournaments", "🏆 Tournament Manager", "💰 Moneyball"]),
+        ("Results", ["🧾 Record Match", "📊 League Results", "🎯 Match Explorer", "📝 Match Log", "🗞️ Weekly Recap", "🗞️ Weekly Recap Admin"]),
+        ("Players", ["🔍 Player Search", "👥 Player Editor", "🖨️ League Night Printout"]),
+        ("Recognition", ["🏆 Leaderboards", "📼 Badge Codex", "🧪 Badge Debug"]),
+        ("Administration", ["🏟️ League Manager", "🛠️ Challenge Ladder Admin", "⚙️ Admin Tools", "📘 Admin Guide", "🎨 Theme QA", "❓ FAQs"]),
+    ]
+
+    selected = current_label
+    for section_name, labels in taxonomy:
+        available = []
+        for label in labels:
+            if label == "🗞️ Weekly Recap Admin" and not admin_logged_in:
+                continue
+            if label in st.session_state.get("_visible_labels", []):
+                available.append(label)
+        if not available:
+            continue
+
+        st.sidebar.markdown(f"### {section_name}")
+        for label in available:
+            prefix = "👉 " if label == selected else ""
+            if st.sidebar.button(f"{prefix}{label}", key=f"nav_btn_{label}", use_container_width=True):
+                selected = label
+                st.session_state["main_nav"] = label
+        st.sidebar.markdown(" ")
+
+    return selected
+
+
 def main():
     """
     Main Streamlit entrypoint. Keep this deterministic for reloads.
@@ -358,7 +390,6 @@ def main():
             badge_debug,
             challenge_ladder,
             challenge_ladder_admin,
-            match_uploader,
             league_manager,
             match_log,
             player_editor,
@@ -389,7 +420,6 @@ def main():
 
             # Admin-only
             "🏟️ League Manager": league_manager,
-            "📝 Match Uploader": match_uploader,
             "🧾 Record Match": record_match,
             "📝 Match Log": match_log,
             "👥 Player Editor": player_editor,
@@ -421,13 +451,14 @@ def main():
 
             # Admin-only deep links
             "league_manager": "🏟️ League Manager",
-            "match_uploader": "📝 Match Uploader",
+            "match_uploader": "🧾 Record Match",
             "record_match": "🧾 Record Match",
             "match_log": "📝 Match Log",
             "player_editor": "👥 Player Editor",
             "admin_tools": "⚙️ Admin Tools",
             "admin_guide": "📘 Admin Guide",
             "challenge_ladder_admin": "🛠️ Challenge Ladder Admin",
+            "legacy_match_entry": "🧾 Record Match",
             "moneyball": "💰 Moneyball",
             "theme_qa": "🎨 Theme QA",
             "tournaments": "🏆 Tournaments",
@@ -443,7 +474,6 @@ def main():
             "🧭 Command Center",
             "🖨️ League Night Printout",
             "🏟️ League Manager",
-            "📝 Match Uploader",
             "🧾 Record Match",
             "📝 Match Log",
             "👥 Player Editor",
@@ -464,6 +494,7 @@ def main():
             visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         else:
             visible_labels = all_labels
+        st.session_state["_visible_labels"] = visible_labels
 
         # Public nav order (old UX)
         PUBLIC_NAV_KEYS = [
@@ -520,7 +551,10 @@ def main():
                     pass
                 st.rerun()
 
-            sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
+            sel = render_admin_sidebar_nav(
+                current_label=st.session_state.get("main_nav", "🧭 Command Center"),
+                admin_logged_in=admin_logged_in,
+            )
 
             if sel not in visible_labels:
                 sel = visible_labels[0]

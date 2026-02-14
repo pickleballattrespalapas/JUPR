@@ -20,8 +20,8 @@ def _placeholder_alert_items() -> list[AlertItem]:
             title="Pending Ladder Challenges",
             count=4,
             subtitle="Challenges awaiting admin resolution.",
-            href="/?page=challenge_ladder_admin",
-            cta_label="Open ladder admin",
+            href="/?page=record_match",
+            cta_label="Open result wizard",
             state="warning",
         ),
         AlertItem(

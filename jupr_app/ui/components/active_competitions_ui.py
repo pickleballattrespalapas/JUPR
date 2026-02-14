@@ -32,7 +32,7 @@ def _placeholder_competitions() -> list[CompetitionCard]:
             name="Challenge Ladder",
             status="Active",
             actions=(
-                CompetitionAction("Enter Result", "/?page=challenge_ladder_admin", style="primary"),
+                CompetitionAction("Enter Result", "/?page=record_match", style="primary"),
                 CompetitionAction("View Standings", "/?page=challenge_ladder"),
             ),
         ),
@@ -40,7 +40,7 @@ def _placeholder_competitions() -> list[CompetitionCard]:
             name="Tournament",
             status="Upcoming",
             actions=(
-                CompetitionAction("Enter Result", "/?page=tournament_manager", style="primary"),
+                CompetitionAction("Enter Result", "/?page=record_match", style="primary"),
                 CompetitionAction("View Standings", "/?page=tournaments"),
             ),
         ),
@@ -48,7 +48,7 @@ def _placeholder_competitions() -> list[CompetitionCard]:
             name="Round Robin",
             status="Active",
             actions=(
-                CompetitionAction("Enter Result", "/?page=tournaments", style="primary"),
+                CompetitionAction("Enter Result", "/?page=record_match", style="primary"),
                 CompetitionAction("View Standings", "/?page=leaderboards"),
             ),
         ),
@@ -56,7 +56,7 @@ def _placeholder_competitions() -> list[CompetitionCard]:
             name="Moneyball",
             status="Closed",
             actions=(
-                CompetitionAction("Enter Result", "/?page=moneyball", style="primary"),
+                CompetitionAction("Enter Result", "/?page=record_match", style="primary"),
                 CompetitionAction("View Standings", "/?page=moneyball"),
             ),
         ),

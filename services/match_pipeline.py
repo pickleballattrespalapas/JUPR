@@ -123,7 +123,8 @@ def _insert_match_record(
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
 
-    insert_response = supabase.table("matches").insert(payload).execute()
+    matches_table = supabase.table("matches")
+    insert_response = matches_table.insert(payload).execute()
     inserted_rows = getattr(insert_response, "data", None) or []
     if not inserted_rows:
         raise RuntimeError("Supabase insert returned no row data for matches insert")
