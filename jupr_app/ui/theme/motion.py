@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+MOTION_DURATION_FAST_MS = 120
+MOTION_DURATION_STANDARD_MS = 180
+MOTION_DURATION_MEDIUM_MS = 240
+MOTION_EASING_STANDARD = "cubic-bezier(0.4, 0.0, 0.2, 1)"
+
+MOTION_TOKENS = {
+    "fast": f"{MOTION_DURATION_FAST_MS}ms",
+    "standard": f"{MOTION_DURATION_STANDARD_MS}ms",
+    "medium": f"{MOTION_DURATION_MEDIUM_MS}ms",
+    "easing": MOTION_EASING_STANDARD,
+}
