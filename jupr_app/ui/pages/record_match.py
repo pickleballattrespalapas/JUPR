@@ -10,6 +10,7 @@ import streamlit as st
 
 from jupr_app.domain.leagues import get_league_meta_row
 from jupr_app.domain.ratings import calculate_hybrid_elo
+from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_tokens import get_theme_tokens
 from services.match_pipeline import submit_match
@@ -706,6 +707,294 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
         )
 
 
+def _team_label(team: dict[str, Any] | None, id_to_name: dict[int, str]) -> str:
+    if not isinstance(team, dict):
+        return "TBD"
+    p1_id = team.get("player1_id")
+    p2_id = team.get("player2_id")
+    p1 = id_to_name.get(int(p1_id), f"#{p1_id}") if p1_id is not None else "TBD"
+    p2 = id_to_name.get(int(p2_id), f"#{p2_id}") if p2_id is not None else "TBD"
+    return f"Team {team.get('team_number')}: {p1} / {p2}"
+
+
+def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
+    st.markdown("### Step 2 · Tournament match entry")
+    st.caption("Pick an active tournament match node. Teams are auto-filled from the bracket.")
+
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "").strip()
+    if not supabase or not club_id:
+        st.error("Tournament submission requires club and database context.")
+        return
+
+    try:
+        tournaments_resp = (
+            supabase.table("tournaments")
+            .select("id,name,status,created_at")
+            .eq("club_id", club_id)
+            .neq("status", "COMPLETE")
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+        active_tournaments = getattr(tournaments_resp, "data", None) or []
+    except Exception as exc:
+        st.error(f"Could not load active tournaments: {exc}")
+        active_tournaments = []
+
+    if not active_tournaments:
+        st.info("No active tournament found. Create or reopen a tournament first.")
+        controls = st.columns([1, 4])
+        with controls[0]:
+            if st.button("← Back", key="rm_step2_back_tourney_empty"):
+                st.session_state[WIZARD_STEP_KEY] = 1
+                st.rerun()
+        return
+
+    tournament_options = {
+        f"{row.get('name', 'Tournament')} · {row.get('status', 'UNKNOWN')} (#{row.get('id')})": row
+        for row in active_tournaments
+    }
+    selected_tournament_label = st.selectbox(
+        "Active tournament",
+        options=list(tournament_options.keys()),
+        key="record_match_tournament_selector",
+    )
+    selected_tournament = tournament_options[selected_tournament_label]
+    tournament_id = selected_tournament.get("id")
+
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: {tokens['card_bg']};
+            padding: 14px;
+            color: {tokens['text_primary']};
+            margin: 0.25rem 0 0.75rem 0;
+        ">
+            <strong>Tournament:</strong> {selected_tournament.get('name', 'Tournament')}<br/>
+            <strong>Status:</strong> {selected_tournament.get('status', 'UNKNOWN')}<br/>
+            <strong>ID:</strong> {tournament_id}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    teams_resp = (
+        supabase.table("tournament_teams")
+        .select("id,team_number,player1_id,player2_id,seed")
+        .eq("tournament_id", tournament_id)
+        .order("team_number", desc=False)
+        .execute()
+    )
+    teams = getattr(teams_resp, "data", None) or []
+    teams_by_id = {row.get("id"): row for row in teams}
+
+    games_resp = (
+        supabase.table("tournament_games")
+        .select("id,stage,rr_round_number,rr_slot_number,playoff_round_label,playoff_slot_number,playoff_game_code,team_a_id,team_b_id,score_a,score_b,winner_team_id,loser_team_id,finalized_at")
+        .eq("tournament_id", tournament_id)
+        .order("stage", desc=False)
+        .order("rr_round_number", desc=False)
+        .order("playoff_round_label", desc=False)
+        .order("rr_slot_number", desc=False)
+        .order("playoff_slot_number", desc=False)
+        .execute()
+    )
+    games = getattr(games_resp, "data", None) or []
+
+    if not games:
+        st.warning("No tournament games generated yet.")
+        return
+
+    id_to_name = getattr(ctx, "id_to_name", None) or {}
+    rows = []
+    pending_games: list[dict[str, Any]] = []
+    for game in games:
+        team_a = teams_by_id.get(game.get("team_a_id"))
+        team_b = teams_by_id.get(game.get("team_b_id"))
+        teams_ready = bool(team_a) and bool(team_b) and all(team_a.get(k) is not None for k in ("player1_id", "player2_id")) and all(team_b.get(k) is not None for k in ("player1_id", "player2_id"))
+        is_pending = not game.get("finalized_at") and teams_ready
+        if is_pending:
+            pending_games.append(game)
+        rows.append(
+            {
+                "Game": game.get("playoff_game_code") or f"RR-{game.get('rr_round_number', '?')}-{game.get('rr_slot_number', '?')}",
+                "Stage": game.get("stage"),
+                "Round": game.get("playoff_round_label") or game.get("rr_round_number"),
+                "Team A": _team_label(team_a, id_to_name),
+                "Team B": _team_label(team_b, id_to_name),
+                "Score": f"{int(game.get('score_a') or 0)} - {int(game.get('score_b') or 0)}" if game.get("finalized_at") else "Pending",
+                "Status": "Pending" if is_pending else ("Final" if game.get("finalized_at") else "Waiting on bracket"),
+            }
+        )
+
+    st.markdown("#### Bracket / pending matches")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if not pending_games:
+        st.info("No scoreable tournament matches are currently pending. Finalize earlier bracket nodes first.")
+        return
+
+    selectable = {}
+    for game in pending_games:
+        team_a = teams_by_id.get(game.get("team_a_id"))
+        team_b = teams_by_id.get(game.get("team_b_id"))
+        game_code = game.get("playoff_game_code") or f"RR R{game.get('rr_round_number')} · S{game.get('rr_slot_number')}"
+        label = f"{game_code} · {_team_label(team_a, id_to_name)} vs {_team_label(team_b, id_to_name)}"
+        selectable[label] = game
+
+    selected_match_label = st.selectbox(
+        "Select match node",
+        options=list(selectable.keys()),
+        key="record_match_tournament_game_selector",
+    )
+    selected_game = selectable[selected_match_label]
+    team_a = teams_by_id.get(selected_game.get("team_a_id"))
+    team_b = teams_by_id.get(selected_game.get("team_b_id"))
+
+    st.markdown("#### Teams (auto-filled from tournament node)")
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: {tokens['card_bg']};
+            padding: 14px;
+            color: {tokens['text_primary']};
+            margin: 0.25rem 0 0.75rem 0;
+        ">
+            <strong>Team A:</strong> {_team_label(team_a, id_to_name)}<br/>
+            <strong>Team B:</strong> {_team_label(team_b, id_to_name)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    score_cols = st.columns(2)
+    score_t1 = score_cols[0].number_input(
+        "Team A score",
+        min_value=0,
+        max_value=99,
+        value=0,
+        step=1,
+        key=f"rm_tour_s1_{selected_game['id']}",
+    )
+    score_t2 = score_cols[1].number_input(
+        "Team B score",
+        min_value=0,
+        max_value=99,
+        value=0,
+        step=1,
+        key=f"rm_tour_s2_{selected_game['id']}",
+    )
+
+    has_score = int(score_t1) + int(score_t2) > 0
+    has_winner = int(score_t1) != int(score_t2)
+    if not has_score:
+        st.error("Enter a non-zero score before confirming.")
+    if has_score and not has_winner:
+        st.error("Tournament matches cannot end in a tie.")
+
+    controls = st.columns([1, 1, 4])
+    with controls[0]:
+        if st.button("← Back", key="rm_step2_back_tournament"):
+            st.session_state[WIZARD_STEP_KEY] = 1
+            st.rerun()
+    with controls[1]:
+        if st.button(
+            "Confirm & Submit",
+            type="primary",
+            disabled=not (has_score and has_winner),
+            key="rm_tournament_submit",
+        ):
+            match_date = datetime.utcnow().isoformat()
+            idem_key = _deterministic_idempotency_key(
+                club_id=club_id,
+                league_id=f"tournament:{tournament_id}:game:{selected_game['id']}",
+                player_ids=[
+                    int(team_a.get("player1_id")),
+                    int(team_a.get("player2_id")),
+                    int(team_b.get("player1_id")),
+                    int(team_b.get("player2_id")),
+                ],
+                score_t1=int(score_t1),
+                score_t2=int(score_t2),
+                match_date=match_date,
+            )
+
+            payload = {
+                "date": match_date,
+                "league": selected_tournament.get("name", "Tournament"),
+                "match_type": "Tournament",
+                "t1_p1": int(team_a.get("player1_id")),
+                "t1_p2": int(team_a.get("player2_id")),
+                "t2_p1": int(team_b.get("player1_id")),
+                "t2_p2": int(team_b.get("player2_id")),
+                "score_t1": int(score_t1),
+                "score_t2": int(score_t2),
+                "s1": int(score_t1),
+                "s2": int(score_t2),
+                "week_tag": "Tournament",
+                "is_popup": True,
+                "tournament_id": tournament_id,
+                "tournament_game_id": selected_game["id"],
+            }
+
+            try:
+                result = submit_match(
+                    club_id=club_id,
+                    context_type="tournament",
+                    context_id=str(tournament_id),
+                    match_payload=payload,
+                    idempotency_key=idem_key,
+                )
+
+                finalize_payload = finalize_game({**selected_game, "score_a": int(score_t1), "score_b": int(score_t2)})
+                supabase.table("tournament_games").update(finalize_payload).eq("id", selected_game["id"]).execute()
+
+                if str(selected_game.get("stage") or "").upper() == "PLAYOFF":
+                    playoff_games_resp = (
+                        supabase.table("tournament_games")
+                        .select("*")
+                        .eq("tournament_id", tournament_id)
+                        .eq("stage", "PLAYOFF")
+                        .execute()
+                    )
+                    playoff_games = getattr(playoff_games_resp, "data", None) or []
+                    updates = resolve_playoff_dependencies(playoff_games)
+                    for upd in updates:
+                        supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
+
+                st.session_state["record_match_last_submit"] = {
+                    "tournament": selected_tournament,
+                    "game": selected_game,
+                    "score": f"{int(score_t1)} - {int(score_t2)}",
+                    "idempotency_key": idem_key,
+                    "result": result,
+                }
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Submit failed: {exc}")
+
+    last_submit = st.session_state.get("record_match_last_submit")
+    if isinstance(last_submit, dict) and isinstance(last_submit.get("tournament"), dict):
+        game = last_submit.get("game") or {}
+        st.markdown(
+            (
+                "<div class='record-match-success-card'>"
+                "<h4 style='margin:0 0 6px 0;'>✅ Tournament match submitted</h4>"
+                f"<div><strong>Tournament:</strong> {last_submit['tournament'].get('name')}</div>"
+                f"<div><strong>Game:</strong> {game.get('playoff_game_code') or game.get('id')}</div>"
+                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
+                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def render(ctx) -> None:
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell("🧾 Record Match", "Unified wizard for recording results across competition types.", mode_label=mode_label)
@@ -728,5 +1017,7 @@ def render(ctx) -> None:
         _step_2_ladder_league(ctx, tokens)
     elif selected_id == "challenge_ladder":
         _step_2_challenge_ladder(ctx, tokens)
+    elif selected_id == "tournament":
+        _step_2_tournament(ctx, tokens)
     else:
         _step_2_placeholder(tokens)
