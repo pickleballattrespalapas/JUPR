@@ -529,11 +529,13 @@ def main():
         tournament_match = re.fullmatch(r"tournament/([^/]+)", deep_route)
         route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
         if tournament_match:
-            st.query_params["tournament_id"] = tournament_match.group(1)
+            if PUBLIC_MODE:
+                st.query_params["tournament_id"] = tournament_match.group(1)
             deep_label = "🏆 Tournament Bracket"
         if route_match:
-            st.query_params["tournament_id"] = route_match.group(1)
-            st.query_params["division_id"] = route_match.group(2)
+            if PUBLIC_MODE:
+                st.query_params["tournament_id"] = route_match.group(1)
+                st.query_params["division_id"] = route_match.group(2)
             deep_label = "🏆 Tournament Bracket" if PUBLIC_MODE else "🏆 Division Manager"
 
         if PUBLIC_MODE:
@@ -582,17 +584,14 @@ def main():
                 st.session_state["main_nav"] = sel
 
         # -------------------------
-        # Keep URL synced (canonical deep links)
+        # Keep URL synced ONLY in public mode
         # -------------------------
-        try:
-            st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
-            if PUBLIC_MODE:
+        if PUBLIC_MODE:
+            try:
+                st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
                 st.query_params["public"] = "1"
-            else:
-                if "public" in st.query_params:
-                    st.query_params.pop("public", None)
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         # -------------------------
         # Render page
