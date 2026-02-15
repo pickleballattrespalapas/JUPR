@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -18,6 +19,15 @@ from jupr_app.domain.tournaments import (
 )
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
 from jupr_app.ui.layout import page_shell
+
+
+TOURNAMENT_CHARTS = [
+    {
+        "id": "rr-6",
+        "name": "6-team RR",
+        "file": Path(__file__).resolve().parents[1] / "assets" / "tournaments" / "rr-6.csv",
+    }
+]
 
 
 def render(ctx):
@@ -45,11 +55,24 @@ def render(ctx):
     player_names = sorted(df_players_all["name"].dropna().astype(str).tolist())
 
     st.subheader("Create Tournament")
+    st.caption("Tournament charts")
+    chart_options = {f"{chart['name']} ({chart['id']})": chart for chart in TOURNAMENT_CHARTS}
+    selected_chart_label = st.selectbox("Downloadable chart template", list(chart_options.keys()))
+    selected_chart = chart_options[selected_chart_label]
+    with selected_chart["file"].open("rb") as chart_file:
+        st.download_button(
+            "Download chart CSV",
+            data=chart_file.read(),
+            file_name=selected_chart["file"].name,
+            mime="text/csv",
+            key=f"download_chart_{selected_chart['id']}",
+        )
+
     c1, c2, c3 = st.columns([3, 2, 1])
     with c1:
         tournament_name = st.text_input("Tournament name", key="tourney_create_name")
     with c2:
-        team_count = st.selectbox("Team count", [4, 5, 7, 8], key="tourney_create_team_count")
+        team_count = st.selectbox("Team count", [4, 5, 6, 7, 8], key="tourney_create_team_count")
     with c3:
         if st.button("Create", type="primary"):
             if not tournament_name.strip():
@@ -153,8 +176,8 @@ def render(ctx):
         with c2:
             new_team_count = st.selectbox(
                 "Team count",
-                [4, 5, 7, 8],
-                index=[4, 5, 7, 8].index(team_count_value),
+                [4, 5, 6, 7, 8],
+                index=[4, 5, 6, 7, 8].index(team_count_value),
                 disabled=team_count_locked,
                 key="tourney_team_count_select",
             )

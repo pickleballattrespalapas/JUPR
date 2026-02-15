@@ -27,6 +27,49 @@ def test_round_robin_schedule_4():
     ]
 
 
+def test_round_robin_schedule_6_rr_template():
+    team_ids = {1: "t1", 2: "t2", 3: "t3", 4: "t4", 5: "t5", 6: "t6"}
+    games = build_round_robin_games(tournament_id="tour1", team_ids_by_number=team_ids)
+
+    by_round = {}
+    pairings = set()
+    for game in games:
+        by_round.setdefault(game["rr_round_number"], []).append(game)
+        pairings.add(tuple(sorted((game["team_a_id"], game["team_b_id"]))))
+
+    assert len(by_round) == 5
+    for round_games in by_round.values():
+        assert len(round_games) == 3
+        teams_in_round = [g["team_a_id"] for g in round_games] + [g["team_b_id"] for g in round_games]
+        assert len(set(teams_in_round)) == 6
+
+    assert len(games) == 15
+    assert len(pairings) == 15
+
+    matchups = [
+        (g["rr_round_number"], g["rr_slot_number"], g["team_a_id"], g["team_b_id"])
+        for g in sorted(games, key=lambda x: (x["rr_round_number"], x["rr_slot_number"]))
+    ]
+
+    assert matchups == [
+        (1, 1, "t2", "t1"),
+        (1, 2, "t3", "t6"),
+        (1, 3, "t4", "t5"),
+        (2, 1, "t3", "t4"),
+        (2, 2, "t6", "t1"),
+        (2, 3, "t2", "t5"),
+        (3, 1, "t6", "t4"),
+        (3, 2, "t2", "t3"),
+        (3, 3, "t1", "t5"),
+        (4, 1, "t4", "t1"),
+        (4, 2, "t5", "t3"),
+        (4, 3, "t2", "t6"),
+        (5, 1, "t5", "t6"),
+        (5, 2, "t1", "t3"),
+        (5, 3, "t2", "t4"),
+    ]
+
+
 def test_round_robin_standings_head_to_head():
     teams = [
         {"id": "t1", "team_number": 1},
