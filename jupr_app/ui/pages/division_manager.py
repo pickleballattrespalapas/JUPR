@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pandas as pd
@@ -7,6 +9,7 @@ import streamlit as st
 
 from jupr_app.data.retry import sb_retry
 from jupr_app.ui.layout import page_shell
+from services.match_pipeline import submit_match
 
 
 def _load_division(supabase, club_id: str, tournament_id: str, division_id: str) -> dict | None:
@@ -85,6 +88,149 @@ def _remove_entry(supabase, club_id: str, entry_id: str) -> None:
             .eq("id", entry_id)
             .execute()
         )
+    )
+
+
+def _load_division_matches(supabase, club_id: str, division_id: str) -> list[dict]:
+    resp = sb_retry(
+        lambda: (
+            supabase.table("division_matches")
+            .select(
+                "id,club_id,division_id,round_number,bracket_position,team_a_id,team_b_id,winner_team_id,score_json,status,created_at"
+            )
+            .eq("club_id", club_id)
+            .eq("division_id", division_id)
+            .order("round_number", desc=False)
+            .order("bracket_position", desc=False)
+            .order("created_at", desc=False)
+            .execute()
+        )
+    )
+    return resp.data or []
+
+
+def _load_division_match(supabase, club_id: str, division_match_id: str) -> dict | None:
+    resp = sb_retry(
+        lambda: (
+            supabase.table("division_matches")
+            .select(
+                "id,club_id,division_id,round_number,bracket_position,team_a_id,team_b_id,winner_team_id,score_json,status"
+            )
+            .eq("club_id", club_id)
+            .eq("id", division_match_id)
+            .limit(1)
+            .execute()
+        )
+    )
+    rows = resp.data or []
+    return rows[0] if rows else None
+
+
+def _build_division_match_idempotency_key(club_id: str, division_id: str, division_match_id: str) -> str:
+    raw = f"division_match_submission:{club_id}:{division_id}:{division_match_id}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _build_division_match_payload(
+    division_title: str,
+    division_id: str,
+    division_match: dict,
+    team_a: dict,
+    team_b: dict,
+    score_t1: int,
+    score_t2: int,
+) -> dict:
+    return {
+        "date": datetime.now(timezone.utc).isoformat(),
+        "league": division_title,
+        "match_type": "Tournament",
+        "week_tag": "Tournament",
+        "is_popup": True,
+        "division_id": division_id,
+        "division_match_id": division_match.get("id"),
+        "round_number": division_match.get("round_number"),
+        "bracket_position": division_match.get("bracket_position"),
+        "match_context": "division_match",
+        "competition_type": "tournament",
+        "competition_id": division_id,
+        "t1_p1": int(team_a.get("player1_id")),
+        "t1_p2": int(team_a.get("player2_id")),
+        "t2_p1": int(team_b.get("player1_id")),
+        "t2_p2": int(team_b.get("player2_id")),
+        "score_t1": int(score_t1),
+        "score_t2": int(score_t2),
+        "s1": int(score_t1),
+        "s2": int(score_t2),
+    }
+
+
+def _complete_division_match(
+    *,
+    supabase,
+    club_id: str,
+    division_id: str,
+    division_title: str,
+    division_match: dict,
+    team_a: dict,
+    team_b: dict,
+    score_t1: int,
+    score_t2: int,
+) -> None:
+    match_id = str(division_match.get("id") or "")
+    if not match_id:
+        raise ValueError("Division match id is missing.")
+
+    latest_row = _load_division_match(supabase, club_id, match_id)
+    if not latest_row:
+        raise ValueError("Division match no longer exists.")
+
+    latest_status = str(latest_row.get("status") or "").lower()
+    if latest_status == "completed":
+        raise ValueError("This division match has already been submitted.")
+
+    winner_team_id = str(latest_row.get("team_a_id") if score_t1 > score_t2 else latest_row.get("team_b_id"))
+    score_json = {
+        "team_a": int(score_t1),
+        "team_b": int(score_t2),
+        "winner_team_id": winner_team_id,
+    }
+
+    update_resp = sb_retry(
+        lambda: (
+            supabase.table("division_matches")
+            .update(
+                {
+                    "winner_team_id": winner_team_id,
+                    "score_json": score_json,
+                    "status": "completed",
+                }
+            )
+            .eq("club_id", club_id)
+            .eq("id", match_id)
+            .eq("status", latest_row.get("status"))
+            .execute()
+        )
+    )
+
+    if not (getattr(update_resp, "data", None) or []):
+        raise ValueError("This division match was already updated by another submission.")
+
+    payload = _build_division_match_payload(
+        division_title=division_title,
+        division_id=division_id,
+        division_match=latest_row,
+        team_a=team_a,
+        team_b=team_b,
+        score_t1=int(score_t1),
+        score_t2=int(score_t2),
+    )
+
+    submit_match(
+        club_id=club_id,
+        context_type="tournament",
+        context_id=division_id,
+        match_payload=payload,
+        idempotency_key=_build_division_match_idempotency_key(club_id, division_id, match_id),
     )
 
 
@@ -238,3 +384,96 @@ def render(ctx):
             st.rerun()
         except Exception as exc:
             st.error(f"Could not save entry changes: {exc}")
+
+    st.markdown("### Record Result")
+
+    try:
+        division_matches = _load_division_matches(supabase, club_id, division_id)
+    except Exception as exc:
+        st.error(f"Could not load division matches: {exc}")
+        return
+
+    if not division_matches:
+        st.info("No bracket matches have been generated for this division yet.")
+        return
+
+    completed_count = sum(1 for m in division_matches if str(m.get("status") or "").lower() == "completed")
+    st.caption(f"Completed matches: {completed_count}/{len(division_matches)}")
+
+    for match in division_matches:
+        match_id = str(match.get("id") or "")
+        if not match_id:
+            continue
+
+        team_a_id = str(match.get("team_a_id") or "")
+        team_b_id = str(match.get("team_b_id") or "")
+        team_a = teams_by_id.get(team_a_id, {"id": team_a_id})
+        team_b = teams_by_id.get(team_b_id, {"id": team_b_id})
+        team_a_label = _team_label(team_a)
+        team_b_label = _team_label(team_b)
+        match_status = str(match.get("status") or "scheduled").lower()
+
+        with st.container(border=True):
+            st.markdown(
+                f"**Round {int(match.get('round_number') or 0)} · Match {int(match.get('bracket_position') or 0)}**"
+            )
+            st.write(f"{team_a_label} vs {team_b_label}")
+
+            if match_status == "completed":
+                score_json = match.get("score_json") if isinstance(match.get("score_json"), dict) else {}
+                st.success(
+                    f"Completed · {int(score_json.get('team_a', 0) or 0)} - {int(score_json.get('team_b', 0) or 0)}"
+                )
+                continue
+
+            players_ready = all(
+                team.get("player1_id") is not None and team.get("player2_id") is not None
+                for team in (team_a, team_b)
+            )
+            if not players_ready:
+                st.warning("Both teams must have player1_id and player2_id assigned before recording this result.")
+                continue
+
+            score_cols = st.columns(2)
+            score_t1 = score_cols[0].number_input(
+                f"{team_a_label} score",
+                min_value=0,
+                max_value=99,
+                value=0,
+                step=1,
+                key=f"division_match_score_a_{match_id}",
+            )
+            score_t2 = score_cols[1].number_input(
+                f"{team_b_label} score",
+                min_value=0,
+                max_value=99,
+                value=0,
+                step=1,
+                key=f"division_match_score_b_{match_id}",
+            )
+
+            if score_t1 == score_t2:
+                st.caption("Division matches require a winner (no ties).")
+
+            if st.button(
+                "Record Result",
+                key=f"division_match_submit_{match_id}",
+                type="primary",
+                disabled=score_t1 == score_t2,
+            ):
+                try:
+                    _complete_division_match(
+                        supabase=supabase,
+                        club_id=club_id,
+                        division_id=division_id,
+                        division_title=str(division.get("title") or "Division"),
+                        division_match=match,
+                        team_a=team_a,
+                        team_b=team_b,
+                        score_t1=int(score_t1),
+                        score_t2=int(score_t2),
+                    )
+                    st.success("Division match recorded and submitted through canonical match pipeline.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not record division result: {exc}")
