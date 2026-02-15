@@ -10,8 +10,7 @@ import re
 from collections.abc import Mapping
 
 import streamlit as st
-import pandas as pd  # kept because pages may rely on it
-from streamlit.errors import StreamlitSecretNotFoundError
+import pandas as pd  # noqa: F401  # kept because pages may rely on it
 
 
 # -------------------------
@@ -26,39 +25,35 @@ LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 # -------------------------
 # Secrets helpers (SAFE)
 # -------------------------
-def _get_config_value(path: list[str], default=None):
+def get_secret(path: list[str], default=None):
     """
-    Safe nested secret getter.
-    Priority: environment variables (Fly) -> st.secrets (Streamlit Cloud) -> default.
-    Never raises when secrets.toml is missing.
+    Nested secret getter.
+
+    Priority:
+    1) Streamlit secrets (st.secrets)
+    2) Environment variables (Fly / Docker / etc.)
+
+    Path ["supabase","url"] → SUPABASE__URL
     """
-    env_var_map = {
-        ("supabase", "url"): "SUPABASE_URL",
-        ("supabase", "anon_key"): "SUPABASE_ANON_KEY",
-        ("supabase", "key"): "SUPABASE_KEY",
-        ("supabase", "service_role_key"): "SUPABASE_SERVICE_ROLE_KEY",
-        ("public_base_url",): "PUBLIC_BASE_URL",
-    }
 
-    env_var = env_var_map.get(tuple(path))
-    if env_var:
-        env_value = os.getenv(env_var)
-        if env_value:
-            return env_value
-
+    # --- 1) Try Streamlit secrets ---
     try:
-        cur: object = st.secrets
+        cur = st.secrets
         for k in path:
-            if not isinstance(cur, Mapping):
-                return default
-            if k not in cur:
-                return default
+            if not isinstance(cur, Mapping) or k not in cur:
+                raise KeyError
             cur = cur[k]
         return cur
-    except StreamlitSecretNotFoundError:
-        return default
     except Exception:
-        return default
+        pass
+
+    # --- 2) Fallback to environment variable ---
+    env_key = "__".join([p.upper() for p in path])
+    return os.environ.get(env_key, default)
+
+
+def _get_config_value(path: list[str], default=None):
+    return get_secret(path, default)
 
 
 # -------------------------
