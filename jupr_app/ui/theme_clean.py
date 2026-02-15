@@ -286,6 +286,31 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         position: relative;
       }}
 
+      .jupr-admin-title-row {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }}
+
+      .jupr-status-dot {{
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-left: 8px;
+      }}
+
+      .jupr-status-green {{
+        background: var(--status-success);
+      }}
+
+      .jupr-status-yellow {{
+        background: var(--status-warning);
+      }}
+
+      .jupr-status-red {{
+        background: var(--status-danger);
+      }}
+
       .jupr-admin-metric {{
         position: absolute;
         top: 12px;
