@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - rebuild
+
+jobs:
+  minimal-gates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile Python sources
+        run: python -m compileall .
+
+      - name: Smoke import checks
+        run: >-
+          python -c "import services.match_pipeline; import jupr_app.domain.match_processing; import jupr_app.domain.replay_history; print('imports-ok')"
