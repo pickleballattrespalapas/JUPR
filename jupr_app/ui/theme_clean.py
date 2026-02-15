@@ -281,6 +281,23 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         font-size: var(--font-sm);
         color: var(--text-muted);
       }}
+
+      .jupr-admin-card-wrapper {{
+        position: relative;
+      }}
+
+      .jupr-admin-metric {{
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        color: var(--text);
+      }}
       .jupr-section-title {{
         font-size: var(--font-lg);
         font-weight: 700;
