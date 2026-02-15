@@ -4,6 +4,7 @@ import html
 
 import streamlit as st
 
+from jupr_app.domain.job_monitor import fetch_recent_jobs
 from jupr_app.domain.system_health import get_system_health
 from jupr_app.ui.layout import page_shell
 
@@ -62,3 +63,17 @@ def render(ctx):
     c1.metric("Total Matches", health.get("match_count"))
     c2.metric("Pending Badge Jobs", health.get("pending_badge_jobs"))
     c3.metric("Last Check (UTC)", health.get("timestamp")[:19])
+
+    st.divider()
+    st.subheader("Background Jobs")
+
+    df_jobs = fetch_recent_jobs(ctx.supabase, ctx.club_id)
+
+    if df_jobs.empty:
+        st.info("No recent jobs.")
+    else:
+        st.dataframe(
+            df_jobs.reindex(columns=["job_type", "status", "created_at", "completed_at"]),
+            use_container_width=True,
+            hide_index=True,
+        )
