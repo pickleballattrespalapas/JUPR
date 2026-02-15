@@ -28,6 +28,8 @@ LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 def get_secret(path: list[str], default=None):
     """
     Nested secret getter.
+    import os
+    st.write("ENV CHECK:", os.environ.get("SUPABASE__ADMIN_PASSWORD"))
 
     Priority:
     1) Streamlit secrets (st.secrets)
