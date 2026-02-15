@@ -27,6 +27,33 @@ def test_round_robin_schedule_4():
     ]
 
 
+def test_round_robin_schedule_6():
+    team_ids = {1: "t1", 2: "t2", 3: "t3", 4: "t4", 5: "t5", 6: "t6"}
+    games = build_round_robin_games(tournament_id="tour1", team_ids_by_number=team_ids)
+
+    matchups = [
+        (g["rr_round_number"], g["rr_slot_number"], g["team_a_id"], g["team_b_id"]) for g in games
+    ]
+
+    assert matchups == [
+        (1, 1, "t1", "t6"),
+        (1, 2, "t2", "t5"),
+        (1, 3, "t3", "t4"),
+        (2, 1, "t6", "t4"),
+        (2, 2, "t5", "t3"),
+        (2, 3, "t1", "t2"),
+        (3, 1, "t2", "t6"),
+        (3, 2, "t3", "t1"),
+        (3, 3, "t4", "t5"),
+        (4, 1, "t6", "t5"),
+        (4, 2, "t1", "t4"),
+        (4, 3, "t2", "t3"),
+        (5, 1, "t3", "t6"),
+        (5, 2, "t4", "t2"),
+        (5, 3, "t5", "t1"),
+    ]
+
+
 def test_round_robin_standings_head_to_head():
     teams = [
         {"id": "t1", "team_number": 1},
