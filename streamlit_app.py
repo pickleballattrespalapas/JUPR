@@ -1,8 +1,6 @@
 # jupr/streamlit_app.py
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
 import time
 import traceback
@@ -11,6 +9,9 @@ from collections.abc import Mapping
 
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
+
+from jupr_app.auth.cookies import clear_cookie, get_cookie, set_cookie
+from jupr_app.auth.session import create_session_token, verify_session_token
 
 
 # -------------------------
@@ -59,14 +60,8 @@ def _get_config_value(path: list[str], default=None):
 # -------------------------
 # Admin session helpers
 # -------------------------
-ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
 ADMIN_MAX_FAILED_ATTEMPTS = 5
 ADMIN_LOCKOUT_SECONDS = 60
-
-
-def _get_admin_session_secret() -> str:
-    # Fly uses SUPABASE__ADMIN_SESSION_SECRET
-    return os.getenv("SUPABASE__ADMIN_SESSION_SECRET", "")
 
 
 def _get_admin_password() -> str:
@@ -74,52 +69,17 @@ def _get_admin_password() -> str:
     return os.getenv("SUPABASE__ADMIN_PASSWORD", "")
 
 
-def _sign_admin_session(expires_at: int, secret: str) -> str:
-    msg = f"{expires_at}".encode("utf-8")
-    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
-
-
-def _create_admin_session() -> None:
-    secret = _get_admin_session_secret()
-    if not secret:
-        st.error("Admin session secret is missing.")
-        st.stop()
-
-    expires_at = int(time.time()) + int(ADMIN_SESSION_TTL_SECONDS)
-    token = _sign_admin_session(expires_at, secret)
-    st.session_state["admin_session"] = {"exp": expires_at, "token": token}
-
-
-def _clear_admin_session() -> None:
-    st.session_state.pop("admin_session", None)
-
-
-def _validate_admin_session() -> bool:
-    secret = _get_admin_session_secret()
-    if not secret:
-        _clear_admin_session()
+def _validate_admin_cookie() -> bool:
+    token = get_cookie()
+    if not token:
         return False
 
-    data = st.session_state.get("admin_session")
-    if not isinstance(data, dict):
+    payload = verify_session_token(token)
+    if not payload:
         return False
 
-    try:
-        expires_at = int(data.get("exp", 0))
-    except Exception:
-        _clear_admin_session()
-        return False
-
-    if expires_at <= int(time.time()):
-        _clear_admin_session()
-        return False
-
-    token = str(data.get("token", ""))
-    expected = _sign_admin_session(expires_at, secret)
-    if not hmac.compare_digest(token, expected):
-        _clear_admin_session()
-        return False
-
+    st.session_state["is_admin"] = True
+    st.session_state["admin_email"] = payload.get("email", "admin")
     return True
 
 
@@ -269,7 +229,7 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not _validate_admin_session():
+            if not _validate_admin_cookie():
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
 
@@ -284,9 +244,13 @@ def main():
                             if not expected:
                                 st.error("Admin password is not configured.")
                             elif pwd == expected:
+                                admin_email = "admin"
+                                token = create_session_token(admin_email)
+                                set_cookie(token)
                                 st.session_state["admin_failed_attempts"] = 0
                                 st.session_state["admin_lock_until"] = 0
-                                _create_admin_session()
+                                st.session_state["is_admin"] = True
+                                st.session_state["admin_email"] = admin_email
                                 st.rerun()
                             else:
                                 failed_attempts = int(st.session_state.get("admin_failed_attempts", 0) or 0) + 1
@@ -304,13 +268,16 @@ def main():
                                         f"{remaining} attempt{'s' if remaining != 1 else ''} remaining before lockout."
                                     )
             else:
-                st.sidebar.success("Logged In: Admin")
+                st.sidebar.success(
+                    f"Logged In: {st.session_state.get('admin_email', 'Admin')}"
+                )
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
-                    _clear_admin_session()
+                    clear_cookie()
+                    st.session_state.clear()
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_session()
+        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_cookie()
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
