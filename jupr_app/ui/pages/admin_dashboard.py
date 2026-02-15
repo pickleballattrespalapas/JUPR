@@ -4,6 +4,7 @@ import html
 
 import streamlit as st
 
+from jupr_app.domain.system_health import get_system_health
 from jupr_app.ui.layout import page_shell
 
 
@@ -50,3 +51,14 @@ def render(ctx):
     _nav_card("Weekly Recap", "Generate & publish recap", "🗞️ Weekly Recap Admin")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("System Health")
+
+    health = get_system_health(ctx.supabase, ctx.club_id)
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Total Matches", health.get("match_count"))
+    c2.metric("Pending Badge Jobs", health.get("pending_badge_jobs"))
+    c3.metric("Last Check (UTC)", health.get("timestamp")[:19])
