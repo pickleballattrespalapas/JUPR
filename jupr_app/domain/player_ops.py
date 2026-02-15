@@ -42,15 +42,23 @@ def safe_add_player(
         "inactive_at": None,
     }
 
-    try:
-        supabase.table("players").insert(payload).execute()
-        return True, ""
-    except Exception as e:
-        msg = str(e)
+    resp = supabase.table("players").insert(payload).execute()
+
+    # Supabase does not raise exceptions for PostgREST errors.
+    # Errors must be inspected on the response object.
+    error = getattr(resp, "error", None)
+
+    if error:
+        msg = str(error)
 
         # If duplicate key (23505) on normalized name, the player already exists — treat as OK.
         # supabase-py surfaces the code in the string; we match conservatively.
         if "23505" in msg or "uq_players_club_name_active" in msg:
             return True, ""
 
+        import logging
+
+        logging.warning(f"safe_add_player insert failed: {msg}")
         return False, msg
+
+    return True, ""
