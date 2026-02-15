@@ -404,13 +404,13 @@ def main():
             tournament_public,
             weekly_recap,
             weekly_recap_admin,
-            command_center,
+            admin_dashboard,
             record_match,
         )
 
         # ---- Router ----
         PAGES = {
-            "🧭 Command Center": command_center,
+            "🧭 Command Center": admin_dashboard,
             "🏆 Leaderboards": leaderboards,
             "📊 League Results": league_results,
             "🖨️ League Night Printout": league_printout,
@@ -423,6 +423,7 @@ def main():
 
             # Admin-only
             "🏟️ League Manager": league_manager,
+            "📝 Match Uploader": record_match,
             "🧾 Record Match": record_match,
             "📝 Match Log": match_log,
             "👥 Player Editor": player_editor,
@@ -482,6 +483,7 @@ def main():
             "🧭 Command Center",
             "🖨️ League Night Printout",
             "🏟️ League Manager",
+            "📝 Match Uploader",
             "🧾 Record Match",
             "📝 Match Log",
             "👥 Player Editor",
@@ -556,8 +558,14 @@ def main():
                 st.session_state["deep_link_applied"] = True
 
             # Ensure valid selection
-            if "main_nav" not in st.session_state or st.session_state["main_nav"] not in visible_labels:
-                st.session_state["main_nav"] = "🧭 Command Center" if admin_logged_in else visible_labels[0]
+            if "main_nav" not in st.session_state:
+                if admin_logged_in:
+                    st.session_state["main_nav"] = "🧭 Command Center"
+                else:
+                    st.session_state["main_nav"] = visible_labels[0]
+
+            if st.session_state["main_nav"] not in visible_labels:
+                st.session_state["main_nav"] = visible_labels[0]
 
             prev_admin_logged_in = bool(st.session_state.get("prev_admin_logged_in", False))
             if admin_logged_in and not prev_admin_logged_in:
