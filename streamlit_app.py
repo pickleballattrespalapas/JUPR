@@ -26,7 +26,7 @@ LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 # -------------------------
 # Secrets helpers (SAFE)
 # -------------------------
-def get_secret(path: list[str], default=None):
+def _get_config_value(path: list[str], default=None):
     """
     Safe nested secret getter.
     Priority: environment variables (Fly) -> st.secrets (Streamlit Cloud) -> default.
@@ -37,9 +37,6 @@ def get_secret(path: list[str], default=None):
         ("supabase", "anon_key"): "SUPABASE_ANON_KEY",
         ("supabase", "key"): "SUPABASE_KEY",
         ("supabase", "service_role_key"): "SUPABASE_SERVICE_ROLE_KEY",
-        ("supabase", "admin_password"): "SUPABASE_ADMIN_PASSWORD",
-        ("supabase", "admin_session_secret"): "SUPABASE_ADMIN_SESSION_SECRET",
-        ("admin_session_secret",): "ADMIN_SESSION_SECRET",
         ("public_base_url",): "PUBLIC_BASE_URL",
     }
 
@@ -73,11 +70,11 @@ ADMIN_LOCKOUT_SECONDS = 60
 
 
 def _get_admin_session_secret() -> str:
-    return str(
-        get_secret(["supabase", "admin_session_secret"], "")
-        or get_secret(["admin_session_secret"], "")
-        or ""
-    )
+    return os.getenv("SUPABASE_ADMIN_SESSION_SECRET", "")
+
+
+def _get_admin_password() -> str:
+    return os.getenv("SUPABASE_ADMIN_PASSWORD", "")
 
 
 def _sign_admin_session(expires_at: int, secret: str) -> str:
@@ -88,7 +85,7 @@ def _sign_admin_session(expires_at: int, secret: str) -> str:
 def _create_admin_session() -> None:
     secret = _get_admin_session_secret()
     if not secret:
-        st.error("Admin session secret is missing. Set supabase.admin_session_secret in secrets.")
+        st.error("Admin session secret is missing.")
         st.stop()
 
     expires_at = int(time.time()) + int(ADMIN_SESSION_TTL_SECONDS)
@@ -135,18 +132,12 @@ def _validate_admin_session() -> bool:
 @st.cache_resource
 def get_supabase():
     """
-    Requires Streamlit secrets:
-
-    [supabase]
-    url = "https://....supabase.co"
-    anon_key = "..."   # OR key = "..." (either is accepted)
-    admin_password = "..."  # your chosen admin login password
-    admin_session_secret = "..."  # used to sign short-lived admin sessions
+    Requires Supabase configuration.
     """
     from jupr_app.data.client import make_supabase
 
-    url = get_secret(["supabase", "url"], "")
-    key = get_secret(["supabase", "anon_key"], "") or get_secret(["supabase", "key"], "")
+    url = _get_config_value(["supabase", "url"], "")
+    key = _get_config_value(["supabase", "anon_key"], "") or _get_config_value(["supabase", "key"], "")
 
     if not url or not key:
         st.error("Supabase secrets are missing or misnamed.")
@@ -154,14 +145,12 @@ def get_supabase():
             "[supabase]\n"
             'url = "https://YOUR_PROJECT_REF.supabase.co"\n'
             'anon_key = "YOUR_SUPABASE_ANON_KEY"  # or use key = "…"\n'
-            'admin_password = "YOUR_ADMIN_PASSWORD"\n'
-            'admin_session_secret = "YOUR_ADMIN_SESSION_SECRET"\n'
         )
 
         # Debug keys only (no values) - Mapping-safe (no .get usage)
         try:
             st.write("Secrets keys:", list(st.secrets.keys()))
-            sb = get_secret(["supabase"], default={})
+            sb = _get_config_value(["supabase"], default={})
             if isinstance(sb, Mapping):
                 st.write("Supabase keys:", list(sb.keys()))
         except Exception:
@@ -270,7 +259,7 @@ def main():
         # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
         # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ADMIN_PASSWORD,
         # and SUPABASE_ADMIN_SESSION_SECRET.
-        base_url = get_secret(["public_base_url"], LOCAL_PUBLIC_BASE_URL_DEFAULT)
+        base_url = _get_config_value(["public_base_url"], LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
         # ---- Session defaults ----
@@ -295,9 +284,9 @@ def main():
                             wait_seconds = lock_until - now
                             st.error(f"Too many failed attempts. Try again in {wait_seconds} seconds.")
                         else:
-                            expected = str(get_secret(["supabase", "admin_password"], "") or "")
+                            expected = _get_admin_password()
                             if not expected:
-                                st.error("Admin password is not configured in secrets (supabase.admin_password).")
+                                st.error("Admin password is not configured.")
                             elif pwd == expected:
                                 st.session_state["admin_failed_attempts"] = 0
                                 st.session_state["admin_lock_until"] = 0
