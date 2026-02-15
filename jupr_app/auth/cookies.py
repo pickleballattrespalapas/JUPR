@@ -1,7 +1,16 @@
 from http.cookies import SimpleCookie
 
 import streamlit.components.v1 as components
-from streamlit.runtime.scriptrunner.script_run_context import get_script_run_ctx
+
+# NOTE:
+# get_script_run_ctx is an internal Streamlit API and may change across versions.
+# We guard the import for compatibility and pin Streamlit in requirements.txt.
+try:
+    # Modern Streamlit
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+except ImportError:
+    # Legacy fallback
+    from streamlit.runtime.scriptrunner.script_run_context import get_script_run_ctx
 
 COOKIE_NAME = "jupr_admin_session"
 
