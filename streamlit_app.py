@@ -400,6 +400,7 @@ def main():
             tournaments,
             tournament_manager,
             division_manager,
+            tournament_public,
             weekly_recap,
             weekly_recap_admin,
             command_center,
@@ -432,6 +433,7 @@ def main():
             "🏆 Tournaments": tournaments,
             "🏆 Tournament Manager": tournament_manager,
             "🏆 Division Manager": division_manager,
+            "🏆 Tournament Bracket": tournament_public,
             "🗞️ Weekly Recap": weekly_recap,
 
             # Admin-only
@@ -467,6 +469,7 @@ def main():
             "tournament_manager": "🏆 Tournament Manager",
             "tournament_divisions": "🏆 Tournament Manager",
             "division_manager": "🏆 Division Manager",
+            "tournament_public": "🏆 Tournament Bracket",
             "weekly_recap": "🗞️ Weekly Recap",
 
             # Admin-only deep links
@@ -505,6 +508,7 @@ def main():
         PUBLIC_NAV_KEYS = [
             "leaderboards",
             "league_results",
+            "tournament_public",
             "weekly_recap",
             "match_explorer",
             "players",
@@ -521,11 +525,15 @@ def main():
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
         deep_route = qp_get("route", "").strip().strip("/")
+        tournament_match = re.fullmatch(r"tournament/([^/]+)", deep_route)
         route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
+        if tournament_match:
+            st.query_params["tournament_id"] = tournament_match.group(1)
+            deep_label = "🏆 Tournament Bracket"
         if route_match:
             st.query_params["tournament_id"] = route_match.group(1)
             st.query_params["division_id"] = route_match.group(2)
-            deep_label = "🏆 Division Manager"
+            deep_label = "🏆 Tournament Bracket" if PUBLIC_MODE else "🏆 Division Manager"
 
         if PUBLIC_MODE:
             # Block admin-only deep links in public mode

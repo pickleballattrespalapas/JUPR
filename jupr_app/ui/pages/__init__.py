@@ -24,6 +24,7 @@ from . import theme_gallery
 from . import tournaments
 from . import tournament_manager
 from . import division_manager
+from . import tournament_public
 from . import command_center
 from . import record_match
 
@@ -50,6 +51,7 @@ __all__ = [
     "tournaments",
     "tournament_manager",
     "division_manager",
+    "tournament_public",
     "command_center",
     "record_match",
 ]
