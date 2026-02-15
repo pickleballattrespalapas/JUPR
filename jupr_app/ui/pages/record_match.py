@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -20,6 +21,7 @@ WIZARD_STEP_KEY = "record_match_wizard_step"
 SELECTED_TYPE_KEY = "record_match_competition_type"
 BULK_UPLOAD_STATE_KEY = "record_match_bulk_upload"
 BULK_CHUNK_SIZE = 200
+UNDO_BANNER_SECONDS = 10
 
 COMPETITION_TYPES: list[dict[str, str]] = [
     {
@@ -66,6 +68,141 @@ def _ensure_state() -> None:
     st.session_state.setdefault(SELECTED_TYPE_KEY, None)
 
 
+def _render_motion_css(tokens: dict[str, str]) -> None:
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --motion-duration-fast: 140ms;
+            --motion-duration-medium: 240ms;
+            --motion-duration-slow: 340ms;
+            --motion-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+        }}
+        .record-match-success-card {{
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: color-mix(in srgb, {tokens['card_bg']} 80%, #1f9d55 20%);
+            padding: 14px;
+            margin-top: 0.8rem;
+            color: {tokens['text_primary']};
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transform: translateY(4px);
+            transition:
+                max-height var(--motion-duration-slow) var(--motion-ease-standard),
+                opacity var(--motion-duration-medium) var(--motion-ease-standard),
+                transform var(--motion-duration-medium) var(--motion-ease-standard);
+        }}
+        .record-match-success-card.is-visible {{
+            max-height: 240px;
+            opacity: 1;
+            transform: translateY(0);
+        }}
+        .record-match-check {{
+            opacity: 0;
+            margin-right: 0.3rem;
+            transition: opacity var(--motion-duration-slow) var(--motion-ease-standard);
+        }}
+        .record-match-success-card.is-visible .record-match-check {{
+            opacity: 1;
+        }}
+        .record-match-loading-btn {{
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 8px;
+            padding: 0.42rem 0.85rem;
+            color: {tokens['text_secondary']};
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            font-size: 0.92rem;
+            background: {tokens['card_bg']};
+        }}
+        .record-match-loading-dot {{
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: {tokens['text_secondary']};
+            animation: record-match-pulse 1s ease-in-out infinite;
+        }}
+        @keyframes record-match-pulse {{
+            0%, 100% {{ opacity: 0.35; transform: scale(0.8); }}
+            50% {{ opacity: 1; transform: scale(1); }}
+        }}
+        .record-match-undo {{
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 10px;
+            padding: 0.6rem 0.8rem;
+            margin-top: 0.6rem;
+            background: {tokens['card_bg']};
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: {tokens['text_secondary']};
+            transition: opacity var(--motion-duration-medium) var(--motion-ease-standard);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _confirm_loading_key(button_key: str) -> str:
+    return f"{button_key}__loading"
+
+
+def _render_confirm_submit_button(button_key: str, disabled: bool) -> bool:
+    loading_key = _confirm_loading_key(button_key)
+    if st.session_state.get(loading_key, False):
+        st.markdown(
+            "<div class='record-match-loading-btn'><span class='record-match-loading-dot'></span>Submitting…</div>",
+            unsafe_allow_html=True,
+        )
+        return True
+    if st.button("Confirm & Submit", type="primary", disabled=disabled, key=button_key):
+        st.session_state[loading_key] = True
+        st.rerun()
+    return False
+
+
+def _clear_confirm_loading(button_key: str) -> None:
+    st.session_state[_confirm_loading_key(button_key)] = False
+
+
+def _set_submit_feedback(payload: dict[str, Any], *, undo_label: str = "submission") -> None:
+    st.session_state["record_match_last_submit"] = payload
+    st.session_state["record_match_undo_state"] = {
+        "expires_at": time.time() + UNDO_BANNER_SECONDS,
+        "label": undo_label,
+    }
+
+
+def _render_undo_banner() -> None:
+    undo_state = st.session_state.get("record_match_undo_state")
+    if not isinstance(undo_state, dict):
+        return
+    remaining = int((undo_state.get("expires_at") or 0) - time.time())
+    if remaining <= 0:
+        st.session_state.pop("record_match_undo_state", None)
+        return
+    cols = st.columns([4, 1])
+    with cols[0]:
+        st.markdown(
+            (
+                "<div class='record-match-undo'>"
+                f"<span>Saved {undo_state.get('label')}. Undo available for {remaining}s.</span>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+    with cols[1]:
+        if st.button("Undo", key="record_match_undo_btn"):
+            st.session_state.pop("record_match_last_submit", None)
+            st.session_state.pop("record_match_undo_state", None)
+            st.info("Submission feedback cleared.")
+            st.rerun()
+
+
 def _step_1_competition_type(tokens: dict[str, str]) -> None:
     st.markdown("### Step 1 · Choose competition type")
     st.caption("Select the format first. The wizard will tailor next steps to this selection.")
@@ -96,14 +233,6 @@ def _step_1_competition_type(tokens: dict[str, str]) -> None:
             color: {tokens['text_secondary']};
             font-size: 0.9rem;
             line-height: 1.35;
-        }}
-        .record-match-success-card {{
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            margin-top: 0.8rem;
-            color: {tokens['text_primary']};
         }}
         </style>
         """,
@@ -447,7 +576,7 @@ def _step_2_bulk_match_entry(ctx, tokens: dict[str, str]) -> None:
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
-        confirm = st.button("Confirm & Submit", type="primary", disabled=not can_submit, key="rm_bulk_submit")
+        confirm = _render_confirm_submit_button("rm_bulk_submit", disabled=not can_submit)
 
     if confirm:
         success_count = 0
@@ -502,13 +631,17 @@ def _step_2_bulk_match_entry(ctx, tokens: dict[str, str]) -> None:
                 processed = success_count + len(error_rows)
                 progress.progress(min(1.0, processed / max(total_rows, 1)))
 
-        st.session_state["record_match_last_submit"] = {
-            "bulk_summary": {
-                "total": total_rows,
-                "success": success_count,
-                "errors": error_rows,
-            }
-        }
+        _set_submit_feedback(
+            {
+                "bulk_summary": {
+                    "total": total_rows,
+                    "success": success_count,
+                    "errors": error_rows,
+                }
+            },
+            undo_label="bulk submission",
+        )
+        _clear_confirm_loading("rm_bulk_submit")
         st.rerun()
 
     last_submit = st.session_state.get("record_match_last_submit")
@@ -645,7 +778,7 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
-        if st.button("Confirm & Submit", type="primary", disabled=not can_submit, key="rm_ll_submit"):
+        if _render_confirm_submit_button("rm_ll_submit", disabled=not can_submit):
             club_id = str(getattr(ctx, "club_id", "")).strip()
             match_date = datetime.utcnow().isoformat()
             idem_key = _deterministic_idempotency_key(
@@ -685,23 +818,28 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
                     match_payload=payload,
                     idempotency_key=idem_key,
                 )
-                st.session_state["record_match_last_submit"] = {
-                    "league": selected_league,
-                    "division": selected_division,
-                    "score": f"{int(score_t1)} - {int(score_t2)}",
-                    "idempotency_key": idem_key,
-                    "result": result,
-                }
+                _set_submit_feedback(
+                    {
+                        "league": selected_league,
+                        "division": selected_division,
+                        "score": f"{int(score_t1)} - {int(score_t2)}",
+                        "idempotency_key": idem_key,
+                        "result": result,
+                    },
+                    undo_label="league match",
+                )
+                _clear_confirm_loading("rm_ll_submit")
                 st.rerun()
             except Exception as exc:
+                _clear_confirm_loading("rm_ll_submit")
                 st.error(f"Submit failed: {exc}")
 
     last_submit = st.session_state.get("record_match_last_submit")
     if isinstance(last_submit, dict):
         st.markdown(
             (
-                "<div class='record-match-success-card'>"
-                "<h4 style='margin:0 0 6px 0;'>✅ Match submitted</h4>"
+                "<div class='record-match-success-card is-visible'>"
+                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Match submitted</h4>"
                 f"<div><strong>League:</strong> {last_submit.get('league')}</div>"
                 f"<div><strong>Division:</strong> {last_submit.get('division') or 'N/A'}</div>"
                 f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
@@ -881,12 +1019,7 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
-        if st.button(
-            "Confirm & Submit",
-            type="primary",
-            disabled=not has_score,
-            key="rm_cl_submit",
-        ):
+        if _render_confirm_submit_button("rm_cl_submit", disabled=not has_score):
             match_date = datetime.utcnow().isoformat()
             idem_key = _deterministic_idempotency_key(
                 club_id=club_id,
@@ -919,14 +1052,19 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
                     match_payload=payload,
                     idempotency_key=idem_key,
                 )
-                st.session_state["record_match_last_submit"] = {
-                    "challenge": selected_challenge,
-                    "score": f"{int(score_t1)} - {int(score_t2)}",
-                    "idempotency_key": idem_key,
-                    "result": result,
-                }
+                _set_submit_feedback(
+                    {
+                        "challenge": selected_challenge,
+                        "score": f"{int(score_t1)} - {int(score_t2)}",
+                        "idempotency_key": idem_key,
+                        "result": result,
+                    },
+                    undo_label="challenge result",
+                )
+                _clear_confirm_loading("rm_cl_submit")
                 st.rerun()
             except Exception as exc:
+                _clear_confirm_loading("rm_cl_submit")
                 st.error(f"Submit failed: {exc}")
 
     last_submit = st.session_state.get("record_match_last_submit")
@@ -934,8 +1072,8 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
         challenge = last_submit["challenge"]
         st.markdown(
             (
-                "<div class='record-match-success-card'>"
-                "<h4 style='margin:0 0 6px 0;'>✅ Challenge result submitted</h4>"
+                "<div class='record-match-success-card is-visible'>"
+                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Challenge result submitted</h4>"
                 f"<div><strong>Challenge:</strong> #{challenge.get('challenge_id')}</div>"
                 f"<div><strong>Players:</strong> {challenge.get('challenger')} vs {challenge.get('defender')}</div>"
                 f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
@@ -1142,12 +1280,7 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
-        if st.button(
-            "Confirm & Submit",
-            type="primary",
-            disabled=not (has_score and has_winner),
-            key="rm_tournament_submit",
-        ):
+        if _render_confirm_submit_button("rm_tournament_submit", disabled=not (has_score and has_winner)):
             match_date = datetime.utcnow().isoformat()
             idem_key = _deterministic_idempotency_key(
                 club_id=club_id,
@@ -1206,15 +1339,20 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
                     for upd in updates:
                         supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
 
-                st.session_state["record_match_last_submit"] = {
-                    "tournament": selected_tournament,
-                    "game": selected_game,
-                    "score": f"{int(score_t1)} - {int(score_t2)}",
-                    "idempotency_key": idem_key,
-                    "result": result,
-                }
+                _set_submit_feedback(
+                    {
+                        "tournament": selected_tournament,
+                        "game": selected_game,
+                        "score": f"{int(score_t1)} - {int(score_t2)}",
+                        "idempotency_key": idem_key,
+                        "result": result,
+                    },
+                    undo_label="tournament result",
+                )
+                _clear_confirm_loading("rm_tournament_submit")
                 st.rerun()
             except Exception as exc:
+                _clear_confirm_loading("rm_tournament_submit")
                 st.error(f"Submit failed: {exc}")
 
     last_submit = st.session_state.get("record_match_last_submit")
@@ -1222,8 +1360,8 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
         game = last_submit.get("game") or {}
         st.markdown(
             (
-                "<div class='record-match-success-card'>"
-                "<h4 style='margin:0 0 6px 0;'>✅ Tournament match submitted</h4>"
+                "<div class='record-match-success-card is-visible'>"
+                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Tournament match submitted</h4>"
                 f"<div><strong>Tournament:</strong> {last_submit['tournament'].get('name')}</div>"
                 f"<div><strong>Game:</strong> {game.get('playoff_game_code') or game.get('id')}</div>"
                 f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
@@ -1484,12 +1622,7 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
-        if st.button(
-            "Confirm & Submit",
-            type="primary",
-            disabled=not has_score,
-            key="rm_round_robin_submit",
-        ):
+        if _render_confirm_submit_button("rm_round_robin_submit", disabled=not has_score):
             team_a_p1, team_a_p2 = _round_robin_team_ids(selected_pairing, "team_a")
             team_b_p1, team_b_p2 = _round_robin_team_ids(selected_pairing, "team_b")
             if None in (team_a_p1, team_a_p2, team_b_p1, team_b_p2):
@@ -1566,16 +1699,21 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
                         on_conflict="session_id,pool_id,player_id",
                     ).execute()
 
-                st.session_state["record_match_last_submit"] = {
-                    "session": selected_session,
-                    "pool": selected_pool,
-                    "pairing": selected_pairing_label,
-                    "score": f"{int(score_t1)} - {int(score_t2)}",
-                    "idempotency_key": idem_key,
-                    "result": result,
-                }
+                _set_submit_feedback(
+                    {
+                        "session": selected_session,
+                        "pool": selected_pool,
+                        "pairing": selected_pairing_label,
+                        "score": f"{int(score_t1)} - {int(score_t2)}",
+                        "idempotency_key": idem_key,
+                        "result": result,
+                    },
+                    undo_label="round robin result",
+                )
+                _clear_confirm_loading("rm_round_robin_submit")
                 st.rerun()
             except Exception as exc:
+                _clear_confirm_loading("rm_round_robin_submit")
                 st.error(f"Submit failed: {exc}")
 
     last_submit = st.session_state.get("record_match_last_submit")
@@ -1584,8 +1722,8 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
         pool = last_submit.get("pool") or {}
         st.markdown(
             (
-                "<div class='record-match-success-card'>"
-                "<h4 style='margin:0 0 6px 0;'>✅ Round Robin match submitted</h4>"
+                "<div class='record-match-success-card is-visible'>"
+                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Round Robin match submitted</h4>"
                 f"<div><strong>Session:</strong> {session.get('name')}</div>"
                 f"<div><strong>Pool:</strong> {pool.get('name') or pool.get('pool_number')}</div>"
                 f"<div><strong>Pairing:</strong> {last_submit.get('pairing')}</div>"
@@ -1712,12 +1850,7 @@ def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
-        if st.button(
-            "Confirm & Submit",
-            type="primary",
-            disabled=not (unique_ids and has_score and bool(event_id)),
-            key="rm_moneyball_submit",
-        ):
+        if _render_confirm_submit_button("rm_moneyball_submit", disabled=not (unique_ids and has_score and bool(event_id))):
             match_date = datetime.utcnow().isoformat()
             idem_key = _deterministic_idempotency_key(
                 club_id=club_id,
@@ -1756,24 +1889,29 @@ def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
                     match_payload=payload,
                     idempotency_key=idem_key,
                 )
-                st.session_state["record_match_last_submit"] = {
-                    "event": selected_event,
-                    "score": f"{int(total_t1)} - {int(total_t2)}",
-                    "raw_score": f"{int(score_t1)} - {int(score_t2)}",
-                    "bonus": f"+{int(bonus_t1)} / +{int(bonus_t2)}",
-                    "idempotency_key": idem_key,
-                    "result": result,
-                }
+                _set_submit_feedback(
+                    {
+                        "event": selected_event,
+                        "score": f"{int(total_t1)} - {int(total_t2)}",
+                        "raw_score": f"{int(score_t1)} - {int(score_t2)}",
+                        "bonus": f"+{int(bonus_t1)} / +{int(bonus_t2)}",
+                        "idempotency_key": idem_key,
+                        "result": result,
+                    },
+                    undo_label="moneyball result",
+                )
+                _clear_confirm_loading("rm_moneyball_submit")
                 st.rerun()
             except Exception as exc:
+                _clear_confirm_loading("rm_moneyball_submit")
                 st.error(f"Submit failed: {exc}")
 
     last_submit = st.session_state.get("record_match_last_submit")
     if isinstance(last_submit, dict) and isinstance(last_submit.get("event"), dict):
         st.markdown(
             (
-                "<div class='record-match-success-card'>"
-                "<h4 style='margin:0 0 6px 0;'>✅ Moneyball result submitted</h4>"
+                "<div class='record-match-success-card is-visible'>"
+                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Moneyball result submitted</h4>"
                 f"<div><strong>Event:</strong> {last_submit['event'].get('name')}</div>"
                 f"<div><strong>Raw score:</strong> {last_submit.get('raw_score')}</div>"
                 f"<div><strong>Bonus:</strong> {last_submit.get('bonus')}</div>"
@@ -1795,6 +1933,7 @@ def render(ctx) -> None:
 
     _ensure_state()
     tokens = get_theme_tokens()
+    _render_motion_css(tokens)
 
     step = int(st.session_state.get(WIZARD_STEP_KEY, 1))
     if step <= 1:
@@ -1817,3 +1956,5 @@ def render(ctx) -> None:
         _step_2_bulk_match_entry(ctx, tokens)
     else:
         _step_2_placeholder(tokens)
+
+    _render_undo_banner()
