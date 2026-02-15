@@ -241,6 +241,20 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         margin-top: 1rem;
       }}
 
+      /* Responsive Admin Grid */
+      .jupr-admin-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1.25rem;
+        margin-top: 1rem;
+      }}
+
+      @media (max-width: 768px) {{
+        .jupr-admin-grid {{
+          grid-template-columns: 1fr;
+        }}
+      }}
+
       .jupr-admin-card {{
         border: 1px solid var(--border);
         border-radius: var(--radius);
