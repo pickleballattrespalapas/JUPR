@@ -42,7 +42,7 @@ def render(ctx):
     )
 
     st.subheader("Core Operations")
-    st.markdown('<div class="jupr-grid">', unsafe_allow_html=True)
+    st.markdown('<div class="jupr-admin-grid">', unsafe_allow_html=True)
 
     _nav_card("League Manager", "Manage standings & divisions", "🏟️ League Manager")
     _nav_card("Match Uploader", "Fast score entry", "📝 Match Uploader")
@@ -58,11 +58,9 @@ def render(ctx):
 
     health = get_system_health(ctx.supabase, ctx.club_id)
 
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric("Total Matches", health.get("match_count"))
-    c2.metric("Pending Badge Jobs", health.get("pending_badge_jobs"))
-    c3.metric("Last Check (UTC)", health.get("timestamp")[:19])
+    st.metric("Total Matches", health.get("match_count"))
+    st.metric("Pending Badge Jobs", health.get("pending_badge_jobs"))
+    st.metric("Last Check (UTC)", health.get("timestamp")[:19])
 
     st.divider()
     st.subheader("Background Jobs")
