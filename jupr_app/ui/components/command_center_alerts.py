@@ -54,8 +54,11 @@ def _placeholder_alert_items() -> list[AlertItem]:
 
 
 def render_alerts_html() -> str:
+    active_items = [item for item in _placeholder_alert_items() if item.count > 0]
+    total_active_alerts = sum(item.count for item in active_items)
+
     cards: list[str] = []
-    for item in _placeholder_alert_items():
+    for item in active_items:
         cards.append(
             f"""
             <article class=\"cc-alert-card cc-alert-{item.state}\">
@@ -68,6 +71,10 @@ def render_alerts_html() -> str:
             </article>
             """.strip()
         )
+
+    alerts_classes = "cc-alerts"
+    if total_active_alerts == 0:
+        alerts_classes += " cc-alerts--resolved"
 
     return Card(
         """
@@ -83,7 +90,7 @@ def render_alerts_html() -> str:
         """,
         elevation=2,
         interactive=False,
-        class_name="cc-alerts",
+        class_name=alerts_classes,
         tag="section",
-        attrs='aria-label="Admin alerts"',
+        attrs=f'aria-label="Admin alerts" data-alert-count="{total_active_alerts}"',
     )
