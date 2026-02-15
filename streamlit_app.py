@@ -218,7 +218,7 @@ def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> 
 def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> str:
     taxonomy = [
         ("Command Center", ["🧭 Command Center"]),
-        ("Competitions", ["🪜 Challenge Ladder", "🏆 Tournaments", "🏆 Tournament Manager", "💰 Moneyball"]),
+        ("Competitions", ["🪜 Challenge Ladder", "🏆 Tournaments", "🏆 Tournament Manager", "🏆 Division Manager", "💰 Moneyball"]),
         ("Results", ["🧾 Record Match", "📊 League Results", "🎯 Match Explorer", "📝 Match Log", "🗞️ Weekly Recap", "🗞️ Weekly Recap Admin"]),
         ("Players", ["🔍 Player Search", "👥 Player Editor", "🖨️ League Night Printout"]),
         ("Recognition", ["🏆 Leaderboards", "📼 Badge Codex", "🧪 Badge Debug"]),
@@ -399,6 +399,7 @@ def main():
             theme_gallery,
             tournaments,
             tournament_manager,
+            division_manager,
             weekly_recap,
             weekly_recap_admin,
             command_center,
@@ -430,6 +431,7 @@ def main():
             "🎨 Theme QA": theme_gallery,
             "🏆 Tournaments": tournaments,
             "🏆 Tournament Manager": tournament_manager,
+            "🏆 Division Manager": division_manager,
             "🗞️ Weekly Recap": weekly_recap,
 
             # Admin-only
@@ -464,6 +466,7 @@ def main():
             "tournaments": "🏆 Tournaments",
             "tournament_manager": "🏆 Tournament Manager",
             "tournament_divisions": "🏆 Tournament Manager",
+            "division_manager": "🏆 Division Manager",
             "weekly_recap": "🗞️ Weekly Recap",
 
             # Admin-only deep links
@@ -485,6 +488,7 @@ def main():
             "🎨 Theme QA",
             "🏆 Tournaments",
             "🏆 Tournament Manager",
+            "🏆 Division Manager",
             "🧪 Badge Debug",
             "🗞️ Weekly Recap Admin",
         }
@@ -515,6 +519,13 @@ def main():
         # -------------------------
         deep_page_key = qp_get("page", "").strip().lower()
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
+
+        deep_route = qp_get("route", "").strip().strip("/")
+        route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
+        if route_match:
+            st.query_params["tournament_id"] = route_match.group(1)
+            st.query_params["division_id"] = route_match.group(2)
+            deep_label = "🏆 Division Manager"
 
         if PUBLIC_MODE:
             # Block admin-only deep links in public mode
