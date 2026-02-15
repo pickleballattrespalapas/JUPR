@@ -80,6 +80,56 @@ ROUND_ROBIN_TEMPLATES: dict[int, dict[str, Any]] = {
             },
         ],
     },
+    6: {
+        "teamCount": 6,
+        "rounds": [
+            {
+                "round": 1,
+                "games": [
+                    {"slot": 1, "teamA": 2, "teamB": 1},
+                    {"slot": 2, "teamA": 3, "teamB": 6},
+                    {"slot": 3, "teamA": 4, "teamB": 5},
+                ],
+                "byes": [],
+            },
+            {
+                "round": 2,
+                "games": [
+                    {"slot": 1, "teamA": 3, "teamB": 4},
+                    {"slot": 2, "teamA": 6, "teamB": 1},
+                    {"slot": 3, "teamA": 2, "teamB": 5},
+                ],
+                "byes": [],
+            },
+            {
+                "round": 3,
+                "games": [
+                    {"slot": 1, "teamA": 6, "teamB": 4},
+                    {"slot": 2, "teamA": 2, "teamB": 3},
+                    {"slot": 3, "teamA": 1, "teamB": 5},
+                ],
+                "byes": [],
+            },
+            {
+                "round": 4,
+                "games": [
+                    {"slot": 1, "teamA": 4, "teamB": 1},
+                    {"slot": 2, "teamA": 5, "teamB": 3},
+                    {"slot": 3, "teamA": 2, "teamB": 6},
+                ],
+                "byes": [],
+            },
+            {
+                "round": 5,
+                "games": [
+                    {"slot": 1, "teamA": 5, "teamB": 6},
+                    {"slot": 2, "teamA": 1, "teamB": 3},
+                    {"slot": 3, "teamA": 2, "teamB": 4},
+                ],
+                "byes": [],
+            },
+        ],
+    },
     7: {
         "teamCount": 7,
         "rounds": [
