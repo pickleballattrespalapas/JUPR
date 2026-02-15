@@ -18,10 +18,14 @@ from services.match_pipeline import submit_match
 
 
 WIZARD_STEP_KEY = "record_match_wizard_step"
+WIZARD_VIEW_STEP_KEY = "record_match_view_step"
+WIZARD_LAST_VIEW_STEP_KEY = "record_match_last_view_step"
 SELECTED_TYPE_KEY = "record_match_competition_type"
 BULK_UPLOAD_STATE_KEY = "record_match_bulk_upload"
 BULK_CHUNK_SIZE = 200
 UNDO_BANNER_SECONDS = 10
+
+WIZARD_PROGRESS_STEPS: list[str] = ["Competition", "Participants", "Score", "Confirm"]
 
 COMPETITION_TYPES: list[dict[str, str]] = [
     {
@@ -65,6 +69,8 @@ COMPETITION_TYPES: list[dict[str, str]] = [
 
 def _ensure_state() -> None:
     st.session_state.setdefault(WIZARD_STEP_KEY, 1)
+    st.session_state.setdefault(WIZARD_VIEW_STEP_KEY, 1)
+    st.session_state.setdefault(WIZARD_LAST_VIEW_STEP_KEY, 1)
     st.session_state.setdefault(SELECTED_TYPE_KEY, None)
 
 
@@ -141,8 +147,119 @@ def _render_motion_css(tokens: dict[str, str]) -> None:
             color: {tokens['text_secondary']};
             transition: opacity var(--motion-duration-medium) var(--motion-ease-standard);
         }}
+        .record-match-progress {{
+            margin: 0.25rem 0 1rem;
+            padding: 0.75rem;
+            border: 1px solid {tokens['border_subtle']};
+            border-radius: 12px;
+            background: color-mix(in srgb, {tokens['card_bg']} 92%, {tokens['bg']} 8%);
+        }}
+        .record-match-progress-track {{
+            position: relative;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.55rem;
+        }}
+        .record-match-progress-step {{
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            opacity: 0.7;
+            transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+        }}
+        .record-match-progress-step.is-active,
+        .record-match-progress-step.is-complete {{
+            opacity: 1;
+        }}
+        .record-match-progress-dot {{
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: 999px;
+            border: 1px solid {tokens['border_subtle']};
+            background: {tokens['card_bg']};
+            color: {tokens['text_secondary']};
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.78rem;
+            font-weight: 600;
+            flex-shrink: 0;
+            transition:
+                color var(--motion-duration-medium) var(--motion-ease-standard),
+                background-color var(--motion-duration-medium) var(--motion-ease-standard),
+                border-color var(--motion-duration-medium) var(--motion-ease-standard);
+        }}
+        .record-match-progress-step.is-active .record-match-progress-dot {{
+            border-color: color-mix(in srgb, {tokens['text_primary']} 28%, {tokens['border_subtle']} 72%);
+            color: {tokens['text_primary']};
+            background: color-mix(in srgb, {tokens['card_bg']} 86%, {tokens['text_primary']} 14%);
+        }}
+        .record-match-progress-step.is-complete .record-match-progress-dot {{
+            border-color: color-mix(in srgb, #1f9d55 35%, {tokens['border_subtle']} 65%);
+            background: color-mix(in srgb, #1f9d55 18%, {tokens['card_bg']} 82%);
+            color: {tokens['text_primary']};
+        }}
+        .record-match-progress-label {{
+            color: {tokens['text_secondary']};
+            font-size: 0.82rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: color var(--motion-duration-medium) var(--motion-ease-standard);
+        }}
+        .record-match-progress-step.is-active .record-match-progress-label,
+        .record-match-progress-step.is-complete .record-match-progress-label {{
+            color: {tokens['text_primary']};
+        }}
+        .record-match-step-shell {{
+            animation: record-match-step-fade var(--motion-duration-medium) var(--motion-ease-standard);
+            will-change: opacity;
+        }}
+        .record-match-step-shell-steady {{
+            animation: none;
+        }}
+        @keyframes record-match-step-fade {{
+            from {{ opacity: 0; }}
+            to {{ opacity: 1; }}
+        }}
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def _resolve_progress_step() -> int:
+    if isinstance(st.session_state.get("record_match_last_submit"), dict):
+        return 4
+    wizard_step = int(st.session_state.get(WIZARD_STEP_KEY, 1))
+    if wizard_step <= 1:
+        return 1
+    return 2
+
+
+def _render_progress_indicator(current_step: int) -> None:
+    current_step = max(1, min(current_step, len(WIZARD_PROGRESS_STEPS)))
+    steps_html: list[str] = []
+    for idx, label in enumerate(WIZARD_PROGRESS_STEPS, start=1):
+        state = "is-pending"
+        if idx < current_step:
+            state = "is-complete"
+        elif idx == current_step:
+            state = "is-active"
+        steps_html.append(
+            (
+                f"<div class='record-match-progress-step {state}'>"
+                f"<span class='record-match-progress-dot'>{idx}</span>"
+                f"<span class='record-match-progress-label'>Step {idx}: {label}</span>"
+                "</div>"
+            )
+        )
+
+    st.markdown(
+        "<div class='record-match-progress'><div class='record-match-progress-track'>"
+        + "".join(steps_html)
+        + "</div></div>",
         unsafe_allow_html=True,
     )
 
@@ -1935,9 +2052,21 @@ def render(ctx) -> None:
     tokens = get_theme_tokens()
     _render_motion_css(tokens)
 
+    current_view_step = _resolve_progress_step()
+    previous_view_step = int(st.session_state.get(WIZARD_LAST_VIEW_STEP_KEY, current_view_step))
+    st.session_state[WIZARD_VIEW_STEP_KEY] = current_view_step
+    _render_progress_indicator(current_view_step)
+
+    shell_class = "record-match-step-shell"
+    if current_view_step == previous_view_step:
+        shell_class += " record-match-step-shell-steady"
+    st.markdown(f"<div class='{shell_class}'>", unsafe_allow_html=True)
+
     step = int(st.session_state.get(WIZARD_STEP_KEY, 1))
     if step <= 1:
         _step_1_competition_type(tokens)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.session_state[WIZARD_LAST_VIEW_STEP_KEY] = current_view_step
         return
 
     selected = st.session_state.get(SELECTED_TYPE_KEY)
@@ -1958,3 +2087,5 @@ def render(ctx) -> None:
         _step_2_placeholder(tokens)
 
     _render_undo_banner()
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.session_state[WIZARD_LAST_VIEW_STEP_KEY] = current_view_step
