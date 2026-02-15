@@ -132,6 +132,30 @@ def _inject_command_center_css(theme_mode: str) -> None:
           .cc-alerts {{
             grid-column: 1 / -1;
             padding: 1rem 1.2rem 1.2rem;
+            overflow: hidden;
+            max-height: 1200px;
+            opacity: 1;
+            transform: translateY(0);
+            transform-origin: top;
+            will-change: max-height, opacity, transform, padding, margin;
+            transition:
+              max-height var(--motion-medium) var(--motion-easing-standard),
+              opacity var(--motion-medium) var(--motion-easing-standard),
+              transform var(--motion-medium) var(--motion-easing-standard),
+              padding var(--motion-medium) var(--motion-easing-standard),
+              margin var(--motion-medium) var(--motion-easing-standard);
+          }}
+
+          .cc-alerts.cc-alerts--resolved {{
+            max-height: 0;
+            opacity: 0;
+            transform: translateY(-0.35rem);
+            margin-top: 0;
+            margin-bottom: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            border-width: 0;
+            pointer-events: none;
           }}
 
           .cc-alerts-header h3 {{
