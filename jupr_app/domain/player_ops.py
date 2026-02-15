@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Tuple
 
+from postgrest.exceptions import APIError
+
 
 def safe_add_player(
     *,
@@ -12,16 +14,17 @@ def safe_add_player(
     rating_jupr: float,
 ) -> Tuple[bool, str]:
     """
-    Ensures a player exists in `players`.
+    Idempotent player creation for JUPR.
 
-    - Attempts insert (rating_jupr stored as ELO x400)
-    - If unique constraint indicates the name already exists for this club, treat as success
-      and rely on a re-fetch to get the id.
-
-    Returns (ok, error_message).
+    Behavior:
+    - Inserts player using ON CONFLICT (club_id, normalized_name)
+    - If player already exists (active=true), returns existing id
+    - Never throws duplicate key error
+    - Deterministic and race-safe
     """
-    nm = str(name or "").strip()
-    if not nm:
+
+    clean_name = str(name or "").strip()
+    if not clean_name:
         return False, "Blank name."
 
     try:
@@ -31,34 +34,59 @@ def safe_add_player(
 
     payload = {
         "club_id": str(club_id),
-        "name": nm,
+        "name": clean_name,
+        "active": True,
         "rating": float(elo),
         "starting_rating": float(elo),
         "wins": 0,
         "losses": 0,
         "matches_played": 0,
-        "active": True,
         "last_game_at": None,
         "inactive_at": None,
     }
 
-    resp = supabase.table("players").insert(payload).execute()
+    try:
+        resp = (
+            supabase
+            .table("players")
+            .insert(payload)
+            .on_conflict("club_id,normalized_name")
+            .execute()
+        )
 
-    # Supabase does not raise exceptions for PostgREST errors.
-    # Errors must be inspected on the response object.
-    error = getattr(resp, "error", None)
+        if resp.data and len(resp.data) > 0:
+            return True, resp.data[0]["id"]
 
-    if error:
-        msg = str(error)
+        existing = (
+            supabase
+            .table("players")
+            .select("id")
+            .eq("club_id", str(club_id))
+            .eq("normalized_name", clean_name.lower())
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
 
-        # If duplicate key (23505) on normalized name, the player already exists — treat as OK.
-        # supabase-py surfaces the code in the string; we match conservatively.
-        if "23505" in msg or "uq_players_club_name_active" in msg:
-            return True, ""
+        if existing.data:
+            return True, existing.data[0]["id"]
 
-        import logging
+        return False, "Unknown insertion state"
 
-        logging.warning(f"safe_add_player insert failed: {msg}")
-        return False, msg
+    except APIError as e:
+        if getattr(e, "code", None) == "23505":
+            existing = (
+                supabase
+                .table("players")
+                .select("id")
+                .eq("club_id", str(club_id))
+                .eq("normalized_name", clean_name.lower())
+                .eq("active", True)
+                .limit(1)
+                .execute()
+            )
 
-    return True, ""
+            if existing.data:
+                return True, existing.data[0]["id"]
+
+        return False, str(e)
