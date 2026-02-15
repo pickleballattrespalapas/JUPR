@@ -9,18 +9,23 @@ from jupr_app.domain.system_health import get_system_health
 from jupr_app.ui.layout import page_shell
 
 
-def _nav_card(title: str, desc: str, target_label: str):
+def _nav_card(title: str, desc: str, target_label: str, metric: str | None = None):
+    wrapper_key = f"card_{target_label}"
+
     clicked = st.button(
-        label="",
-        key=f"card_{target_label}",
-        help=desc,
+        f"{title}\n\n{desc}",
+        key=wrapper_key,
         use_container_width=True,
     )
+
+    metric_html = ""
+    if metric is not None:
+        metric_html = f'<div class="jupr-admin-metric">{html.escape(str(metric))}</div>'
+
     st.markdown(
         f"""
-        <div class="jupr-admin-card">
-            <div class="jupr-admin-card__title">{html.escape(title)}</div>
-            <div class="jupr-admin-card__desc">{html.escape(desc)}</div>
+        <div class="jupr-admin-card-wrapper">
+            {metric_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -41,6 +46,8 @@ def render(ctx):
         mode_label="Admin",
     )
 
+    health = get_system_health(ctx.supabase, ctx.club_id)
+
     st.subheader("Core Operations")
     st.markdown('<div class="jupr-admin-grid">', unsafe_allow_html=True)
 
@@ -48,15 +55,18 @@ def render(ctx):
     _nav_card("Match Uploader", "Fast score entry", "📝 Match Uploader")
     _nav_card("Match Log", "Bulk edit + replay", "📝 Match Log")
     _nav_card("Player Editor", "Merge & manage players", "👥 Player Editor")
-    _nav_card("Admin Tools", "Recompute & system ops", "⚙️ Admin Tools")
+    _nav_card(
+        "Admin Tools",
+        "Recompute & system ops",
+        "⚙️ Admin Tools",
+        metric=health.get("pending_badge_jobs"),
+    )
     _nav_card("Weekly Recap", "Generate & publish recap", "🗞️ Weekly Recap Admin")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.divider()
     st.subheader("System Health")
-
-    health = get_system_health(ctx.supabase, ctx.club_id)
 
     st.metric("Total Matches", health.get("match_count"))
     st.metric("Pending Badge Jobs", health.get("pending_badge_jobs"))
