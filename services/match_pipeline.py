@@ -41,6 +41,7 @@ def submit_match(
     context_id: Optional[str],
     match_payload: Dict[str, Any],
     idempotency_key: Optional[str] = None,
+    run_context_hooks: bool = True,
 ) -> Dict[str, Any]:
     """Validate input and route to canonical pipeline steps.
 
@@ -66,13 +67,21 @@ def submit_match(
         idempotency_key=idempotency_key,
     )
     rating_result = _apply_rating_engine_stub(match_payload=match_payload)
-    hooks_result = _run_context_hooks(
-        club_id=club_id,
-        context_type=context_type,
-        context_id=context_id,
-        match_payload=match_payload,
-        rating_result=rating_result,
-    )
+    hooks_result: Dict[str, Any]
+    if run_context_hooks:
+        hooks_result = _run_context_hooks(
+            club_id=club_id,
+            context_type=context_type,
+            context_id=context_id,
+            match_payload=match_payload,
+            rating_result=rating_result,
+        )
+    else:
+        hooks_result = {
+            "stub": True,
+            "name": "run_context_hooks",
+            "action": "skipped_by_flag",
+        }
 
     return {
         "ok": True,

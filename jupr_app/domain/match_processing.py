@@ -333,6 +333,8 @@ def process_matches(
                         context_id=context_id,
                         match_payload=match_row,
                         idempotency_key=idempotency_key,
+                        # match_processing already persists league_ratings; avoid pipeline hook double writes.
+                        run_context_hooks=False,
                     )
                 )
 
