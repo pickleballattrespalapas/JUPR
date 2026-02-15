@@ -134,14 +134,17 @@ def _render_divisions_tab(supabase, club_id: str, tournament: dict) -> None:
                 st.caption(f"Team count: {counts.get(division_id, 0)}")
                 st.caption(f"Status: {row.get('status') or 'draft'}")
             with right:
-                st.button(
+                if st.button(
                     "Manage Entries",
                     key=f"manage_entries_{division_id}",
                     use_container_width=True,
                     type="secondary",
-                    disabled=True,
-                    help="Entries management is coming next.",
-                )
+                ):
+                    st.query_params["page"] = "division_manager"
+                    st.query_params["route"] = f"tournament/{tournament_id}/division/{division_id}"
+                    st.query_params["tournament_id"] = tournament_id
+                    st.query_params["division_id"] = division_id
+                    st.rerun()
                 st.button(
                     "Generate Bracket",
                     key=f"generate_bracket_{division_id}",
