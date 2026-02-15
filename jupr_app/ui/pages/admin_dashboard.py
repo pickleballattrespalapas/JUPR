@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import html
-
 import streamlit as st
 
 from jupr_app.domain.job_monitor import fetch_recent_jobs
@@ -9,7 +7,13 @@ from jupr_app.domain.system_health import get_system_health
 from jupr_app.ui.layout import page_shell
 
 
-def _nav_card(title: str, desc: str, target_label: str, metric: str | None = None):
+def _nav_card(
+    title: str,
+    desc: str,
+    target_label: str,
+    metric: str | None = None,
+    status: str = "green",
+):
     wrapper_key = f"card_{target_label}"
 
     clicked = st.button(
@@ -18,14 +22,19 @@ def _nav_card(title: str, desc: str, target_label: str, metric: str | None = Non
         use_container_width=True,
     )
 
-    metric_html = ""
-    if metric is not None:
-        metric_html = f'<div class="jupr-admin-metric">{html.escape(str(metric))}</div>'
+    status_class = {
+        "green": "jupr-status-green",
+        "yellow": "jupr-status-yellow",
+        "red": "jupr-status-red",
+    }.get(status, "jupr-status-green")
 
     st.markdown(
         f"""
         <div class="jupr-admin-card-wrapper">
-            {metric_html}
+            <div class="jupr-admin-title-row">
+                <div></div>
+                <div class="jupr-status-dot {status_class}"></div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -55,11 +64,19 @@ def render(ctx):
     _nav_card("Match Uploader", "Fast score entry", "📝 Match Uploader")
     _nav_card("Match Log", "Bulk edit + replay", "📝 Match Log")
     _nav_card("Player Editor", "Merge & manage players", "👥 Player Editor")
+    pending = health.get("pending_badge_jobs", 0)
+    status = "green"
+    if isinstance(pending, int) and pending > 20:
+        status = "red"
+    elif isinstance(pending, int) and pending > 5:
+        status = "yellow"
+
     _nav_card(
         "Admin Tools",
         "Recompute & system ops",
         "⚙️ Admin Tools",
-        metric=health.get("pending_badge_jobs"),
+        metric=pending,
+        status=status,
     )
     _nav_card("Weekly Recap", "Generate & publish recap", "🗞️ Weekly Recap Admin")
 
