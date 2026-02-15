@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jupr_app.ui.components.card import Card
+
 
 @dataclass(frozen=True)
 class CompetitionAction:
@@ -75,8 +77,8 @@ def render_active_competitions_html() -> str:
         )
 
         cards.append(
-            f"""
-            <article class="cc-competition-card" aria-label="{card.name}">
+            Card(
+                f"""
               <div class="cc-competition-top">
                 <h4>{card.name}</h4>
                 <span class="cc-competition-status cc-competition-status-{card.status.lower()}">{card.status}</span>
@@ -84,13 +86,17 @@ def render_active_competitions_html() -> str:
               <div class="cc-competition-actions">
                 {actions}
               </div>
-            </article>
-            """.strip()
+                """.strip(),
+                elevation=1,
+                interactive=True,
+                class_name="cc-competition-card",
+                tag="article",
+                attrs=f'aria-label="{card.name}"',
+            )
         )
 
-    return (
+    return Card(
         """
-        <section class="cc-competitions" aria-label="Active competitions">
           <div class="cc-competitions-header">
             <h3>Active Competitions</h3>
             <p>Monitor live programs and jump directly to key admin actions.</p>
@@ -100,6 +106,10 @@ def render_active_competitions_html() -> str:
         + "".join(cards)
         + """
           </div>
-        </section>
-        """
+        """,
+        elevation=2,
+        interactive=False,
+        class_name="cc-competitions",
+        tag="section",
+        attrs='aria-label="Active competitions"',
     )
