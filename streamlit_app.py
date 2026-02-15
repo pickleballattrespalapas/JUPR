@@ -68,6 +68,8 @@ def get_secret(path: list[str], default=None):
 # Admin session helpers
 # -------------------------
 ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
+ADMIN_MAX_FAILED_ATTEMPTS = 5
+ADMIN_LOCKOUT_SECONDS = 60
 
 
 def _get_admin_session_secret() -> str:
@@ -182,15 +184,9 @@ def get_data(club_id: str):
 # UI helpers
 # -------------------------
 def hide_sidebar_and_header_for_public():
-    # Hide sidebar + collapse control for public, keep app content full-width.
-    st.markdown(
-        "<style>"
-        "section[data-testid='stSidebar']{display:none;}"
-        "div[data-testid='collapsedControl']{display:none;}"
-        "header{visibility:hidden;}"
-        "</style>",
-        unsafe_allow_html=True,
-    )
+    # Intentionally a no-op: public mode relies on Streamlit config
+    # (initial_sidebar_state="collapsed") and avoids raw HTML/CSS injection.
+    return None
 
 
 def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> str:
@@ -264,10 +260,6 @@ def main():
             initial_sidebar_state="collapsed",
         )
         apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
-        st.markdown(
-            "<!-- JUPR_DEPLOY_PING_2026_02_11 -->",
-            unsafe_allow_html=True,
-        )
 
                                 
         # ---- Public mode ----
@@ -283,6 +275,8 @@ def main():
 
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
+        st.session_state.setdefault("admin_failed_attempts", 0)
+        st.session_state.setdefault("admin_lock_until", 0)
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
@@ -295,14 +289,35 @@ def main():
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
 
                     if st.button("Login", key="admin_login_btn"):
-                        expected = str(get_secret(["supabase", "admin_password"], "") or "")
-                        if not expected:
-                            st.error("Admin password is not configured in secrets (supabase.admin_password).")
-                        elif pwd == expected:
-                            _create_admin_session()
-                            st.rerun()
+                        now = int(time.time())
+                        lock_until = int(st.session_state.get("admin_lock_until", 0) or 0)
+                        if now < lock_until:
+                            wait_seconds = lock_until - now
+                            st.error(f"Too many failed attempts. Try again in {wait_seconds} seconds.")
                         else:
-                            st.error("Incorrect password.")
+                            expected = str(get_secret(["supabase", "admin_password"], "") or "")
+                            if not expected:
+                                st.error("Admin password is not configured in secrets (supabase.admin_password).")
+                            elif pwd == expected:
+                                st.session_state["admin_failed_attempts"] = 0
+                                st.session_state["admin_lock_until"] = 0
+                                _create_admin_session()
+                                st.rerun()
+                            else:
+                                failed_attempts = int(st.session_state.get("admin_failed_attempts", 0) or 0) + 1
+                                st.session_state["admin_failed_attempts"] = failed_attempts
+                                if failed_attempts >= ADMIN_MAX_FAILED_ATTEMPTS:
+                                    st.session_state["admin_lock_until"] = now + ADMIN_LOCKOUT_SECONDS
+                                    st.session_state["admin_failed_attempts"] = 0
+                                    st.error(
+                                        f"Too many failed attempts. Try again in {ADMIN_LOCKOUT_SECONDS} seconds."
+                                    )
+                                else:
+                                    remaining = ADMIN_MAX_FAILED_ATTEMPTS - failed_attempts
+                                    st.error(
+                                        "Incorrect password. "
+                                        f"{remaining} attempt{'s' if remaining != 1 else ''} remaining before lockout."
+                                    )
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
