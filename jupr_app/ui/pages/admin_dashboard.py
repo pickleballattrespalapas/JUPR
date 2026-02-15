@@ -1,12 +1,29 @@
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from jupr_app.ui.layout import page_shell
 
 
-def _nav_button(label: str, target_label: str):
-    if st.button(label, use_container_width=True):
+def _nav_card(title: str, desc: str, target_label: str):
+    clicked = st.button(
+        label="",
+        key=f"card_{target_label}",
+        help=desc,
+        use_container_width=True,
+    )
+    st.markdown(
+        f"""
+        <div class="jupr-admin-card">
+            <div class="jupr-admin-card__title">{html.escape(title)}</div>
+            <div class="jupr-admin-card__desc">{html.escape(desc)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if clicked:
         st.session_state["main_nav"] = target_label
         st.rerun()
 
@@ -23,31 +40,13 @@ def render(ctx):
     )
 
     st.subheader("Core Operations")
+    st.markdown('<div class="jupr-grid">', unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns(3)
+    _nav_card("League Manager", "Manage standings & divisions", "🏟️ League Manager")
+    _nav_card("Match Uploader", "Fast score entry", "📝 Match Uploader")
+    _nav_card("Match Log", "Bulk edit + replay", "📝 Match Log")
+    _nav_card("Player Editor", "Merge & manage players", "👥 Player Editor")
+    _nav_card("Admin Tools", "Recompute & system ops", "⚙️ Admin Tools")
+    _nav_card("Weekly Recap", "Generate & publish recap", "🗞️ Weekly Recap Admin")
 
-    with col1:
-        _nav_button("🏟️ League Manager", "🏟️ League Manager")
-        _nav_button("📝 Match Uploader", "📝 Match Uploader")
-
-    with col2:
-        _nav_button("📝 Match Log", "📝 Match Log")
-        _nav_button("👥 Player Editor", "👥 Player Editor")
-
-    with col3:
-        _nav_button("⚙️ Admin Tools", "⚙️ Admin Tools")
-        _nav_button("🗞️ Weekly Recap Admin", "🗞️ Weekly Recap Admin")
-
-    st.divider()
-
-    st.subheader("Advanced")
-
-    col4, col5 = st.columns(2)
-
-    with col4:
-        _nav_button("🛠️ Challenge Ladder Admin", "🛠️ Challenge Ladder Admin")
-        _nav_button("🏆 Tournament Manager", "🏆 Tournament Manager")
-
-    with col5:
-        _nav_button("💰 Moneyball", "💰 Moneyball")
-        _nav_button("🎨 Theme QA", "🎨 Theme QA")
+    st.markdown("</div>", unsafe_allow_html=True)
