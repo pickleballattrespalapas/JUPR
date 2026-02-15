@@ -4,6 +4,7 @@ from collections import Counter
 
 import streamlit as st
 
+from jupr_app.domain.tournaments.bracket_builder import generate_single_elim
 from jupr_app.ui.layout import page_shell
 
 DIVISION_FORMATS = ["single_elim", "double_elim", "rr", "pool_to_bracket"]
@@ -145,14 +146,26 @@ def _render_divisions_tab(supabase, club_id: str, tournament: dict) -> None:
                     st.query_params["tournament_id"] = tournament_id
                     st.query_params["division_id"] = division_id
                     st.rerun()
-                st.button(
+                generate_clicked = st.button(
                     "Generate Bracket",
                     key=f"generate_bracket_{division_id}",
                     use_container_width=True,
                     type="primary",
-                    disabled=True,
-                    help="Bracket generation is not implemented yet.",
+                    disabled=str(row.get("format") or "") != "single_elim",
+                    help="Only available for single elimination divisions.",
                 )
+                if generate_clicked:
+                    try:
+                        result = generate_single_elim(supabase, division_id=division_id, club_id=club_id)
+                        st.success(
+                            "Bracket generated "
+                            f"({result['match_count']} matches, {result['entry_count']} teams, size {result['bracket_size']})."
+                        )
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:
+                        st.error(f"Could not generate bracket: {exc}")
 
 
 def render(ctx):
