@@ -233,6 +233,40 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         box-shadow: var(--shadow-lg);
         border-color: var(--accent-border);
       }}
+      /* Admin Grid */
+      .jupr-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 1.2rem;
+        margin-top: 1rem;
+      }}
+
+      .jupr-admin-card {{
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        padding: 1.2rem;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        cursor: pointer;
+      }}
+
+      .jupr-admin-card:hover {{
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-lg);
+        border-color: var(--accent-border);
+      }}
+
+      .jupr-admin-card__title {{
+        font-size: 1.05rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+      }}
+
+      .jupr-admin-card__desc {{
+        font-size: var(--font-sm);
+        color: var(--text-muted);
+      }}
       .jupr-section-title {{
         font-size: var(--font-lg);
         font-weight: 700;
