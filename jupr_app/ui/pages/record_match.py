@@ -22,6 +22,9 @@ WIZARD_VIEW_STEP_KEY = "record_match_view_step"
 WIZARD_LAST_VIEW_STEP_KEY = "record_match_last_view_step"
 SELECTED_TYPE_KEY = "record_match_competition_type"
 BULK_UPLOAD_STATE_KEY = "record_match_bulk_upload"
+PENDING_FINGERPRINT_KEY = "record_match_pending_payload_fingerprint"
+PENDING_MATCH_DATE_KEY = "record_match_pending_match_date"
+PENDING_IDEMPOTENCY_KEY = "record_match_pending_idempotency_key"
 BULK_CHUNK_SIZE = 200
 UNDO_BANNER_SECONDS = 10
 
@@ -536,6 +539,59 @@ def _deterministic_idempotency_key(
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
 
+def _build_submission_fingerprint(payload: dict[str, Any]) -> str:
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _clear_pending_submission() -> None:
+    st.session_state.pop(PENDING_FINGERPRINT_KEY, None)
+    st.session_state.pop(PENDING_MATCH_DATE_KEY, None)
+    st.session_state.pop(PENDING_IDEMPOTENCY_KEY, None)
+
+
+def _sync_pending_submission(fingerprint: str) -> None:
+    pending_fingerprint = st.session_state.get(PENDING_FINGERPRINT_KEY)
+    if pending_fingerprint and pending_fingerprint != fingerprint:
+        _clear_pending_submission()
+
+
+def _resolve_submission_date_and_idem_key(
+    *,
+    fingerprint: str,
+    club_id: str,
+    league_id: str,
+    player_ids: list[int],
+    score_t1: int,
+    score_t2: int,
+) -> tuple[str, str]:
+    pending_fingerprint = st.session_state.get(PENDING_FINGERPRINT_KEY)
+    pending_match_date = st.session_state.get(PENDING_MATCH_DATE_KEY)
+    pending_idem_key = st.session_state.get(PENDING_IDEMPOTENCY_KEY)
+    if (
+        pending_fingerprint == fingerprint
+        and isinstance(pending_match_date, str)
+        and pending_match_date
+        and isinstance(pending_idem_key, str)
+        and pending_idem_key
+    ):
+        return pending_match_date, pending_idem_key
+
+    match_date = datetime.utcnow().isoformat()
+    idem_key = _deterministic_idempotency_key(
+        club_id=club_id,
+        league_id=league_id,
+        player_ids=player_ids,
+        score_t1=score_t1,
+        score_t2=score_t2,
+        match_date=match_date,
+    )
+    st.session_state[PENDING_FINGERPRINT_KEY] = fingerprint
+    st.session_state[PENDING_MATCH_DATE_KEY] = match_date
+    st.session_state[PENDING_IDEMPOTENCY_KEY] = idem_key
+    return match_date, idem_key
+
+
 def _normalize_bulk_columns(df: pd.DataFrame) -> pd.DataFrame:
     renamed = {
         col: str(col).strip().lower().replace(" ", "_") for col in df.columns
@@ -888,23 +944,33 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
         st.error("Enter a non-zero score before confirming.")
 
     can_submit = unique_ids and has_score and bool(getattr(ctx, "club_id", None))
+    submission_fingerprint = _build_submission_fingerprint(
+        {
+            "flow": "ladder_league",
+            "league": selected_league,
+            "division": selected_division if selected_division and selected_division != "All divisions" else None,
+            "players": [int(t1_p1), int(t1_p2), int(t2_p1), int(t2_p2)],
+            "scores": [int(score_t1), int(score_t2)],
+        }
+    )
+    _sync_pending_submission(submission_fingerprint)
 
     controls = st.columns([1, 1, 4])
     with controls[0]:
         if st.button("← Back", key="rm_step2_back"):
+            _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
         if _render_confirm_submit_button("rm_ll_submit", disabled=not can_submit):
             club_id = str(getattr(ctx, "club_id", "")).strip()
-            match_date = datetime.utcnow().isoformat()
-            idem_key = _deterministic_idempotency_key(
+            match_date, idem_key = _resolve_submission_date_and_idem_key(
+                fingerprint=submission_fingerprint,
                 club_id=club_id,
                 league_id=selected_league,
                 player_ids=[t1_p1, t1_p2, t2_p1, t2_p2],
                 score_t1=int(score_t1),
                 score_t2=int(score_t2),
-                match_date=match_date,
             )
 
             payload = {
@@ -945,6 +1011,7 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
                     },
                     undo_label="league match",
                 )
+                _clear_pending_submission()
                 _clear_confirm_loading("rm_ll_submit")
                 st.rerun()
             except Exception as exc:
@@ -1130,21 +1197,31 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
     if not has_score:
         st.error("Enter a non-zero score before confirming.")
 
+    submission_fingerprint = _build_submission_fingerprint(
+        {
+            "flow": "challenge_ladder",
+            "challenge_id": int(selected_challenge["challenge_id"]),
+            "players": [int(selected_challenge["challenger_id"]), int(selected_challenge["defender_id"])],
+            "scores": [int(score_t1), int(score_t2)],
+        }
+    )
+    _sync_pending_submission(submission_fingerprint)
+
     controls = st.columns([1, 1, 4])
     with controls[0]:
         if st.button("← Back", key="rm_step2_back_challenge"):
+            _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
         if _render_confirm_submit_button("rm_cl_submit", disabled=not has_score):
-            match_date = datetime.utcnow().isoformat()
-            idem_key = _deterministic_idempotency_key(
+            match_date, idem_key = _resolve_submission_date_and_idem_key(
+                fingerprint=submission_fingerprint,
                 club_id=club_id,
                 league_id=f"challenge:{selected_challenge['challenge_id']}",
                 player_ids=[selected_challenge["challenger_id"], selected_challenge["defender_id"]],
                 score_t1=int(score_t1),
                 score_t2=int(score_t2),
-                match_date=match_date,
             )
 
             payload = {
@@ -1178,6 +1255,7 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
                     },
                     undo_label="challenge result",
                 )
+                _clear_pending_submission()
                 _clear_confirm_loading("rm_cl_submit")
                 st.rerun()
             except Exception as exc:
@@ -1391,15 +1469,32 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
     if has_score and not has_winner:
         st.error("Tournament matches cannot end in a tie.")
 
+    submission_fingerprint = _build_submission_fingerprint(
+        {
+            "flow": "tournament",
+            "tournament_id": tournament_id,
+            "game_id": int(selected_game["id"]),
+            "players": [
+                int(team_a.get("player1_id")),
+                int(team_a.get("player2_id")),
+                int(team_b.get("player1_id")),
+                int(team_b.get("player2_id")),
+            ],
+            "scores": [int(score_t1), int(score_t2)],
+        }
+    )
+    _sync_pending_submission(submission_fingerprint)
+
     controls = st.columns([1, 1, 4])
     with controls[0]:
         if st.button("← Back", key="rm_step2_back_tournament"):
+            _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
         if _render_confirm_submit_button("rm_tournament_submit", disabled=not (has_score and has_winner)):
-            match_date = datetime.utcnow().isoformat()
-            idem_key = _deterministic_idempotency_key(
+            match_date, idem_key = _resolve_submission_date_and_idem_key(
+                fingerprint=submission_fingerprint,
                 club_id=club_id,
                 league_id=f"tournament:{tournament_id}:game:{selected_game['id']}",
                 player_ids=[
@@ -1410,7 +1505,6 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
                 ],
                 score_t1=int(score_t1),
                 score_t2=int(score_t2),
-                match_date=match_date,
             )
 
             payload = {
@@ -1466,6 +1560,7 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
                     },
                     undo_label="tournament result",
                 )
+                _clear_pending_submission()
                 _clear_confirm_loading("rm_tournament_submit")
                 st.rerun()
             except Exception as exc:
@@ -1733,27 +1828,39 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
     if not has_score:
         st.error("Enter a non-zero score before confirming.")
 
+    team_a_p1, team_a_p2 = _round_robin_team_ids(selected_pairing, "team_a")
+    team_b_p1, team_b_p2 = _round_robin_team_ids(selected_pairing, "team_b")
+    submission_fingerprint = _build_submission_fingerprint(
+        {
+            "flow": "round_robin",
+            "session_id": session_id,
+            "pool_id": pool_id,
+            "match_id": int(selected_pairing["id"]),
+            "players": [team_a_p1, team_a_p2, team_b_p1, team_b_p2],
+            "scores": [int(score_t1), int(score_t2)],
+        }
+    )
+    _sync_pending_submission(submission_fingerprint)
+
     controls = st.columns([1, 1, 4])
     with controls[0]:
         if st.button("← Back", key="rm_step2_back_round_robin"):
+            _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
         if _render_confirm_submit_button("rm_round_robin_submit", disabled=not has_score):
-            team_a_p1, team_a_p2 = _round_robin_team_ids(selected_pairing, "team_a")
-            team_b_p1, team_b_p2 = _round_robin_team_ids(selected_pairing, "team_b")
             if None in (team_a_p1, team_a_p2, team_b_p1, team_b_p2):
                 st.error("Selected pairing is missing one or more player assignments.")
                 return
 
-            match_date = datetime.utcnow().isoformat()
-            idem_key = _deterministic_idempotency_key(
+            match_date, idem_key = _resolve_submission_date_and_idem_key(
+                fingerprint=submission_fingerprint,
                 club_id=club_id,
                 league_id=f"round_robin:{session_id}:pool:{pool_id}:match:{selected_pairing['id']}",
                 player_ids=[int(team_a_p1), int(team_a_p2), int(team_b_p1), int(team_b_p2)],
                 score_t1=int(score_t1),
                 score_t2=int(score_t2),
-                match_date=match_date,
             )
 
             payload = {
@@ -1827,6 +1934,7 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
                     },
                     undo_label="round robin result",
                 )
+                _clear_pending_submission()
                 _clear_confirm_loading("rm_round_robin_submit")
                 st.rerun()
             except Exception as exc:
@@ -1961,21 +2069,33 @@ def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
     if not has_score:
         st.error("Enter score/bonus points before confirming.")
 
+    submission_fingerprint = _build_submission_fingerprint(
+        {
+            "flow": "moneyball",
+            "event_id": event_id,
+            "players": [int(t1_p1), int(t1_p2), int(t2_p1), int(t2_p2)],
+            "raw_scores": [int(score_t1), int(score_t2)],
+            "bonus": [int(bonus_t1), int(bonus_t2)],
+            "totals": [int(total_t1), int(total_t2)],
+        }
+    )
+    _sync_pending_submission(submission_fingerprint)
+
     controls = st.columns([1, 1, 4])
     with controls[0]:
         if st.button("← Back", key="rm_step2_back_moneyball"):
+            _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
             st.rerun()
     with controls[1]:
         if _render_confirm_submit_button("rm_moneyball_submit", disabled=not (unique_ids and has_score and bool(event_id))):
-            match_date = datetime.utcnow().isoformat()
-            idem_key = _deterministic_idempotency_key(
+            match_date, idem_key = _resolve_submission_date_and_idem_key(
+                fingerprint=submission_fingerprint,
                 club_id=club_id,
                 league_id=f"moneyball:{event_id}",
                 player_ids=[t1_p1, t1_p2, t2_p1, t2_p2],
                 score_t1=int(total_t1),
                 score_t2=int(total_t2),
-                match_date=match_date,
             )
 
             payload = {
@@ -2017,6 +2137,7 @@ def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
                     },
                     undo_label="moneyball result",
                 )
+                _clear_pending_submission()
                 _clear_confirm_loading("rm_moneyball_submit")
                 st.rerun()
             except Exception as exc:
