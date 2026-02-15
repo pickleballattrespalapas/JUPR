@@ -463,6 +463,7 @@ def main():
             "theme_qa": "🎨 Theme QA",
             "tournaments": "🏆 Tournaments",
             "tournament_manager": "🏆 Tournament Manager",
+            "tournament_divisions": "🏆 Tournament Manager",
             "weekly_recap": "🗞️ Weekly Recap",
 
             # Admin-only deep links
