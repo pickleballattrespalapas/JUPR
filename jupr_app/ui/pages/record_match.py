@@ -13,7 +13,6 @@ from jupr_app.domain.leagues import get_league_meta_row
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
 from jupr_app.ui.layout import page_shell
-from jupr_app.ui.theme_tokens import get_theme_tokens
 from services.match_pipeline import submit_match
 
 
@@ -77,161 +76,6 @@ def _ensure_state() -> None:
     st.session_state.setdefault(SELECTED_TYPE_KEY, None)
 
 
-def _render_motion_css(tokens: dict[str, str]) -> None:
-    st.markdown(
-        f"""
-        <style>
-        :root {{
-            --motion-duration-fast: 140ms;
-            --motion-duration-medium: 240ms;
-            --motion-duration-slow: 340ms;
-            --motion-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
-        }}
-        .record-match-success-card {{
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: color-mix(in srgb, {tokens['card_bg']} 80%, #1f9d55 20%);
-            padding: 14px;
-            margin-top: 0.8rem;
-            color: {tokens['text_primary']};
-            max-height: 0;
-            opacity: 0;
-            overflow: hidden;
-            transform: translateY(4px);
-            transition:
-                max-height var(--motion-duration-slow) var(--motion-ease-standard),
-                opacity var(--motion-duration-medium) var(--motion-ease-standard),
-                transform var(--motion-duration-medium) var(--motion-ease-standard);
-        }}
-        .record-match-success-card.is-visible {{
-            max-height: 240px;
-            opacity: 1;
-            transform: translateY(0);
-        }}
-        .record-match-check {{
-            opacity: 0;
-            margin-right: 0.3rem;
-            transition: opacity var(--motion-duration-slow) var(--motion-ease-standard);
-        }}
-        .record-match-success-card.is-visible .record-match-check {{
-            opacity: 1;
-        }}
-        .record-match-loading-btn {{
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 8px;
-            padding: 0.42rem 0.85rem;
-            color: {tokens['text_secondary']};
-            display: inline-flex;
-            align-items: center;
-            gap: 0.45rem;
-            font-size: 0.92rem;
-            background: {tokens['card_bg']};
-        }}
-        .record-match-loading-dot {{
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: {tokens['text_secondary']};
-            animation: record-match-pulse 1s ease-in-out infinite;
-        }}
-        @keyframes record-match-pulse {{
-            0%, 100% {{ opacity: 0.35; transform: scale(0.8); }}
-            50% {{ opacity: 1; transform: scale(1); }}
-        }}
-        .record-match-undo {{
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 10px;
-            padding: 0.6rem 0.8rem;
-            margin-top: 0.6rem;
-            background: {tokens['card_bg']};
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            color: {tokens['text_secondary']};
-            transition: opacity var(--motion-duration-medium) var(--motion-ease-standard);
-        }}
-        .record-match-progress {{
-            margin: 0.25rem 0 1rem;
-            padding: 0.75rem;
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: color-mix(in srgb, {tokens['card_bg']} 92%, {tokens['bg']} 8%);
-        }}
-        .record-match-progress-track {{
-            position: relative;
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 0.55rem;
-        }}
-        .record-match-progress-step {{
-            min-width: 0;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            opacity: 0.7;
-            transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
-        }}
-        .record-match-progress-step.is-active,
-        .record-match-progress-step.is-complete {{
-            opacity: 1;
-        }}
-        .record-match-progress-dot {{
-            width: 1.5rem;
-            height: 1.5rem;
-            border-radius: 999px;
-            border: 1px solid {tokens['border_subtle']};
-            background: {tokens['card_bg']};
-            color: {tokens['text_secondary']};
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.78rem;
-            font-weight: 600;
-            flex-shrink: 0;
-            transition:
-                color var(--motion-duration-medium) var(--motion-ease-standard),
-                background-color var(--motion-duration-medium) var(--motion-ease-standard),
-                border-color var(--motion-duration-medium) var(--motion-ease-standard);
-        }}
-        .record-match-progress-step.is-active .record-match-progress-dot {{
-            border-color: color-mix(in srgb, {tokens['text_primary']} 28%, {tokens['border_subtle']} 72%);
-            color: {tokens['text_primary']};
-            background: color-mix(in srgb, {tokens['card_bg']} 86%, {tokens['text_primary']} 14%);
-        }}
-        .record-match-progress-step.is-complete .record-match-progress-dot {{
-            border-color: color-mix(in srgb, #1f9d55 35%, {tokens['border_subtle']} 65%);
-            background: color-mix(in srgb, #1f9d55 18%, {tokens['card_bg']} 82%);
-            color: {tokens['text_primary']};
-        }}
-        .record-match-progress-label {{
-            color: {tokens['text_secondary']};
-            font-size: 0.82rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            transition: color var(--motion-duration-medium) var(--motion-ease-standard);
-        }}
-        .record-match-progress-step.is-active .record-match-progress-label,
-        .record-match-progress-step.is-complete .record-match-progress-label {{
-            color: {tokens['text_primary']};
-        }}
-        .record-match-step-shell {{
-            animation: record-match-step-fade var(--motion-duration-medium) var(--motion-ease-standard);
-            will-change: opacity;
-        }}
-        .record-match-step-shell-steady {{
-            animation: none;
-        }}
-        @keyframes record-match-step-fade {{
-            from {{ opacity: 0; }}
-            to {{ opacity: 1; }}
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _resolve_progress_step() -> int:
     if isinstance(st.session_state.get("record_match_last_submit"), dict):
         return 4
@@ -243,28 +87,16 @@ def _resolve_progress_step() -> int:
 
 def _render_progress_indicator(current_step: int) -> None:
     current_step = max(1, min(current_step, len(WIZARD_PROGRESS_STEPS)))
-    steps_html: list[str] = []
+    st.progress(current_step / len(WIZARD_PROGRESS_STEPS))
+    step_lines: list[str] = []
     for idx, label in enumerate(WIZARD_PROGRESS_STEPS, start=1):
-        state = "is-pending"
+        prefix = "⏳"
         if idx < current_step:
-            state = "is-complete"
+            prefix = "✅"
         elif idx == current_step:
-            state = "is-active"
-        steps_html.append(
-            (
-                f"<div class='record-match-progress-step {state}'>"
-                f"<span class='record-match-progress-dot'>{idx}</span>"
-                f"<span class='record-match-progress-label'>Step {idx}: {label}</span>"
-                "</div>"
-            )
-        )
-
-    st.markdown(
-        "<div class='record-match-progress'><div class='record-match-progress-track'>"
-        + "".join(steps_html)
-        + "</div></div>",
-        unsafe_allow_html=True,
-    )
+            prefix = "➡️"
+        step_lines.append(f"- {prefix} Step {idx}: {label}")
+    st.markdown("\n".join(step_lines))
 
 
 def _confirm_loading_key(button_key: str) -> str:
@@ -274,10 +106,7 @@ def _confirm_loading_key(button_key: str) -> str:
 def _render_confirm_submit_button(button_key: str, disabled: bool) -> bool:
     loading_key = _confirm_loading_key(button_key)
     if st.session_state.get(loading_key, False):
-        st.markdown(
-            "<div class='record-match-loading-btn'><span class='record-match-loading-dot'></span>Submitting…</div>",
-            unsafe_allow_html=True,
-        )
+        st.info("Submitting…")
         return True
     if st.button("Confirm & Submit", type="primary", disabled=disabled, key=button_key):
         st.session_state[loading_key] = True
@@ -307,14 +136,7 @@ def _render_undo_banner() -> None:
         return
     cols = st.columns([4, 1])
     with cols[0]:
-        st.markdown(
-            (
-                "<div class='record-match-undo'>"
-                f"<span>Saved {undo_state.get('label')}. Undo available for {remaining}s.</span>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
-        )
+        st.info(f"Saved {undo_state.get('label')}. Undo available for {remaining}s.")
     with cols[1]:
         if st.button("Undo", key="record_match_undo_btn"):
             st.session_state.pop("record_match_last_submit", None)
@@ -323,70 +145,24 @@ def _render_undo_banner() -> None:
             st.rerun()
 
 
-def _step_1_competition_type(tokens: dict[str, str]) -> None:
+def _step_1_competition_type(_tokens: dict[str, str]) -> None:
     st.markdown("### Step 1 · Choose competition type")
     st.caption("Select the format first. The wizard will tailor next steps to this selection.")
 
-    st.markdown(
-        f"""
-        <style>
-        .record-match-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 12px;
-            margin: 0.5rem 0 1rem 0;
-        }}
-        .record-match-card {{
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 12px;
-            color: {tokens['text_primary']};
-            min-height: 112px;
-        }}
-        .record-match-card h4 {{
-            margin: 0 0 6px 0;
-            color: {tokens['text_primary']};
-        }}
-        .record-match-card p {{
-            margin: 0;
-            color: {tokens['text_secondary']};
-            font-size: 0.9rem;
-            line-height: 1.35;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    card_html = "".join(
-        [
-            (
-                "<div class='record-match-card'>"
-                f"<h4>{option['icon']} {option['title']}</h4>"
-                f"<p>{option['description']}</p>"
-                "</div>"
-            )
-            for option in COMPETITION_TYPES
-        ]
-    )
-    st.markdown(f"<div class='record-match-grid'>{card_html}</div>", unsafe_allow_html=True)
-
-    selector_options = ["Select one…"] + [option["title"] for option in COMPETITION_TYPES]
-    selected_title = st.selectbox(
+    selector_options = [f"{option['icon']} {option['title']}" for option in COMPETITION_TYPES]
+    selected_title = st.radio(
         "Competition type",
         options=selector_options,
         key="record_match_competition_selector",
     )
 
-    if selected_title != "Select one…":
-        selected_option = next(opt for opt in COMPETITION_TYPES if opt["title"] == selected_title)
-        st.session_state[SELECTED_TYPE_KEY] = selected_option
+    selected_option = next(opt for opt in COMPETITION_TYPES if f"{opt['icon']} {opt['title']}" == selected_title)
+    st.session_state[SELECTED_TYPE_KEY] = selected_option
+    st.caption(selected_option["description"])
 
     controls = st.columns([1, 1, 3])
     with controls[0]:
-        next_disabled = st.session_state.get(SELECTED_TYPE_KEY) is None
-        if st.button("Next →", type="primary", disabled=next_disabled):
+        if st.button("Next →", type="primary"):
             st.session_state[WIZARD_STEP_KEY] = 2
             st.rerun()
 
@@ -629,7 +405,7 @@ def _coerce_required_int(value: Any, field: str, row_number: int) -> int:
     return int(parsed)
 
 
-def _step_2_bulk_match_entry(ctx, tokens: dict[str, str]) -> None:
+def _step_2_bulk_match_entry(ctx, _tokens: dict[str, str]) -> None:
     st.markdown("### Step 2 · Bulk Match Entry")
     st.caption("Upload CSV, validate rows, then submit in chunks via submit_match().")
 
@@ -638,16 +414,9 @@ def _step_2_bulk_match_entry(ctx, tokens: dict[str, str]) -> None:
         st.error("Bulk Match Entry requires a valid club context.")
         return
 
-    st.markdown(
-        (
-            f"<div style='border:1px solid {tokens['border_subtle']};border-radius:12px;"
-            f"background:{tokens['card_bg']};padding:12px;margin-bottom:0.75rem;'>"
-            "<strong>Required CSV columns:</strong> "
-            "<code>league,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2</code><br/>"
-            "<span style='font-size:0.9rem;'>Optional: <code>date,match_type,week_tag,division,notes,context_type,context_id</code>.</span>"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
+    st.info(
+        "Required CSV columns: league,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2\n"
+        "Optional: date,match_type,week_tag,division,notes,context_type,context_id."
     )
 
     uploaded_file = st.file_uploader(
@@ -908,21 +677,9 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
     ]
 
     st.markdown("### Step 3 · Rating preview & confirmation")
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            color: {tokens['text_primary']};
-            margin: 0.25rem 0 0.75rem 0;
-        ">
-            <strong>League:</strong> {selected_league}<br/>
-            <strong>Division:</strong> {selected_division or 'N/A'}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        f"League: {selected_league}\n"
+        f"Division: {selected_division or 'N/A'}"
     )
 
     preview_df = pd.DataFrame(
@@ -1020,44 +777,25 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
 
     last_submit = st.session_state.get("record_match_last_submit")
     if isinstance(last_submit, dict):
+        st.success("Match submitted")
         st.markdown(
-            (
-                "<div class='record-match-success-card is-visible'>"
-                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Match submitted</h4>"
-                f"<div><strong>League:</strong> {last_submit.get('league')}</div>"
-                f"<div><strong>Division:</strong> {last_submit.get('division') or 'N/A'}</div>"
-                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
-                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
+            f"**League:** {last_submit.get('league')}\n"
+            f"**Division:** {last_submit.get('division') or 'N/A'}\n"
+            f"**Score:** {last_submit.get('score')}"
         )
+        st.code(str(last_submit.get('idempotency_key') or ''), language='text')
 
 
-def _step_2_placeholder(tokens: dict[str, str]) -> None:
+def _step_2_placeholder(_tokens: dict[str, str]) -> None:
     selected = st.session_state.get(SELECTED_TYPE_KEY)
     selected_label = selected["title"] if isinstance(selected, dict) else "Not selected"
 
     st.markdown("### Step 2 · Match details")
     st.caption("Scaffold only: non-Ladder-League flows are intentionally pending.")
 
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px dashed {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            color: {tokens['text_primary']};
-            margin: 0.5rem 0 1rem 0;
-        ">
-            <strong>Selected competition type:</strong> {selected_label}<br/>
-            <span style="color: {tokens['text_secondary']};">
-                This flow is currently implemented only for Ladder League.
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        f"Selected competition type: {selected_label}\n"
+        "This flow is currently implemented only for Ladder League."
     )
 
     controls = st.columns([1, 1, 3])
@@ -1069,7 +807,7 @@ def _step_2_placeholder(tokens: dict[str, str]) -> None:
         st.button("Submit (coming soon)", type="primary", disabled=True)
 
 
-def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
+def _step_2_challenge_ladder(ctx, _tokens: dict[str, str]) -> None:
     st.markdown("### Step 2 · Challenge Ladder result")
     st.caption("Select a pending challenge. Players are auto-filled from the challenge record.")
 
@@ -1156,23 +894,11 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
     )
     selected_challenge = challenge_options[selected_label]
 
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            color: {tokens['text_primary']};
-            margin: 0.25rem 0 0.75rem 0;
-        ">
-            <strong>Challenge:</strong> #{selected_challenge['challenge_id']}<br/>
-            <strong>Challenger:</strong> {selected_challenge['challenger']} (#{selected_challenge['challenger_id']})<br/>
-            <strong>Defender:</strong> {selected_challenge['defender']} (#{selected_challenge['defender_id']})<br/>
-            <strong>Tier:</strong> {selected_challenge['tier'] or 'N/A'}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        f"Challenge: #{selected_challenge['challenge_id']}\n"
+        f"Challenger: {selected_challenge['challenger']} (#{selected_challenge['challenger_id']})\n"
+        f"Defender: {selected_challenge['defender']} (#{selected_challenge['defender_id']})\n"
+        f"Tier: {selected_challenge['tier'] or 'N/A'}"
     )
 
     score_cols = st.columns(2)
@@ -1265,18 +991,13 @@ def _step_2_challenge_ladder(ctx, tokens: dict[str, str]) -> None:
     last_submit = st.session_state.get("record_match_last_submit")
     if isinstance(last_submit, dict) and isinstance(last_submit.get("challenge"), dict):
         challenge = last_submit["challenge"]
+        st.success("Challenge result submitted")
         st.markdown(
-            (
-                "<div class='record-match-success-card is-visible'>"
-                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Challenge result submitted</h4>"
-                f"<div><strong>Challenge:</strong> #{challenge.get('challenge_id')}</div>"
-                f"<div><strong>Players:</strong> {challenge.get('challenger')} vs {challenge.get('defender')}</div>"
-                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
-                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
+            f"**Challenge:** #{challenge.get('challenge_id')}\n"
+            f"**Players:** {challenge.get('challenger')} vs {challenge.get('defender')}\n"
+            f"**Score:** {last_submit.get('score')}"
         )
+        st.code(str(last_submit.get('idempotency_key') or ''), language='text')
 
 
 def _team_label(team: dict[str, Any] | None, id_to_name: dict[int, str]) -> str:
@@ -1289,7 +1010,7 @@ def _team_label(team: dict[str, Any] | None, id_to_name: dict[int, str]) -> str:
     return f"Team {team.get('team_number')}: {p1} / {p2}"
 
 
-def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
+def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
     st.markdown("### Step 2 · Tournament match entry")
     st.caption("Pick an active tournament match node. Teams are auto-filled from the bracket.")
 
@@ -1335,22 +1056,10 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
     selected_tournament = tournament_options[selected_tournament_label]
     tournament_id = selected_tournament.get("id")
 
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            color: {tokens['text_primary']};
-            margin: 0.25rem 0 0.75rem 0;
-        ">
-            <strong>Tournament:</strong> {selected_tournament.get('name', 'Tournament')}<br/>
-            <strong>Status:</strong> {selected_tournament.get('status', 'UNKNOWN')}<br/>
-            <strong>ID:</strong> {tournament_id}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        f"Tournament: {selected_tournament.get('name', 'Tournament')}\n"
+        f"Status: {selected_tournament.get('status', 'UNKNOWN')}\n"
+        f"ID: {tournament_id}"
     )
 
     teams_resp = (
@@ -1427,21 +1136,9 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
     team_b = teams_by_id.get(selected_game.get("team_b_id"))
 
     st.markdown("#### Teams (auto-filled from tournament node)")
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            color: {tokens['text_primary']};
-            margin: 0.25rem 0 0.75rem 0;
-        ">
-            <strong>Team A:</strong> {_team_label(team_a, id_to_name)}<br/>
-            <strong>Team B:</strong> {_team_label(team_b, id_to_name)}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        f"Team A: {_team_label(team_a, id_to_name)}\n"
+        f"Team B: {_team_label(team_b, id_to_name)}"
     )
 
     score_cols = st.columns(2)
@@ -1570,18 +1267,13 @@ def _step_2_tournament(ctx, tokens: dict[str, str]) -> None:
     last_submit = st.session_state.get("record_match_last_submit")
     if isinstance(last_submit, dict) and isinstance(last_submit.get("tournament"), dict):
         game = last_submit.get("game") or {}
+        st.success("Tournament match submitted")
         st.markdown(
-            (
-                "<div class='record-match-success-card is-visible'>"
-                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Tournament match submitted</h4>"
-                f"<div><strong>Tournament:</strong> {last_submit['tournament'].get('name')}</div>"
-                f"<div><strong>Game:</strong> {game.get('playoff_game_code') or game.get('id')}</div>"
-                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
-                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
+            f"**Tournament:** {last_submit['tournament'].get('name')}\n"
+            f"**Game:** {game.get('playoff_game_code') or game.get('id')}\n"
+            f"**Score:** {last_submit.get('score')}"
         )
+        st.code(str(last_submit.get('idempotency_key') or ''), language='text')
 
 
 def _safe_int(value: Any) -> int | None:
@@ -1945,22 +1637,17 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
     if isinstance(last_submit, dict) and isinstance(last_submit.get("session"), dict):
         session = last_submit.get("session") or {}
         pool = last_submit.get("pool") or {}
+        st.success("Round Robin match submitted")
         st.markdown(
-            (
-                "<div class='record-match-success-card is-visible'>"
-                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Round Robin match submitted</h4>"
-                f"<div><strong>Session:</strong> {session.get('name')}</div>"
-                f"<div><strong>Pool:</strong> {pool.get('name') or pool.get('pool_number')}</div>"
-                f"<div><strong>Pairing:</strong> {last_submit.get('pairing')}</div>"
-                f"<div><strong>Score:</strong> {last_submit.get('score')}</div>"
-                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
+            f"**Session:** {session.get('name')}\n"
+            f"**Pool:** {pool.get('name') or pool.get('pool_number')}\n"
+            f"**Pairing:** {last_submit.get('pairing')}\n"
+            f"**Score:** {last_submit.get('score')}"
         )
+        st.code(str(last_submit.get('idempotency_key') or ''), language='text')
 
 
-def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
+def _step_2_moneyball(ctx, _tokens: dict[str, str]) -> None:
     st.markdown("### Step 2 · Moneyball result")
     st.caption("Select an active Moneyball event, assign players, set score + bonus, then confirm.")
 
@@ -2036,23 +1723,11 @@ def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
     total_t2 = int(score_t2) + int(bonus_t2)
     total_delta = int(total_t1) - int(total_t2)
 
-    st.markdown(
-        f"""
-        <div style="
-            border: 1px solid {tokens['border_subtle']};
-            border-radius: 12px;
-            background: {tokens['card_bg']};
-            padding: 14px;
-            color: {tokens['text_primary']};
-            margin: 0.25rem 0 0.75rem 0;
-        ">
-            <strong>Event:</strong> {selected_event.get('name') or 'Moneyball'}<br/>
-            <strong>Raw score:</strong> {int(score_t1)} - {int(score_t2)}<br/>
-            <strong>Bonus:</strong> +{int(bonus_t1)} / +{int(bonus_t2)}<br/>
-            <strong>Total points impact:</strong> {int(total_t1)} - {int(total_t2)} (Δ {int(total_delta):+d})
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        f"Event: {selected_event.get('name') or 'Moneyball'}\n"
+        f"Raw score: {int(score_t1)} - {int(score_t2)}\n"
+        f"Bonus: +{int(bonus_t1)} / +{int(bonus_t2)}\n"
+        f"Total points impact: {int(total_t1)} - {int(total_t2)} (Δ {int(total_delta):+d})"
     )
 
     t1_p1 = label_to_pid[t1_p1_label]
@@ -2146,19 +1821,14 @@ def _step_2_moneyball(ctx, tokens: dict[str, str]) -> None:
 
     last_submit = st.session_state.get("record_match_last_submit")
     if isinstance(last_submit, dict) and isinstance(last_submit.get("event"), dict):
+        st.success("Moneyball result submitted")
         st.markdown(
-            (
-                "<div class='record-match-success-card is-visible'>"
-                "<h4 style='margin:0 0 6px 0;'><span class='record-match-check'>✓</span>Moneyball result submitted</h4>"
-                f"<div><strong>Event:</strong> {last_submit['event'].get('name')}</div>"
-                f"<div><strong>Raw score:</strong> {last_submit.get('raw_score')}</div>"
-                f"<div><strong>Bonus:</strong> {last_submit.get('bonus')}</div>"
-                f"<div><strong>Submitted total:</strong> {last_submit.get('score')}</div>"
-                f"<div><strong>Idempotency Key:</strong> <code>{last_submit.get('idempotency_key')}</code></div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
+            f"**Event:** {last_submit['event'].get('name')}\n"
+            f"**Raw score:** {last_submit.get('raw_score')}\n"
+            f"**Bonus:** {last_submit.get('bonus')}\n"
+            f"**Submitted total:** {last_submit.get('score')}"
         )
+        st.code(str(last_submit.get('idempotency_key') or ''), language='text')
 
 
 def render(ctx) -> None:
@@ -2170,23 +1840,15 @@ def render(ctx) -> None:
         return
 
     _ensure_state()
-    tokens = get_theme_tokens()
-    _render_motion_css(tokens)
+    tokens: dict[str, str] = {}
 
     current_view_step = _resolve_progress_step()
-    previous_view_step = int(st.session_state.get(WIZARD_LAST_VIEW_STEP_KEY, current_view_step))
     st.session_state[WIZARD_VIEW_STEP_KEY] = current_view_step
     _render_progress_indicator(current_view_step)
-
-    shell_class = "record-match-step-shell"
-    if current_view_step == previous_view_step:
-        shell_class += " record-match-step-shell-steady"
-    st.markdown(f"<div class='{shell_class}'>", unsafe_allow_html=True)
 
     step = int(st.session_state.get(WIZARD_STEP_KEY, 1))
     if step <= 1:
         _step_1_competition_type(tokens)
-        st.markdown("</div>", unsafe_allow_html=True)
         st.session_state[WIZARD_LAST_VIEW_STEP_KEY] = current_view_step
         return
 
@@ -2208,5 +1870,4 @@ def render(ctx) -> None:
         _step_2_placeholder(tokens)
 
     _render_undo_banner()
-    st.markdown("</div>", unsafe_allow_html=True)
     st.session_state[WIZARD_LAST_VIEW_STEP_KEY] = current_view_step
