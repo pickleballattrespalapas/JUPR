@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jupr_app.ui.components.skeleton import (
+    render_header_skeleton,
+    render_table_row_skeleton,
+)
+
 
 @dataclass(frozen=True)
 class LeaderboardPlayer:
@@ -34,13 +39,37 @@ def _movement_badge(player: LeaderboardPlayer) -> str:
             '<span class="cc-lb-move cc-lb-move-down" '
             f'aria-label="Moved down {movement} positions">↓ {movement}</span>'
         )
-    return '<span class="cc-lb-move cc-lb-move-flat" aria-label="No movement">→ 0</span>'
+    return (
+        '<span class="cc-lb-move cc-lb-move-flat" aria-label="No movement">→ 0</span>'
+    )
 
 
-def render_leaderboards_snapshot_html() -> str:
+def render_leaderboards_snapshot_html(is_loading: bool = False) -> str:
+    if is_loading:
+        return (
+            """
+            <section class="cc-leaderboards" aria-label="Leaderboards snapshot">
+              <div class="cc-leaderboards-header">
+            """
+            + render_header_skeleton()
+            + """
+              </div>
+              <div class="cc-lb-grid">
+            """
+            + "".join(render_table_row_skeleton() for _ in range(5))
+            + """
+              </div>
+            </section>
+            """
+        )
+
     rows: list[str] = []
     for index, player in enumerate(_placeholder_leaderboard_players(), start=1):
-        division = f'<span class="cc-lb-division">{player.division}</span>' if player.division else ""
+        division = (
+            f'<span class="cc-lb-division">{player.division}</span>'
+            if player.division
+            else ""
+        )
         rows.append(
             f"""
             <article class="cc-lb-row" aria-label="Leaderboard player {player.name}">

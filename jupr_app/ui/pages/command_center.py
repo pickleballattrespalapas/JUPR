@@ -2,18 +2,27 @@ from __future__ import annotations
 
 import streamlit as st
 
-from jupr_app.ui.components.active_competitions_ui import render_active_competitions_html
+from jupr_app.ui.components.active_competitions_ui import (
+    render_active_competitions_html,
+)
 from jupr_app.ui.components.card import Card, card_css
 from jupr_app.ui.components.command_center_alerts import render_alerts_html
-from jupr_app.ui.components.command_center_public_nav import render_public_navigation_html
-from jupr_app.ui.components.leaderboards_snapshot_ui import render_leaderboards_snapshot_html
+from jupr_app.ui.components.command_center_public_nav import (
+    render_public_navigation_html,
+)
+from jupr_app.ui.components.leaderboards_snapshot_ui import (
+    render_leaderboards_snapshot_html,
+)
+from jupr_app.ui.components.skeleton import skeleton_css
 from jupr_app.ui.components.theme_toggle import render_theme_toggle
 from jupr_app.ui.components.weekly_recaps_ui import render_weekly_recap_builder_html
 from jupr_app.ui.theme import MATCH_COLORS
 from jupr_app.ui.theme_tokens import get_theme_tokens
 
 
-def _inject_command_center_css(theme_mode: str) -> None:
+def _inject_command_center_css(
+    theme_mode: str, show_loading_skeletons: bool = False
+) -> None:
     tokens = get_theme_tokens(theme_mode)
     hero_html = Card(
         """
@@ -65,6 +74,7 @@ def _inject_command_center_css(theme_mode: str) -> None:
           }}
 
           {card_css()}
+          {skeleton_css()}
 
           .cc-header {{
             grid-column: 1 / -1;
@@ -610,10 +620,10 @@ def _inject_command_center_css(theme_mode: str) -> None:
 
             {hero_html}
 
-            {render_alerts_html()}
+            {render_alerts_html(is_loading=show_loading_skeletons)}
             {render_weekly_recap_builder_html()}
-            {render_active_competitions_html()}
-            {render_leaderboards_snapshot_html()}
+            {render_active_competitions_html(is_loading=show_loading_skeletons)}
+            {render_leaderboards_snapshot_html(is_loading=show_loading_skeletons)}
             {render_public_navigation_html()}
           </div>
         </div>
@@ -633,4 +643,7 @@ def render(ctx) -> None:
     with col_r:
         theme_mode = render_theme_toggle(key="cc_theme_toggle", label="Dark theme")
 
-    _inject_command_center_css(theme_mode)
+    show_loading_skeletons = bool(st.session_state.get("cc_loading_skeletons", False))
+    _inject_command_center_css(
+        theme_mode, show_loading_skeletons=show_loading_skeletons
+    )

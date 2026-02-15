@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from jupr_app.ui.components.card import Card
+from jupr_app.ui.components.skeleton import render_card_skeleton, render_header_skeleton
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,28 @@ def _placeholder_alert_items() -> list[AlertItem]:
     ]
 
 
-def render_alerts_html() -> str:
+def render_alerts_html(is_loading: bool = False) -> str:
+    if is_loading:
+        return Card(
+            """
+              <div class="cc-alerts-header">
+            """
+            + render_header_skeleton()
+            + """
+              </div>
+              <div class="cc-alert-grid">
+            """
+            + "".join(render_card_skeleton() for _ in range(4))
+            + """
+              </div>
+            """,
+            elevation=2,
+            interactive=False,
+            class_name="cc-alerts",
+            tag="section",
+            attrs='aria-label="Admin alerts" data-alert-count="0"',
+        )
+
     active_items = [item for item in _placeholder_alert_items() if item.count > 0]
     total_active_alerts = sum(item.count for item in active_items)
 
