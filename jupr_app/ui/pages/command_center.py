@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from jupr_app.ui.components.active_competitions_ui import render_active_competitions_html
+from jupr_app.ui.components.card import Card, card_css
 from jupr_app.ui.components.command_center_alerts import render_alerts_html
 from jupr_app.ui.components.command_center_public_nav import render_public_navigation_html
 from jupr_app.ui.components.leaderboards_snapshot_ui import render_leaderboards_snapshot_html
@@ -14,6 +15,17 @@ from jupr_app.ui.theme_tokens import get_theme_tokens
 
 def _inject_command_center_css(theme_mode: str) -> None:
     tokens = get_theme_tokens(theme_mode)
+    hero_html = Card(
+        """
+        <h2>Record Match Result</h2>
+        <p>Placeholder hero card for the upcoming guided result entry workflow.</p>
+        <span class="cc-pill">Coming soon</span>
+        """,
+        elevation=3,
+        interactive=True,
+        class_name="cc-hero",
+    )
+
     st.markdown(
         f"""
         <style>
@@ -52,17 +64,15 @@ def _inject_command_center_css(theme_mode: str) -> None:
             width: 100%;
           }}
 
-          .cc-header,
-          .cc-hero {{
+          {card_css()}
+
+          .cc-header {{
             grid-column: 1 / -1;
             border: 1px solid var(--cc-border);
             background: var(--cc-panel);
             box-shadow: var(--cc-shadow);
             border-radius: 16px;
             color: var(--cc-text);
-          }}
-
-          .cc-header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -121,11 +131,6 @@ def _inject_command_center_css(theme_mode: str) -> None:
 
           .cc-alerts {{
             grid-column: 1 / -1;
-            border: 1px solid var(--cc-border);
-            background: var(--cc-panel);
-            box-shadow: var(--cc-shadow);
-            border-radius: 16px;
-            color: var(--cc-text);
             padding: 1rem 1.2rem 1.2rem;
           }}
 
@@ -284,11 +289,6 @@ def _inject_command_center_css(theme_mode: str) -> None:
 
           .cc-competitions {{
             grid-column: 1 / -1;
-            border: 1px solid var(--cc-border);
-            background: var(--cc-panel);
-            box-shadow: var(--cc-shadow);
-            border-radius: 16px;
-            color: var(--cc-text);
             padding: 1rem 1.2rem 1.2rem;
           }}
 
@@ -311,9 +311,8 @@ def _inject_command_center_css(theme_mode: str) -> None:
           }}
 
           .cc-competition-card {{
-            border: 1px solid var(--cc-border);
-            border-radius: 12px;
             background: var(--cc-bg);
+            border-radius: 12px;
             padding: 0.8rem 0.9rem;
           }}
 
@@ -585,11 +584,7 @@ def _inject_command_center_css(theme_mode: str) -> None:
               </div>
             </div>
 
-            <div class="cc-hero">
-              <h2>Record Match Result</h2>
-              <p>Placeholder hero card for the upcoming guided result entry workflow.</p>
-              <span class="cc-pill">Coming soon</span>
-            </div>
+            {hero_html}
 
             {render_alerts_html()}
             {render_weekly_recap_builder_html()}

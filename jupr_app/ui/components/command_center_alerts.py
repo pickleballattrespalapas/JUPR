@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from jupr_app.ui.components.card import Card
+
 
 @dataclass(frozen=True)
 class AlertItem:
@@ -67,9 +69,8 @@ def render_alerts_html() -> str:
             """.strip()
         )
 
-    return (
+    return Card(
         """
-        <section class="cc-alerts" aria-label="Admin alerts">
           <div class="cc-alerts-header">
             <h3>Alerts</h3>
             <p>Operational items requiring follow-up.</p>
@@ -79,6 +80,10 @@ def render_alerts_html() -> str:
         + "".join(cards)
         + """
           </div>
-        </section>
-        """
+        """,
+        elevation=2,
+        interactive=False,
+        class_name="cc-alerts",
+        tag="section",
+        attrs='aria-label="Admin alerts"',
     )
