@@ -135,6 +135,10 @@ def _insert_match_record(
         payload["idempotency_key"] = idempotency_key
 
     matches_table = supabase.table("matches")
+    print("===== DEBUG: MATCH INSERT =====")
+    print("FINAL INSERT PAYLOAD KEYS:", list(payload.keys()))
+    print("FINAL INSERT PAYLOAD:", payload)
+    print("================================")
     insert_response = matches_table.insert(payload).execute()
     inserted_rows = getattr(insert_response, "data", None) or []
     if not inserted_rows:
