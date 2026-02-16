@@ -384,7 +384,7 @@ def process_matches(
         sb_retry(lambda row=row, activity_update=activity_update: update_player_row(row, activity_update))
 
     # -------------------------
-    # Update league ratings
+    # Update league ratings (atomic upsert)
     # -------------------------
     if island_updates:
         for (pid, league_name), stats in island_updates.items():
@@ -396,39 +396,17 @@ def process_matches(
                 "wins": int(stats["w"]),
                 "losses": int(stats["l"]),
                 "matches_played": int(stats["mp"]),
+                "starting_rating": float(stats.get("start", 1200.0)),
+                "is_active": True,
+                "inactive_at": None,
             }
 
-            existing = sb_retry(lambda pid=pid, league_name=league_name: (
-                supabase.table("league_ratings")
-                .select("id,wins,losses,matches_played,starting_rating")
-                .eq("club_id", club_id)
-                .eq("player_id", int(pid))
-                .eq("league_name", str(league_name))
-                .limit(1)
-                .execute()
+            sb_retry(lambda payload=payload: sb_upsert(
+                supabase,
+                "league_ratings",
+                payload,
+                conflict="club_id,player_id,league_name",
             ))
-
-            if existing.data:
-                cur = existing.data[0]
-                payload["wins"] += int(cur.get("wins", 0) or 0)
-                payload["losses"] += int(cur.get("losses", 0) or 0)
-                payload["matches_played"] += int(cur.get("matches_played", 0) or 0)
-                payload["is_active"] = True
-                payload["inactive_at"] = None
-
-                if cur.get("starting_rating") is not None:
-                    payload["starting_rating"] = float(cur["starting_rating"])
-                else:
-                    payload["starting_rating"] = float(stats.get("start", 1200.0))
-
-                sb_retry(lambda payload=payload, rid=int(cur["id"]): (
-                    sb_update(supabase, "league_ratings", payload, filters={"id": rid})
-                ))
-            else:
-                payload["starting_rating"] = float(stats.get("start", 1200.0))
-                payload["is_active"] = True
-                payload["inactive_at"] = None
-                sb_retry(lambda payload=payload: sb_insert(supabase, "league_ratings", payload))
 
     return {
         "inserted": len(db_matches),
