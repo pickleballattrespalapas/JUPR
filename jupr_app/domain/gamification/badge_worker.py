@@ -49,6 +49,7 @@ def process_badge_eval_queue(
                         player_ids=player_ids,
                         match_payload=payload_json,
                         context_id=context_id,
+                        match_id=str(job.get("match_id") or "") or None,
                     )
                 if USE_BADGE_ENGINE_V3:
                     v3_badge_ids = _v3_badge_ids_with_conditions(supabase, badge_ids)
@@ -163,4 +164,3 @@ def _v3_badge_ids_with_conditions(supabase: Any, badge_ids: set[str]) -> set[str
         for row in condition_rows
         if row.get("badge_id")
     }
-

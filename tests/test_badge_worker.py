@@ -19,6 +19,7 @@ class FakeTable:
         self.sort_desc = False
         self.limit_count = None
         self.update_payload = None
+        self._insert_result = None
 
     def select(self, _cols):
         return self
@@ -44,15 +45,32 @@ class FakeTable:
         self.update_payload = payload
         return self
 
-    def insert(self, payload):
+    def insert(self, payload, **kwargs):
         if self.storage.get("raise_missing_table"):
             raise APIError({"code": "PGRST205", "message": "missing table"})
         rows = payload if isinstance(payload, list) else [payload]
         stored = self.storage.setdefault(self.name, [])
+        conflict_cols = [c.strip() for c in str(kwargs.get("on_conflict") or "").split(",") if c.strip()]
+        ignore_duplicates = bool(kwargs.get("ignore_duplicates"))
+        inserted = []
         for row in rows:
             row = dict(row)
-            row.setdefault("id", f"{self.name}_{len(stored) + 1}")
-            stored.append(row)
+            match = None
+            if conflict_cols:
+                for current in stored:
+                    if all(str(current.get(c)) == str(row.get(c)) for c in conflict_cols):
+                        match = current
+                        break
+            if match is not None and ignore_duplicates:
+                continue
+            if match is None:
+                row.setdefault("id", f"{self.name}_{len(stored) + 1}")
+                stored.append(row)
+                inserted.append(row)
+            else:
+                match.update(row)
+                inserted.append(match)
+        self._insert_result = inserted
         return self
 
     def upsert(self, rows, on_conflict=None):
@@ -76,6 +94,10 @@ class FakeTable:
     def execute(self):
         if self.storage.get("raise_missing_table"):
             raise APIError({"code": "PGRST205", "message": "missing table"})
+        if self._insert_result is not None:
+            data = list(self._insert_result)
+            self._insert_result = None
+            return SimpleNamespace(data=data)
         data = list(self.storage.get(self.name, []))
         for op, column, value in self.filters:
             if op == "eq":
@@ -141,7 +163,7 @@ def _build_ctx(supabase=None):
 def test_worker_processes_queue_and_awards_badge():
     storage = {
         "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
-        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
     }
@@ -162,7 +184,7 @@ def test_worker_processes_queue_and_awards_badge():
 def test_worker_dedupes_duplicate_events():
     storage = {
         "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
-        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
     }
@@ -189,7 +211,7 @@ def test_worker_dedupes_duplicate_events():
 def test_worker_error_marks_queue(monkeypatch):
     storage = {
         "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
-        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
     }
@@ -227,3 +249,33 @@ def test_enqueue_badge_eval_missing_table_is_ignored():
         match_id="m1",
     )
     assert storage.get(BADGE_QUEUE_TABLE) is None
+
+
+def test_worker_passes_match_id_to_fact_engine(monkeypatch):
+    storage = {
+        "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
+        "player_badge_facts": [],
+        "player_badges": [],
+    }
+    supabase = FakeSupabase(storage)
+    enqueue_badge_eval(
+        supabase,
+        club_id="club",
+        event_type="match_recorded",
+        player_ids=[1],
+        match_id="m42",
+    )
+
+    captured = {}
+
+    def fake_update(*_args, **kwargs):
+        captured["match_id"] = kwargs.get("match_id")
+
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_worker.update_match_facts_for_players",
+        fake_update,
+    )
+    process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=_build_ctx(supabase))
+
+    assert captured["match_id"] == "m42"

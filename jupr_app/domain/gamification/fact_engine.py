@@ -14,6 +14,7 @@ def update_match_facts_for_players(
     player_ids: list[int],
     match_payload: dict,
     context_id: str = "overall",
+    match_id: str | None = None,
 ):
     """Incrementally update badge facts for players for a single match payload.
 
@@ -24,14 +25,14 @@ def update_match_facts_for_players(
     - rating_delta
     - upset_wins
 
-    The update is idempotent through a per-player/match guard fact key.
+    The update is idempotent through a per-player/match guard table.
     """
     if supabase is None or not club_id or not player_ids:
         return
 
     payload = dict(match_payload or {})
-    match_id = str(payload.get("match_id") or payload.get("id") or "").strip()
-    if not match_id:
+    resolved_match_id = str(match_id or payload.get("match_id") or payload.get("id") or "").strip()
+    if not resolved_match_id:
         return
 
     score_t1 = _safe_int(payload.get("score_t1", payload.get("s1")))
@@ -45,7 +46,7 @@ def update_match_facts_for_players(
     normalized_players = sorted({int(pid) for pid in player_ids})
 
     for pid in normalized_players:
-        if _already_processed_match(supabase, str(club_id), int(pid), context_id, match_id):
+        if not _insert_processed_match_guard(supabase, str(club_id), resolved_match_id, int(pid)):
             continue
 
         _increment_numeric_fact(supabase, str(club_id), int(pid), context_id, "total_matches", 1.0, now_iso)
@@ -77,8 +78,6 @@ def update_match_facts_for_players(
 
         if won and _is_upset_win_for_player(int(pid), payload, team1, team2):
             _increment_numeric_fact(supabase, str(club_id), int(pid), context_id, "upset_wins", 1.0, now_iso)
-
-        _mark_match_processed(supabase, str(club_id), int(pid), context_id, match_id, now_iso)
 
 
 def _extract_team(payload: dict[str, Any], keys: tuple[str, str]) -> set[int]:
@@ -129,29 +128,60 @@ def _is_upset_win_for_player(player_id: int, payload: dict[str, Any], team1: set
     return False
 
 
-def _fact_guard_key(match_id: str) -> str:
-    return f"_match_guard:{match_id}"
+def _insert_processed_match_guard(supabase: Any, club_id: str, match_id: str, player_id: int) -> bool:
+    payload = {
+        "club_id": str(club_id),
+        "match_id": str(match_id),
+        "player_id": int(player_id),
+    }
+    existed_before = _processed_match_guard_exists(supabase, str(club_id), str(match_id), int(player_id))
+    try:
+        resp = (
+            supabase.table("processed_match_facts")
+            .insert(
+                payload,
+                on_conflict="club_id,match_id,player_id",
+                ignore_duplicates=True,
+                returning="representation",
+            )
+            .execute()
+        )
+    except TypeError:
+        resp = (
+            supabase.table("processed_match_facts")
+            .upsert(payload, on_conflict="club_id,match_id,player_id")
+            .execute()
+        )
+    inserted_rows = _response_rowcount(resp)
+    if inserted_rows is not None:
+        return inserted_rows > 0
+    exists_after = _processed_match_guard_exists(supabase, str(club_id), str(match_id), int(player_id))
+    return (not existed_before) and exists_after
 
 
-def _already_processed_match(supabase: Any, club_id: str, player_id: int, context_id: str, match_id: str) -> bool:
-    rows = _read_fact_rows(supabase, club_id, player_id, context_id, _fact_guard_key(match_id))
+def _processed_match_guard_exists(supabase: Any, club_id: str, match_id: str, player_id: int) -> bool:
+    rows = (
+        supabase.table("processed_match_facts")
+        .select("player_id")
+        .eq("club_id", str(club_id))
+        .eq("match_id", str(match_id))
+        .eq("player_id", int(player_id))
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
     return bool(rows)
 
 
-def _mark_match_processed(supabase: Any, club_id: str, player_id: int, context_id: str, match_id: str, now_iso: str) -> None:
-    sb_upsert(
-        supabase,
-        "player_badge_facts",
-        {
-            "club_id": club_id,
-            "player_id": int(player_id),
-            "context_id": context_id,
-            "fact_key": _fact_guard_key(match_id),
-            "fact_value_num": 1.0,
-            "updated_at": now_iso,
-        },
-        conflict="club_id,player_id,context_id,fact_key",
-    )
+def _response_rowcount(resp: Any) -> int | None:
+    data = getattr(resp, "data", None)
+    if isinstance(data, list):
+        return len(data)
+    count = getattr(resp, "count", None)
+    if isinstance(count, int):
+        return count
+    return None
 
 
 def _read_fact_rows(supabase: Any, club_id: str, player_id: int, context_id: str, fact_key: str) -> list[dict[str, Any]]:
