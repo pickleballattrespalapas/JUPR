@@ -14,6 +14,7 @@ from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_player
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
+from jupr_app.domain.gamification import v3_engine
 
 
 def process_badge_eval_queue(
@@ -42,22 +43,27 @@ def process_badge_eval_queue(
             badge_ids = _badge_ids_for_trigger(context, event_type)
             if badge_ids and player_ids:
                 _update_incremental_facts(supabase, job, player_ids, context_id)
-                candidates = []
-                for pid in player_ids:
-                    candidates.extend(
-                        [
-                            c
-                            for c in compute_candidates_for_player(job_club_id, pid, ctx=context)
-                            if str(c.badge_id) in badge_ids
-                        ]
-                    )
-                if candidates:
-                    upsert_player_badges(
-                        supabase,
-                        job_club_id,
-                        candidates,
-                        awarded_by="engine",
-                    )
+                if v3_engine.USE_BADGE_ENGINE_V3:
+                    for pid in player_ids:
+                        v3_context = _context_with_context_id(context, context_id)
+                        v3_engine.evaluate_badges_v3(pid, v3_context)
+                else:
+                    candidates = []
+                    for pid in player_ids:
+                        candidates.extend(
+                            [
+                                c
+                                for c in compute_candidates_for_player(job_club_id, pid, ctx=context)
+                                if str(c.badge_id) in badge_ids
+                            ]
+                        )
+                    if candidates:
+                        upsert_player_badges(
+                            supabase,
+                            job_club_id,
+                            candidates,
+                            awarded_by="engine",
+                        )
             ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
             processed += 1
         except Exception as exc:  # noqa: BLE001 - worker should record failures
@@ -100,6 +106,12 @@ def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: 
         schema_degraded=schema_degraded,
         schema_degraded_reason=schema_degraded_reason,
     )
+
+
+def _context_with_context_id(ctx: Any, context_id: str) -> Any:
+    attrs = dict(vars(ctx)) if hasattr(ctx, "__dict__") else {}
+    attrs["context_id"] = context_id
+    return SimpleNamespace(**attrs)
 
 
 def _badge_ids_for_trigger(ctx: Any, event_type: str) -> set[str]:
