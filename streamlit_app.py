@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import time
 import traceback
 import re
 from collections.abc import Mapping
@@ -10,8 +9,11 @@ from collections.abc import Mapping
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
 
-from jupr_app.auth.cookies import clear_cookie, get_cookie, set_cookie
-from jupr_app.auth.session import create_session_token, verify_session_token
+from jupr_app.auth.admin_auth import (
+    attempt_login,
+    validate_admin_session,
+    clear_admin_session,
+)
 
 
 # -------------------------
@@ -55,32 +57,6 @@ def get_secret(path: list[str], default=None):
 
 def _get_config_value(path: list[str], default=None):
     return get_secret(path, default)
-
-
-# -------------------------
-# Admin session helpers
-# -------------------------
-ADMIN_MAX_FAILED_ATTEMPTS = 5
-ADMIN_LOCKOUT_SECONDS = 60
-
-
-def _get_admin_password() -> str:
-    # Fly uses SUPABASE__ADMIN_PASSWORD
-    return os.getenv("SUPABASE__ADMIN_PASSWORD", "")
-
-
-def _validate_admin_cookie() -> bool:
-    token = get_cookie()
-    if not token:
-        return False
-
-    payload = verify_session_token(token)
-    if not payload:
-        return False
-
-    st.session_state["is_admin"] = True
-    st.session_state["admin_email"] = payload.get("email", "admin")
-    return True
 
 
 # -------------------------
@@ -220,64 +196,31 @@ def main():
 
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
-        st.session_state.setdefault("admin_failed_attempts", 0)
-        st.session_state.setdefault("admin_lock_until", 0)
-
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
             hide_sidebar_and_header_for_public()
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not _validate_admin_cookie():
+            if not validate_admin_session():
                 with st.sidebar.expander("🔒 Admin Login"):
-                    pwd = st.text_input("Password", type="password", key="admin_pwd")
+                    pwd = st.text_input("Password", type="password")
 
-                    if st.button("Login", key="admin_login_btn"):
-                        now = int(time.time())
-                        lock_until = int(st.session_state.get("admin_lock_until", 0) or 0)
-                        if now < lock_until:
-                            wait_seconds = lock_until - now
-                            st.error(f"Too many failed attempts. Try again in {wait_seconds} seconds.")
+                    if st.button("Login"):
+                        ok, msg = attempt_login(pwd)
+                        if not ok:
+                            st.error(msg)
                         else:
-                            expected = _get_admin_password()
-                            if not expected:
-                                st.error("Admin password is not configured.")
-                            elif pwd == expected:
-                                admin_email = "admin"
-                                token = create_session_token(admin_email)
-                                set_cookie(token)
-                                st.session_state["admin_failed_attempts"] = 0
-                                st.session_state["admin_lock_until"] = 0
-                                st.session_state["is_admin"] = True
-                                st.session_state["admin_email"] = admin_email
-                                st.rerun()
-                            else:
-                                failed_attempts = int(st.session_state.get("admin_failed_attempts", 0) or 0) + 1
-                                st.session_state["admin_failed_attempts"] = failed_attempts
-                                if failed_attempts >= ADMIN_MAX_FAILED_ATTEMPTS:
-                                    st.session_state["admin_lock_until"] = now + ADMIN_LOCKOUT_SECONDS
-                                    st.session_state["admin_failed_attempts"] = 0
-                                    st.error(
-                                        f"Too many failed attempts. Try again in {ADMIN_LOCKOUT_SECONDS} seconds."
-                                    )
-                                else:
-                                    remaining = ADMIN_MAX_FAILED_ATTEMPTS - failed_attempts
-                                    st.error(
-                                        "Incorrect password. "
-                                        f"{remaining} attempt{'s' if remaining != 1 else ''} remaining before lockout."
-                                    )
+                            st.success("Logged in.")
+                            st.rerun()
             else:
-                st.sidebar.success(
-                    f"Logged In: {st.session_state.get('admin_email', 'Admin')}"
-                )
-                if st.sidebar.button("Log Out", key="admin_logout_btn"):
-                    clear_cookie()
-                    st.session_state.clear()
+                st.sidebar.success("Logged In: Admin")
+                if st.sidebar.button("Log Out"):
+                    clear_admin_session()
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_cookie()
+        admin_logged_in = (not PUBLIC_MODE) and validate_admin_session()
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
