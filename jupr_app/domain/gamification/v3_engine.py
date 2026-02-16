@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_update
-
 from datetime import datetime, timezone
 from typing import Any
 
+from postgrest.exceptions import APIError
 
-USE_BADGE_ENGINE_V3 = True
+from jupr_app.config import USE_BADGE_ENGINE_V3
 
 _NUMERIC_OPERATORS = {
     ">": lambda left, right: left > right,
@@ -17,128 +16,152 @@ _NUMERIC_OPERATORS = {
 }
 
 
-def evaluate_badges_v3(player_id: int, context: Any, *, allowed_badge_ids: set[str] | None = None) -> list[str]:
-    """Evaluate published V3 badges for a single player and award matches."""
-    supabase = getattr(context, "supabase", None)
-    club_id = str(getattr(context, "club_id", "") or "")
-    context_id = str(getattr(context, "context_id", "overall") or "overall")
-    if supabase is None or not club_id:
+def evaluate_badges_v3_for_player(supabase: Any, club_id: str, player_id: int, context_id: str) -> list[str]:
+    """Evaluate published V3 badges for a single player in one context using AND-only numeric rules."""
+    if supabase is None:
         return []
 
-    badges_resp = supabase.table("badges").select("badge_id,award_count,status,is_locked").eq("status", "published").execute()
-    badges = badges_resp.data or []
-    if allowed_badge_ids is not None:
-        allowed = {str(badge_id) for badge_id in allowed_badge_ids}
-        badges = [row for row in badges if str(row.get("badge_id") or "") in allowed]
-    if not badges:
+    normalized_club_id = str(club_id or "")
+    normalized_context_id = str(context_id or "overall")
+    if not normalized_club_id:
         return []
 
-    badge_ids = [str(row.get("badge_id") or "") for row in badges if row.get("badge_id")]
-    conditions_resp = (
-        supabase.table("badge_rule_conditions")
-        .select("badge_id,fact_key,operator,value_numeric,value_boolean")
-        .in_("badge_id", badge_ids)
+    badges = (
+        supabase.table("badges")
+        .select("badge_id,status")
+        .eq("club_id", normalized_club_id)
+        .eq("status", "published")
         .execute()
+        .data
+        or []
     )
-    conditions = conditions_resp.data or []
-    by_badge: dict[str, list[dict[str, Any]]] = {}
-    for row in conditions:
-        badge_id = str(row.get("badge_id") or "")
-        if not badge_id:
-            continue
-        by_badge.setdefault(badge_id, []).append(row)
-
-    facts_resp = (
-        supabase.table("player_badge_facts")
-        .select("fact_key,fact_value_num,fact_value_bool")
-        .eq("club_id", club_id)
-        .eq("player_id", int(player_id))
-        .eq("context_id", context_id)
-        .execute()
-    )
-    fact_rows = facts_resp.data or []
-    facts = {str(row.get("fact_key") or ""): row for row in fact_rows}
 
     awarded_badge_ids: list[str] = []
-    now = datetime.now(timezone.utc).isoformat()
-
     for badge in badges:
         badge_id = str(badge.get("badge_id") or "")
-        badge_conditions = by_badge.get(badge_id, [])
-        if not badge_id or not badge_conditions:
+        if not badge_id:
             continue
 
-        if not _conditions_match(badge_conditions, facts):
-            continue
-
-        already_awarded = (
-            supabase.table("player_badges")
-            .select("badge_id")
-            .eq("club_id", club_id)
-            .eq("player_id", int(player_id))
+        conditions = (
+            supabase.table("badge_rule_conditions")
+            .select("fact_key,operator,value_numeric")
             .eq("badge_id", badge_id)
-            .eq("context_id", context_id)
-            .limit(1)
             .execute()
             .data
             or []
         )
-        if already_awarded:
+        if not conditions:
             continue
 
-        supabase.table("player_badges").insert(
-            {
-                "club_id": club_id,
-                "player_id": int(player_id),
-                "badge_id": badge_id,
-                "context_type": "overall",
-                "context_id": context_id,
-                "earned_at": now,
-                "awarded_by": "engine_v3",
-            }
-        ).execute()
+        if not _all_conditions_pass(supabase, normalized_club_id, int(player_id), normalized_context_id, conditions):
+            continue
 
-        current_awards = int(badge.get("award_count") or 0)
-        new_award_count = current_awards + 1
-        sb_update(
-            supabase,
-            "badges",
-            {
-                "award_count": new_award_count,
-                "is_locked": True,
-            },
-            filters={"badge_id": badge_id},
+        did_insert = _insert_player_badge(
+            supabase=supabase,
+            club_id=normalized_club_id,
+            player_id=int(player_id),
+            badge_id=badge_id,
+            context_id=normalized_context_id,
         )
+        if not did_insert:
+            continue
+
+        _increment_badge_awards(supabase, normalized_club_id, badge_id)
         awarded_badge_ids.append(badge_id)
 
     return awarded_badge_ids
 
 
-def _conditions_match(conditions: list[dict[str, Any]], facts: dict[str, dict[str, Any]]) -> bool:
+def evaluate_badges_v3(player_id: int, context: Any, *, allowed_badge_ids: set[str] | None = None) -> list[str]:
+    """Backward-compatible wrapper used by the queue worker."""
+    supabase = getattr(context, "supabase", None)
+    club_id = str(getattr(context, "club_id", "") or "")
+    context_id = str(getattr(context, "context_id", "overall") or "overall")
+    awarded = evaluate_badges_v3_for_player(supabase, club_id, int(player_id), context_id)
+    if allowed_badge_ids is None:
+        return awarded
+    allowed = {str(badge_id) for badge_id in allowed_badge_ids}
+    return [badge_id for badge_id in awarded if badge_id in allowed]
+
+
+def _all_conditions_pass(
+    supabase: Any,
+    club_id: str,
+    player_id: int,
+    context_id: str,
+    conditions: list[dict[str, Any]],
+) -> bool:
     for condition in conditions:
         fact_key = str(condition.get("fact_key") or "")
         operator = str(condition.get("operator") or "").strip()
-        fact_row = facts.get(fact_key)
-        if not fact_row:
-            return False
-
-        if operator == "is":
-            actual = _coerce_bool(fact_row.get("fact_value_bool"))
-            expected = _coerce_bool(condition.get("value_boolean"))
-            if actual is None or expected is None or actual is not expected:
-                return False
-            continue
-
+        expected_value = _coerce_num(condition.get("value_numeric"))
         compare = _NUMERIC_OPERATORS.get(operator)
-        if compare is None:
+        if not fact_key or compare is None or expected_value is None:
             return False
-        actual_num = _coerce_num(fact_row.get("fact_value_num"))
-        expected_num = _coerce_num(condition.get("value_numeric"))
-        if actual_num is None or expected_num is None:
+
+        fact_rows = (
+            supabase.table("player_badge_facts")
+            .select("fact_value_num")
+            .eq("club_id", club_id)
+            .eq("player_id", int(player_id))
+            .eq("context_id", context_id)
+            .eq("fact_key", fact_key)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not fact_rows:
             return False
-        if not compare(actual_num, expected_num):
+
+        actual_value = _coerce_num(fact_rows[0].get("fact_value_num"))
+        if actual_value is None or not compare(actual_value, expected_value):
             return False
     return True
+
+
+def _insert_player_badge(
+    supabase: Any,
+    club_id: str,
+    player_id: int,
+    badge_id: str,
+    context_id: str,
+) -> bool:
+    try:
+        supabase.table("player_badges").insert(
+            {
+                "club_id": club_id,
+                "player_id": int(player_id),
+                "badge_id": badge_id,
+                "context_id": context_id,
+                "earned_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).execute()
+        return True
+    except APIError as exc:
+        if getattr(exc, "code", None) == "23505":
+            return False
+        raise
+
+
+def _increment_badge_awards(supabase: Any, club_id: str, badge_id: str) -> None:
+    rows = (
+        supabase.table("badges")
+        .select("award_count")
+        .eq("club_id", club_id)
+        .eq("badge_id", badge_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    current_award_count = int((rows[0] or {}).get("award_count") or 0) if rows else 0
+    supabase.table("badges").update(
+        {
+            "award_count": current_award_count + 1,
+            "is_locked": True,
+        }
+    ).eq("club_id", club_id).eq("badge_id", badge_id).execute()
 
 
 def _coerce_num(value: Any) -> float | None:
@@ -146,17 +169,3 @@ def _coerce_num(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _coerce_bool(value: Any) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no"}:
-            return False
-    return None
