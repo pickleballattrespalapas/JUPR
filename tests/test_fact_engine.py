@@ -11,6 +11,7 @@ class FakeTable:
         self.name = name
         self.filters: list[tuple[str, str, object]] = []
         self.limit_count = None
+        self._result_override = None
 
     def select(self, _cols):
         return self
@@ -21,6 +22,31 @@ class FakeTable:
 
     def limit(self, count):
         self.limit_count = int(count)
+        return self
+
+    def insert(self, payload, **kwargs):
+        rows = payload if isinstance(payload, list) else [payload]
+        existing = self.storage.setdefault(self.name, [])
+        keys = [k.strip() for k in str(kwargs.get("on_conflict") or "").split(",") if k.strip()]
+        ignore_duplicates = bool(kwargs.get("ignore_duplicates"))
+        inserted = []
+        for row in rows:
+            row = dict(row)
+            match = None
+            if keys:
+                for current in existing:
+                    if all(str(current.get(k)) == str(row.get(k)) for k in keys):
+                        match = current
+                        break
+            if match is not None and ignore_duplicates:
+                continue
+            if match is None:
+                existing.append(row)
+                inserted.append(row)
+            else:
+                match.update(row)
+                inserted.append(match)
+        self._result_override = inserted
         return self
 
     def upsert(self, payload, on_conflict=None):
@@ -42,6 +68,10 @@ class FakeTable:
         return self
 
     def execute(self):
+        if self._result_override is not None:
+            rows = list(self._result_override)
+            self._result_override = None
+            return SimpleNamespace(data=rows)
         rows = list(self.storage.get(self.name, []))
         for op, column, value in self.filters:
             if op == "eq":
@@ -184,3 +214,65 @@ def test_rating_delta_and_upset_wins():
     assert _fact_num(storage, 3, "rating_delta") == 30.0
     assert _fact_num(storage, 1, "upset_wins") == 1.0
     assert _fact_num(storage, 3, "upset_wins") == 0.0
+
+
+def test_retry_keeps_streak_values_correct():
+    storage = {
+        "players": [
+            {"club_id": "club", "id": 1, "rating": 1260.0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 2, "rating": 1260.0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 3, "rating": 1260.0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 4, "rating": 1260.0, "starting_rating": 1200.0},
+        ],
+        "player_badge_facts": [],
+    }
+    supabase = FakeSupabase(storage)
+
+    first_win = {
+        "match_id": "m-streak-1",
+        "score_t1": 11,
+        "score_t2": 8,
+        "t1_p1": 1,
+        "t1_p2": 2,
+        "t2_p1": 3,
+        "t2_p2": 4,
+    }
+    second_win = first_win | {"match_id": "m-streak-2"}
+
+    update_match_facts_for_players(supabase, "club", [1, 2], first_win)
+    update_match_facts_for_players(supabase, "club", [1, 2], first_win)
+    update_match_facts_for_players(supabase, "club", [1, 2], second_win)
+
+    assert _fact_num(storage, 1, "current_win_streak") == 2.0
+    assert _fact_num(storage, 1, "best_win_streak") == 2.0
+
+
+def test_retry_keeps_total_matches_accurate():
+    storage = {
+        "players": [
+            {"club_id": "club", "id": 1, "rating": 1260.0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 2, "rating": 1260.0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 3, "rating": 1260.0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 4, "rating": 1260.0, "starting_rating": 1200.0},
+        ],
+        "player_badge_facts": [],
+    }
+    supabase = FakeSupabase(storage)
+
+    match_1 = {
+        "match_id": "m-total-1",
+        "score_t1": 11,
+        "score_t2": 9,
+        "t1_p1": 1,
+        "t1_p2": 2,
+        "t2_p1": 3,
+        "t2_p2": 4,
+    }
+    match_2 = match_1 | {"match_id": "m-total-2"}
+
+    update_match_facts_for_players(supabase, "club", [1, 2, 3, 4], match_1)
+    update_match_facts_for_players(supabase, "club", [1, 2, 3, 4], match_1)
+    update_match_facts_for_players(supabase, "club", [1, 2, 3, 4], match_2)
+
+    for pid in [1, 2, 3, 4]:
+        assert _fact_num(storage, pid, "total_matches") == 2.0
