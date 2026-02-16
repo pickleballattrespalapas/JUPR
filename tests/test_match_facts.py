@@ -207,7 +207,5 @@ def test_no_gamification_badge_rules_imports_in_domain_modules():
 
     for root in roots:
         for path in root.rglob("*.py"):
-            if path.name == "badge_rules.py":
-                continue
             contents = path.read_text(encoding="utf-8")
             assert disallowed not in contents, f"Found '{disallowed}' in {path}"
