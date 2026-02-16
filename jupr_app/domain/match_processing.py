@@ -16,6 +16,7 @@ from jupr_app.domain.player_activity import (
     max_activity_time,
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.fact_pipeline import update_player_badge_facts_for_match_commit
 from services.match_pipeline import submit_match
 
 
@@ -340,15 +341,6 @@ def process_matches(
                     )
                 )
 
-        if supabase is not None and has_non_popup_match:
-            enqueue_badge_eval(
-                supabase,
-                club_id=str(club_id),
-                event_type="match_recorded",
-                player_ids=sorted(affected_players),
-                payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
-            )
-
     # -------------------------
     # Update overall player rows
     # -------------------------
@@ -407,6 +399,24 @@ def process_matches(
                 payload,
                 conflict="club_id,player_id,league_name",
             ))
+
+    # -------------------------
+    # Update V3 badge facts before enqueue
+    # -------------------------
+    if supabase is not None and db_matches and has_non_popup_match:
+        update_player_badge_facts_for_match_commit(
+            supabase,
+            club_id=str(club_id),
+            overall_updates=overall_updates,
+        )
+
+        enqueue_badge_eval(
+            supabase,
+            club_id=str(club_id),
+            event_type="match_recorded",
+            player_ids=sorted(affected_players),
+            payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
+        )
 
     return {
         "inserted": len(db_matches),
