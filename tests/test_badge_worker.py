@@ -100,7 +100,7 @@ class FakeSupabase:
         return FakeTable(self.storage, name)
 
 
-def _build_ctx():
+def _build_ctx(supabase=None):
     df_matches = pd.DataFrame(
         [
             {
@@ -119,11 +119,11 @@ def _build_ctx():
     )
     df_badges = pd.DataFrame(
         [
-            {"badge_id": "participant", "state": "live", "eval_triggers": ["match_recorded"]},
+            {"badge_id": "grinder", "state": "live", "eval_triggers": ["match_recorded"]},
         ]
     )
     return SimpleNamespace(
-        supabase=None,
+        supabase=supabase,
         club_id="club",
         df_matches=df_matches,
         df_players_all=pd.DataFrame(),
@@ -139,7 +139,12 @@ def _build_ctx():
 
 
 def test_worker_processes_queue_and_awards_badge():
-    storage = {}
+    storage = {
+        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
+        "player_badge_facts": [],
+        "player_badges": [],
+    }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
         supabase,
@@ -148,14 +153,19 @@ def test_worker_processes_queue_and_awards_badge():
         player_ids=[1],
         match_id="m1",
     )
-    ctx = _build_ctx()
+    ctx = _build_ctx(supabase)
     result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
     assert result["processed"] == 1
     assert storage.get("player_badges")
 
 
 def test_worker_dedupes_duplicate_events():
-    storage = {}
+    storage = {
+        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
+        "player_badge_facts": [],
+        "player_badges": [],
+    }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
         supabase,
@@ -171,13 +181,18 @@ def test_worker_dedupes_duplicate_events():
         player_ids=[1],
         match_id="m1",
     )
-    ctx = _build_ctx()
+    ctx = _build_ctx(supabase)
     process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2, ctx=ctx)
     assert len(storage.get("player_badges", [])) == 1
 
 
 def test_worker_error_marks_queue(monkeypatch):
-    storage = {}
+    storage = {
+        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
+        "player_badge_facts": [],
+        "player_badges": [],
+    }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
         supabase,
@@ -186,13 +201,13 @@ def test_worker_error_marks_queue(monkeypatch):
         player_ids=[1],
         match_id="m1",
     )
-    ctx = _build_ctx()
+    ctx = _build_ctx(supabase)
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "jupr_app.domain.gamification.badge_worker.compute_candidates_for_player",
+        "jupr_app.domain.gamification.v3_engine.evaluate_badges_v3",
         boom,
     )
     process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)

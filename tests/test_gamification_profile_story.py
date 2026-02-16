@@ -10,7 +10,6 @@ from jupr_app.domain.gamification.copy_pack import (
     render_template,
 )
 from jupr_app.domain.gamification.story_engine import compute_story_cards
-from jupr_app.domain.gamification.badge_rules import BadgeAward
 
 
 def test_profile_summary_locked_and_prestige():
@@ -128,7 +127,7 @@ def test_story_generation_highlight_and_foreshadow_dedupe():
         ]
     )
     awards = [
-        BadgeAward(
+        SimpleNamespace(
             player_id=1,
             badge_id="first_win",
             context_type="overall",
@@ -257,7 +256,7 @@ def test_story_cards_dedupe_by_type_and_context():
         ]
     )
     awards = [
-        BadgeAward(
+        SimpleNamespace(
             player_id=1,
             badge_id="first_win",
             context_type="overall",

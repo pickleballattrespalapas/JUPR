@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.v3_engine import evaluate_badges_v3
 
@@ -130,11 +129,10 @@ def test_evaluate_badges_v3_awards_and_locks_badge():
     assert storage["badges"][0]["is_locked"] is True
 
 
-def test_worker_uses_v3_for_new_badges_and_v2_for_legacy(monkeypatch):
+def test_worker_uses_v3_only(monkeypatch):
     storage = {
         "badges": [
             {"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False},
-            {"badge_id": "legacy", "status": None, "award_count": 0, "is_locked": False},
         ],
         "badge_rule_conditions": [
             {"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1},
@@ -157,7 +155,6 @@ def test_worker_uses_v3_for_new_badges_and_v2_for_legacy(monkeypatch):
         df_badges=pd.DataFrame(
             [
                 {"badge_id": "grinder", "eval_triggers": ["match_recorded", "match_updated"]},
-                {"badge_id": "legacy", "eval_triggers": ["match_recorded", "match_updated"]},
             ]
         ),
         df_matches=None,
@@ -175,31 +172,8 @@ def test_worker_uses_v3_for_new_badges_and_v2_for_legacy(monkeypatch):
     monkeypatch.setattr("jupr_app.domain.gamification.v3_engine.USE_BADGE_ENGINE_V3", True)
     monkeypatch.setattr("jupr_app.domain.gamification.v3_engine.evaluate_badges_v3", _fake_v3)
 
-    def _fake_candidates(*_args, **_kwargs):
-        return [
-            BadgeCandidate(
-                badge_id="legacy",
-                player_id=7,
-                club_id="club",
-                context_type="overall",
-                context_id="overall",
-                match_id=None,
-            ),
-            BadgeCandidate(
-                badge_id="grinder",
-                player_id=7,
-                club_id="club",
-                context_type="overall",
-                context_id="overall",
-                match_id=None,
-            ),
-        ]
-
-    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.compute_candidates_for_player", _fake_candidates)
-
     result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
 
     assert result["processed"] == 1
     assert v3_calls == [(7, {"grinder"})]
-    assert len(storage["player_badges"]) == 1
-    assert storage["player_badges"][0]["badge_id"] == "legacy"
+    assert storage["player_badges"] == []
