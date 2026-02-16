@@ -646,8 +646,6 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
                 filters={"id": game_id},
             )
 
-            supabase.table("matches").delete().eq("tournament_game_id", game_id).execute()
-
             updated_any = True
             continue
 
@@ -666,8 +664,6 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
             finalize_payload,
             filters={"id": game_id},
         )
-
-        supabase.table("matches").delete().eq("tournament_game_id", game_id).execute()
 
         match_payload = _build_match_payload(
             tournament,
