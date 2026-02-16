@@ -180,3 +180,6 @@ Public site must feel official and polished.
 5.  Small, safe PRs only.
 
 This document is binding for all architectural decisions in JUPR v2.
+
+Badge Engine Subsystem (V3)
+The Badge Engine is defined in ARCHITECTURE_V3.md and must fully comply with all V2 system constraints, including deterministic routing, background job execution for heavy computation, additive migrations only, strict club_id scoping, and idempotent write guarantees. V3 is a subsystem specification layered on top of the V2 platform architecture and does not replace V2 principles.
