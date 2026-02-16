@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import os
+import time
+import hmac
+import hashlib
 import traceback
 import re
 from collections.abc import Mapping
@@ -9,17 +12,11 @@ from collections.abc import Mapping
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
 
-from jupr_app.auth.admin_auth import (
-    attempt_login,
-    validate_admin_session,
-    clear_admin_session,
-)
-
-
 # -------------------------
 # CONFIG
 # -------------------------
 CLUB_ID = "tres_palapas"
+ADMIN_SESSION_TTL_SECONDS = 60 * 60
 
 # Local/dev fallback for share links + link buttons.
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
@@ -57,6 +54,77 @@ def get_secret(path: list[str], default=None):
 
 def _get_config_value(path: list[str], default=None):
     return get_secret(path, default)
+
+
+def _get_secret(key: str) -> str:
+    try:
+        if key in st.secrets:
+            return str(st.secrets[key])
+        if "supabase" in st.secrets and key in st.secrets["supabase"]:
+            return str(st.secrets["supabase"][key])
+    except Exception:
+        pass
+    return os.getenv(key.upper(), "")
+
+
+def _get_admin_password() -> str:
+    return _get_secret("admin_password")
+
+
+def _get_session_secret() -> str:
+    return _get_secret("admin_session_secret")
+
+
+def _sign(exp: int, secret: str) -> str:
+    msg = str(exp).encode()
+    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def _create_admin_session():
+    secret = _get_session_secret()
+    if not secret:
+        st.error("ADMIN_SESSION_SECRET missing.")
+        st.stop()
+
+    exp = int(time.time()) + ADMIN_SESSION_TTL_SECONDS
+    token = _sign(exp, secret)
+
+    st.session_state["admin_session"] = {
+        "exp": exp,
+        "token": token,
+    }
+
+
+def _clear_admin_session():
+    st.session_state.pop("admin_session", None)
+
+
+def _validate_admin_session() -> bool:
+    secret = _get_session_secret()
+    if not secret:
+        return False
+
+    data = st.session_state.get("admin_session")
+    if not isinstance(data, dict):
+        return False
+
+    exp = data.get("exp")
+    token = data.get("token")
+
+    if not exp or not token:
+        return False
+
+    if int(exp) < int(time.time()):
+        _clear_admin_session()
+        return False
+
+    expected = _sign(int(exp), secret)
+
+    if not hmac.compare_digest(token, expected):
+        _clear_admin_session()
+        return False
+
+    return True
 
 
 # -------------------------
@@ -189,8 +257,8 @@ def main():
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
         # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
-        # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ADMIN_PASSWORD,
-        # and SUPABASE_ADMIN_SESSION_SECRET.
+        # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, ADMIN_PASSWORD,
+        # and ADMIN_SESSION_SECRET.
         base_url = _get_config_value(["public_base_url"], LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
@@ -202,25 +270,28 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not validate_admin_session():
+            if not _validate_admin_session():
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password")
 
                     if st.button("Login"):
-                        ok, msg = attempt_login(pwd)
-                        if not ok:
-                            st.error(msg)
+                        expected = _get_admin_password()
+                        if not expected:
+                            st.error("Admin password not configured.")
+                        elif pwd != expected:
+                            st.error("Incorrect password.")
                         else:
+                            _create_admin_session()
                             st.success("Logged in.")
                             st.rerun()
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out"):
-                    clear_admin_session()
+                    _clear_admin_session()
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and validate_admin_session()
+        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_session()
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
