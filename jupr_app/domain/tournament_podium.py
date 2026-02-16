@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from jupr_app.data.sb_write import sb_upsert
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 
 
@@ -40,10 +41,12 @@ def upsert_tournament_podium(
     if supabase is None or not tournament_id or not payload:
         return
     try:
-        supabase.table("tournament_podium").upsert(
+        sb_upsert(
+            supabase,
+            "tournament_podium",
             payload,
-            on_conflict="tournament_id,placement",
-        ).execute()
+            conflict="tournament_id,placement",
+        )
     except Exception:
         logger.exception("Failed to upsert tournament podium", extra={"tournament_id": tournament_id})
 

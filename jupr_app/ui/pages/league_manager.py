@@ -1,6 +1,8 @@
 # jupr_app/ui/pages/league_manager.py
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import json
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -1086,7 +1088,7 @@ def render(ctx):
                 }
 
                 try:
-                    resp = ctx.supabase.table("leagues_metadata").insert(payload).execute()
+                    resp = ctx.sb_insert(supabase, "leagues_metadata", payload)
                 except Exception as exc:
                     st.error(f"Could not create league: {exc}")
                     st.stop()
@@ -1134,9 +1136,12 @@ def render(ctx):
             if not meta_row.get("id"):
                 st.error("League metadata ID is missing.")
                 return
-            ctx.supabase.table("leagues_metadata").update(payload).eq("id", int(meta_row["id"])).eq(
-                "club_id", str(ctx.club_id)
-            ).execute()
+            sb_update(
+                ctx.supabase,
+                "leagues_metadata",
+                payload,
+                filters={"id": int(meta_row["id"]), "club_id": str(ctx.club_id)},
+            )
             st.session_state["force_data_refresh"] = True
             st.success("League updated.")
             time.sleep(0.3)
@@ -1249,7 +1254,7 @@ def render(ctx):
                 "rules_config": rules_cfg,
                 "awards_config": awards_cfg,
             }
-            ctx.supabase.table("leagues_metadata").insert(payload).execute()
+            ctx.sb_insert(supabase, "leagues_metadata", payload)
             st.session_state["force_data_refresh"] = True
             st.success("Draft duplicated.")
             st.rerun()
@@ -1668,14 +1673,17 @@ def render(ctx):
 
             if st.button("Save Config"):
                 for _, r in editor.iterrows():
-                    ctx.supabase.table("leagues_metadata").update(
+                    sb_update(
+                        ctx.supabase,
+                        "leagues_metadata",
                         {
                             "is_active": bool(r.get("is_active", True)),
                             "min_games": int(r.get("min_games", 0) or 0),
                             "k_factor": int(r.get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR),
                             "description": str(r.get("description", "") or ""),
-                        }
-                    ).eq("id", int(r["id"])).eq("club_id", str(ctx.club_id)).execute()
+                        },
+                        filters={"id": int(r["id"]), "club_id": str(ctx.club_id)},
+                    )
 
                 st.success("Saved.")
                 time.sleep(0.3)

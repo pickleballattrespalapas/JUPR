@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,14 +80,16 @@ def render(ctx):
             if not tournament_name.strip():
                 st.error("Tournament name is required.")
             else:
-                supabase.table("tournaments").insert(
+                sb_insert(
+                    supabase,
+                    "tournaments",
                     {
                         "club_id": str(club_id),
                         "name": tournament_name.strip(),
                         "status": "DRAFT",
                         "team_count": int(team_count),
-                    }
-                ).execute()
+                    },
+                )
                 st.success("Tournament created.")
                 st.rerun()
 
@@ -182,7 +186,7 @@ def render(ctx):
                 key="tourney_team_count_select",
             )
         if not team_count_locked and st.button("Update team count"):
-            supabase.table("tournaments").update({"team_count": int(new_team_count)}).eq("id", tournament_id).execute()
+            sb_update(supabase, "tournaments", {"team_count": int(new_team_count)}, filters={"id": tournament_id})
             st.success("Team count updated.")
             st.rerun()
 
@@ -235,7 +239,7 @@ def render(ctx):
                     }
                 )
 
-            supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,team_number").execute()
+            sb_upsert(supabase, "tournament_teams", payload, conflict="tournament_id,team_number")
             st.success("Teams saved.")
             st.rerun()
 
@@ -250,8 +254,8 @@ def render(ctx):
         if st.button("Generate RR Schedule", disabled=bool(rr_games) or not ready_teams or is_complete):
             team_ids = {int(num): t["id"] for num, t in teams_by_number.items()}
             games_payload = build_round_robin_games(tournament_id=tournament_id, team_ids_by_number=team_ids)
-            supabase.table("tournament_games").insert(games_payload).execute()
-            supabase.table("tournaments").update({"status": "ROUND_ROBIN"}).eq("id", tournament_id).execute()
+            sb_insert(supabase, "tournament_games", games_payload)
+            sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"id": tournament_id})
             st.success("Round robin schedule generated.")
             st.rerun()
 
@@ -264,8 +268,8 @@ def render(ctx):
                     disabled=confirm.strip().upper() != "RESET" or is_complete,
                 ):
                     supabase.table("tournament_games").delete().eq("tournament_id", tournament_id).execute()
-                    supabase.table("tournament_teams").update({"seed": None}).eq("tournament_id", tournament_id).execute()
-                    supabase.table("tournaments").update({"status": "DRAFT", "playoff_advance_count": None}).eq("id", tournament_id).execute()
+                    sb_update(supabase, "tournament_teams", {"seed": None}, filters={"tournament_id": tournament_id})
+                    sb_update(supabase, "tournaments", {"status": "DRAFT", "playoff_advance_count": None}, filters={"id": tournament_id})
                     st.success("Schedule cleared.")
                     st.rerun()
 
@@ -309,7 +313,7 @@ def render(ctx):
 
                 if st.button("Update Seeds", disabled=is_complete):
                     for row in standings:
-                        supabase.table("tournament_teams").update({"seed": int(row["seed"])}).eq("id", row["team_id"]).execute()
+                        sb_update(supabase, "tournament_teams", {"seed": int(row["seed"])}, filters={"id": row["team_id"]})
                     st.success("Seeds updated.")
                     st.rerun()
 
@@ -329,7 +333,7 @@ def render(ctx):
             disabled=is_complete,
         )
         if st.button("Save advance count", disabled=is_complete):
-            supabase.table("tournaments").update({"playoff_advance_count": int(selected_advance)}).eq("id", tournament_id).execute()
+            sb_update(supabase, "tournaments", {"playoff_advance_count": int(selected_advance)}, filters={"id": tournament_id})
             st.success("Advance count saved.")
             st.rerun()
 
@@ -341,16 +345,19 @@ def render(ctx):
                 st.error("Not enough seeded teams to generate the bracket.")
                 st.stop()
             for row in standings:
-                supabase.table("tournament_teams").update({"seed": int(row["seed"])}).eq("id", row["team_id"]).execute()
+                sb_update(supabase, "tournament_teams", {"seed": int(row["seed"])}, filters={"id": row["team_id"]})
             games_payload = build_playoff_games(
                 tournament_id=tournament_id,
                 advance_count=int(selected_advance),
                 standings=standings,
             )
-            supabase.table("tournament_games").insert(games_payload).execute()
-            supabase.table("tournaments").update(
-                {"status": "PLAYOFFS", "playoff_advance_count": int(selected_advance)}
-            ).eq("id", tournament_id).execute()
+            sb_insert(supabase, "tournament_games", games_payload)
+            sb_update(
+                supabase,
+                "tournaments",
+                {"status": "PLAYOFFS", "playoff_advance_count": int(selected_advance)},
+                filters={"id": tournament_id},
+            )
             st.success("Playoff bracket generated.")
             st.rerun()
 
@@ -543,7 +550,7 @@ def _render_podium_review(
 
         upsert_tournament_podium(ctx.supabase, tournament_id, payload)
         award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
-        ctx.supabase.table("tournaments").update({"status": "COMPLETE"}).eq("id", tournament_id).execute()
+        ctx.sb_update(supabase, "tournaments", {"status": "COMPLETE"}, filters={"id": tournament_id})
         st.success("Tournament completed and podium locked.")
         st.session_state.pop(f"podium_review_open_{tournament_id}", None)
         st.rerun()
@@ -621,11 +628,11 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
 
         if score_a == 0 and score_b == 0:
             if game.get("score_a") or game.get("score_b"):
-                supabase.table("tournament_games").update({"score_a": None, "score_b": None}).eq("id", game_id).execute()
+                sb_update(supabase, "tournament_games", {"score_a": None, "score_b": None}, filters={"id": game_id})
                 updated_any = True
             continue
 
-        supabase.table("tournament_games").update({"score_a": score_a, "score_b": score_b}).eq("id", game_id).execute()
+        sb_update(supabase, "tournament_games", {"score_a": score_a, "score_b": score_b}, filters={"id": game_id})
         updated_any = True
 
         try:
@@ -633,7 +640,7 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
         except ValueError:
             continue
 
-        supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
+        sb_update(supabase, "tournament_games", finalize_payload, filters={"id": game_id})
 
         match_payload = _build_match_payload(
             tournament,
@@ -663,7 +670,7 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
             playoff_games = playoff_games_resp.data or []
             updates = resolve_playoff_dependencies(playoff_games)
             for upd in updates:
-                supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
+                sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
 
     if updated_any:
         st.success("Scores saved.")

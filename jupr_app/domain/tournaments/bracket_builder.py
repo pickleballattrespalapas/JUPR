@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from uuid import uuid4
 
 from jupr_app.data.retry import sb_retry
@@ -79,14 +81,13 @@ def generate_single_elim(supabase, division_id: str, club_id: str) -> dict[str, 
     if not matchup_rows:
         raise ValueError("Unable to create round 1 matchups from current entries.")
 
-    sb_retry(lambda: supabase.table("division_matches").insert(matchup_rows).execute())
+    sb_retry(lambda: sb_insert(supabase, "division_matches", matchup_rows))
     sb_retry(
-        lambda: (
-            supabase.table("tournament_divisions")
-            .update({"status": "active"})
-            .eq("club_id", clean_club_id)
-            .eq("id", clean_division_id)
-            .execute()
+        lambda: sb_update(
+            supabase,
+            "tournament_divisions",
+            {"status": "active"},
+            filters={"club_id": clean_club_id, "id": clean_division_id},
         )
     )
 

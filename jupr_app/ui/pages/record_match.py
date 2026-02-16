@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import hashlib
 import json
 import time
@@ -1232,7 +1234,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
                 )
 
                 finalize_payload = finalize_game({**selected_game, "score_a": int(score_t1), "score_b": int(score_t2)})
-                supabase.table("tournament_games").update(finalize_payload).eq("id", selected_game["id"]).execute()
+                sb_update(supabase, "tournament_games", finalize_payload, filters={"id": selected_game["id"]})
 
                 if str(selected_game.get("stage") or "").upper() == "PLAYOFF":
                     playoff_games_resp = (
@@ -1245,7 +1247,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
                     playoff_games = getattr(playoff_games_resp, "data", None) or []
                     updates = resolve_playoff_dependencies(playoff_games)
                     for upd in updates:
-                        supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
+                        sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
 
                 _set_submit_feedback(
                     {
@@ -1590,7 +1592,7 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
                     "updated_at": datetime.utcnow().isoformat(),
                     "finalized_at": datetime.utcnow().isoformat(),
                 }
-                supabase.table("round_robin_matches").update(update_payload).eq("id", selected_pairing["id"]).execute()
+                sb_update(supabase, "round_robin_matches", update_payload, filters={"id": selected_pairing["id"]})
 
                 refreshed_matches_resp = supabase.table("round_robin_matches").select("*").eq("pool_id", pool_id).execute()
                 refreshed_matches = getattr(refreshed_matches_resp, "data", None) or []
@@ -1610,10 +1612,12 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
                         "point_diff": int(row["point_diff"]),
                         "updated_at": datetime.utcnow().isoformat(),
                     }
-                    supabase.table("round_robin_standings").upsert(
+                    sb_upsert(
+                        supabase,
+                        "round_robin_standings",
                         upsert_payload,
-                        on_conflict="session_id,pool_id,player_id",
-                    ).execute()
+                        conflict="session_id,pool_id,player_id",
+                    )
 
                 _set_submit_feedback(
                     {

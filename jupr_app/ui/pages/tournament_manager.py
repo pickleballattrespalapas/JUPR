@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from collections import Counter
 
 import streamlit as st
@@ -58,7 +60,7 @@ def _insert_division(supabase, club_id: str, tournament_id: str, title: str, fmt
     }
     if max_teams is not None:
         payload["max_teams"] = int(max_teams)
-    supabase.table("tournament_divisions").insert(payload).execute()
+    sb_insert(supabase, "tournament_divisions", payload)
 
 
 def _render_division_modal(supabase, club_id: str, tournament_id: str) -> None:

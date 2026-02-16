@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from datetime import datetime, timezone
 import logging
 import os
@@ -146,20 +148,24 @@ def upsert_player_badges(
 
 def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> None:
     try:
-        supabase.table("player_badges").upsert(
+        sb_upsert(
+            supabase,
+            "player_badges",
             rows,
-            on_conflict=PLAYER_BADGES_CONFLICT_KEY,
-        ).execute()
+            conflict=PLAYER_BADGES_CONFLICT_KEY,
+        )
     except APIError as exc:
         if _is_missing_column_error(exc, _PLAYER_BADGES_OPTIONAL_COLUMNS):
             logger.warning(
                 "player_badges schema missing optional columns; retrying upsert without provenance fields."
             )
             stripped = [_strip_optional_columns(row, _PLAYER_BADGES_OPTIONAL_COLUMNS) for row in rows]
-            supabase.table("player_badges").upsert(
+            sb_upsert(
+                supabase,
+                "player_badges",
                 stripped,
-                on_conflict=PLAYER_BADGES_CONFLICT_KEY,
-            ).execute()
+                conflict=PLAYER_BADGES_CONFLICT_KEY,
+            )
         else:
             raise
 

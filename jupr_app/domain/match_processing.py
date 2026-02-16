@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -360,10 +362,10 @@ def process_matches(
         }
         if activity_update:
             payload.update(activity_update)
-        res = supabase.table("players").update(payload).eq("club_id", club_id).eq("id", pid).execute()
+        res = sb_update(supabase, "players", payload, filters={"club_id": club_id, "id": pid})
         if not res.data:
             payload_ins = {"club_id": club_id, "id": pid, **payload}
-            supabase.table("players").insert(payload_ins).execute()
+            sb_insert(supabase, "players", payload_ins)
 
     for pid, stats in overall_updates.items():
         row = {
@@ -420,13 +422,13 @@ def process_matches(
                     payload["starting_rating"] = float(stats.get("start", 1200.0))
 
                 sb_retry(lambda payload=payload, rid=int(cur["id"]): (
-                    supabase.table("league_ratings").update(payload).eq("id", rid).execute()
+                    sb_update(supabase, "league_ratings", payload, filters={"id": rid})
                 ))
             else:
                 payload["starting_rating"] = float(stats.get("start", 1200.0))
                 payload["is_active"] = True
                 payload["inactive_at"] = None
-                sb_retry(lambda payload=payload: supabase.table("league_ratings").insert(payload).execute())
+                sb_retry(lambda payload=payload: sb_insert(supabase, "league_ratings", payload))
 
     return {
         "inserted": len(db_matches),
