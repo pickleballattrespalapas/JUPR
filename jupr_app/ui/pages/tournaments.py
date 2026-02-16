@@ -611,44 +611,92 @@ def _team_label(team: dict, id_to_name: dict) -> str:
 
 def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
     supabase = ctx.supabase
+
     if tournament.get("status") == "COMPLETE":
         st.error("Tournament is complete. Scores are locked.")
         return
+
     df_players_all = ctx.df_players_all
     df_leagues = ctx.df_leagues
     df_meta = ctx.df_meta
     name_to_id = ctx.name_to_id
 
     updated_any = False
-    for game_id, game in game_map.items():
-        if game.get("finalized_at"):
-            continue
-        score_a = int(st.session_state.get(f"{_score_key(stage, 'a', game_id)}", 0))
-        score_b = int(st.session_state.get(f"{_score_key(stage, 'b', game_id)}", 0))
 
+    for game_id in game_map.keys():
+
+        score_a = int(st.session_state.get(_score_key(stage, "a", game_id), 0))
+        score_b = int(st.session_state.get(_score_key(stage, "b", game_id), 0))
+
+        # -----------------------------
+        # CLEAR GAME (0–0)
+        # -----------------------------
         if score_a == 0 and score_b == 0:
-            if game.get("score_a") or game.get("score_b"):
-                sb_update(supabase, "tournament_games", {"score_a": None, "score_b": None}, filters={"id": game_id})
-                updated_any = True
+            sb_update(
+                supabase,
+                "tournament_games",
+                {
+                    "score_a": None,
+                    "score_b": None,
+                    "winner_team_id": None,
+                    "loser_team_id": None,
+                    "finalized_at": None,
+                },
+                filters={"id": game_id},
+            )
+
+            # Delete any previously processed match
+            supabase.table("matches") \
+                .delete() \
+                .eq("tournament_game_id", game_id) \
+                .execute()
+
+            updated_any = True
             continue
 
-        sb_update(supabase, "tournament_games", {"score_a": score_a, "score_b": score_b}, filters={"id": game_id})
-        updated_any = True
+        # -----------------------------
+        # FINALIZE GAME (atomic write)
+        # -----------------------------
+        fresh_game = (
+            supabase.table("tournament_games")
+            .select("*")
+            .eq("id", game_id)
+            .single()
+            .execute()
+            .data
+        )
 
-        try:
-            finalize_payload = finalize_game({**game, "score_a": score_a, "score_b": score_b})
-        except ValueError:
-            continue
+        finalize_payload = finalize_game({
+            "team_a_id": fresh_game.get("team_a_id"),
+            "team_b_id": fresh_game.get("team_b_id"),
+            "score_a": score_a,
+            "score_b": score_b,
+        })
 
-        sb_update(supabase, "tournament_games", finalize_payload, filters={"id": game_id})
+        sb_update(
+            supabase,
+            "tournament_games",
+            finalize_payload,
+            filters={"id": game_id},
+        )
+
+        # -----------------------------
+        # MATCH PROCESSING (idempotent)
+        # -----------------------------
+        # Delete previous match row for this tournament game
+        supabase.table("matches") \
+            .delete() \
+            .eq("tournament_game_id", game_id) \
+            .execute()
 
         match_payload = _build_match_payload(
             tournament,
-            game,
+            fresh_game,
             teams_by_id,
             score_a=score_a,
             score_b=score_b,
         )
+
         process_matches(
             [match_payload],
             supabase=supabase,
@@ -659,22 +707,12 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
             df_meta=df_meta,
         )
 
-        if stage == "PLAYOFF":
-            playoff_games_resp = (
-                supabase.table("tournament_games")
-                .select("*")
-                .eq("tournament_id", tournament["id"])
-                .eq("stage", "PLAYOFF")
-                .execute()
-            )
-            playoff_games = playoff_games_resp.data or []
-            updates = resolve_playoff_dependencies(playoff_games)
-            for upd in updates:
-                sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
+        updated_any = True
 
     if updated_any:
         st.success("Scores saved.")
         st.rerun()
+
 
 
 def _build_match_payload(tournament, game, teams_by_id, *, score_a: int, score_b: int) -> dict:
