@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.tournaments.sync import sync_tournament_game_to_match
 from jupr_app.domain.tournaments import (
     build_playoff_games,
     build_round_robin_games,
@@ -616,11 +616,6 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
         st.error("Tournament is complete. Scores are locked.")
         return
 
-    df_players_all = ctx.df_players_all
-    df_leagues = ctx.df_leagues
-    df_meta = ctx.df_meta
-    name_to_id = ctx.name_to_id
-
     updated_any = False
 
     for game_id in game_map.keys():
@@ -628,9 +623,15 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
         score_a = int(st.session_state.get(_score_key(stage, "a", game_id), 0))
         score_b = int(st.session_state.get(_score_key(stage, "b", game_id), 0))
 
-        # -----------------------------
-        # CLEAR GAME (0–0)
-        # -----------------------------
+        fresh_game = (
+            supabase.table("tournament_games")
+            .select("*")
+            .eq("id", game_id)
+            .single()
+            .execute()
+            .data
+        )
+
         if score_a == 0 and score_b == 0:
             sb_update(
                 supabase,
@@ -645,33 +646,19 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
                 filters={"id": game_id},
             )
 
-            # Delete any previously processed match
-            supabase.table("matches") \
-                .delete() \
-                .eq("tournament_game_id", game_id) \
-                .execute()
+            supabase.table("matches").delete().eq("tournament_game_id", game_id).execute()
 
             updated_any = True
             continue
 
-        # -----------------------------
-        # FINALIZE GAME (atomic write)
-        # -----------------------------
-        fresh_game = (
-            supabase.table("tournament_games")
-            .select("*")
-            .eq("id", game_id)
-            .single()
-            .execute()
-            .data
+        finalize_payload = finalize_game(
+            {
+                "team_a_id": fresh_game.get("team_a_id"),
+                "team_b_id": fresh_game.get("team_b_id"),
+                "score_a": score_a,
+                "score_b": score_b,
+            }
         )
-
-        finalize_payload = finalize_game({
-            "team_a_id": fresh_game.get("team_a_id"),
-            "team_b_id": fresh_game.get("team_b_id"),
-            "score_a": score_a,
-            "score_b": score_b,
-        })
 
         sb_update(
             supabase,
@@ -680,14 +667,7 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
             filters={"id": game_id},
         )
 
-        # -----------------------------
-        # MATCH PROCESSING (idempotent)
-        # -----------------------------
-        # Delete previous match row for this tournament game
-        supabase.table("matches") \
-            .delete() \
-            .eq("tournament_game_id", game_id) \
-            .execute()
+        supabase.table("matches").delete().eq("tournament_game_id", game_id).execute()
 
         match_payload = _build_match_payload(
             tournament,
@@ -697,14 +677,15 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
             score_b=score_b,
         )
 
-        process_matches(
-            [match_payload],
+        sync_tournament_game_to_match(
             supabase=supabase,
             club_id=str(ctx.club_id),
-            name_to_id=name_to_id,
-            df_players_all=df_players_all,
-            df_leagues=df_leagues,
-            df_meta=df_meta,
+            game=fresh_game,
+            match_payload=match_payload,
+            name_to_id=ctx.name_to_id,
+            df_players_all=ctx.df_players_all,
+            df_leagues=ctx.df_leagues,
+            df_meta=ctx.df_meta,
         )
 
         updated_any = True
