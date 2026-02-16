@@ -1,0 +1,1 @@
+USE_BADGE_ENGINE_V3 = True

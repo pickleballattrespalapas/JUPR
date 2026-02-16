@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
-from jupr_app.domain.gamification.v3_engine import USE_BADGE_ENGINE_V3
+from jupr_app.config import USE_BADGE_ENGINE_V3
 from jupr_app.ui.components.theme_toggle import render_theme_toggle
 
 

@@ -140,7 +140,7 @@ def _build_ctx(supabase=None):
 
 def test_worker_processes_queue_and_awards_badge():
     storage = {
-        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
@@ -161,7 +161,7 @@ def test_worker_processes_queue_and_awards_badge():
 
 def test_worker_dedupes_duplicate_events():
     storage = {
-        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
@@ -188,7 +188,7 @@ def test_worker_dedupes_duplicate_events():
 
 def test_worker_error_marks_queue(monkeypatch):
     storage = {
-        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
+        "badges": [{"club_id": "club", "badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
@@ -207,7 +207,7 @@ def test_worker_error_marks_queue(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "jupr_app.domain.gamification.v3_engine.evaluate_badges_v3",
+        "jupr_app.domain.gamification.v3_engine.evaluate_badges_v3_for_player",
         boom,
     )
     process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)

@@ -12,6 +12,7 @@ import pandas as pd
 from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
+from jupr_app.config import USE_BADGE_ENGINE_V3
 from jupr_app.domain.gamification import v3_engine
 
 
@@ -41,12 +42,15 @@ def process_badge_eval_queue(
             badge_ids = _badge_ids_for_trigger(context, event_type)
             if badge_ids and player_ids:
                 _update_incremental_facts(supabase, job, player_ids, context_id)
-                if v3_engine.USE_BADGE_ENGINE_V3:
+                if USE_BADGE_ENGINE_V3:
                     v3_badge_ids = _v3_badge_ids_with_conditions(supabase, badge_ids)
                     for pid in player_ids:
-                        v3_context = _context_with_context_id(context, context_id)
                         if v3_badge_ids:
-                            v3_engine.evaluate_badges_v3(pid, v3_context, allowed_badge_ids=v3_badge_ids)
+                            v3_engine.evaluate_badges_v3_for_player(supabase, job_club_id, int(pid), context_id)
+                else:
+                    for pid in player_ids:
+                        v3_context = _context_with_context_id(context, context_id)
+                        v3_engine.evaluate_badges_v3(pid, v3_context, allowed_badge_ids=badge_ids)
             ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
             processed += 1
         except Exception as exc:  # noqa: BLE001 - worker should record failures
