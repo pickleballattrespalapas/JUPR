@@ -1,6 +1,8 @@
 # jupr_app/ui/pages/challenge_ladder.py
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import time
 from typing import Any, Callable, Dict, Tuple
 
@@ -54,7 +56,7 @@ def ladder_fetch_settings(supabase, club_id: str) -> Dict[str, Any]:
         return resp.data[0]
 
     # Ensure exists (same behavior as your old code)
-    sb_retry(lambda: supabase.table("ladder_settings").insert({"club_id": club_id}).execute())
+    sb_retry(lambda: sb_insert(supabase, "ladder_settings", {"club_id": club_id}))
 
     resp2 = sb_retry(lambda: (
         supabase.table("ladder_settings")

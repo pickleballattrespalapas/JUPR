@@ -1,3 +1,4 @@
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 import streamlit as st
 import pandas as pd
 import time
@@ -273,13 +274,16 @@ def render(ctx):
                 st.error(transition.reason or "Transition not allowed.")
             else:
                 try:
-                    supabase.table("badges").update(
+                    sb_update(
+                        supabase,
+                        "badges",
                         {
                             "state": new_state,
                             "state_changed_at": datetime.now(timezone.utc).isoformat(),
                             "state_change_reason": reason.strip(),
-                        }
-                    ).eq("badge_id", badge_id).execute()
+                        },
+                        filters={"badge_id": badge_id},
+                    )
                     st.success(f"Updated {badge_id} → {new_state}.")
                 except Exception as exc:
                     st.error("Failed to update badge state.")

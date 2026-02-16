@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -192,7 +194,7 @@ def render(ctx):
                 "final_json": recap,
             }
             try:
-                supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+                sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
             except APIError as exc:
                 if _handle_missing_table(exc):
                     return
@@ -360,7 +362,7 @@ def render(ctx):
             "final_json": final_json,
         }
         try:
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
         except APIError as exc:
             if _handle_missing_table(exc):
                 return
@@ -417,7 +419,7 @@ def render(ctx):
             "published_by": "admin",
         }
         try:
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
         except APIError as exc:
             if _handle_missing_table(exc):
                 return
@@ -438,7 +440,7 @@ def render(ctx):
             "published_by": None,
         }
         try:
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
         except APIError as exc:
             if _handle_missing_table(exc):
                 return

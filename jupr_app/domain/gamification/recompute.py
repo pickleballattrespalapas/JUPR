@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -244,23 +246,29 @@ def _fetch_existing_awards(
 
 
 def _mark_revoked(supabase: Any, row_id: str, revoked_by: str | None, revoke_reason: str) -> None:
-    supabase.table("player_badges").update(
+    sb_update(
+        supabase,
+        "player_badges",
         {
             "revoked_at": _now_iso(),
             "revoked_by": revoked_by,
             "revoke_reason": revoke_reason,
-        }
-    ).eq("id", row_id).execute()
+        },
+        filters={"id": row_id},
+    )
 
 
 def _clear_revocation(supabase: Any, row_id: str) -> None:
-    supabase.table("player_badges").update(
+    sb_update(
+        supabase,
+        "player_badges",
         {
             "revoked_at": None,
             "revoked_by": None,
             "revoke_reason": None,
-        }
-    ).eq("id", row_id).execute()
+        },
+        filters={"id": row_id},
+    )
 
 
 def _compute_rule_version() -> str:
@@ -272,16 +280,16 @@ def _compute_rule_version() -> str:
 
 def _create_eval_run(supabase: Any, created_by: str | None, mode: str, scope: dict[str, Any]) -> str:
     resp = (
-        supabase.table("badge_eval_runs")
-        .insert(
-            {
-                "created_by": created_by,
-                "mode": mode,
-                "scope_json": scope,
-                "status": "queued",
-            }
-        )
-        .execute()
+        sb_insert(
+        supabase,
+        "badge_eval_runs",
+        {
+            "created_by": created_by,
+            "mode": mode,
+            "scope_json": scope,
+            "status": "queued",
+        },
+    )
     )
     data = resp.data or []
     if not data:
@@ -308,7 +316,7 @@ def _update_eval_run(
         payload["summary_json"] = summary
     if error is not None:
         payload["error"] = error
-    supabase.table("badge_eval_runs").update(payload).eq("id", eval_run_id).execute()
+    sb_update(supabase, "badge_eval_runs", payload, filters={"id": eval_run_id})
 
 
 def _now_iso() -> str:

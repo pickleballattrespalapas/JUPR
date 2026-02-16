@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import random
 import time
 from typing import Any, Callable, Dict, Optional
@@ -187,11 +189,12 @@ def replay_history(
         players_updated = True
         for pid, s in p_map.items():
             _exec_with_retry(
-                lambda pid=pid, s=s: supabase.table("players")
-                .update({"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]})
-                .eq("club_id", club_id)
-                .eq("id", int(pid))
-                .execute()
+                lambda pid=pid, s=s: sb_update(
+                supabase,
+                "players",
+                {"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]},
+                filters={"club_id": club_id, "id": int(pid)},
+            )
             )
 
     # Rebuild league_ratings
@@ -228,7 +231,7 @@ def replay_history(
 
     for i in range(0, len(new_rows), 1000):
         chunk = new_rows[i : i + 1000]
-        _exec_with_retry(lambda chunk=chunk: supabase.table("league_ratings").insert(chunk).execute())
+        _exec_with_retry(lambda chunk=chunk: sb_insert(supabase, "league_ratings", chunk))
 
     # Rewrite match snapshots (in-place updates on existing match rows)
     snapshot_columns = {
@@ -258,11 +261,12 @@ def replay_history(
                 update_payload = {k: row[k] for k in snapshot_columns if k in row}
 
                 _exec_with_retry(
-                    lambda update_payload=update_payload, match_id=match_id: supabase.table("matches")
-                    .update(update_payload)
-                    .eq("club_id", club_id)
-                    .eq("id", match_id)
-                    .execute()
+                    lambda update_payload=update_payload, match_id=match_id: sb_update(
+                    supabase,
+                    "matches",
+                    update_payload,
+                    filters={"club_id": club_id, "id": match_id},
+                )
                 )
         except Exception as exc:
             raise RuntimeError(f"Failed matches update chunk {chunk_index}: {exc}") from exc

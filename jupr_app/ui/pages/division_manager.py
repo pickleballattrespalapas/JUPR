@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -64,17 +66,16 @@ def _insert_entry(supabase, club_id: str, division_id: str, team_id: str, seed: 
         "team_id": team_id,
         "seed": seed,
     }
-    sb_retry(lambda: supabase.table("division_entries").insert(payload).execute())
+    sb_retry(lambda: sb_insert(supabase, "division_entries", payload))
 
 
 def _update_entry_seed(supabase, club_id: str, entry_id: str, seed: int | None) -> None:
     sb_retry(
-        lambda: (
-            supabase.table("division_entries")
-            .update({"seed": seed})
-            .eq("club_id", club_id)
-            .eq("id", entry_id)
-            .execute()
+        lambda: sb_update(
+            supabase,
+            "division_entries",
+            {"seed": seed},
+            filters={"club_id": club_id, "id": entry_id},
         )
     )
 
@@ -196,19 +197,15 @@ def _complete_division_match(
     }
 
     update_resp = sb_retry(
-        lambda: (
-            supabase.table("division_matches")
-            .update(
-                {
-                    "winner_team_id": winner_team_id,
-                    "score_json": score_json,
-                    "status": "completed",
-                }
-            )
-            .eq("club_id", club_id)
-            .eq("id", match_id)
-            .eq("status", latest_row.get("status"))
-            .execute()
+        lambda: sb_update(
+            supabase,
+            "division_matches",
+            {
+                "winner_team_id": winner_team_id,
+                "score_json": score_json,
+                "status": "completed",
+            },
+            filters={"club_id": club_id, "id": match_id, "status": latest_row.get("status")},
         )
     )
 

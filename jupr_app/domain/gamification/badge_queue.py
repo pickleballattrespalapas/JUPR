@@ -6,6 +6,8 @@ from typing import Any, Iterable
 
 from postgrest.exceptions import APIError
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 
 BADGE_QUEUE_TABLE = "badge_eval_queue"
 _MISSING_TABLE_CODES = {"PGRST205", "42P01"}
@@ -36,11 +38,10 @@ def enqueue_badge_eval(
         "status": "pending",
     }
     try:
-        table = supabase.table(BADGE_QUEUE_TABLE)
         if match_id:
-            table.upsert(row, on_conflict="event_type,match_id").execute()
+            sb_upsert(supabase, BADGE_QUEUE_TABLE, row, conflict="event_type,match_id")
         else:
-            table.insert(row).execute()
+            sb_insert(supabase, BADGE_QUEUE_TABLE, row)
     except APIError as exc:
         code = _get_api_error_code(exc)
         message = _get_api_error_message(exc)
@@ -81,9 +82,12 @@ def dequeue_badge_eval(supabase: Any) -> dict[str, Any] | None:
             return None
         job = rows[0]
         attempts = int(job.get("attempts") or 0) + 1
-        supabase.table(BADGE_QUEUE_TABLE).update(
-            {"status": "processing", "attempts": attempts}
-        ).eq("id", job.get("id")).execute()
+        sb_update(
+            supabase,
+            BADGE_QUEUE_TABLE,
+            {"status": "processing", "attempts": attempts},
+            filters={"id": job.get("id")},
+        )
         job["attempts"] = attempts
         job["status"] = "processing"
         return job
@@ -117,7 +121,7 @@ def ack_badge_eval(
     }
     if error:
         payload["last_error"] = error
-    supabase.table(BADGE_QUEUE_TABLE).update(payload).eq("id", job_id).execute()
+    sb_update(supabase, BADGE_QUEUE_TABLE, payload, filters={"id": job_id})
 
 
 def _get_api_error_code(exc: APIError) -> str | None:

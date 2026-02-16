@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 # DEPRECATED: do not use; the badge engine/registry is the single source of truth.
 
 from dataclasses import dataclass
@@ -166,7 +168,7 @@ def _seed_badges(supabase) -> None:
         for b in BADGE_DEFINITIONS
     ]
     try:
-        supabase.table("badges").upsert(payload, on_conflict="badge_id").execute()
+        sb_upsert(supabase, "badges", payload, conflict="badge_id")
         _backfill_copy_pack_badges(
             supabase,
             force_backfill=force_backfill,
@@ -219,10 +221,12 @@ def _insert_badges(supabase, club_id: str, awards: list[BadgeAward]) -> None:
 
     chunk = 200
     for i in range(0, len(rows), chunk):
-        supabase.table("player_badges").upsert(
+        sb_upsert(
+            supabase,
+            "player_badges",
             rows[i : i + chunk],
-            on_conflict="club_id,player_id,badge_id,context_id",
-        ).execute()
+            conflict="club_id,player_id,badge_id,context_id",
+        )
 
 
 def _award_first_win(facts: pd.DataFrame, add_badge, now: datetime) -> None:
@@ -818,7 +822,7 @@ def _backfill_copy_pack_badges(
         if not force_backfill and existing and (existing.get("lore") or existing.get("hint")):
             continue
         try:
-            supabase.table("badges").update({"lore": lore, "hint": hint}).eq("badge_id", badge_id).execute()
+            sb_update(supabase, "badges", {"lore": lore, "hint": hint}, filters={"badge_id": badge_id})
         except Exception:
             logger.exception("Failed to backfill badge copy", extra={"badge_id": badge_id})
 

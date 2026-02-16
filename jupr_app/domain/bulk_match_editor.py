@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 
@@ -60,14 +62,16 @@ def _safe_insert_audit_event(
       admin_audit_events(created_at timestamptz default now(), club_id text, actor text, action_type text, payload_json jsonb)
     """
     try:
-        supabase.table("admin_audit_events").insert(
+        sb_insert(
+            supabase,
+            "admin_audit_events",
             {
                 "club_id": payload.get("club_id"),
                 "actor": payload.get("actor"),
                 "action_type": payload.get("action_type", "bulk_match_edit"),
                 "payload_json": payload,
-            }
-        ).execute()
+            },
+        )
     except Exception:
         # Intentionally swallow errors (table may not exist in some deployments)
         return
@@ -217,7 +221,7 @@ def apply_bulk_match_edits(
             a_snap[k] = newv
 
         # Apply update
-        supabase.table("matches").update(update).eq("club_id", club_id).eq("id", mid).execute()
+        sb_update(supabase, "matches", update, filters={"club_id": club_id, "id": mid})
 
         updated_ids.append(mid)
         applied.append({"id": mid, **update})

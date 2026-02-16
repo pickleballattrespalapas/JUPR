@@ -12,6 +12,8 @@ Constraints for this initial infrastructure PR:
 
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import os
 from typing import Any, Dict, Literal, Optional
 
@@ -257,7 +259,7 @@ def _league_hook(
                 "is_active": True,
                 "inactive_at": None,
             }
-            supabase.table("league_ratings").update(payload).eq("id", int(existing_row["id"])).eq("club_id", club_id).execute()
+            sb_update(supabase, "league_ratings", payload, filters={"id": int(existing_row["id"]), "club_id": club_id})
             updated_rows += 1
             continue
 
@@ -276,7 +278,7 @@ def _league_hook(
             "is_active": True,
             "inactive_at": None,
         }
-        supabase.table("league_ratings").insert(payload).execute()
+        sb_insert(supabase, "league_ratings", payload)
         updated_rows += 1
 
     return {

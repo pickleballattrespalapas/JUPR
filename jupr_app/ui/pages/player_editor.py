@@ -1,3 +1,4 @@
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 import streamlit as st
 import pandas as pd
 import time
@@ -101,9 +102,12 @@ def render(ctx):
         new_rating = st.number_input("Overall JUPR", 1.0, 7.0, float(row.get("rating", 1200.0) or 1200.0) / 400.0, step=0.01)
         active = st.checkbox("Active", value=bool(row.get("active", True)))
         if st.form_submit_button("Save Player"):
-            supabase.table("players").update(
-                {"name": new_name.strip(), "rating": float(new_rating) * 400.0, "active": bool(active)}
-            ).eq("club_id", club_id).eq("id", pid).execute()
+            sb_update(
+                supabase,
+                "players",
+                {"name": new_name.strip(), "rating": float(new_rating) * 400.0, "active": bool(active)},
+                filters={"club_id": club_id, "id": pid},
+            )
             st.success("Saved. Use Refresh in sidebar if leaderboards still show old values.")
             time.sleep(0.4)
             st.rerun()
@@ -160,7 +164,7 @@ def render(ctx):
                     "is_active": next_active,
                     "inactive_at": None if next_active else (lr_df[lr_df["id"] == rid]["inactive_at"].iloc[0] or now_iso),
                 }
-                supabase.table("league_ratings").update(payload).eq("club_id", club_id).eq("id", rid).execute()
+                sb_update(supabase, "league_ratings", payload, filters={"club_id": club_id, "id": rid})
 
             st.success("Saved league ratings. Refresh cached data if needed.")
             time.sleep(0.4)
@@ -227,10 +231,10 @@ def render(ctx):
     if st.button("🧬 Execute Merge Now", type="primary", disabled=(confirm.strip().upper() != "MERGE")):
         # Update matches
         for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
-            supabase.table("matches").update({col: int(dst_id)}).eq("club_id", club_id).eq(col, int(src_id)).execute()
+            sb_update(supabase, "matches", {col: int(dst_id)}, filters={"club_id": club_id, col: int(src_id)})
 
         # Move league_ratings
-        supabase.table("league_ratings").update({"player_id": int(dst_id)}).eq("club_id", club_id).eq("player_id", int(src_id)).execute()
+        sb_update(supabase, "league_ratings", {"player_id": int(dst_id)}, filters={"club_id": club_id, "player_id": int(src_id)})
 
         # Deactivate source player
         src_p = supabase.table("players").select("name").eq("club_id", club_id).eq("id", int(src_id)).limit(1).execute().data
@@ -238,13 +242,16 @@ def render(ctx):
         src_name = str(src_p[0]["name"]) if src_p else f"#{src_id}"
         dst_name = str(dst_p[0]["name"]) if dst_p else f"#{dst_id}"
         now_iso = datetime.now(timezone.utc).isoformat()
-        supabase.table("players").update(
+        sb_update(
+            supabase,
+            "players",
             {
                 "active": False,
                 "inactive_at": now_iso,
                 "name": f"{src_name} (MERGED into {dst_name} #{dst_id})",
-            }
-        ).eq("club_id", club_id).eq("id", int(src_id)).execute()
+            },
+            filters={"club_id": club_id, "id": int(src_id)},
+        )
 
         st.success("Merge completed. Now run Admin Tools → Replay History → ALL.")
         time.sleep(0.4)

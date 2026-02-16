@@ -5,6 +5,8 @@ from typing import Tuple
 
 from postgrest.exceptions import APIError
 
+from jupr_app.data.sb_write import sb_upsert
+
 
 def safe_add_player(
     *,
@@ -46,12 +48,11 @@ def safe_add_player(
     }
 
     try:
-        resp = (
-            supabase
-            .table("players")
-            .insert(payload)
-            .on_conflict("club_id,normalized_name")
-            .execute()
+        resp = sb_upsert(
+            supabase,
+            "players",
+            payload,
+            conflict="club_id,normalized_name",
         )
 
         if resp.data and len(resp.data) > 0:

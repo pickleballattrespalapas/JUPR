@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from datetime import datetime, timezone
 import time
 from types import SimpleNamespace
@@ -170,7 +172,9 @@ def _increment_fact(
         except Exception:
             current = 0
     new_value = current + int(delta)
-    supabase.table("player_badge_facts").upsert(
+    sb_upsert(
+        supabase,
+        "player_badge_facts",
         {
             "club_id": club_id,
             "player_id": int(player_id),
@@ -179,5 +183,5 @@ def _increment_fact(
             "fact_value_num": new_value,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
-        on_conflict="club_id,player_id,context_id,fact_key",
-    ).execute()
+        conflict="club_id,player_id,context_id,fact_key",
+    )
