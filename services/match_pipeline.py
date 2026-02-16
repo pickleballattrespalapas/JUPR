@@ -127,10 +127,28 @@ def _insert_match_record(
         if existing_rows:
             return dict(existing_rows[0])
 
-    payload: Dict[str, Any] = dict(match_payload)
+    ALLOWED_MATCH_COLUMNS = {
+        "t1_p1", "t1_p2", "t2_p1", "t2_p2",
+        "score_t1", "score_t2",
+        "elo_delta", "elo_delta_t1", "elo_delta_t2",
+        "t1_p1_r", "t1_p1_r_end",
+        "t1_p2_r", "t1_p2_r_end",
+        "t2_p1_r", "t2_p1_r_end",
+        "t2_p2_r", "t2_p2_r_end",
+        "league", "match_type", "week_tag",
+        "tournament_id", "tournament_game_id",
+        "date",
+    }
+
+    payload: Dict[str, Any] = {
+        k: v for k, v in match_payload.items()
+        if k in ALLOWED_MATCH_COLUMNS
+    }
+
     payload["club_id"] = club_id
     payload["context_type"] = context_type
     payload["context_id"] = context_id
+
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
 
