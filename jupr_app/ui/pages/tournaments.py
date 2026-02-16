@@ -49,7 +49,7 @@ def render(ctx):
     with c1:
         tournament_name = st.text_input("Tournament name", key="tourney_create_name")
     with c2:
-        team_count = st.selectbox("Team count", [4, 5, 6, 7, 8], key="tourney_create_team_count")
+        team_count = st.selectbox("Team count", [4, 5, 7, 8], key="tourney_create_team_count")
     with c3:
         if st.button("Create", type="primary"):
             if not tournament_name.strip():
@@ -153,8 +153,8 @@ def render(ctx):
         with c2:
             new_team_count = st.selectbox(
                 "Team count",
-                [4, 5, 6, 7, 8],
-                index=[4, 5, 6, 7, 8].index(team_count_value),
+                [4, 5, 7, 8],
+                index=[4, 5, 7, 8].index(team_count_value),
                 disabled=team_count_locked,
                 key="tourney_team_count_select",
             )
