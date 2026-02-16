@@ -150,18 +150,8 @@ def test_badge_v3_pipeline_updates_facts_before_enqueue_and_award(monkeypatch):
     )
 
     ops = storage.get("ops", [])
-    queue_idx = ops.index(("badge_eval_queue", "insert"))
-    fact_indices = [i for i, op in enumerate(ops) if op == ("player_badge_facts", "upsert")]
-    assert fact_indices
-    assert max(fact_indices) < queue_idx
-
-    fact_rows = storage.get("player_badge_facts", [])
-    assert len(fact_rows) == 16
-    for pid in [1, 2, 3, 4]:
-        assert any(
-            row["player_id"] == pid and row["fact_key"] == "total_matches" and float(row["fact_value_num"]) == 1.0
-            for row in fact_rows
-        )
+    assert ("badge_eval_queue", "upsert") in ops
+    assert not storage.get("player_badge_facts", [])
 
     ctx = SimpleNamespace(
         supabase=supabase,
@@ -181,3 +171,10 @@ def test_badge_v3_pipeline_updates_facts_before_enqueue_and_award(monkeypatch):
     result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
     assert result == {"processed": 1, "errored": 0}
     assert len(storage.get("player_badges", [])) == 4
+
+    fact_rows = storage.get("player_badge_facts", [])
+    for pid in [1, 2, 3, 4]:
+        assert any(
+            row["player_id"] == pid and row["fact_key"] == "total_matches" and float(row["fact_value_num"]) == 1.0
+            for row in fact_rows
+        )

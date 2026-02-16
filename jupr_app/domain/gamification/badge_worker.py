@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_upsert
-
-from datetime import datetime, timezone
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +9,7 @@ import pandas as pd
 from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
+from jupr_app.domain.gamification.fact_engine import update_match_facts_for_players
 from jupr_app.config import USE_BADGE_ENGINE_V3
 from jupr_app.domain.gamification import v3_engine
 
@@ -38,10 +36,20 @@ def process_badge_eval_queue(
             event_type = str(job.get("event_type") or "")
             player_ids = [int(pid) for pid in (job.get("player_ids") or [])]
             context_id = str(job.get("context_id") or "overall")
+            payload_json = dict(job.get("payload_json") or {})
+            if str(job.get("match_id") or ""):
+                payload_json.setdefault("match_id", str(job.get("match_id") or ""))
 
             badge_ids = _badge_ids_for_trigger(context, event_type)
             if badge_ids and player_ids:
-                _update_incremental_facts(supabase, job, player_ids, context_id)
+                if event_type in {"match_recorded", "match_updated"}:
+                    update_match_facts_for_players(
+                        supabase,
+                        club_id=job_club_id,
+                        player_ids=player_ids,
+                        match_payload=payload_json,
+                        context_id=context_id,
+                    )
                 if USE_BADGE_ENGINE_V3:
                     v3_badge_ids = _v3_badge_ids_with_conditions(supabase, badge_ids)
                     for pid in player_ids:
@@ -156,59 +164,3 @@ def _v3_badge_ids_with_conditions(supabase: Any, badge_ids: set[str]) -> set[str
         if row.get("badge_id")
     }
 
-
-def _update_incremental_facts(
-    supabase: Any,
-    job: dict[str, Any],
-    player_ids: list[int],
-    context_id: str,
-) -> None:
-    if supabase is None:
-        return
-    event_type = str(job.get("event_type") or "")
-    if event_type not in {"match_recorded", "match_updated"}:
-        return
-    for pid in player_ids:
-        _increment_fact(supabase, job, pid, context_id, "matches_seen", 1)
-
-
-def _increment_fact(
-    supabase: Any,
-    job: dict[str, Any],
-    player_id: int,
-    context_id: str,
-    fact_key: str,
-    delta: int,
-) -> None:
-    club_id = str(job.get("club_id") or "")
-    resp = (
-        supabase.table("player_badge_facts")
-        .select("fact_value_num")
-        .eq("club_id", club_id)
-        .eq("player_id", int(player_id))
-        .eq("context_id", context_id)
-        .eq("fact_key", fact_key)
-        .limit(1)
-        .execute()
-    )
-    rows = resp.data or []
-    current = 0
-    if rows:
-        try:
-            current = int(rows[0].get("fact_value_num") or 0)
-        except Exception:
-            current = 0
-    new_value = current + int(delta)
-    sb_upsert(
-        supabase,
-        "player_badge_facts",
-        {
-            "club_id": club_id,
-            "player_id": int(player_id),
-            "context_id": context_id,
-            "fact_key": fact_key,
-            "fact_value_num": new_value,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-        conflict="club_id,player_id,context_id,fact_key",
-    )

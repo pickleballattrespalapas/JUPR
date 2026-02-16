@@ -16,7 +16,6 @@ from jupr_app.domain.player_activity import (
     max_activity_time,
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
-from jupr_app.domain.gamification.fact_pipeline import update_player_badge_facts_for_match_commit
 from services.match_pipeline import submit_match
 
 
@@ -54,7 +53,6 @@ def process_matches(
     island_updates: dict[tuple[int, str], dict[str, Any]] = {}  # (pid, league) -> {"r","start","w","l","mp"}
     last_game_updates: dict[int, datetime] = {}
     affected_players: set[int] = set()
-    match_payloads: list[dict[str, Any]] = []
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -316,11 +314,11 @@ def process_matches(
                 "tournament_game_id": m.get("tournament_game_id"),
             }
         )
-        match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})
 
     # -------------------------
     # Write match rows
     # -------------------------
+    queued_badge_events: list[dict[str, Any]] = []
     if db_matches:
         CHUNK_M = 300
         for i in range(0, len(db_matches), CHUNK_M):
@@ -340,6 +338,24 @@ def process_matches(
                         run_context_hooks=False,
                     )
                 )
+                queued_badge_events.append({
+                    "context_id": str(context_id or "overall"),
+                    "match_id": str(idempotency_key),
+                    "player_ids": [int(match_row["t1_p1"]), int(match_row["t1_p2"]), int(match_row["t2_p1"]), int(match_row["t2_p2"])],
+                    "payload": {
+                        "match_id": str(idempotency_key),
+                        "score_t1": int(match_row["score_t1"]),
+                        "score_t2": int(match_row["score_t2"]),
+                        "t1_p1": int(match_row["t1_p1"]),
+                        "t1_p2": int(match_row["t1_p2"]),
+                        "t2_p1": int(match_row["t2_p1"]),
+                        "t2_p2": int(match_row["t2_p2"]),
+                        "t1_p1_r": float(match_row["t1_p1_r"]),
+                        "t1_p2_r": float(match_row["t1_p2_r"]),
+                        "t2_p1_r": float(match_row["t2_p1_r"]),
+                        "t2_p2_r": float(match_row["t2_p2_r"]),
+                    },
+                })
 
     # -------------------------
     # Update overall player rows
@@ -401,22 +417,19 @@ def process_matches(
             ))
 
     # -------------------------
-    # Update V3 badge facts before enqueue
+    # Enqueue per-match badge jobs (facts are updated in badge_worker)
     # -------------------------
-    if supabase is not None and db_matches and has_non_popup_match:
-        update_player_badge_facts_for_match_commit(
-            supabase,
-            club_id=str(club_id),
-            overall_updates=overall_updates,
-        )
-
-        enqueue_badge_eval(
-            supabase,
-            club_id=str(club_id),
-            event_type="match_recorded",
-            player_ids=sorted(affected_players),
-            payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
-        )
+    if supabase is not None and queued_badge_events and has_non_popup_match:
+        for event in queued_badge_events:
+            enqueue_badge_eval(
+                supabase,
+                club_id=str(club_id),
+                event_type="match_recorded",
+                player_ids=event["player_ids"],
+                context_id=event["context_id"],
+                match_id=event["match_id"],
+                payload=event["payload"],
+            )
 
     return {
         "inserted": len(db_matches),
