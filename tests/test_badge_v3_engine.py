@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
+import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.v3_engine import evaluate_badges_v3
 
@@ -129,10 +130,15 @@ def test_evaluate_badges_v3_awards_and_locks_badge():
     assert storage["badges"][0]["is_locked"] is True
 
 
-def test_worker_dispatches_to_v3_when_flag_enabled(monkeypatch):
+def test_worker_uses_v3_for_new_badges_and_v2_for_legacy(monkeypatch):
     storage = {
-        "badges": [{"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False}],
-        "badge_rule_conditions": [],
+        "badges": [
+            {"badge_id": "grinder", "status": "published", "award_count": 0, "is_locked": False},
+            {"badge_id": "legacy", "status": None, "award_count": 0, "is_locked": False},
+        ],
+        "badge_rule_conditions": [
+            {"badge_id": "grinder", "fact_key": "matches_seen", "operator": ">=", "value_numeric": 1},
+        ],
         "player_badge_facts": [],
         "player_badges": [],
     }
@@ -148,27 +154,52 @@ def test_worker_dispatches_to_v3_when_flag_enabled(monkeypatch):
     ctx = SimpleNamespace(
         supabase=supabase,
         club_id="club",
-        df_badges=SimpleNamespace(empty=True),
+        df_badges=pd.DataFrame(
+            [
+                {"badge_id": "grinder", "eval_triggers": ["match_recorded", "match_updated"]},
+                {"badge_id": "legacy", "eval_triggers": ["match_recorded", "match_updated"]},
+            ]
+        ),
         df_matches=None,
         df_players_all=None,
         df_leagues=None,
         df_meta=None,
     )
 
-    calls: list[int] = []
+    v3_calls: list[tuple[int, set[str]]] = []
 
-    def _fake_v3(player_id, _context):
-        calls.append(int(player_id))
+    def _fake_v3(player_id, _context, *, allowed_badge_ids=None):
+        v3_calls.append((int(player_id), set(allowed_badge_ids or set())))
         return []
 
     monkeypatch.setattr("jupr_app.domain.gamification.v3_engine.USE_BADGE_ENGINE_V3", True)
     monkeypatch.setattr("jupr_app.domain.gamification.v3_engine.evaluate_badges_v3", _fake_v3)
-    monkeypatch.setattr(
-        "jupr_app.domain.gamification.badge_worker.compute_candidates_for_player",
-        lambda *_args, **_kwargs: pytest.fail("v2 evaluator should not run when v3 flag is enabled"),
-    )
+
+    def _fake_candidates(*_args, **_kwargs):
+        return [
+            BadgeCandidate(
+                badge_id="legacy",
+                player_id=7,
+                club_id="club",
+                context_type="overall",
+                context_id="overall",
+                match_id=None,
+            ),
+            BadgeCandidate(
+                badge_id="grinder",
+                player_id=7,
+                club_id="club",
+                context_type="overall",
+                context_id="overall",
+                match_id=None,
+            ),
+        ]
+
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.compute_candidates_for_player", _fake_candidates)
 
     result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
 
     assert result["processed"] == 1
-    assert calls == [7]
+    assert v3_calls == [(7, {"grinder"})]
+    assert len(storage["player_badges"]) == 1
+    assert storage["player_badges"][0]["badge_id"] == "legacy"

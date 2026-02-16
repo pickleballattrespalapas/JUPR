@@ -43,18 +43,23 @@ def process_badge_eval_queue(
             badge_ids = _badge_ids_for_trigger(context, event_type)
             if badge_ids and player_ids:
                 _update_incremental_facts(supabase, job, player_ids, context_id)
+                v3_badge_ids: set[str] = set()
                 if v3_engine.USE_BADGE_ENGINE_V3:
+                    v3_badge_ids = _v3_badge_ids_with_conditions(supabase, badge_ids)
                     for pid in player_ids:
                         v3_context = _context_with_context_id(context, context_id)
-                        v3_engine.evaluate_badges_v3(pid, v3_context)
-                else:
+                        if v3_badge_ids:
+                            v3_engine.evaluate_badges_v3(pid, v3_context, allowed_badge_ids=v3_badge_ids)
+
+                v2_badge_ids = badge_ids - v3_badge_ids
+                if v2_badge_ids:
                     candidates = []
                     for pid in player_ids:
                         candidates.extend(
                             [
                                 c
                                 for c in compute_candidates_for_player(job_club_id, pid, ctx=context)
-                                if str(c.badge_id) in badge_ids
+                                if str(c.badge_id) in v2_badge_ids
                             ]
                         )
                     if candidates:
@@ -140,6 +145,34 @@ def _normalize_triggers(value: Any) -> list[str]:
     if isinstance(value, str):
         return [str(value)]
     return ["match_recorded", "match_updated"]
+
+
+def _v3_badge_ids_with_conditions(supabase: Any, badge_ids: set[str]) -> set[str]:
+    if supabase is None or not badge_ids:
+        return set()
+
+    badge_rows = supabase.table("badges").select("badge_id,status").in_("badge_id", list(badge_ids)).execute().data or []
+    eligible_status_badges = {
+        str(row.get("badge_id") or "")
+        for row in badge_rows
+        if row.get("badge_id") and row.get("status") is not None
+    }
+    if not eligible_status_badges:
+        return set()
+
+    condition_rows = (
+        supabase.table("badge_rule_conditions")
+        .select("badge_id")
+        .in_("badge_id", list(eligible_status_badges))
+        .execute()
+        .data
+        or []
+    )
+    return {
+        str(row.get("badge_id") or "")
+        for row in condition_rows
+        if row.get("badge_id")
+    }
 
 
 def _update_incremental_facts(

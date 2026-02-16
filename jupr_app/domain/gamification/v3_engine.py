@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-USE_BADGE_ENGINE_V3 = False
+USE_BADGE_ENGINE_V3 = True
 
 _NUMERIC_OPERATORS = {
     ">": lambda left, right: left > right,
@@ -17,7 +17,7 @@ _NUMERIC_OPERATORS = {
 }
 
 
-def evaluate_badges_v3(player_id: int, context: Any) -> list[str]:
+def evaluate_badges_v3(player_id: int, context: Any, *, allowed_badge_ids: set[str] | None = None) -> list[str]:
     """Evaluate published V3 badges for a single player and award matches."""
     supabase = getattr(context, "supabase", None)
     club_id = str(getattr(context, "club_id", "") or "")
@@ -27,6 +27,9 @@ def evaluate_badges_v3(player_id: int, context: Any) -> list[str]:
 
     badges_resp = supabase.table("badges").select("badge_id,award_count,status,is_locked").eq("status", "published").execute()
     badges = badges_resp.data or []
+    if allowed_badge_ids is not None:
+        allowed = {str(badge_id) for badge_id in allowed_badge_ids}
+        badges = [row for row in badges if str(row.get("badge_id") or "") in allowed]
     if not badges:
         return []
 
