@@ -10,6 +10,7 @@ from postgrest.exceptions import APIError
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
+from jupr_app.domain.gamification.fact_replay import rebuild_facts_from_history
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.layout import page_shell
@@ -133,6 +134,32 @@ def render(ctx):
         time.sleep(0.6)
         st.rerun()
 
+
+    st.divider()
+
+    # -------------------------
+    # Historical Fact Replay
+    # -------------------------
+    st.subheader("🧱 Historical Fact Replay")
+    st.caption("Rebuild player badge facts from full match history in ascending date order.")
+    if st.button("Rebuild Badge Facts from History", key="badge_fact_replay"):
+        with st.spinner("Rebuilding badge facts from history..."):
+            try:
+                replay_summary = rebuild_facts_from_history(supabase, club_id=club_id)
+            except Exception as exc:  # noqa: BLE001 - UI should not crash
+                st.error("Failed to rebuild badge facts from history.")
+                st.exception(exc)
+            else:
+                st.success("Historical fact replay completed.")
+                st.info(
+                    " · ".join(
+                        [
+                            f"Matches seen: {replay_summary['matches_seen']}",
+                            f"Matches processed: {replay_summary['matches_processed']}",
+                            f"Players touched: {replay_summary['players_touched']}",
+                        ]
+                    )
+                )
 
     st.divider()
 
