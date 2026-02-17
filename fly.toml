@@ -15,7 +15,7 @@ primary_region = 'iad'
   # Staging should mirror production runtime behavior.
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   processes = ['app']
 
 [[vm]]
