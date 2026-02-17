@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any
+from jupr_app.data.supabase_admin import get_service_supabase
 from jupr_app.domain.match_processing import process_matches
 
 
@@ -24,8 +25,10 @@ def sync_tournament_game_to_match(
     if not game_id:
         return
 
+    supabase_admin = get_service_supabase()
+
     # Delete existing canonical match
-    supabase.table("matches") \
+    supabase_admin.table("matches") \
         .delete() \
         .eq("tournament_game_id", game_id) \
         .execute()
@@ -33,7 +36,7 @@ def sync_tournament_game_to_match(
     # Insert fresh canonical match
     process_matches(
         [match_payload],
-        supabase=supabase,
+        supabase_admin=supabase_admin,
         club_id=str(club_id),
         name_to_id=name_to_id,
         df_players_all=df_players_all,

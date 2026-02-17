@@ -22,7 +22,8 @@ from services.match_pipeline import submit_match
 def process_matches(
     match_list: list[dict[str, Any]],
     *,
-    supabase,
+    supabase_admin=None,
+    supabase=None,
     club_id: str,
     name_to_id: dict[str, int],
     df_players_all,
@@ -42,6 +43,12 @@ def process_matches(
       - s1/s2 (preferred; used by live ladder + uploader)
       - score_t1/score_t2 (legacy)
     """
+
+    if supabase_admin is None:
+        supabase_admin = supabase
+
+    if not hasattr(supabase_admin, "postgrest"):
+        raise RuntimeError("process_matches requires service_role Supabase client")
 
     # Default retry wrapper: just run the callable
     if sb_retry is None:
@@ -370,10 +377,10 @@ def process_matches(
         }
         if activity_update:
             payload.update(activity_update)
-        res = sb_update(supabase, "players", payload, filters={"club_id": club_id, "id": pid})
+        res = sb_update(supabase_admin, "players", payload, filters={"club_id": club_id, "id": pid})
         if not res.data:
             payload_ins = {"club_id": club_id, "id": pid, **payload}
-            sb_insert(supabase, "players", payload_ins)
+            sb_insert(supabase_admin, "players", payload_ins)
 
     for pid, stats in overall_updates.items():
         row = {
@@ -410,7 +417,7 @@ def process_matches(
             }
 
             sb_retry(lambda payload=payload: sb_upsert(
-                supabase,
+                supabase_admin,
                 "league_ratings",
                 payload,
                 conflict="club_id,player_id,league_name",
@@ -419,10 +426,10 @@ def process_matches(
     # -------------------------
     # Enqueue per-match badge jobs (facts are updated in badge_worker)
     # -------------------------
-    if supabase is not None and queued_badge_events and has_non_popup_match:
+    if supabase_admin is not None and queued_badge_events and has_non_popup_match:
         for event in queued_badge_events:
             enqueue_badge_eval(
-                supabase,
+                supabase_admin,
                 club_id=str(club_id),
                 event_type="match_recorded",
                 player_ids=event["player_ids"],
