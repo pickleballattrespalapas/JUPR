@@ -169,6 +169,33 @@ def test_resolve_series_results_best_of_three():
     ]
 
 
+def test_best_of_three_series_winner():
+    games = [
+        {
+            "id": "g1",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "winner_team_id": "t1",
+        },
+        {
+            "id": "g2",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "winner_team_id": "t1",
+        },
+        {
+            "id": "g3",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "winner_team_id": None,
+        },
+    ]
+
+    updates = resolve_series_results(games)
+
+    assert len(updates) > 0
+
+
 def test_resolve_playoff_dependencies():
     games = [
         {
