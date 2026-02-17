@@ -41,6 +41,7 @@ def get_secret(path: list[str], default=""):
     except Exception:
         return default
 
+st.write("DEBUG ENV PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
 
 def _get_admin_password() -> str:
     return (
