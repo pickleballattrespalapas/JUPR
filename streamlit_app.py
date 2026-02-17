@@ -274,6 +274,8 @@ def main():
             schema_degraded,
             schema_degraded_reason,
         ) = get_data(CLUB_ID)
+        test_clubs = supabase.table("clubs").select("*").execute()
+        st.write("CLUBS RAW:", test_clubs.data)
 
         ctx = AppContext(
             supabase=supabase,
