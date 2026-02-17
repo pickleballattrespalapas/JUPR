@@ -17,18 +17,6 @@ jobs:
         with:
           version: latest
 
-      - name: Set Fly secrets (staging)
-        run: |
-          flyctl secrets set \
-            PUBLIC_BASE_URL="${{ secrets.PUBLIC_BASE_URL }}" \
-            SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
-            SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}" \
-            SUPABASE_SERVICE_ROLE_KEY="${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            SUPABASE_ADMIN_PASSWORD="${{ secrets.SUPABASE_ADMIN_PASSWORD }}" \
-            SUPABASE_ADMIN_SESSION_SECRET="${{ secrets.SUPABASE_ADMIN_SESSION_SECRET }}" \
-            --app jupr-staging
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy to Fly.io (staging)
         run: flyctl deploy --remote-only --app jupr-staging
