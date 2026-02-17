@@ -277,6 +277,11 @@ def main():
         test_clubs = supabase.table("clubs").select("*").execute()
         st.write("CLUBS RAW:", test_clubs.data)
 
+        # 🔎 DEBUG BLOCK — add this
+        st.write("PLAYERS ALL COUNT:", len(df_players_all) if df_players_all is not None else "None")
+        st.write("MATCHES COUNT:", len(df_matches) if df_matches is not None else "None")
+        st.write("LEAGUES COUNT:", len(df_leagues) if df_leagues is not None else "None")
+        
         ctx = AppContext(
             supabase=supabase,
             club_id=CLUB_ID,
