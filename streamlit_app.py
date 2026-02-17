@@ -45,6 +45,7 @@ st.write("DEBUG SUPABASE_URL:", os.getenv("SUPABASE_URL"))
 st.write("DEBUG ENV PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
 st.write("ENV CHECK PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
 st.write("ENV CHECK SESSION:", os.getenv("SUPABASE_ADMIN_SESSION_SECRET"))
+st.write("ALL ENV:", {k: os.environ[k] for k in os.environ if "SUPABASE" in k})
 
 
 def _get_admin_password() -> str:
