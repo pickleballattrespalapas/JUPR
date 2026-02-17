@@ -22,15 +22,20 @@ LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
 def _get_admin_password() -> str:
-    import os
-
-    return os.environ.get("SUPABASE_ADMIN_PASSWORD", "")
+    return (
+        os.getenv("SUPABASE_ADMIN_PASSWORD")
+        or st.secrets.get("supabase", {}).get("admin_password", "")
+        or ""
+    )
 
 
 def _get_session_secret() -> str:
-    import os
-
-    return os.environ.get("SUPABASE_ADMIN_SESSION_SECRET", "")
+    return (
+        os.getenv("SUPABASE_ADMIN_SESSION_SECRET")
+        or st.secrets.get("supabase", {}).get("admin_session_secret", "")
+        or st.secrets.get("admin_session_secret", "")
+        or ""
+    )
 
 
 def _sign(exp: int, secret: str) -> str:
