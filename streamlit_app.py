@@ -21,19 +21,40 @@ ADMIN_SESSION_TTL_SECONDS = 60 * 60
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
+
+
+def get_secret(path: list[str], default=""):
+    try:
+        cur = st.secrets
+    except Exception:
+        return default
+
+    try:
+        for key in path:
+            if cur is None:
+                return default
+            if hasattr(cur, "get"):
+                cur = cur.get(key)
+            else:
+                return default
+        return cur if cur is not None else default
+    except Exception:
+        return default
+
+
 def _get_admin_password() -> str:
     return (
         os.getenv("SUPABASE_ADMIN_PASSWORD")
-        or st.secrets.get("supabase", {}).get("admin_password", "")
+        or get_secret(["supabase", "admin_password"], "")
         or ""
     )
 
 
-def _get_session_secret() -> str:
+def _get_admin_session_secret() -> str:
     return (
         os.getenv("SUPABASE_ADMIN_SESSION_SECRET")
-        or st.secrets.get("supabase", {}).get("admin_session_secret", "")
-        or st.secrets.get("admin_session_secret", "")
+        or get_secret(["supabase", "admin_session_secret"], "")
+        or get_secret(["admin_session_secret"], "")
         or ""
     )
 
@@ -44,7 +65,7 @@ def _sign(exp: int, secret: str) -> str:
 
 
 def _create_admin_session():
-    secret = _get_session_secret()
+    secret = _get_admin_session_secret()
     if not secret:
         st.error("SUPABASE_ADMIN_SESSION_SECRET missing.")
         st.stop()
@@ -63,7 +84,7 @@ def _clear_admin_session():
 
 
 def _validate_admin_session() -> bool:
-    secret = _get_session_secret()
+    secret = _get_admin_session_secret()
     if not secret:
         return False
 
@@ -238,7 +259,11 @@ def main():
                     pwd = st.text_input("Password", type="password")
 
                     if st.button("Login"):
-                        expected = _get_admin_password()
+                        expected = (
+                            os.getenv("SUPABASE_ADMIN_PASSWORD")
+                            or get_secret(["supabase", "admin_password"], "")
+                            or ""
+                        )
                         if not expected:
                             st.error("Admin password not configured.")
                         elif pwd != expected:
