@@ -40,6 +40,7 @@ def get_secret(path: list[str], default=""):
         return cur if cur is not None else default
     except Exception:
         return default
+st.write("DEBUG SUPABASE_URL:", os.getenv("SUPABASE_URL"))
 
 st.write("DEBUG ENV PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
 st.write("ENV CHECK PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
