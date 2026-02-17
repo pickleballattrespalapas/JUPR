@@ -521,6 +521,7 @@ def build_playoff_games(
     tournament_id: str,
     advance_count: int,
     standings: list[dict[str, Any]],
+    best_of: int = 1,
 ) -> list[dict[str, Any]]:
     template = PLAYOFF_TEMPLATES.get(int(advance_count))
     if not template:
@@ -529,25 +530,65 @@ def build_playoff_games(
     seed_map = {int(row["seed"]): row["team_id"] for row in standings}
     games: list[dict[str, Any]] = []
 
-    for game in template["games"]:
-        team_a_source = game["teamA"]
-        team_b_source = game["teamB"]
+    for template_game in template["games"]:
+        team_a_source = template_game["teamA"]
+        team_b_source = template_game["teamB"]
         team_a_id = seed_map.get(int(team_a_source["seed"])) if "seed" in team_a_source else None
         team_b_id = seed_map.get(int(team_b_source["seed"])) if "seed" in team_b_source else None
-        games.append(
-            {
-                "tournament_id": tournament_id,
-                "stage": "PLAYOFF",
-                "playoff_game_code": game["id"],
-                "playoff_round": game["round"],
-                "team_a_id": team_a_id,
-                "team_b_id": team_b_id,
-                "team_a_source": team_a_source,
-                "team_b_source": team_b_source,
-            }
-        )
+        for series_game in range(1, best_of + 1):
+            games.append(
+                {
+                    "tournament_id": tournament_id,
+                    "stage": "PLAYOFF",
+                    "playoff_game_code": template_game["id"],
+                    "series_game_number": series_game,
+                    "playoff_round": template_game["round"],
+                    "team_a_id": team_a_id,
+                    "team_b_id": team_b_id,
+                    "team_a_source": team_a_source,
+                    "team_b_source": team_b_source,
+                }
+            )
 
     return games
+
+
+def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Determines winner_team_id for a playoff series based on best-of logic.
+    Does NOT overwrite individual game winners.
+    """
+
+    updates = []
+    grouped: dict[str, list[dict]] = {}
+
+    for g in games:
+        if g.get("stage") != "PLAYOFF":
+            continue
+        grouped.setdefault(g.get("playoff_game_code"), []).append(g)
+
+    for code, series_games in grouped.items():
+        wins: dict[str, int] = {}
+        for g in series_games:
+            winner = g.get("winner_team_id")
+            if winner:
+                wins[winner] = wins.get(winner, 0) + 1
+
+        if not wins:
+            continue
+
+        # best-of-3 means first to 2
+        max_wins = max(wins.values())
+        winner_team = [k for k, v in wins.items() if v == max_wins][0]
+
+        required = 2 if len(series_games) >= 3 else 1
+        if max_wins >= required:
+            for g in series_games:
+                if g.get("winner_team_id") != winner_team:
+                    continue
+                updates.append({"id": g["id"], "series_winner_team_id": winner_team})
+
+    return updates
 
 
 def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, Any]]:

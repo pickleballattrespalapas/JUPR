@@ -1,9 +1,11 @@
 import pytest
 
 from jupr_app.domain.tournaments import (
+    build_playoff_games,
     build_round_robin_games,
     compute_podium_from_rr,
     compute_round_robin_standings,
+    resolve_series_results,
     resolve_playoff_dependencies,
     validate_podium_placements,
 )
@@ -117,6 +119,54 @@ def test_validate_podium_rejects_duplicate_teams():
 
     with pytest.raises(ValueError):
         validate_podium_placements(placements)
+
+
+def test_build_playoff_games_best_of_series():
+    standings = [
+        {"seed": 1, "team_id": "t1"},
+        {"seed": 2, "team_id": "t2"},
+        {"seed": 3, "team_id": "t3"},
+        {"seed": 4, "team_id": "t4"},
+    ]
+
+    games = build_playoff_games(
+        tournament_id="tour1",
+        advance_count=4,
+        standings=standings,
+        best_of=3,
+    )
+
+    p1_games = [g for g in games if g["playoff_game_code"] == "P1"]
+    p2_games = [g for g in games if g["playoff_game_code"] == "P2"]
+    p3_games = [g for g in games if g["playoff_game_code"] == "P3"]
+    p4_games = [g for g in games if g["playoff_game_code"] == "P4"]
+
+    assert len(games) == 12
+    assert [g["series_game_number"] for g in p1_games] == [1, 2, 3]
+    assert [g["series_game_number"] for g in p2_games] == [1, 2, 3]
+    assert [g["series_game_number"] for g in p3_games] == [1, 2, 3]
+    assert [g["series_game_number"] for g in p4_games] == [1, 2, 3]
+    assert {g["team_a_id"] for g in p1_games} == {"t1"}
+    assert {g["team_b_id"] for g in p1_games} == {"t4"}
+
+
+def test_resolve_series_results_best_of_three():
+    games = [
+        {"id": "g1", "stage": "PLAYOFF", "playoff_game_code": "P1", "winner_team_id": "t1"},
+        {"id": "g2", "stage": "PLAYOFF", "playoff_game_code": "P1", "winner_team_id": "t1"},
+        {"id": "g3", "stage": "PLAYOFF", "playoff_game_code": "P1", "winner_team_id": "t2"},
+        {"id": "g4", "stage": "PLAYOFF", "playoff_game_code": "P2", "winner_team_id": "t3"},
+        {"id": "g5", "stage": "PLAYOFF", "playoff_game_code": "P2", "winner_team_id": None},
+        {"id": "g6", "stage": "ROUND_ROBIN", "playoff_game_code": "P3", "winner_team_id": "t9"},
+    ]
+
+    updates = resolve_series_results(games)
+
+    assert updates == [
+        {"id": "g1", "series_winner_team_id": "t1"},
+        {"id": "g2", "series_winner_team_id": "t1"},
+        {"id": "g4", "series_winner_team_id": "t3"},
+    ]
 
 
 def test_resolve_playoff_dependencies():
