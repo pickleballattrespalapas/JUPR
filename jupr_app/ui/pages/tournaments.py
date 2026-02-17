@@ -4,6 +4,7 @@ from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import defaultdict
 
 import pandas as pd
 import streamlit as st
@@ -17,6 +18,7 @@ from jupr_app.domain.tournaments import (
     compute_podium_from_rr,
     compute_round_robin_standings,
     finalize_game,
+    resolve_series_results,
     resolve_playoff_dependencies,
 )
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
@@ -337,6 +339,20 @@ def render(ctx):
             st.success("Advance count saved.")
             st.rerun()
 
+        best_of = st.selectbox(
+            "Playoff Format",
+            options=[1, 3],
+            format_func=lambda x: "1 Game" if x == 1 else "Best 2 of 3",
+            index=0 if tournament.get("playoff_best_of", 1) == 1 else 1,
+            key="playoff_best_of_select",
+            disabled=is_complete,
+        )
+
+        if st.button("Save format", disabled=is_complete):
+            supabase.table("tournaments").update({"playoff_best_of": int(best_of)}).eq("id", tournament_id).execute()
+            st.success("Playoff format saved.")
+            st.rerun()
+
         if not playoff_games:
             st.info("No playoff bracket generated yet.")
         if st.button("Generate Playoff Bracket", disabled=bool(playoff_games) or is_complete):
@@ -350,6 +366,7 @@ def render(ctx):
                 tournament_id=tournament_id,
                 advance_count=int(selected_advance),
                 standings=standings,
+                best_of=int(tournament.get("playoff_best_of", 1)),
             )
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(
@@ -434,30 +451,37 @@ def _render_playoff_bracket(*, games, teams_by_id, id_to_name, on_save, disabled
         if not round_games:
             continue
         st.markdown(f"#### {round_name}")
+
+        series_groups = defaultdict(list)
+        for game in round_games:
+            series_groups[game.get("playoff_game_code")].append(game)
+
         with st.form(key=f"playoff_{round_name}"):
-            for game in round_games:
-                team_a = teams_by_id.get(game.get("team_a_id"), {})
-                team_b = teams_by_id.get(game.get("team_b_id"), {})
-                label_a = _team_label(team_a, id_to_name)
-                label_b = _team_label(team_b, id_to_name)
-                col1, col2, col3, col4 = st.columns([4, 1, 1, 2])
-                col1.write(f"{game.get('playoff_game_code')}: {label_a} vs {label_b}")
-                col2.number_input(
-                    "Score A",
-                    min_value=0,
-                    value=int(game.get("score_a") or 0),
-                    key=f"playoff_a_{game['id']}",
-                    disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
-                )
-                col3.number_input(
-                    "Score B",
-                    min_value=0,
-                    value=int(game.get("score_b") or 0),
-                    key=f"playoff_b_{game['id']}",
-                    disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
-                )
-                status = "Final" if game.get("finalized_at") else "Open"
-                col4.caption(status)
+            for series_code, series_games in series_groups.items():
+                st.markdown(f"### {series_code}")
+                for game in sorted(series_games, key=lambda x: x.get("series_game_number") or 1):
+                    team_a = teams_by_id.get(game.get("team_a_id"), {})
+                    team_b = teams_by_id.get(game.get("team_b_id"), {})
+                    label_a = _team_label(team_a, id_to_name)
+                    label_b = _team_label(team_b, id_to_name)
+                    col1, col2, col3, col4 = st.columns([4, 1, 1, 2])
+                    col1.write(f"{game.get('playoff_game_code')}: {label_a} vs {label_b}")
+                    col2.number_input(
+                        "Score A",
+                        min_value=0,
+                        value=int(game.get("score_a") or 0),
+                        key=f"playoff_a_{game['id']}",
+                        disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
+                    )
+                    col3.number_input(
+                        "Score B",
+                        min_value=0,
+                        value=int(game.get("score_b") or 0),
+                        key=f"playoff_b_{game['id']}",
+                        disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
+                    )
+                    status = "Final" if game.get("finalized_at") else "Open"
+                    col4.caption(status)
 
             if st.form_submit_button("Save scores", disabled=disabled):
                 on_save({g["id"]: g for g in round_games})
@@ -687,6 +711,33 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
         updated_any = True
 
     if updated_any:
+        if stage == "PLAYOFF":
+            playoff_games = (
+                supabase.table("tournament_games")
+                .select("*")
+                .eq("tournament_id", tournament["id"])
+                .eq("stage", "PLAYOFF")
+                .execute()
+                .data
+                or []
+            )
+            series_updates = resolve_series_results(playoff_games)
+            for upd in series_updates:
+                sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
+
+            playoff_games = (
+                supabase.table("tournament_games")
+                .select("*")
+                .eq("tournament_id", tournament["id"])
+                .eq("stage", "PLAYOFF")
+                .execute()
+                .data
+                or []
+            )
+            dependency_updates = resolve_playoff_dependencies(playoff_games)
+            for upd in dependency_updates:
+                sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
+
         st.success("Scores saved.")
         st.rerun()
 
