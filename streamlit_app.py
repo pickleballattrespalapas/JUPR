@@ -7,7 +7,6 @@ import hmac
 import hashlib
 import traceback
 import re
-from collections.abc import Mapping
 
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
@@ -22,57 +21,12 @@ ADMIN_SESSION_TTL_SECONDS = 60 * 60
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
-# -------------------------
-# Secrets helpers (SAFE)
-# -------------------------
-def get_secret(path: list[str], default=None):
-    """
-    Nested secret getter.
-
-    Priority:
-    1) Streamlit secrets (st.secrets)
-    2) Environment variables (Fly / Docker / etc.)
-
-    Path ["supabase","url"] → SUPABASE__URL
-    """
-
-    # --- 1) Try Streamlit secrets ---
-    try:
-        cur = st.secrets
-        for k in path:
-            if not isinstance(cur, Mapping) or k not in cur:
-                raise KeyError
-            cur = cur[k]
-        return cur
-    except Exception:
-        pass
-
-    # --- 2) Fallback to environment variable ---
-    env_key = "__".join([p.upper() for p in path])
-    return os.environ.get(env_key, default)
-
-
-def _get_config_value(path: list[str], default=None):
-    return get_secret(path, default)
-
-
-def _get_secret(key: str) -> str:
-    try:
-        if key in st.secrets:
-            return str(st.secrets[key])
-        if "supabase" in st.secrets and key in st.secrets["supabase"]:
-            return str(st.secrets["supabase"][key])
-    except Exception:
-        pass
-    return os.getenv(key.upper(), "")
-
-
 def _get_admin_password() -> str:
-    return _get_secret("admin_password")
+    return os.getenv("ADMIN_PASSWORD", "")
 
 
 def _get_session_secret() -> str:
-    return _get_secret("admin_session_secret")
+    return os.getenv("ADMIN_SESSION_SECRET", "")
 
 
 def _sign(exp: int, secret: str) -> str:
@@ -133,33 +87,24 @@ def _validate_admin_session() -> bool:
 @st.cache_resource
 def get_supabase():
     """
-    Requires Supabase configuration.
+    Production Supabase client.
+    Requires Fly environment variables:
+    SUPABASE_URL
+    SUPABASE_SERVICE_ROLE_KEY
     """
+
     from jupr_app.data.client import make_supabase
 
-    url = _get_config_value(["supabase", "url"], "")
-    key = _get_config_value(["supabase", "anon_key"], "") or _get_config_value(["supabase", "key"], "")
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-    if not url or not key:
-        st.error("Supabase secrets are missing or misnamed.")
-        st.code(
-            "[supabase]\n"
-            'url = "https://YOUR_PROJECT_REF.supabase.co"\n'
-            'anon_key = "YOUR_SUPABASE_ANON_KEY"  # or use key = "…"\n'
-        )
+    if not url:
+        raise RuntimeError("Missing SUPABASE_URL environment variable.")
 
-        # Debug keys only (no values) - Mapping-safe (no .get usage)
-        try:
-            st.write("Secrets keys:", list(st.secrets.keys()))
-            sb = _get_config_value(["supabase"], default={})
-            if isinstance(sb, Mapping):
-                st.write("Supabase keys:", list(sb.keys()))
-        except Exception:
-            pass
+    if not key:
+        raise RuntimeError("Missing SUPABASE_SERVICE_ROLE_KEY environment variable.")
 
-        st.stop()
-
-    return make_supabase(str(url), str(key))
+    return make_supabase(url, key)
 
 
 @st.cache_data(ttl=30)
@@ -257,9 +202,9 @@ def main():
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
         # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
-        # SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, ADMIN_PASSWORD,
+        # SUPABASE_SERVICE_ROLE_KEY, ADMIN_PASSWORD,
         # and ADMIN_SESSION_SECRET.
-        base_url = _get_config_value(["public_base_url"], LOCAL_PUBLIC_BASE_URL_DEFAULT)
+        base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
         # ---- Session defaults ----
