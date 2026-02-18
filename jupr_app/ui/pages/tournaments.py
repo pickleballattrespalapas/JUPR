@@ -607,7 +607,10 @@ def _render_podium_review(
 
         upsert_tournament_podium(ctx.supabase, tournament_id, payload)
         award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
-        ctx.sb_update(supabase, "tournaments", {"status": "COMPLETE"}, filters={"id": tournament_id})
+        supabase.table("tournaments") \
+            .update({"status": "COMPLETE"}) \
+            .eq("id", tournament_id) \
+            .execute()
         st.success("Tournament completed and podium locked.")
         st.session_state.pop(f"podium_review_open_{tournament_id}", None)
         st.rerun()
