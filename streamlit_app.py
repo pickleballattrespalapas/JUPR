@@ -11,7 +11,6 @@ import pandas as pd  # noqa: F401  # kept because pages may rely on it
 # -------------------------
 # CONFIG
 # -------------------------
-DEFAULT_PUBLIC_CLUB_ID = "tres_palapas"
 # Local/dev fallback for share links + link buttons.
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
@@ -161,6 +160,25 @@ def main():
             except Exception:
                 st.session_state.pop("sb_session", None)
 
+        # -------------------------
+        # Resolve club_id dynamically
+        # -------------------------
+        session = st.session_state.get("sb_session")
+        club_id = None
+
+        if session:
+            user = getattr(session, "user", None)
+            if user and hasattr(user, "user_metadata"):
+                club_id = user.user_metadata.get("club_id")
+
+        if not PUBLIC_MODE:
+            if not club_id:
+                st.error("Authenticated user missing club_id in metadata.")
+                st.stop()
+
+        if PUBLIC_MODE:
+            club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
+
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
         # ---- Sidebar / Auth ----
@@ -198,28 +216,11 @@ def main():
                         supabase.auth.sign_out()
                     except Exception:
                         pass
-                    st.session_state.clear()
+                    st.session_state.pop("sb_session", None)
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
         admin_logged_in = bool(st.session_state.get("sb_session"))
-
-        session_user_metadata = (
-            st.session_state.get("sb_session", {})
-            .get("user", {})
-            .get("user_metadata", {})
-        )
-        session_club_id = session_user_metadata.get("club_id")
-        club_id = (
-            str(session_club_id).strip()
-            if session_club_id is not None and str(session_club_id).strip()
-            else None
-        )
-        if not club_id:
-            if PUBLIC_MODE:
-                club_id = DEFAULT_PUBLIC_CLUB_ID
-            else:
-                club_id = DEFAULT_PUBLIC_CLUB_ID
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
