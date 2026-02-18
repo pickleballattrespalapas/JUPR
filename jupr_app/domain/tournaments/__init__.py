@@ -631,20 +631,32 @@ def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
     updates: dict[str, dict[str, Any]] = {}
-    by_code: dict[str, dict[str, Any]] = {}
 
+    # --- Collapse series rows into one logical row per playoff_game_code ---
+    series_map: dict[str, list[dict[str, Any]]] = {}
     for g in games:
         code = g.get("playoff_game_code")
         if not code:
             continue
+        series_map.setdefault(code, []).append(g)
 
-        existing = by_code.get(code)
+    by_code: dict[str, dict[str, Any]] = {}
 
-        # Prefer finalized game in best-of series
-        if g.get("finalized_at"):
-            by_code[code] = g
-        elif not existing:
-            by_code[code] = g
+    for code, series_games in series_map.items():
+        # Prefer finalized game in series
+        finalized_game = next((g for g in series_games if g.get("finalized_at")), None)
+
+        if finalized_game:
+            by_code[code] = finalized_game
+        else:
+            # No finalized game -> treat series as unresolved
+            # Use a representative row but clear winner/loser logically
+            representative = series_games[0]
+            rep_copy = dict(representative)
+            rep_copy["winner_team_id"] = None
+            rep_copy["loser_team_id"] = None
+            rep_copy["finalized_at"] = None
+            by_code[code] = rep_copy
 
     def resolve_source(source: Any) -> tuple[bool, str | None]:
         if not source:
@@ -665,20 +677,27 @@ def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, 
     local_games = [dict(g) for g in games]
     while changed:
         changed = False
-        by_code = {}
+        series_map = {}
 
         for g in local_games:
             code = g.get("playoff_game_code")
             if not code:
                 continue
+            series_map.setdefault(code, []).append(g)
 
-            existing = by_code.get(code)
+        by_code = {}
+        for code, series_games in series_map.items():
+            finalized_game = next((g for g in series_games if g.get("finalized_at")), None)
 
-            # Prefer finalized game in best-of series
-            if g.get("finalized_at"):
-                by_code[code] = g
-            elif not existing:
-                by_code[code] = g
+            if finalized_game:
+                by_code[code] = finalized_game
+            else:
+                representative = series_games[0]
+                rep_copy = dict(representative)
+                rep_copy["winner_team_id"] = None
+                rep_copy["loser_team_id"] = None
+                rep_copy["finalized_at"] = None
+                by_code[code] = rep_copy
         for game in local_games:
             if game.get("stage") != "PLAYOFF":
                 continue
