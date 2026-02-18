@@ -631,7 +631,20 @@ def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
     updates: dict[str, dict[str, Any]] = {}
-    by_code = {g.get("playoff_game_code"): g for g in games if g.get("playoff_game_code")}
+    by_code: dict[str, dict[str, Any]] = {}
+
+    for g in games:
+        code = g.get("playoff_game_code")
+        if not code:
+            continue
+
+        existing = by_code.get(code)
+
+        # Prefer finalized game in best-of series
+        if g.get("finalized_at"):
+            by_code[code] = g
+        elif not existing:
+            by_code[code] = g
 
     def resolve_source(source: Any) -> tuple[bool, str | None]:
         if not source:
@@ -652,7 +665,20 @@ def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, 
     local_games = [dict(g) for g in games]
     while changed:
         changed = False
-        by_code = {g.get("playoff_game_code"): g for g in local_games if g.get("playoff_game_code")}
+        by_code = {}
+
+        for g in local_games:
+            code = g.get("playoff_game_code")
+            if not code:
+                continue
+
+            existing = by_code.get(code)
+
+            # Prefer finalized game in best-of series
+            if g.get("finalized_at"):
+                by_code[code] = g
+            elif not existing:
+                by_code[code] = g
         for game in local_games:
             if game.get("stage") != "PLAYOFF":
                 continue
