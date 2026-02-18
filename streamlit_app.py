@@ -11,7 +11,7 @@ import pandas as pd  # noqa: F401  # kept because pages may rely on it
 # -------------------------
 # CONFIG
 # -------------------------
-CLUB_ID = "tres_palapas"
+DEFAULT_PUBLIC_CLUB_ID = "tres_palapas"
 # Local/dev fallback for share links + link buttons.
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
@@ -204,6 +204,23 @@ def main():
         # Canonical admin flag (never true in public mode)
         admin_logged_in = bool(st.session_state.get("sb_session"))
 
+        session_user_metadata = (
+            st.session_state.get("sb_session", {})
+            .get("user", {})
+            .get("user_metadata", {})
+        )
+        session_club_id = session_user_metadata.get("club_id")
+        club_id = (
+            str(session_club_id).strip()
+            if session_club_id is not None and str(session_club_id).strip()
+            else None
+        )
+        if not club_id:
+            if PUBLIC_MODE:
+                club_id = DEFAULT_PUBLIC_CLUB_ID
+            else:
+                club_id = DEFAULT_PUBLIC_CLUB_ID
+
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
             try:
@@ -225,11 +242,11 @@ def main():
             id_to_name,
             schema_degraded,
             schema_degraded_reason,
-        ) = get_data(CLUB_ID)
+        ) = get_data(club_id)
 
         ctx = AppContext(
             supabase=supabase,
-            club_id=CLUB_ID,
+            club_id=club_id,
             df_players_all=df_players_all,
             df_players_active=df_players_active,
             df_leagues=df_leagues,
@@ -261,10 +278,10 @@ def main():
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
             enqueue_badge_eval(
                 supabase,
-                club_id=CLUB_ID,
+                club_id=club_id,
                 event_type="match_recorded",
                 player_ids=player_ids,
-                match_id=f"initial_load:{CLUB_ID}",
+                match_id=f"initial_load:{club_id}",
                 payload={"initial_load": True},
             )
 
