@@ -555,20 +555,32 @@ def build_playoff_games(
 
 def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    Determines winner_team_id for a playoff series based on best-of logic.
-    Does NOT overwrite individual game winners.
+    Determine series winner for playoff games.
+
+    For best-of-3:
+        First team to 2 wins advances.
+    For single game:
+        Normal winner logic applies.
+
+    Returns:
+        List of updates compatible with sb_update.
     """
 
     updates = []
-    grouped: dict[str, list[dict]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
 
+    # Group games by playoff_game_code
     for g in games:
         if g.get("stage") != "PLAYOFF":
             continue
-        grouped.setdefault(g.get("playoff_game_code"), []).append(g)
+        code = g.get("playoff_game_code")
+        if not code:
+            continue
+        grouped.setdefault(code, []).append(g)
 
-    for code, series_games in grouped.items():
+    for _, series_games in grouped.items():
         wins: dict[str, int] = {}
+
         for g in series_games:
             winner = g.get("winner_team_id")
             if winner:
@@ -577,16 +589,29 @@ def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not wins:
             continue
 
-        # best-of-3 means first to 2
-        max_wins = max(wins.values())
-        winner_team = [k for k, v in wins.items() if v == max_wins][0]
-
+        # Determine required wins
         required = 2 if len(series_games) >= 3 else 1
-        if max_wins >= required:
-            for g in series_games:
-                if g.get("winner_team_id") != winner_team:
-                    continue
-                updates.append({"id": g["id"], "series_winner_team_id": winner_team})
+
+        for team_id, win_count in wins.items():
+            if win_count >= required:
+                # Determine loser
+                opponents = [tid for tid in wins.keys() if tid != team_id]
+                loser_id = opponents[0] if opponents else None
+
+                # Use highest series_game_number as deciding game
+                deciding_game = sorted(
+                    series_games,
+                    key=lambda x: x.get("series_game_number") or 1,
+                )[-1]
+
+                updates.append(
+                    {
+                        "id": deciding_game["id"],
+                        "winner_team_id": team_id,
+                        "loser_team_id": loser_id,
+                        "finalized_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
 
     return updates
 

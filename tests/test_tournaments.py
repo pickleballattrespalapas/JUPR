@@ -152,21 +152,61 @@ def test_build_playoff_games_best_of_series():
 
 def test_resolve_series_results_best_of_three():
     games = [
-        {"id": "g1", "stage": "PLAYOFF", "playoff_game_code": "P1", "winner_team_id": "t1"},
-        {"id": "g2", "stage": "PLAYOFF", "playoff_game_code": "P1", "winner_team_id": "t1"},
-        {"id": "g3", "stage": "PLAYOFF", "playoff_game_code": "P1", "winner_team_id": "t2"},
-        {"id": "g4", "stage": "PLAYOFF", "playoff_game_code": "P2", "winner_team_id": "t3"},
-        {"id": "g5", "stage": "PLAYOFF", "playoff_game_code": "P2", "winner_team_id": None},
-        {"id": "g6", "stage": "ROUND_ROBIN", "playoff_game_code": "P3", "winner_team_id": "t9"},
+        {
+            "id": "g1",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "series_game_number": 1,
+            "winner_team_id": "t1",
+        },
+        {
+            "id": "g2",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "series_game_number": 2,
+            "winner_team_id": "t1",
+        },
+        {
+            "id": "g3",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "series_game_number": 3,
+            "winner_team_id": "t2",
+        },
+        {
+            "id": "g4",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P2",
+            "series_game_number": 1,
+            "winner_team_id": "t3",
+        },
+        {
+            "id": "g5",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P2",
+            "series_game_number": 2,
+            "winner_team_id": None,
+        },
+        {
+            "id": "g6",
+            "stage": "ROUND_ROBIN",
+            "playoff_game_code": "P3",
+            "winner_team_id": "t9",
+        },
     ]
 
     updates = resolve_series_results(games)
 
-    assert updates == [
-        {"id": "g1", "series_winner_team_id": "t1"},
-        {"id": "g2", "series_winner_team_id": "t1"},
-        {"id": "g4", "series_winner_team_id": "t3"},
-    ]
+    assert len(updates) == 2
+    by_id = {u["id"]: u for u in updates}
+
+    assert by_id["g3"]["winner_team_id"] == "t1"
+    assert by_id["g3"]["loser_team_id"] == "t2"
+    assert by_id["g3"]["finalized_at"]
+
+    assert by_id["g5"]["winner_team_id"] == "t3"
+    assert by_id["g5"]["loser_team_id"] is None
+    assert by_id["g5"]["finalized_at"]
 
 
 def test_best_of_three_series_winner():
