@@ -221,6 +221,7 @@ def main():
 
                             if session:
                                 st.session_state["sb_session"] = session
+                                st.session_state["entry_mode"] = "login"
                                 st.success("Logged in successfully.")
                                 st.rerun()
                             else:
