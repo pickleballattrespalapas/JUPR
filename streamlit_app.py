@@ -206,20 +206,34 @@ def main():
                                     "password": password,
                                 }
                             )
-                            auth_session = getattr(auth_response, "session", None)
-                            if auth_session:
-                                st.session_state["sb_session"] = auth_session
-                                st.success("Logged in.")
+
+                            # Defensive handling of response
+                            if not auth_response:
+                                st.error("Login failed: no response from Supabase.")
+                                st.stop()
+
+                            # Try direct attribute access first
+                            session = getattr(auth_response, "session", None)
+
+                            # If attribute missing, try dict-style fallback
+                            if not session and isinstance(auth_response, dict):
+                                session = auth_response.get("session")
+
+                            if session:
+                                st.session_state["sb_session"] = session
+                                st.success("Logged in successfully.")
                                 st.rerun()
                             else:
-                                st.error("Login failed. No session returned.")
+                                st.error("Login failed: session not returned.")
+                                st.write("DEBUG auth_response:", auth_response)
                         except Exception as exc:
-                            st.error(f"Login failed: {exc}")
+                            st.error(f"Login exception: {exc}")
                 return
 
-            if not club_id:
-                st.error("Authenticated user missing club_id in metadata.")
-                return
+            if not PUBLIC_MODE and st.session_state.get("sb_session"):
+                if not club_id:
+                    st.error("Authenticated user missing club_id in metadata.")
+                    st.stop()
         else:
             club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
 
