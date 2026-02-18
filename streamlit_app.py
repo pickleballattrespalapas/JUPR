@@ -133,6 +133,8 @@ def main():
         from jupr_app.ui.theme_clean import apply_clean_theme
         from jupr_app.ui.url import qp_get
 
+        st.session_state.setdefault("entry_mode", None)
+
         st.set_page_config(
             page_title="JUPR Leagues",
             layout="wide",
@@ -141,8 +143,25 @@ def main():
         )
         apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
 
+        if st.session_state["entry_mode"] is None:
+            st.markdown("# JUPR Leagues 🌵")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("🔐 Login", use_container_width=True):
+                    st.session_state["entry_mode"] = "login"
+                    st.rerun()
+
+            with col2:
+                if st.button("🌎 Enter Public Mode", use_container_width=True):
+                    st.session_state["entry_mode"] = "public"
+                    st.rerun()
+
+            st.stop()
+
         # ---- Public mode ----
-        PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
+        PUBLIC_MODE = st.session_state.get("entry_mode") == "public"
 
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
@@ -153,42 +172,29 @@ def main():
         st.session_state["base_url"] = str(base_url)
 
         supabase = get_supabase()
-        existing_session = st.session_state.get("sb_session")
-        if existing_session:
-            try:
-                supabase.auth.set_session(existing_session)
-            except Exception:
-                st.session_state.pop("sb_session", None)
+        if st.session_state.get("entry_mode") == "login":
+            existing_session = st.session_state.get("sb_session")
+            if existing_session:
+                try:
+                    supabase.auth.set_session(existing_session)
+                except Exception:
+                    st.session_state.pop("sb_session", None)
 
         # -------------------------
         # Resolve club_id dynamically
         # -------------------------
-        session = st.session_state.get("sb_session")
+        entry_mode = st.session_state.get("entry_mode")
+        session = st.session_state.get("sb_session") if entry_mode == "login" else None
         club_id = None
 
-        if session:
-            user = getattr(session, "user", None)
-            if user and hasattr(user, "user_metadata"):
-                club_id = user.user_metadata.get("club_id")
-
-        if not PUBLIC_MODE:
-            if not club_id:
-                st.error("Authenticated user missing club_id in metadata.")
-                st.stop()
-
-        if PUBLIC_MODE:
-            club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
-
-        # ---- Session defaults ----
-        st.session_state.setdefault("deep_link_applied", False)
-        # ---- Sidebar / Auth ----
-        if PUBLIC_MODE:
-            hide_sidebar_and_header_for_public()
-        else:
-            st.sidebar.title("JUPR Leagues 🌵")
-
-            if not st.session_state.get("sb_session"):
-                with st.sidebar.expander("🔒 Admin Login"):
+        if entry_mode == "login":
+            if session:
+                user = getattr(session, "user", None)
+                if user and hasattr(user, "user_metadata"):
+                    club_id = user.user_metadata.get("club_id")
+            else:
+                st.sidebar.title("JUPR Leagues 🌵")
+                with st.sidebar.expander("🔒 Admin Login", expanded=True):
                     email = st.text_input("Email", key="admin_login_email")
                     password = st.text_input("Password", type="password", key="admin_login_password")
 
@@ -200,24 +206,40 @@ def main():
                                     "password": password,
                                 }
                             )
-                            session = getattr(auth_response, "session", None)
-                            if session:
-                                st.session_state["sb_session"] = session
+                            auth_session = getattr(auth_response, "session", None)
+                            if auth_session:
+                                st.session_state["sb_session"] = auth_session
                                 st.success("Logged in.")
                                 st.rerun()
                             else:
                                 st.error("Login failed. No session returned.")
                         except Exception as exc:
                             st.error(f"Login failed: {exc}")
-            else:
-                st.sidebar.success("Logged In: Admin")
-                if st.sidebar.button("Log Out"):
-                    try:
-                        supabase.auth.sign_out()
-                    except Exception:
-                        pass
-                    st.session_state.pop("sb_session", None)
-                    st.rerun()
+                return
+
+            if not club_id:
+                st.error("Authenticated user missing club_id in metadata.")
+                return
+        else:
+            club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
+
+        # ---- Session defaults ----
+        st.session_state.setdefault("deep_link_applied", False)
+        # ---- Sidebar / Auth ----
+        if PUBLIC_MODE:
+            hide_sidebar_and_header_for_public()
+        else:
+            st.sidebar.title("JUPR Leagues 🌵")
+
+            st.sidebar.success("Logged In: Admin")
+            if st.sidebar.button("Log Out"):
+                try:
+                    supabase.auth.sign_out()
+                except Exception:
+                    pass
+                st.session_state.pop("sb_session", None)
+                st.session_state["entry_mode"] = None
+                st.rerun()
 
         # Canonical admin flag (never true in public mode)
         admin_logged_in = bool(st.session_state.get("sb_session"))
@@ -506,7 +528,6 @@ def main():
         if PUBLIC_MODE:
             try:
                 st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
-                st.query_params["public"] = "1"
             except Exception:
                 pass
 
