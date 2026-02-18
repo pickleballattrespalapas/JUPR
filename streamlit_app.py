@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import os
-import time
-import hmac
-import hashlib
 import traceback
 import re
 
@@ -15,106 +12,10 @@ import pandas as pd  # noqa: F401  # kept because pages may rely on it
 # CONFIG
 # -------------------------
 CLUB_ID = "tres_palapas"
-ADMIN_SESSION_TTL_SECONDS = 60 * 60
-
 # Local/dev fallback for share links + link buttons.
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
-
-
-def get_secret(path: list[str], default=""):
-    try:
-        cur = st.secrets
-    except Exception:
-        return default
-
-    try:
-        for key in path:
-            if cur is None:
-                return default
-            if hasattr(cur, "get"):
-                cur = cur.get(key)
-            else:
-                return default
-        return cur if cur is not None else default
-    except Exception:
-        return default
-st.write("DEBUG SUPABASE_URL:", os.getenv("SUPABASE_URL"))
-
-st.write("DEBUG ENV PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
-st.write("ENV CHECK PASSWORD:", os.getenv("SUPABASE_ADMIN_PASSWORD"))
-st.write("ENV CHECK SESSION:", os.getenv("SUPABASE_ADMIN_SESSION_SECRET"))
-st.write("ALL ENV:", {k: os.environ[k] for k in os.environ if "SUPABASE" in k})
-
-
-def _get_admin_password() -> str:
-    return (
-        os.getenv("SUPABASE_ADMIN_PASSWORD")
-        or get_secret(["supabase", "admin_password"], "")
-        or ""
-    )
-
-
-def _get_admin_session_secret() -> str:
-    return (
-        os.getenv("SUPABASE_ADMIN_SESSION_SECRET")
-        or get_secret(["supabase", "admin_session_secret"], "")
-        or get_secret(["admin_session_secret"], "")
-        or ""
-    )
-
-
-def _sign(exp: int, secret: str) -> str:
-    msg = str(exp).encode()
-    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()
-
-
-def _create_admin_session():
-    secret = _get_admin_session_secret()
-    if not secret:
-        st.error("SUPABASE_ADMIN_SESSION_SECRET missing.")
-        st.stop()
-
-    exp = int(time.time()) + ADMIN_SESSION_TTL_SECONDS
-    token = _sign(exp, secret)
-
-    st.session_state["admin_session"] = {
-        "exp": exp,
-        "token": token,
-    }
-
-
-def _clear_admin_session():
-    st.session_state.pop("admin_session", None)
-
-
-def _validate_admin_session() -> bool:
-    secret = _get_admin_session_secret()
-    if not secret:
-        return False
-
-    data = st.session_state.get("admin_session")
-    if not isinstance(data, dict):
-        return False
-
-    exp = data.get("exp")
-    token = data.get("token")
-
-    if not exp or not token:
-        return False
-
-    if int(exp) < int(time.time()):
-        _clear_admin_session()
-        return False
-
-    expected = _sign(int(exp), secret)
-
-    if not hmac.compare_digest(token, expected):
-        _clear_admin_session()
-        return False
-
-    return True
 
 
 # -------------------------
@@ -252,6 +153,14 @@ def main():
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
+        supabase = get_supabase()
+        existing_session = st.session_state.get("sb_session")
+        if existing_session:
+            try:
+                supabase.auth.set_session(existing_session)
+            except Exception:
+                st.session_state.pop("sb_session", None)
+
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
         # ---- Sidebar / Auth ----
@@ -260,32 +169,40 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not _validate_admin_session():
+            if not st.session_state.get("sb_session"):
                 with st.sidebar.expander("🔒 Admin Login"):
-                    pwd = st.text_input("Password", type="password")
+                    email = st.text_input("Email", key="admin_login_email")
+                    password = st.text_input("Password", type="password", key="admin_login_password")
 
                     if st.button("Login"):
-                        expected = (
-                            os.getenv("SUPABASE_ADMIN_PASSWORD")
-                            or get_secret(["supabase", "admin_password"], "")
-                            or ""
-                        )
-                        if not expected:
-                            st.error("Admin password not configured.")
-                        elif pwd != expected:
-                            st.error("Incorrect password.")
-                        else:
-                            _create_admin_session()
-                            st.success("Logged in.")
-                            st.rerun()
+                        try:
+                            auth_response = supabase.auth.sign_in_with_password(
+                                {
+                                    "email": email,
+                                    "password": password,
+                                }
+                            )
+                            session = getattr(auth_response, "session", None)
+                            if session:
+                                st.session_state["sb_session"] = session
+                                st.success("Logged in.")
+                                st.rerun()
+                            else:
+                                st.error("Login failed. No session returned.")
+                        except Exception as exc:
+                            st.error(f"Login failed: {exc}")
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out"):
-                    _clear_admin_session()
+                    try:
+                        supabase.auth.sign_out()
+                    except Exception:
+                        pass
+                    st.session_state.clear()
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_session()
+        admin_logged_in = bool(st.session_state.get("sb_session"))
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
@@ -296,7 +213,6 @@ def main():
             st.session_state["force_data_refresh"] = False
 
         # ---- Load data + ctx ----
-        supabase = get_supabase()
         (
             df_players_all,
             df_players_active,
@@ -310,14 +226,7 @@ def main():
             schema_degraded,
             schema_degraded_reason,
         ) = get_data(CLUB_ID)
-        test_clubs = supabase.table("clubs").select("*").execute()
-        st.write("CLUBS RAW:", test_clubs.data)
 
-        # 🔎 DEBUG BLOCK — add this
-        st.write("PLAYERS ALL COUNT:", len(df_players_all) if df_players_all is not None else "None")
-        st.write("MATCHES COUNT:", len(df_matches) if df_matches is not None else "None")
-        st.write("LEAGUES COUNT:", len(df_leagues) if df_leagues is not None else "None")
-        
         ctx = AppContext(
             supabase=supabase,
             club_id=CLUB_ID,
