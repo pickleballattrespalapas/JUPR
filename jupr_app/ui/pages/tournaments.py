@@ -607,7 +607,7 @@ def _render_podium_review(
 
         upsert_tournament_podium(ctx.supabase, tournament_id, payload)
         award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
-        supabase.table("tournaments") \
+        ctx.supabase.table("tournaments") \
             .update({"status": "COMPLETE"}) \
             .eq("id", tournament_id) \
             .execute()
