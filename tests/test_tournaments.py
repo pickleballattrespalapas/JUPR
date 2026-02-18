@@ -200,13 +200,13 @@ def test_resolve_series_results_best_of_three():
     assert len(updates) == 2
     by_id = {u["id"]: u for u in updates}
 
-    assert by_id["g3"]["winner_team_id"] == "t1"
-    assert by_id["g3"]["loser_team_id"] == "t2"
-    assert by_id["g3"]["finalized_at"]
+    assert by_id["g2"]["winner_team_id"] == "t1"
+    assert by_id["g2"]["loser_team_id"] == "t2"
+    assert by_id["g2"]["finalized_at"]
 
-    assert by_id["g5"]["winner_team_id"] == "t3"
-    assert by_id["g5"]["loser_team_id"] is None
-    assert by_id["g5"]["finalized_at"]
+    assert by_id["g4"]["winner_team_id"] == "t3"
+    assert by_id["g4"]["loser_team_id"] is None
+    assert by_id["g4"]["finalized_at"]
 
 
 def test_best_of_three_series_winner():

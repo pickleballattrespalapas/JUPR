@@ -598,11 +598,24 @@ def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 opponents = [tid for tid in wins.keys() if tid != team_id]
                 loser_id = opponents[0] if opponents else None
 
-                # Use highest series_game_number as deciding game
-                deciding_game = sorted(
+                # Sort series games by series_game_number ascending
+                ordered_games = sorted(
                     series_games,
                     key=lambda x: x.get("series_game_number") or 1,
-                )[-1]
+                )
+
+                win_counter = 0
+                deciding_game = None
+
+                for g in ordered_games:
+                    if g.get("winner_team_id") == team_id:
+                        win_counter += 1
+                        if win_counter == required:
+                            deciding_game = g
+                            break
+
+                if not deciding_game:
+                    continue
 
                 updates.append(
                     {
