@@ -745,31 +745,35 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
 
     if updated_any:
         if stage == "PLAYOFF":
-            playoff_games = (
+            # --- Fetch latest playoff games ---
+            playoff_games_resp = (
                 supabase.table("tournament_games")
                 .select("*")
                 .eq("tournament_id", tournament["id"])
                 .eq("stage", "PLAYOFF")
                 .execute()
-                .data
-                or []
             )
+            playoff_games = playoff_games_resp.data or []
+
+            # --- First resolve series winners (best-of logic) ---
             series_updates = resolve_series_results(playoff_games)
             for upd in series_updates:
-                sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
+                supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
 
-            playoff_games = (
+            # --- Re-fetch after series resolution ---
+            playoff_games_resp = (
                 supabase.table("tournament_games")
                 .select("*")
                 .eq("tournament_id", tournament["id"])
                 .eq("stage", "PLAYOFF")
                 .execute()
-                .data
-                or []
             )
+            playoff_games = playoff_games_resp.data or []
+
+            # --- Then resolve bracket dependencies ---
             dependency_updates = resolve_playoff_dependencies(playoff_games)
             for upd in dependency_updates:
-                sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
+                supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
 
         st.success("Scores saved.")
         st.rerun()
