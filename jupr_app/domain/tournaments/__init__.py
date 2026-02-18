@@ -658,6 +658,10 @@ def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, 
             rep_copy["finalized_at"] = None
             by_code[code] = rep_copy
 
+    # Collapse to one logical game per playoff_game_code
+    logical_games = list(by_code.values())
+    local_games = [dict(g) for g in logical_games]
+
     def resolve_source(source: Any) -> tuple[bool, str | None]:
         if not source:
             return False, None
@@ -674,7 +678,6 @@ def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, 
         updates.setdefault(gid, {"id": gid})[field] = value
 
     changed = True
-    local_games = [dict(g) for g in games]
     while changed:
         changed = False
         series_map = {}
