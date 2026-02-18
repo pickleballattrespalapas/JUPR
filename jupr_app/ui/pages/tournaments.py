@@ -353,6 +353,39 @@ def render(ctx):
             st.success("Playoff format saved.")
             st.rerun()
 
+        # --- Regenerate Playoff Bracket ---
+        if playoff_games:
+            if tournament.get("status") == "COMPLETE":
+                st.info("Tournament is complete. Bracket cannot be regenerated.")
+            else:
+                existing_scored = any(
+                    g.get("score_a") is not None or g.get("score_b") is not None
+                    for g in playoff_games
+                )
+
+                if existing_scored:
+                    st.warning("Playoff scores have already been entered. Bracket cannot be regenerated.")
+                else:
+                    if st.button("Regenerate Playoff Bracket", type="secondary"):
+                        supabase.table("tournament_games").delete().eq("tournament_id", tournament_id).eq("stage", "PLAYOFF").execute()
+
+                        standings = compute_round_robin_standings(
+                            list(teams_by_id.values()),
+                            rr_games,
+                        )
+
+                        games_payload = build_playoff_games(
+                            tournament_id=tournament_id,
+                            advance_count=int(tournament.get("playoff_advance_count")),
+                            standings=standings,
+                            best_of=int(tournament.get("playoff_best_of", 1)),
+                        )
+
+                        supabase.table("tournament_games").insert(games_payload).execute()
+
+                        st.success("Playoff bracket regenerated.")
+                        st.rerun()
+
         if not playoff_games:
             st.info("No playoff bracket generated yet.")
         if st.button("Generate Playoff Bracket", disabled=bool(playoff_games) or is_complete):
