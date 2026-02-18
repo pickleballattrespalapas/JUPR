@@ -149,7 +149,7 @@ def main():
             col1, col2 = st.columns(2)
 
             with col1:
-                if st.button("🔐 Admin Login", use_container_width=True):
+                if st.button("🔐 Login", use_container_width=True):
                     st.session_state["entry_mode"] = "login"
                     st.rerun()
 
@@ -161,80 +161,68 @@ def main():
             st.stop()
 
         # ---- Public mode ----
-        PUBLIC_MODE = st.session_state.get("entry_mode") == "public"
+        PUBLIC_MODE = st.session_state["entry_mode"] == "public"
 
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
         # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
-        # SUPABASE_ANON_KEY, SUPABASE_ADMIN_PASSWORD,
-        # and SUPABASE_ADMIN_SESSION_SECRET.
+        # and SUPABASE_ANON_KEY.
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
+        # -------------------------
+        # Supabase initialization
+        # -------------------------
         supabase = get_supabase()
-        if st.session_state.get("entry_mode") == "login":
-            existing_session = st.session_state.get("sb_session")
-            if existing_session:
-                try:
-                    supabase.auth.set_session(existing_session)
-                except Exception:
-                    st.session_state.pop("sb_session", None)
+
+        # -------------------------
+        # Authentication handling
+        # -------------------------
+        entry_mode = st.session_state.get("entry_mode")
+        if entry_mode == "login":
+            if not st.session_state.get("sb_session"):
+                st.markdown("## Login")
+                email = st.text_input("Email", key="login_email")
+                password = st.text_input("Password", type="password", key="login_password")
+
+                if st.button("Login", use_container_width=True):
+                    try:
+                        auth_response = supabase.auth.sign_in_with_password(
+                            {
+                                "email": email,
+                                "password": password,
+                            }
+                        )
+                        if getattr(auth_response, "session", None):
+                            st.session_state["sb_session"] = auth_response.session
+                            st.rerun()
+                        else:
+                            st.error("Login failed")
+                    except Exception:
+                        st.error("Login failed")
+                return
+
+            try:
+                supabase.auth.set_session(st.session_state["sb_session"])
+            except Exception:
+                st.session_state.pop("sb_session", None)
+                st.error("Login failed")
+                return
 
         # -------------------------
         # Resolve club_id dynamically
         # -------------------------
-        entry_mode = st.session_state.get("entry_mode")
-        session = st.session_state.get("sb_session") if entry_mode == "login" else None
         club_id = None
-
         if entry_mode == "login":
-            if session:
-                user = getattr(session, "user", None)
-                if user and hasattr(user, "user_metadata"):
-                    club_id = user.user_metadata.get("club_id")
-            else:
-                st.sidebar.title("JUPR Leagues 🌵")
-                with st.sidebar.expander("🔒 Admin Login", expanded=True):
-                    email = st.text_input("Email", key="admin_login_email")
-                    password = st.text_input("Password", type="password", key="admin_login_password")
+            session = st.session_state.get("sb_session")
+            user = getattr(session, "user", None)
+            user_metadata = getattr(user, "user_metadata", {}) if user else {}
+            if isinstance(user_metadata, dict):
+                club_id = user_metadata.get("club_id")
 
-                    if st.button("Login"):
-                        try:
-                            auth_response = supabase.auth.sign_in_with_password(
-                                {
-                                    "email": email,
-                                    "password": password,
-                                }
-                            )
-
-                            # Defensive handling of response
-                            if not auth_response:
-                                st.error("Login failed: no response from Supabase.")
-                                st.stop()
-
-                            # Try direct attribute access first
-                            session = getattr(auth_response, "session", None)
-
-                            # If attribute missing, try dict-style fallback
-                            if not session and isinstance(auth_response, dict):
-                                session = auth_response.get("session")
-
-                            if session:
-                                st.session_state["sb_session"] = session
-                                st.session_state["entry_mode"] = "login"
-                                st.success("Logged in successfully.")
-                                st.rerun()
-                            else:
-                                st.error("Login failed: session not returned.")
-                                st.write("DEBUG auth_response:", auth_response)
-                        except Exception as exc:
-                            st.error(f"Login exception: {exc}")
-                return
-
-            if not PUBLIC_MODE and st.session_state.get("sb_session"):
-                if not club_id:
-                    st.error("Authenticated user missing club_id in metadata.")
-                    st.stop()
+            if not club_id:
+                st.error("Authenticated user missing club_id in metadata.")
+                st.stop()
         else:
             club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
 
@@ -246,8 +234,7 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            st.sidebar.success("Logged In: Admin")
-            if st.sidebar.button("Log Out"):
+            if st.session_state.get("sb_session") and st.sidebar.button("Log Out"):
                 try:
                     supabase.auth.sign_out()
                 except Exception:
