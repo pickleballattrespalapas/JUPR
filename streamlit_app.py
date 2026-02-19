@@ -4,6 +4,9 @@ from __future__ import annotations
 import os
 import traceback
 import re
+import base64
+
+import jwt
 
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
@@ -134,6 +137,7 @@ def main():
         from jupr_app.ui.url import qp_get
 
         st.session_state.setdefault("entry_mode", None)
+        st.session_state.setdefault("auth_initialized", False)
 
         st.set_page_config(
             page_title="JUPR Leagues",
@@ -143,7 +147,30 @@ def main():
         )
         apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
 
-        if st.session_state["entry_mode"] is None:
+        # Make base_url available to all pages (leaderboards uses this for share links)
+        # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
+        # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
+        # and SUPABASE_ANON_KEY.
+        base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
+        st.session_state["base_url"] = str(base_url)
+
+        # -------------------------
+        # Authentication handling
+        # -------------------------
+        params = st.experimental_get_query_params()
+        access_token = params.get("access_token", [None])[0]
+        refresh_token = params.get("refresh_token", [None])[0]
+        flow_type = params.get("type", [None])[0]
+
+        if flow_type == "signup":
+            st.success("Email confirmed successfully.")
+            st.stop()
+
+        if (
+            st.session_state["entry_mode"] is None
+            and not (access_token and refresh_token)
+            and flow_type != "recovery"
+        ):
             st.markdown("# JUPR Leagues 🌵")
 
             col1, col2 = st.columns(2)
@@ -160,24 +187,52 @@ def main():
 
             st.stop()
 
-        # ---- Public mode ----
-        PUBLIC_MODE = st.session_state["entry_mode"] == "public"
-
-        # Make base_url available to all pages (leaderboards uses this for share links)
-        # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
-        # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
-        # and SUPABASE_ANON_KEY.
-        base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
-        st.session_state["base_url"] = str(base_url)
-
         # -------------------------
         # Supabase initialization
         # -------------------------
         supabase = get_supabase()
 
-        # -------------------------
-        # Authentication handling
-        # -------------------------
+        if access_token and refresh_token:
+            try:
+                supabase.auth.set_session(
+                    {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                    }
+                )
+                session_response = supabase.auth.get_session()
+                session = getattr(session_response, "session", session_response)
+                if session:
+                    st.session_state["sb_session"] = session
+                    st.session_state["entry_mode"] = "auth"
+                    st.session_state["auth_initialized"] = True
+            except Exception:
+                st.error("Unable to complete authentication redirect flow.")
+                st.stop()
+
+            st.experimental_set_query_params()
+            st.rerun()
+
+        if flow_type == "recovery":
+            st.subheader("Set New Password")
+
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+
+            if st.button("Update Password"):
+                if new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                else:
+                    supabase.auth.update_user({"password": new_password})
+                    st.success("Password updated successfully.")
+                    st.session_state.pop("recovery_mode", None)
+                    st.rerun()
+
+            st.stop()
+
+        # ---- Public mode ----
+        PUBLIC_MODE = st.session_state["entry_mode"] == "public"
+
         entry_mode = st.session_state.get("entry_mode")
         if entry_mode == "login":
             if not st.session_state.get("sb_session"):
@@ -195,25 +250,67 @@ def main():
                         )
                         if getattr(auth_response, "session", None):
                             st.session_state["sb_session"] = auth_response.session
+                            st.session_state["entry_mode"] = "auth"
+                            st.session_state["auth_initialized"] = True
                             st.rerun()
                         else:
                             st.error("Login failed")
                     except Exception:
                         st.error("Login failed")
+
+                if st.button("Send Magic Link", use_container_width=True):
+                    if not email:
+                        st.error("Email is required for magic link login.")
+                    else:
+                        try:
+                            supabase.auth.sign_in_with_otp({"email": email})
+                            st.success("Magic link sent. Check your email.")
+                            st.stop()
+                        except Exception:
+                            st.error("Unable to send magic link.")
                 return
 
+        session = st.session_state.get("sb_session")
+        if session:
             try:
-                supabase.auth.set_session(st.session_state["sb_session"])
+                session_payload = {
+                    "access_token": getattr(session, "access_token", None),
+                    "refresh_token": getattr(session, "refresh_token", None),
+                }
+                if session_payload["access_token"] and session_payload["refresh_token"]:
+                    supabase.auth.set_session(session_payload)
+                refreshed_response = supabase.auth.get_session()
+                refreshed = getattr(refreshed_response, "session", refreshed_response)
+
+                if refreshed:
+                    st.session_state["sb_session"] = refreshed
+                    st.session_state["entry_mode"] = "auth"
+                    st.session_state["auth_initialized"] = True
             except Exception:
                 st.session_state.pop("sb_session", None)
-                st.error("Login failed")
-                return
+                st.session_state["entry_mode"] = None
+                st.session_state["auth_initialized"] = False
+                st.rerun()
+
+        if st.session_state.get("sb_session"):
+            try:
+                token = st.session_state["sb_session"].access_token
+                base64.urlsafe_b64decode(token.split(".")[1] + "===")
+                payload = jwt.decode(token, options={"verify_signature": False})
+                st.session_state["jwt_payload"] = payload
+
+                if "club_id" not in payload.get("user_metadata", {}):
+                    st.error("JWT missing club_id claim.")
+                    st.stop()
+            except Exception as e:
+                st.error(f"JWT validation failed: {e}")
+                st.stop()
 
         # -------------------------
         # Resolve club_id dynamically
         # -------------------------
         club_id = None
-        if entry_mode == "login":
+        if st.session_state.get("sb_session"):
             session = st.session_state.get("sb_session")
             user = getattr(session, "user", None)
             user_metadata = getattr(user, "user_metadata", {}) if user else {}
@@ -241,10 +338,15 @@ def main():
                     pass
                 st.session_state.pop("sb_session", None)
                 st.session_state["entry_mode"] = None
+                st.session_state["auth_initialized"] = False
                 st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = bool(st.session_state.get("sb_session"))
+        if st.session_state.get("sb_session"):
+            st.session_state["entry_mode"] = "auth"
+            admin_logged_in = True
+        else:
+            admin_logged_in = False
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
