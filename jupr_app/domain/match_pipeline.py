@@ -151,7 +151,7 @@ def _find_existing_match_by_idempotency_key(*, supabase: Any, club_id: str, idem
 
 
 def _rebuild_state(*, supabase: Any, club_id: str) -> dict[str, int]:
-    """Replay historical matches to refresh snapshots and derived ratings."""
+    """Recalculate snapshots and derived ratings after match mutations."""
     replay = replay_history(
         supabase=supabase,
         club_id=club_id,
@@ -163,6 +163,11 @@ def _rebuild_state(*, supabase: Any, club_id: str) -> dict[str, int]:
         "players_updated": int(replay.get("players_updated") or 0),
         "league_rows_upserted": int(replay.get("league_ratings_rows") or 0),
     }
+
+
+def recalculate_state(*, supabase: Any, club_id: str) -> dict[str, int]:
+    """Public wrapper for deterministic post-mutation state rebuilds."""
+    return _rebuild_state(supabase=supabase, club_id=club_id)
 
 
 def _build_processing_context(*, supabase: Any, club_id: str) -> dict[str, Any]:
@@ -314,7 +319,14 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
         )
 
 
-def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[str, Any]) -> dict[str, Any]:
+def update_match(
+    *,
+    supabase: Any,
+    club_id: str,
+    match_id: int,
+    patch: Mapping[str, Any],
+    rebuild_state: bool = True,
+) -> dict[str, Any]:
     """Update one match row for `club_id` and rebuild all dependent projections.
 
     Invariant: any mutable match-field change must flow through this function so
@@ -346,14 +358,14 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
             filters=_scoped_filters(scoped_club_id, {"club_id": scoped_club_id, "id": target_match_id}),
         ))
         updated_rows = getattr(updated, "data", None) or []
-        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id) if rebuild_state else None
         operation_success = True
         return _pipeline_result(
             success=True,
             match_id=target_match_id,
             warnings=warnings,
             updated=updated_rows,
-            rebuild=rebuild,
+            rebuild=rebuild or {},
         )
     except Exception as exc:
         if match_before:
@@ -502,6 +514,7 @@ __all__ = [
     "require_club_scope",
     "record_match",
     "update_match",
+    "recalculate_state",
     "delete_match",
     "delete_matches",
     "merge_player_into",
