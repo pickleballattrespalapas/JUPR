@@ -21,7 +21,6 @@ Run in Supabase SQL editor.
 The `.github/workflows/deploy_fly_staging.yml` workflow expects these GitHub repository secrets:
 - `PUBLIC_BASE_URL`
 - `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_ADMIN_PASSWORD`
 - `SUPABASE_ADMIN_SESSION_SECRET`
