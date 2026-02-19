@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# SCHEMA STRICT MODE ENABLED
+# All environments must match migrations
+
 from typing import Any
 
 from jupr_app.domain.gamification.fact_engine import update_match_facts_for_players
