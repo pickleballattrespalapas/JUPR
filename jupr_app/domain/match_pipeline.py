@@ -50,6 +50,98 @@ _ALLOWED_MATCH_KEYS = {
 _SLOT_KEYS = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 
 
+class MatchPipelineError(RuntimeError):
+    """Raised when a match pipeline mutation fails and cannot complete safely."""
+
+
+def _pipeline_result(
+    *,
+    success: bool,
+    match_id: int | None,
+    warnings: list[str] | None = None,
+    error: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "success": bool(success),
+        "match_id": _as_int(match_id),
+        "warnings": list(warnings or []),
+        "error": error,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _snapshot_ratings_state(*, supabase: Any, club_id: str) -> dict[str, list[dict[str, Any]]]:
+    players_rows = (
+        supabase.table("players")
+        .select("id,rating,wins,losses,matches_played,last_game_at,is_active,inactive_at")
+        .eq("club_id", club_id)
+        .execute()
+        .data
+        or []
+    )
+    league_rows = (
+        supabase.table("league_ratings")
+        .select("club_id,player_id,league_name,rating,wins,losses,matches_played,starting_rating,is_active,inactive_at")
+        .eq("club_id", club_id)
+        .execute()
+        .data
+        or []
+    )
+    return {
+        "players": [dict(r) for r in players_rows],
+        "league_ratings": [dict(r) for r in league_rows],
+    }
+
+
+def _restore_ratings_state(*, supabase: Any, club_id: str, snapshot: Mapping[str, Any]) -> None:
+    for row in snapshot.get("players", []):
+        pid = _as_int(row.get("id"))
+        if pid is None:
+            continue
+        payload = {
+            "rating": row.get("rating"),
+            "wins": row.get("wins"),
+            "losses": row.get("losses"),
+            "matches_played": row.get("matches_played"),
+            "last_game_at": row.get("last_game_at"),
+            "is_active": row.get("is_active"),
+            "inactive_at": row.get("inactive_at"),
+        }
+        _run_write(lambda pid=pid, payload=payload: sb_update(
+            supabase,
+            "players",
+            payload,
+            filters={"club_id": club_id, "id": int(pid)},
+        ))
+
+    _run_write(lambda: sb_delete(
+        supabase,
+        "league_ratings",
+        filters={"club_id": club_id},
+    ))
+    for row in snapshot.get("league_ratings", []):
+        payload = {
+            "club_id": club_id,
+            "player_id": int(row["player_id"]),
+            "league_name": str(row.get("league_name") or ""),
+            "rating": row.get("rating"),
+            "wins": row.get("wins"),
+            "losses": row.get("losses"),
+            "matches_played": row.get("matches_played"),
+            "starting_rating": row.get("starting_rating"),
+            "is_active": row.get("is_active"),
+            "inactive_at": row.get("inactive_at"),
+        }
+        _run_write(lambda payload=payload: sb_upsert(
+            supabase,
+            "league_ratings",
+            payload,
+            conflict="club_id,player_id,league_name",
+        ))
+
+
 def _run_write(fn):
     """Execute a write callable through the module's single retry wrapper."""
     return sb_retry(fn)
@@ -286,7 +378,11 @@ def _rebuild_state(*, supabase: Any, club_id: str) -> dict[str, int]:
             filters={"club_id": club_id, "id": int(pid)},
         ))
 
-    _run_write(lambda: supabase.table("league_ratings").delete().eq("club_id", club_id).execute())
+    _run_write(lambda: sb_delete(
+        supabase,
+        "league_ratings",
+        filters={"club_id": club_id},
+    ))
     for (pid, league_name), state in league_state.items():
         payload = {
             "club_id": club_id,
@@ -323,9 +419,40 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     """
     scoped_club_id = _require_club_id(club_id)
     payload = _coerce_match_payload(scoped_club_id, match_payload)
-    inserted = _run_write(lambda: sb_insert(supabase, "matches", payload))
-    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-    return {"inserted": getattr(inserted, "data", None) or [], "rebuild": rebuild}
+    snapshot = _snapshot_ratings_state(supabase=supabase, club_id=scoped_club_id)
+    inserted_rows: list[dict[str, Any]] = []
+    inserted_match_id: int | None = None
+    warnings: list[str] = []
+
+    try:
+        inserted = _run_write(lambda: sb_insert(supabase, "matches", payload))
+        inserted_rows = getattr(inserted, "data", None) or []
+        inserted_match_id = _as_int((inserted_rows[0] or {}).get("id")) if inserted_rows else None
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        return _pipeline_result(
+            success=True,
+            match_id=inserted_match_id,
+            warnings=warnings,
+            inserted=inserted_rows,
+            rebuild=rebuild,
+        )
+    except Exception as exc:
+        if inserted_match_id is not None:
+            _run_write(lambda: sb_delete(
+                supabase,
+                "matches",
+                filters={"club_id": scoped_club_id, "id": int(inserted_match_id)},
+            ))
+            warnings.append("rolled_back_inserted_match")
+        _restore_ratings_state(supabase=supabase, club_id=scoped_club_id, snapshot=snapshot)
+        warnings.append("ratings_restored_from_snapshot")
+        err = MatchPipelineError(f"record_match failed: {exc}")
+        return _pipeline_result(
+            success=False,
+            match_id=inserted_match_id,
+            warnings=warnings,
+            error=str(err),
+        )
 
 
 def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[str, Any]) -> dict[str, Any]:
@@ -335,16 +462,58 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
     downstream snapshots/ratings/activity remain deterministic.
     """
     scoped_club_id = _require_club_id(club_id)
+    target_match_id = int(match_id)
     safe_patch = _coerce_match_payload(scoped_club_id, patch)
     safe_patch.pop("club_id", None)
-    updated = _run_write(lambda: sb_update(
-        supabase,
-        "matches",
-        safe_patch,
-        filters={"club_id": scoped_club_id, "id": int(match_id)},
-    ))
-    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-    return {"updated": getattr(updated, "data", None) or [], "rebuild": rebuild}
+    snapshot = _snapshot_ratings_state(supabase=supabase, club_id=scoped_club_id)
+    match_before_rows = (
+        supabase.table("matches")
+        .select("*")
+        .eq("club_id", scoped_club_id)
+        .eq("id", target_match_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    match_before = dict(match_before_rows[0]) if match_before_rows else None
+    warnings: list[str] = []
+
+    try:
+        updated = _run_write(lambda: sb_update(
+            supabase,
+            "matches",
+            safe_patch,
+            filters={"club_id": scoped_club_id, "id": target_match_id},
+        ))
+        updated_rows = getattr(updated, "data", None) or []
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        return _pipeline_result(
+            success=True,
+            match_id=target_match_id,
+            warnings=warnings,
+            updated=updated_rows,
+            rebuild=rebuild,
+        )
+    except Exception as exc:
+        if match_before:
+            restore_patch = {k: v for k, v in match_before.items() if k in _ALLOWED_MATCH_KEYS}
+            _run_write(lambda restore_patch=restore_patch: sb_update(
+                supabase,
+                "matches",
+                restore_patch,
+                filters={"club_id": scoped_club_id, "id": target_match_id},
+            ))
+            warnings.append("rolled_back_match_patch")
+        _restore_ratings_state(supabase=supabase, club_id=scoped_club_id, snapshot=snapshot)
+        warnings.append("ratings_restored_from_snapshot")
+        err = MatchPipelineError(f"update_match failed: {exc}")
+        return _pipeline_result(
+            success=False,
+            match_id=target_match_id,
+            warnings=warnings,
+            error=str(err),
+        )
 
 
 def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any]:
@@ -354,13 +523,24 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
     to avoid stale ratings, snapshots, player activity, or badge queue drift.
     """
     scoped_club_id = _require_club_id(club_id)
-    deleted = _run_write(lambda: sb_delete(
-        supabase,
-        "matches",
-        filters={"club_id": scoped_club_id, "id": int(match_id)},
-    ))
-    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-    return {"deleted": getattr(deleted, "data", None) or [], "rebuild": rebuild}
+    target_match_id = int(match_id)
+    try:
+        deleted = _run_write(lambda: sb_delete(
+            supabase,
+            "matches",
+            filters={"club_id": scoped_club_id, "id": target_match_id},
+        ))
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        return _pipeline_result(
+            success=True,
+            match_id=target_match_id,
+            warnings=[],
+            deleted=getattr(deleted, "data", None) or [],
+            rebuild=rebuild,
+        )
+    except Exception as exc:
+        err = MatchPipelineError(f"delete_match failed: {exc}")
+        return _pipeline_result(success=False, match_id=target_match_id, warnings=[], error=str(err))
 
 
 def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict[str, Any]:
@@ -368,16 +548,20 @@ def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict
     scoped_club_id = _require_club_id(club_id)
     ids = sorted({int(mid) for mid in (match_ids or [])})
     deleted_rows: list[dict[str, Any]] = []
-    for match_id in ids:
-        deleted = _run_write(lambda match_id=match_id: sb_delete(
-            supabase,
-            "matches",
-            filters={"club_id": scoped_club_id, "id": int(match_id)},
-        ))
-        deleted_rows.extend(getattr(deleted, "data", None) or [])
+    try:
+        for match_id in ids:
+            deleted = _run_write(lambda match_id=match_id: sb_delete(
+                supabase,
+                "matches",
+                filters={"club_id": scoped_club_id, "id": int(match_id)},
+            ))
+            deleted_rows.extend(getattr(deleted, "data", None) or [])
 
-    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-    return {"deleted": deleted_rows, "rebuild": rebuild}
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        return _pipeline_result(success=True, match_id=None, warnings=[], deleted=deleted_rows, rebuild=rebuild)
+    except Exception as exc:
+        err = MatchPipelineError(f"delete_matches failed: {exc}")
+        return _pipeline_result(success=False, match_id=None, warnings=[], error=str(err))
 
 
 def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, target_player_id: int) -> dict[str, Any]:
@@ -392,35 +576,39 @@ def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, tar
     if src == dst:
         raise ValueError("source_player_id and target_player_id must differ")
 
-    matches = (
-        supabase.table("matches")
-        .select("id,t1_p1,t1_p2,t2_p1,t2_p2")
-        .eq("club_id", scoped_club_id)
-        .or_(f"t1_p1.eq.{src},t1_p2.eq.{src},t2_p1.eq.{src},t2_p2.eq.{src}")
-        .execute()
-        .data
-        or []
-    )
+    try:
+        matches = (
+            supabase.table("matches")
+            .select("id,t1_p1,t1_p2,t2_p1,t2_p2")
+            .eq("club_id", scoped_club_id)
+            .or_(f"t1_p1.eq.{src},t1_p2.eq.{src},t2_p1.eq.{src},t2_p2.eq.{src}")
+            .execute()
+            .data
+            or []
+        )
 
-    rewritten = 0
-    for row in matches:
-        match_id = int(row["id"])
-        patch: dict[str, int] = {}
-        for slot in _SLOT_KEYS:
-            if _as_int(row.get(slot)) == src:
-                patch[slot] = dst
-        if not patch:
-            continue
-        _run_write(lambda match_id=match_id, patch=patch: sb_update(
-            supabase,
-            "matches",
-            patch,
-            filters={"club_id": scoped_club_id, "id": match_id},
-        ))
-        rewritten += 1
+        rewritten = 0
+        for row in matches:
+            match_id = int(row["id"])
+            patch: dict[str, int] = {}
+            for slot in _SLOT_KEYS:
+                if _as_int(row.get(slot)) == src:
+                    patch[slot] = dst
+            if not patch:
+                continue
+            _run_write(lambda match_id=match_id, patch=patch: sb_update(
+                supabase,
+                "matches",
+                patch,
+                filters={"club_id": scoped_club_id, "id": match_id},
+            ))
+            rewritten += 1
 
-    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-    return {"matches_rewritten": rewritten, "rebuild": rebuild}
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        return _pipeline_result(success=True, match_id=None, warnings=[], matches_rewritten=rewritten, rebuild=rebuild)
+    except Exception as exc:
+        err = MatchPipelineError(f"merge_player_into failed: {exc}")
+        return _pipeline_result(success=False, match_id=None, warnings=[], error=str(err))
 
 
 def reassign_match_players(
@@ -436,6 +624,7 @@ def reassign_match_players(
     and trigger full projection recalculation.
     """
     scoped_club_id = _require_club_id(club_id)
+    target_match_id = int(match_id)
     patch = {
         slot: int(pid)
         for slot, pid in dict(reassignments).items()
@@ -444,17 +633,28 @@ def reassign_match_players(
     if not patch:
         raise ValueError("reassignments must include at least one valid match slot")
 
-    updated = _run_write(lambda: sb_update(
-        supabase,
-        "matches",
-        patch,
-        filters={"club_id": scoped_club_id, "id": int(match_id)},
-    ))
-    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-    return {"updated": getattr(updated, "data", None) or [], "rebuild": rebuild}
+    try:
+        updated = _run_write(lambda: sb_update(
+            supabase,
+            "matches",
+            patch,
+            filters={"club_id": scoped_club_id, "id": target_match_id},
+        ))
+        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        return _pipeline_result(
+            success=True,
+            match_id=target_match_id,
+            warnings=[],
+            updated=getattr(updated, "data", None) or [],
+            rebuild=rebuild,
+        )
+    except Exception as exc:
+        err = MatchPipelineError(f"reassign_match_players failed: {exc}")
+        return _pipeline_result(success=False, match_id=target_match_id, warnings=[], error=str(err))
 
 
 __all__ = [
+    "MatchPipelineError",
     "record_match",
     "update_match",
     "delete_match",
