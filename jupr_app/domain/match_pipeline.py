@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_update, sb_upsert
 from jupr_app.domain.ratings import calculate_hybrid_elo
 
 
@@ -50,22 +50,6 @@ def record_match(
         source=source,
     )
 
-    existing = (
-        supabase.table("matches")
-        .select("*")
-        .eq("club_id", club_id)
-        .eq("idempotency_key", idempotency_key)
-        .limit(1)
-        .execute()
-    )
-    existing_rows = getattr(existing, "data", None) or []
-    if existing_rows:
-        return {
-            "status": "exists",
-            "idempotency_key": idempotency_key,
-            "match": dict(existing_rows[0]),
-        }
-
     snapshot = _build_rating_snapshot(player_rows, normalized_team_a, normalized_team_b)
     rating_delta = _compute_rating_delta(
         snapshot=snapshot,
@@ -101,10 +85,25 @@ def record_match(
         "match_type": source,
     }
 
-    inserted_match_resp = sb_insert(supabase, "matches", match_payload)
+    inserted_match_resp = (
+        supabase.table("matches")
+        .upsert(
+            match_payload,
+            on_conflict="idempotency_key",
+            ignore_duplicates=True,
+        )
+        .execute()
+    )
     inserted_rows = getattr(inserted_match_resp, "data", None) or []
     if not inserted_rows:
-        raise RuntimeError("Failed to insert match row")
+        existing_match = _fetch_existing_match(supabase, idempotency_key=idempotency_key)
+        print("[PIPELINE] idempotent hit — skipping delta")
+        return {
+            "status": "exists",
+            "idempotency_key": idempotency_key,
+            "match": existing_match,
+        }
+
     inserted_match = dict(inserted_rows[0])
     inserted_match_id = str(inserted_match.get("id") or idempotency_key)
 
@@ -205,6 +204,20 @@ def _normalize_optional_str(value: str | None) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _fetch_existing_match(supabase, *, idempotency_key: str) -> dict[str, Any]:
+    existing = (
+        supabase.table("matches")
+        .select("*")
+        .eq("idempotency_key", idempotency_key)
+        .limit(1)
+        .execute()
+    )
+    existing_rows = getattr(existing, "data", None) or []
+    if not existing_rows:
+        raise RuntimeError("Failed to fetch existing idempotent match row")
+    return dict(existing_rows[0])
 
 
 def _fetch_and_validate_players(supabase, *, club_id: str, player_ids: list[int]) -> dict[int, dict[str, Any]]:
