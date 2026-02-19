@@ -8,6 +8,7 @@ from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.replay_lock import is_replay_running
+from jupr_app.data.sb_write import sb_update
 from jupr_app.ui.layout import page_shell
 
 
