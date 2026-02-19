@@ -162,3 +162,19 @@ def test_record_match_returns_existing_on_idempotency_hit(monkeypatch):
     assert result["idempotent_hit"] is True
     assert result["existing"]["id"] == 55
     assert rebuild_calls == []
+
+
+def test_require_club_scope_rejects_missing_club_id_in_payload():
+    try:
+        match_pipeline.require_club_scope("club-1", {"id": 42})
+        assert False, "expected MatchPipelineError"
+    except match_pipeline.MatchPipelineError as exc:
+        assert "club_id scope is required" in str(exc)
+
+
+def test_require_club_scope_rejects_mismatched_club_id():
+    try:
+        match_pipeline.require_club_scope("club-1", {"club_id": "club-2", "id": 42})
+        assert False, "expected MatchPipelineError"
+    except match_pipeline.MatchPipelineError as exc:
+        assert "club_id scope mismatch" in str(exc)
