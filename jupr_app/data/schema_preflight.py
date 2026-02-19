@@ -12,6 +12,7 @@ REQUIRED_PLAYER_BADGES_COLUMNS = {
     "rule_version",
     "eval_run_id",
 }
+REQUIRED_SCHEMA_VERSION = "rebuild_phase1_alignment"
 REQUIRED_REVOKED_COLUMNS = {
     "revoked_at",
     "revoked_by",
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 def ensure_badge_schema_preflight(supabase: Any) -> bool:
     if _should_skip_preflight():
         return True
+    _ensure_required_schema_version(supabase)
     missing_columns = _find_missing_player_badges_columns(supabase)
     missing_tables = _find_missing_tables(supabase, REQUIRED_BADGE_TABLES)
     missing_optional_tables = _find_missing_tables(supabase, OPTIONAL_BADGE_TABLES)
@@ -53,6 +55,33 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
             ", ".join(sorted(missing_optional_tables)),
         )
     return True
+
+
+def _ensure_required_schema_version(supabase: Any) -> None:
+    try:
+        resp = supabase.table("schema_version").select("version").limit(1).execute()
+    except APIError as exc:
+        code = _get_api_error_code(exc)
+        message = _get_api_error_message(exc)
+        raise RuntimeError(
+            "Database schema version check failed. Missing schema_version table or inaccessible version column. "
+            f"Expected version '{REQUIRED_SCHEMA_VERSION}'. (code={code} message={message})"
+        ) from exc
+
+    rows = resp.data or []
+    if not rows:
+        raise RuntimeError(
+            "Database schema version check failed. schema_version is empty. "
+            f"Expected version '{REQUIRED_SCHEMA_VERSION}'."
+        )
+
+    db_version = str(rows[0].get("version") or "").strip()
+    if db_version != REQUIRED_SCHEMA_VERSION:
+        raise RuntimeError(
+            "Database schema version mismatch. "
+            f"Expected '{REQUIRED_SCHEMA_VERSION}' but found '{db_version or '<empty>'}'. "
+            "Apply the latest migrations before starting the app."
+        )
 
 
 def _find_missing_player_badges_columns(supabase: Any) -> set[str]:
