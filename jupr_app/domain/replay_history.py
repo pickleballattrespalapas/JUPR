@@ -239,6 +239,7 @@ def replay_history(
                         "players",
                         {"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]},
                         filters={"club_id": club_id, "id": int(pid)},
+                        derived_from_match_history=True,
                     )
                 )
 
