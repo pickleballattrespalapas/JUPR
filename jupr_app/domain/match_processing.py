@@ -64,7 +64,7 @@ def process_matches(
     skipped_incomplete = 0
     skipped_empty = 0
     has_non_popup_match = False
-    allowed_context_types = {"league", "ladder", "tournament", "admin"}
+    allowed_context_types = {"league", "ladder", "tournament", "round_robin", "moneyball", "admin"}
 
     def resolve_context_type(match_row: dict[str, Any], league_name: str) -> str:
         raw_context_type = str(match_row.get("context_type", "") or "").strip().lower()
