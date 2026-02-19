@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import traceback
 import re
-import base64
 
 import jwt
 from supabase import create_client
@@ -12,18 +11,9 @@ from supabase import create_client
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
 
-# -------------------------
-# CONFIG
-# -------------------------
-# Local/dev fallback for share links + link buttons.
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
-
-
-# -------------------------
-# Supabase + data loading
-# -------------------------
 @st.cache_resource
 def get_supabase():
     url = os.getenv("SUPABASE_URL")
@@ -36,6 +26,10 @@ def get_supabase():
         raise RuntimeError("Supabase environment variables missing. Require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
 
     return create_client(url, service_key)
+
+
+def init_supabase():
+    return get_supabase()
 
 
 def assert_schema_health(supabase):
@@ -52,28 +46,18 @@ def get_data(club_id: str):
     return load_data(supabase, club_id, match_limit=5000)
 
 
-# -------------------------
-# UI helpers
-# -------------------------
 def hide_sidebar_and_header_for_public():
-    # Intentionally a no-op: public mode relies on Streamlit config
-    # (initial_sidebar_state="collapsed") and avoids raw HTML/CSS injection.
     return None
 
 
 def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> str:
-    """
-    Public mode top navigation (horizontal radio).
-    Returns the selected label.
-    """
     st.markdown("**Go to:**")
-
     try:
         idx = labels_in_order.index(current_label)
     except ValueError:
         idx = 0
 
-    sel = st.radio(
+    return st.radio(
         label="public_top_nav",
         options=labels_in_order,
         index=idx,
@@ -81,7 +65,6 @@ def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> 
         key="public_top_nav_radio",
         label_visibility="collapsed",
     )
-    return sel
 
 
 def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> str:
@@ -110,23 +93,88 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
             prefix = "👉 " if label == selected else ""
             if st.sidebar.button(f"{prefix}{label}", key=f"nav_btn_{label}", use_container_width=True):
                 selected = label
-                st.session_state["_nav"] = label
         st.sidebar.markdown(" ")
 
     return selected
 
 
+def resolve_auth_session(supabase):
+    params = st.query_params
+
+    if "sb_session" in st.session_state:
+        return st.session_state["sb_session"]
+
+    access_token = params.get("access_token")
+    refresh_token = params.get("refresh_token")
+
+    if access_token and refresh_token:
+        try:
+            supabase.auth.set_session(
+                {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                }
+            )
+            session_obj = supabase.auth.get_session()
+            session = getattr(session_obj, "session", session_obj)
+            if session:
+                st.session_state["sb_session"] = session
+                st.query_params.clear()
+                return session
+        except Exception:
+            pass
+
+    return None
+
+
+def resolve_entry_mode(session):
+    if st.session_state.get("entry_mode"):
+        return st.session_state["entry_mode"]
+    if session:
+        return "auth"
+    return "gateway"
+
+
+def resolve_tenant(session):
+    if session:
+        token = session.access_token
+        payload = jwt.decode(token, options={"verify_signature": False})
+        club_id = payload.get("user_metadata", {}).get("club_id")
+        if not club_id:
+            raise RuntimeError("Authenticated user missing club_id claim.")
+
+        st.session_state["jwt_payload"] = {
+            "sub": payload.get("sub"),
+            "email": payload.get("email"),
+            "club_id": club_id,
+        }
+        return club_id
+
+    st.session_state.pop("jwt_payload", None)
+    return os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
+
+
+def resolve_route(entry_mode, session, visible_labels, page_key_to_label, public_labels_in_order):
+    deep_page_key = st.query_params.get("page", "").strip().lower()
+    label = page_key_to_label.get(deep_page_key)
+    if label in visible_labels:
+        return label
+
+    if entry_mode == "auth" and session and "🧭 Command Center" in visible_labels:
+        return "🧭 Command Center"
+
+    if entry_mode == "public" and public_labels_in_order:
+        return public_labels_in_order[0]
+
+    return visible_labels[0]
+
+
 def main():
-    """
-    Main Streamlit entrypoint. Keep this deterministic for reloads.
-    """
     try:
         from jupr_app.ui.context import AppContext
         from jupr_app.ui.theme_clean import apply_clean_theme
-        from jupr_app.ui.url import qp_get
 
         st.session_state.setdefault("entry_mode", None)
-        st.session_state.setdefault("auth_initialized", False)
 
         st.set_page_config(
             page_title="JUPR Leagues",
@@ -134,186 +182,81 @@ def main():
             page_icon="🌵",
             initial_sidebar_state="collapsed",
         )
-        apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
+        apply_clean_theme(accent_hex="#2F6FED")
 
-        # Make base_url available to all pages (leaderboards uses this for share links)
-        # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
-        # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
-        # and SUPABASE_SERVICE_ROLE_KEY.
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
-        # --------------------------------------------
-        # AUTH STATE INITIALIZATION
-        # --------------------------------------------
-        
-        st.session_state.setdefault("entry_mode", None)
-        
-        supabase = get_supabase()
-        assert_schema_health(get_supabase())
-        
-        # --------------------------------------------
-        # HANDLE SUPABASE REDIRECT FLOWS
-        # --------------------------------------------
-        
-        params = st.query_params
-        access_token = params.get("access_token")
-        refresh_token = params.get("refresh_token")
-        flow_type = params.get("type")
-        
-        if access_token and refresh_token:
-            try:
-                supabase.auth.set_session({
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                })
-        
-                session_obj = supabase.auth.get_session()
-                session = getattr(session_obj, "session", session_obj)
-        
-                if session:
-                    st.session_state["sb_session"] = session
-                    st.session_state["entry_mode"] = "auth"
-        
-                    if flow_type == "recovery":
-                        st.session_state["recovery_mode"] = True
-        
-            except Exception:
-                st.error("Authentication redirect failed.")
-                st.stop()
-        
-            # Clear URL params after handling
-            st.query_params.clear()
-            st.rerun()
-        
-        # --------------------------------------------
-        # EMAIL CONFIRMATION HANDLING
-        # --------------------------------------------
-        
+        supabase = init_supabase()
+        assert_schema_health(supabase)
+
+        session = resolve_auth_session(supabase)
+        flow_type = st.query_params.get("type")
+        if flow_type == "recovery":
+            st.session_state["recovery_mode"] = True
+
         if flow_type == "signup":
             st.success("Email confirmed successfully.")
             st.stop()
-        
-        # --------------------------------------------
-        # GATEWAY SCREEN
-        # --------------------------------------------
-        
-        if st.session_state["entry_mode"] is None:
+
+        entry_mode = resolve_entry_mode(session)
+        st.session_state["entry_mode"] = entry_mode
+
+        if entry_mode == "gateway":
             st.markdown("# JUPR Leagues 🌵")
-        
             col1, col2 = st.columns(2)
-        
             with col1:
                 if st.button("🔐 Login", use_container_width=True):
                     st.session_state["entry_mode"] = "login"
-                    st.rerun()
-        
             with col2:
                 if st.button("🌎 Public Pages", use_container_width=True):
                     st.session_state["entry_mode"] = "public"
-                    st.rerun()
-        
             st.stop()
-        
-        # --------------------------------------------
-        # LOGIN FLOW
-        # --------------------------------------------
-        
-        if st.session_state["entry_mode"] == "login":
-        
-            if not st.session_state.get("sb_session"):
-        
-                st.markdown("## Login")
-        
-                email = st.text_input("Email")
-                password = st.text_input("Password", type="password")
-        
-                if st.button("Login", use_container_width=True):
-                    try:
-                        auth_response = supabase.auth.sign_in_with_password({
-                            "email": email,
-                            "password": password,
-                        })
-                
-                        st.write("Auth response:", auth_response)
-                
-                        session = getattr(auth_response, "session", None)
-                
-                        if session:
-                            st.session_state["sb_session"] = session
-                            st.session_state["entry_mode"] = "auth"
-                            st.rerun()
-                        else:
-                            st.error("Login failed — no session returned.")
-                
-                    except Exception as e:
-                        st.error(f"Login exception: {e}")
 
-        
-                        session = getattr(auth_response, "session", None)
-        
-                        if session:
-                            supabase.auth.set_session({
-                                "access_token": session.access_token,
-                                "refresh_token": session.refresh_token,
-                            })
-                            st.session_state["sb_session"] = session
-                            st.session_state["entry_mode"] = "auth"
-                            st.rerun()
-                        else:
-                            st.error("Login failed.")
-        
-                    except Exception:
-                        st.error("Login failed.")
-        
-                if st.button("Send Magic Link", use_container_width=True):
-                    if not email:
-                        st.error("Email required.")
+        if entry_mode == "login" and not session:
+            st.markdown("## Login")
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+
+            if st.button("Login", use_container_width=True):
+                try:
+                    auth_response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    login_session = getattr(auth_response, "session", None)
+                    if login_session:
+                        st.session_state["sb_session"] = login_session
+                        st.session_state["entry_mode"] = "auth"
                     else:
-                        try:
-                            supabase.auth.sign_in_with_otp({"email": email})
-                            st.success("Magic link sent.")
-                        except Exception:
-                            st.error("Unable to send magic link.")
-        
-                st.stop()
-        
-        # --------------------------------------------
-        # SESSION VALIDATION (NON-DESTRUCTIVE)
-        # --------------------------------------------
+                        st.error("Login failed — no session returned.")
+                except Exception as e:
+                    st.error(f"Login exception: {e}")
+
+            if st.button("Send Magic Link", use_container_width=True):
+                if not email:
+                    st.error("Email required.")
+                else:
+                    try:
+                        supabase.auth.sign_in_with_otp({"email": email})
+                        st.success("Magic link sent.")
+                    except Exception:
+                        st.error("Unable to send magic link.")
+            st.stop()
 
         session = st.session_state.get("sb_session")
-
         if session:
             try:
                 current_obj = supabase.auth.get_session()
                 current_session = getattr(current_obj, "session", current_obj)
-
                 if current_session:
-                    # Update session if Supabase refreshed it internally
                     st.session_state["sb_session"] = current_session
-
-                # IMPORTANT:
-                # Do NOT clear session on transient failure.
-                # Do NOT reset entry_mode here.
-                # Only explicit logout should clear session.
-
+                    session = current_session
             except Exception:
-                # Never wipe session automatically.
-                # Streamlit reruns or minor Supabase hiccups
-                # should not log out admin.
                 pass
-        
-        # --------------------------------------------
-        # PASSWORD RECOVERY MODE
-        # --------------------------------------------
-        
+
         if st.session_state.get("recovery_mode"):
             st.subheader("Set New Password")
-        
             new_password = st.text_input("New Password", type="password")
             confirm_password = st.text_input("Confirm Password", type="password")
-        
+
             if st.button("Update Password"):
                 if not new_password or new_password != confirm_password:
                     st.error("Passwords do not match.")
@@ -322,71 +265,27 @@ def main():
                         supabase.auth.update_user({"password": new_password})
                         st.success("Password updated successfully.")
                         st.session_state.pop("recovery_mode", None)
-                        st.rerun()
                     except Exception:
                         st.error("Password update failed.")
-        
             st.stop()
-        
-        # --------------------------------------------
-        # JWT CLAIM VALIDATION
-        # --------------------------------------------
-        
-        session = st.session_state.get("sb_session")
-        
-        if session:
-            try:
-                token = session.access_token
-                payload = jwt.decode(token, options={"verify_signature": False})
-        
-                user_metadata = payload.get("user_metadata", {})
-                club_id = user_metadata.get("club_id")
-        
-                if not club_id:
-                    st.error("Authenticated user missing club_id claim.")
-                    st.stop()
-        
-                # Store minimal safe payload
-                st.session_state["jwt_payload"] = {
-                    "sub": payload.get("sub"),
-                    "email": payload.get("email"),
-                    "club_id": club_id,
-                }
-        
-            except Exception:
-                st.error("Invalid authentication token.")
-                st.stop()
-        
-        # --------------------------------------------
-        # RESOLVE TENANT
-        # --------------------------------------------
-        
-        if st.session_state.get("sb_session"):
-            club_id = st.session_state["jwt_payload"]["club_id"]
-        else:
-            club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
-        
+
+        try:
+            club_id = resolve_tenant(session)
+        except Exception:
+            st.error("Invalid authentication token.")
+            st.stop()
+
         PUBLIC_MODE = st.session_state["entry_mode"] == "public"
         admin_logged_in = bool(st.session_state.get("sb_session"))
-        
-        # --------------------------------------------
-        # LOGOUT
-        # --------------------------------------------
-        
-        if admin_logged_in:
-            if st.sidebar.button("Log Out"):
-                try:
-                    supabase.auth.sign_out()
-                except Exception:
-                    pass
-        
-                st.session_state.pop("sb_session", None)
-                st.session_state.pop("jwt_payload", None)
-                st.session_state["entry_mode"] = None
-                st.rerun()
 
+        if admin_logged_in and st.sidebar.button("Log Out"):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
+            st.session_state.clear()
+            st.stop()
 
-        # ---- Load data + ctx ----
         (
             df_players_all,
             df_players_active,
@@ -442,9 +341,6 @@ def main():
                 payload={"initial_load": True},
             )
 
-        # -------------------------
-        # LAZY IMPORT PAGES (prevents import-time KeyError crashes)
-        # -------------------------
         from jupr_app.ui.pages import (
             leaderboards,
             league_results,
@@ -473,7 +369,6 @@ def main():
             record_match,
         )
 
-        # ---- Router ----
         PAGES = {
             "🧭 Command Center": admin_dashboard,
             "🏆 Leaderboards": leaderboards,
@@ -485,8 +380,6 @@ def main():
             "🧪 Badge Debug": badge_debug,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
-
-            # Admin-only
             "🏟️ League Manager": league_manager,
             "📝 Match Uploader": record_match,
             "🧾 Record Match": record_match,
@@ -502,8 +395,6 @@ def main():
             "🏆 Division Manager": division_manager,
             "🏆 Tournament Bracket": tournament_public,
             "🗞️ Weekly Recap": weekly_recap,
-
-            # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
         }
 
@@ -519,8 +410,6 @@ def main():
             "badge_debug": "🧪 Badge Debug",
             "challenge_ladder": "🪜 Challenge Ladder",
             "faqs": "❓ FAQs",
-
-            # Admin-only deep links
             "league_manager": "🏟️ League Manager",
             "match_uploader": "🧾 Record Match",
             "record_match": "🧾 Record Match",
@@ -538,8 +427,6 @@ def main():
             "division_manager": "🏆 Division Manager",
             "tournament_public": "🏆 Tournament Bracket",
             "weekly_recap": "🗞️ Weekly Recap",
-
-            # Admin-only deep links
             "weekly_recap_admin": "🗞️ Weekly Recap Admin",
         }
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
@@ -564,15 +451,10 @@ def main():
             "🗞️ Weekly Recap Admin",
         }
 
-        # Visible labels based on auth
         all_labels = list(PAGES.keys())
-        if not admin_logged_in:
-            visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
-        else:
-            visible_labels = all_labels
+        visible_labels = all_labels if admin_logged_in else [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         st.session_state["_visible_labels"] = visible_labels
 
-        # Public nav order (old UX)
         PUBLIC_NAV_KEYS = [
             "leaderboards",
             "league_results",
@@ -586,13 +468,8 @@ def main():
         ]
         public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
 
-        # -------------------------
-        # Deep link resolution
-        # -------------------------
-        deep_page_key = qp_get("page", "").strip().lower()
-        deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
-
-        deep_route = qp_get("route", "").strip().strip("/")
+        deep_label = ""
+        deep_route = st.query_params.get("route", "").strip().strip("/")
         tournament_match = re.fullmatch(r"tournament/([^/]+)", deep_route)
         route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
         if tournament_match:
@@ -604,39 +481,22 @@ def main():
                 st.query_params["tournament_id"] = route_match.group(1)
                 st.query_params["division_id"] = route_match.group(2)
             deep_label = "🏆 Tournament Bracket" if PUBLIC_MODE else "🏆 Division Manager"
+        if PUBLIC_MODE and deep_label in ADMIN_ONLY_LABELS:
+            deep_label = ""
+        if deep_label:
+            st.query_params["page"] = LABEL_TO_PAGE_KEY.get(deep_label, "leaderboards")
+
+        sel = resolve_route(
+            entry_mode=st.session_state["entry_mode"],
+            session=session,
+            visible_labels=visible_labels,
+            page_key_to_label=PAGE_KEY_TO_LABEL,
+            public_labels_in_order=public_labels_in_order,
+        )
 
         if PUBLIC_MODE:
-            # Block admin-only deep links in public mode
-            if deep_label in ADMIN_ONLY_LABELS:
-                deep_label = ""
-
-            current_label = deep_label if deep_label in public_labels_in_order else public_labels_in_order[0]
-            sel = render_public_top_nav(
-                labels_in_order=public_labels_in_order,
-                current_label=current_label,
-            )
-
+            sel = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=sel)
         else:
-            # Apply deep link once (only if that page is visible)
-            if (not bool(st.session_state.get("deep_link_applied", False))) and (deep_label in visible_labels):
-                st.session_state["main_nav"] = deep_label
-                st.session_state["deep_link_applied"] = True
-
-            # Ensure valid selection
-            if "main_nav" not in st.session_state:
-                if admin_logged_in:
-                    st.session_state["main_nav"] = "🧭 Command Center"
-                else:
-                    st.session_state["main_nav"] = visible_labels[0]
-
-            if st.session_state["main_nav"] not in visible_labels:
-                st.session_state["main_nav"] = visible_labels[0]
-
-            prev_admin_logged_in = bool(st.session_state.get("prev_admin_logged_in", False))
-            if admin_logged_in and not prev_admin_logged_in:
-                st.session_state["main_nav"] = "🧭 Command Center"
-            st.session_state["prev_admin_logged_in"] = admin_logged_in
-
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
                 get_data.clear()
                 try:
@@ -645,29 +505,16 @@ def main():
                     clear_requirements_cache()
                 except Exception:
                     pass
-                st.rerun()
-
-            sel = render_admin_sidebar_nav(
-                current_label=st.session_state.get("main_nav", "🧭 Command Center"),
-                admin_logged_in=admin_logged_in,
-            )
-
+            sel = render_admin_sidebar_nav(current_label=sel, admin_logged_in=admin_logged_in)
             if sel not in visible_labels:
                 sel = visible_labels[0]
-                st.session_state["main_nav"] = sel
 
-        # -------------------------
-        # Keep URL synced ONLY in public mode
-        # -------------------------
         if PUBLIC_MODE:
             try:
                 st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
             except Exception:
                 pass
 
-        # -------------------------
-        # Render page
-        # -------------------------
         page_mod = PAGES.get(sel)
         if page_mod is None:
             st.error(f"Unknown page selection: {sel}")
