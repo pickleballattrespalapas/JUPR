@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_insert
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
@@ -8,6 +8,7 @@ import json
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.match_pipeline import update_match
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
     """
@@ -143,8 +144,6 @@ def apply_bulk_match_edits(
     affected_players: Set[int] = set()
 
     # For audit
-    audit_before: List[Dict[str, Any]] = []
-    audit_after: List[Dict[str, Any]] = []
     applied: List[Dict[str, Any]] = []
 
     warnings: List[str] = []
@@ -213,20 +212,26 @@ def apply_bulk_match_edits(
         if not update:
             continue
 
-        # audit snapshots (only changed fields + id)
-        b_snap = {"id": mid}
-        a_snap = {"id": mid}
-        for k, newv in update.items():
-            b_snap[k] = before.get(k)
-            a_snap[k] = newv
-
-        # Apply update
-        sb_update(supabase, "matches", update, filters={"club_id": club_id, "id": mid})
+        # Apply update via pipeline
+        update_match(
+            supabase,
+            match_id=str(mid),
+            club_id=str(club_id),
+            played_at=update.get("date"),
+            league=update.get("league"),
+            week_tag=update.get("week_tag"),
+            match_type=update.get("match_type"),
+            notes=update.get("notes"),
+            is_active=update.get("is_active"),
+            score_a=update.get("score_t1"),
+            score_b=update.get("score_t2"),
+            tournament_id=update.get("tournament_id"),
+            tournament_game_id=update.get("tournament_game_id"),
+            is_popup=update.get("is_popup"),
+        )
 
         updated_ids.append(mid)
         applied.append({"id": mid, **update})
-        audit_before.append(b_snap)
-        audit_after.append(a_snap)
 
     recompute_scope = compute_recompute_scope(patches)
 
@@ -242,8 +247,6 @@ def apply_bulk_match_edits(
             "updated_ids": updated_ids,
             "affected_leagues": sorted(affected_leagues),
             "recompute_scope": recompute_scope,
-            "before": audit_before,
-            "after": audit_after,
             "patches": applied,
             "warnings": warnings,
         },

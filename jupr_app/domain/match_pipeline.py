@@ -199,28 +199,40 @@ def update_match(
     supabase,
     *,
     match_id: str,
-    score_a: int,
-    score_b: int,
+    score_a: int | None = None,
+    score_b: int | None = None,
     played_at: str | None = None,
     league: str | None = None,
     week_tag: str | None = None,
+    match_type: str | None = None,
+    notes: str | None = None,
+    is_active: bool | None = None,
     tournament_id: str | None = None,
     tournament_game_id: str | None = None,
     is_popup: bool | None = None,
+    club_id: str | None = None,
 ) -> dict:
     normalized_match_id = str(match_id or "").strip()
     if not normalized_match_id:
         raise ValueError("match_id is required")
 
-    payload: dict[str, Any] = {
-        "score_t1": int(score_a),
-        "score_t2": int(score_b),
-        "date": _normalize_played_at(played_at),
-    }
+    payload: dict[str, Any] = {}
+    if score_a is not None:
+        payload["score_t1"] = int(score_a)
+    if score_b is not None:
+        payload["score_t2"] = int(score_b)
+    if played_at is not None:
+        payload["date"] = _normalize_played_at(played_at)
     if league is not None:
         payload["league"] = str(league)
     if week_tag is not None:
         payload["week_tag"] = str(week_tag)
+    if match_type is not None:
+        payload["match_type"] = str(match_type)
+    if notes is not None:
+        payload["notes"] = str(notes)
+    if is_active is not None:
+        payload["is_active"] = bool(is_active)
     if tournament_id is not None:
         payload["tournament_id"] = str(tournament_id)
     if tournament_game_id is not None:
@@ -228,7 +240,14 @@ def update_match(
     if is_popup is not None:
         payload["is_popup"] = bool(is_popup)
 
-    result = sb_update(supabase, "matches", payload, filters={"id": normalized_match_id})
+    if not payload:
+        raise ValueError("At least one field is required to update a match")
+
+    filters: dict[str, Any] = {"id": normalized_match_id}
+    if club_id is not None and str(club_id).strip():
+        filters["club_id"] = str(club_id).strip()
+
+    result = sb_update(supabase, "matches", payload, filters=filters)
     rows = getattr(result, "data", None) or []
     if not rows:
         raise RuntimeError(f"Failed to update matches row for id={normalized_match_id}")
