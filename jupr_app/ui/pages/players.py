@@ -14,11 +14,11 @@ from jupr_app.domain import stories as story_domain
 from jupr_app.ui.components.badge_cards import render_inline_badge_text
 from jupr_app.ui.components.story_cards import render_story_cards
 from jupr_app.ui.helpers import (
-    qp_get,
     build_match_explorer_link,
     display_requirement_text,
     sanitize_story_text,
 )
+from jupr_app.ui.url import qp_get
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
