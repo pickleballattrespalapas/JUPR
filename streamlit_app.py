@@ -319,12 +319,7 @@ def main():
         )
 
         if admin_logged_in and schema_degraded:
-            st.warning(
-                "Badge schema is behind the app code. Apply migrations/20260625_badge_recompute_runs.sql and "
-                "migrations/20260630_player_badges_revocation.sql to restore awarded_by/rule_version/"
-                "eval_run_id/revoked_* support. "
-                f"Details: {schema_degraded_reason}"
-            )
+            st.warning(f"Schema preflight degraded mode enabled. {schema_degraded_reason}")
 
         if df_player_badges is not None and df_player_badges.empty:
             from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
