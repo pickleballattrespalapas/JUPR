@@ -6,6 +6,7 @@ from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
 import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -76,16 +77,29 @@ def process_matches(
             return "league"
         return "admin"
 
+    def parse_uuid(value: Any) -> str | None:
+        if value is None:
+            return None
+
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+
+        try:
+            return str(uuid.UUID(normalized))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
     def resolve_context_id(match_row: dict[str, Any], context_type: str, league_name: str) -> str | None:
         raw_context_id = match_row.get("context_id")
-        if raw_context_id is not None and str(raw_context_id).strip() != "":
-            return str(raw_context_id)
-        if context_type == "league" and league_name:
-            return str(league_name)
+        parsed_context_id = parse_uuid(raw_context_id)
+        if parsed_context_id:
+            return parsed_context_id
         if context_type == "tournament":
             tournament_id = match_row.get("tournament_id")
-            if tournament_id is not None and str(tournament_id).strip() != "":
-                return str(tournament_id)
+            parsed_tournament_id = parse_uuid(tournament_id)
+            if parsed_tournament_id:
+                return parsed_tournament_id
         return None
 
     def build_idempotency_key(match_row: dict[str, Any]) -> str:

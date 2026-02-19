@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any, Literal, Mapping
 
 from jupr_app.data.client import make_supabase
 from jupr_app.domain.match_pipeline import record_match
 
 _ALLOWED_CONTEXT_TYPES = {"league", "ladder", "tournament", "round_robin", "moneyball", "admin"}
+
+
+def _coerce_uuid(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+
+    try:
+        return str(uuid.UUID(normalized))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def get_supabase_client() -> Any:
@@ -40,7 +55,7 @@ def submit_match(
 
     payload = dict(match_payload or {})
     payload["context_type"] = context_type
-    payload["context_id"] = context_id
+    payload["context_id"] = _coerce_uuid(context_id)
     if idempotency_key is not None:
         payload["idempotency_key"] = idempotency_key
 
