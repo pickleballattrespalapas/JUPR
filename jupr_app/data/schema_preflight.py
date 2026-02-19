@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 from postgrest.exceptions import APIError
@@ -32,6 +33,29 @@ _MISSING_TABLE_CODES = {"PGRST205", "42P01"}
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_UPSERT_INDEXES = (
+    {
+        "index_name": "badge_eval_queue_event_match_uidx",
+        "table": "badge_eval_queue",
+        "columns": ["club_id", "event_type", "match_id"],
+        "predicate": "match_id IS NOT NULL",
+        "create_sql": (
+            "CREATE UNIQUE INDEX badge_eval_queue_event_match_uidx ON public.badge_eval_queue "
+            "(club_id,event_type,match_id) WHERE match_id IS NOT NULL;"
+        ),
+    },
+    {
+        "index_name": "league_ratings_club_player_league_uidx",
+        "table": "league_ratings",
+        "columns": ["club_id", "player_id", "league_name"],
+        "predicate": None,
+        "create_sql": (
+            "CREATE UNIQUE INDEX league_ratings_club_player_league_uidx ON public.league_ratings "
+            "(club_id,player_id,league_name);"
+        ),
+    },
+)
+
 
 def ensure_badge_schema_preflight(supabase: Any) -> bool:
     if _should_skip_preflight():
@@ -55,6 +79,37 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
             ", ".join(sorted(missing_optional_tables)),
         )
     return True
+
+
+def check_required_upsert_indexes(supabase: Any) -> tuple[bool, str | None]:
+    """Read-only check for unique indexes required by PostgREST upserts."""
+    if _should_skip_preflight():
+        return False, None
+
+    try:
+        resp = (
+            supabase.table("pg_indexes")
+            .select("schemaname,tablename,indexname,indexdef")
+            .eq("schemaname", "public")
+            .in_("tablename", [spec["table"] for spec in REQUIRED_UPSERT_INDEXES])
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("Failed to run upsert index preflight; continuing without degradation", exc_info=exc)
+        return False, None
+
+    rows = resp.data or []
+    missing_specs = [spec for spec in REQUIRED_UPSERT_INDEXES if not _has_matching_index(rows, spec)]
+    if not missing_specs:
+        return False, None
+
+    missing_names = ", ".join(spec["index_name"] for spec in missing_specs)
+    sql_block = "\n".join(spec["create_sql"] for spec in missing_specs)
+    reason = (
+        "Missing required unique indexes for PostgREST upserts: "
+        f"{missing_names}. Apply SQL:\n{sql_block}"
+    )
+    return True, reason
 
 
 def _ensure_required_schema_version(supabase: Any) -> None:
@@ -119,6 +174,50 @@ def _probe_column(supabase: Any, table: str, column: str) -> bool:
             f"PostgREST error while checking {table}.{column} (code={code} message={message})."
         ) from exc
     return True
+
+
+def _has_matching_index(rows: list[dict[str, Any]], spec: dict[str, Any]) -> bool:
+    expected_columns = [str(col).strip().lower() for col in spec["columns"]]
+    expected_predicate = _normalize_expression(spec.get("predicate") or "")
+
+    for row in rows:
+        if str(row.get("tablename") or "") != spec["table"]:
+            continue
+        if str(row.get("indexname") or "") != spec["index_name"]:
+            continue
+
+        indexdef = str(row.get("indexdef") or "")
+        if "UNIQUE" not in indexdef.upper():
+            continue
+        if _extract_index_columns(indexdef) != expected_columns:
+            continue
+
+        actual_predicate = _extract_predicate(indexdef)
+        if expected_predicate != _normalize_expression(actual_predicate):
+            continue
+        return True
+
+    return False
+
+
+def _extract_index_columns(indexdef: str) -> list[str]:
+    match = re.search(r"\(([^)]+)\)", indexdef)
+    if not match:
+        return []
+    return [part.strip().strip('"').lower() for part in match.group(1).split(",") if part.strip()]
+
+
+def _extract_predicate(indexdef: str) -> str:
+    marker = " WHERE "
+    upper = indexdef.upper()
+    idx = upper.find(marker)
+    if idx < 0:
+        return ""
+    return indexdef[idx + len(marker) :].strip().rstrip(";")
+
+
+def _normalize_expression(value: str) -> str:
+    return " ".join(str(value).replace("(", " ").replace(")", " ").lower().split())
 
 
 def _probe_table(supabase: Any, table: str) -> bool:
