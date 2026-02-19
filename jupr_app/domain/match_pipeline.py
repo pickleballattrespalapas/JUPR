@@ -1,3 +1,8 @@
+"""
+THIS IS THE ONLY MATCH WRITE ENTRYPOINT.
+All match writes must pass through this module.
+"""
+
 from __future__ import annotations
 
 import hashlib
