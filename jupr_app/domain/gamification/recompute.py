@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# SCHEMA STRICT MODE ENABLED
+# All environments must match migrations
+
 from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
 from dataclasses import asdict
@@ -58,6 +61,7 @@ def run_badge_recompute(
     try:
         if ctx is None:
             ctx = _load_ctx(supabase, club_id, match_limit)
+        _require_strict_schema(ctx)
         ctx = _apply_match_filters(ctx, since=since, until=until)
 
         computed = list(
@@ -178,6 +182,14 @@ def _load_ctx(supabase: Any, club_id: str, match_limit: int) -> Any:
         schema_degraded=schema_degraded,
         schema_degraded_reason=schema_degraded_reason,
     )
+
+
+def _require_strict_schema(ctx: Any) -> None:
+    if getattr(ctx, "schema_degraded", False):
+        raise RuntimeError(
+            "Schema degraded mode is not supported. "
+            f"Apply required migrations: {getattr(ctx, 'schema_degraded_reason', 'unknown reason')}"
+        )
 
 
 def _apply_match_filters(ctx: Any, *, since: str | None, until: str | None) -> Any:

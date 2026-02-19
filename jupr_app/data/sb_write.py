@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# SCHEMA STRICT MODE ENABLED
+# All environments must match migrations
+
 from typing import Any, Dict
 
 

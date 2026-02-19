@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# SCHEMA STRICT MODE ENABLED
+# All environments must match migrations
+
 from datetime import datetime, timezone
 from typing import Any
 
@@ -65,7 +68,7 @@ def update_match_facts_for_players(
         _set_numeric_fact(supabase, str(club_id), int(pid), context_id, "best_win_streak", best_streak, now_iso)
 
         current_rating = _read_player_rating(supabase, str(club_id), int(pid))
-        starting_rating = _read_player_starting_rating(supabase, str(club_id), int(pid), fallback=current_rating)
+        starting_rating = _read_player_starting_rating(supabase, str(club_id), int(pid))
         _set_numeric_fact(
             supabase,
             str(club_id),
@@ -257,10 +260,10 @@ def _read_player_rating(supabase: Any, club_id: str, player_id: int) -> float:
     return float(rows[0].get("rating") or 1200.0)
 
 
-def _read_player_starting_rating(supabase: Any, club_id: str, player_id: int, *, fallback: float) -> float:
+def _read_player_starting_rating(supabase: Any, club_id: str, player_id: int) -> float:
     resp = (
         supabase.table("players")
-        .select("starting_rating,rating")
+        .select("starting_rating")
         .eq("club_id", club_id)
         .eq("id", int(player_id))
         .limit(1)
@@ -268,13 +271,13 @@ def _read_player_starting_rating(supabase: Any, club_id: str, player_id: int, *,
     )
     rows = resp.data or []
     if not rows:
-        return float(fallback)
+        raise RuntimeError(f"Missing players row for club_id={club_id} player_id={player_id}")
     row = rows[0]
     starting = row.get("starting_rating")
     if starting is None:
-        starting = row.get("rating")
-    if starting is None:
-        return float(fallback)
+        raise RuntimeError(
+            f"Missing required players.starting_rating for club_id={club_id} player_id={player_id}"
+        )
     return float(starting)
 
 
