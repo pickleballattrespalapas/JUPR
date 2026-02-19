@@ -38,6 +38,20 @@ def get_supabase():
     return create_client(url, service_key)
 
 
+def assert_schema_health(supabase):
+    required_tables = [
+        "players",
+        "matches",
+        "league_ratings",
+        "badges",
+        "player_badges",
+    ]
+    for table in required_tables:
+        resp = supabase.table(table).select("id").limit(1).execute()
+        if resp is None:
+            raise RuntimeError(f"Schema validation failed for table: {table}")
+
+
 @st.cache_data(ttl=30)
 def get_data(club_id: str):
     from jupr_app.data.load import load_data
@@ -144,6 +158,7 @@ def main():
         st.session_state.setdefault("entry_mode", None)
         
         supabase = get_supabase()
+        assert_schema_health(get_supabase())
         
         # --------------------------------------------
         # HANDLE SUPABASE REDIRECT FLOWS

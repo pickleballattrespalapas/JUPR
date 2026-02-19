@@ -9,8 +9,6 @@ from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
 from services.match_pipeline import submit_match
-import re
-from postgrest.exceptions import APIError
 
 
 PLAYER_BADGES_BASE_COLUMNS = [
@@ -112,15 +110,6 @@ def submit_matches_from_loader(supabase, club_id: str, matches: list[dict], chun
     return submitted
 
 
-def _missing_player_badges_columns(exc: APIError) -> set[str]:
-    message = str(exc)
-    missing = {col for col in PLAYER_BADGES_OPTIONAL_COLUMNS if col in message}
-    if missing:
-        return missing
-    matches = re.findall(r"player_badges\\.([a-zA-Z0-9_]+)", message)
-    return {col for col in matches if col in PLAYER_BADGES_OPTIONAL_COLUMNS}
-
-
 def _ensure_player_badges_columns(df: pd.DataFrame) -> pd.DataFrame:
     defaults = {
         "awarded_by": "engine",
@@ -136,38 +125,17 @@ def _ensure_player_badges_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, str | None]:
-    schema_degraded = False
-    schema_degraded_reason = None
+def _fetch_player_badges(supabase, club_id: str) -> pd.DataFrame:
     select_cols = ",".join(PLAYER_BADGES_BASE_COLUMNS + PLAYER_BADGES_OPTIONAL_COLUMNS)
-    try:
-        pb_resp = (
-            supabase.table("player_badges")
-            .select(select_cols)
-            .eq("club_id", club_id)
-            .execute()
-        )
-    except APIError as exc:
-        missing = _missing_player_badges_columns(exc)
-        if getattr(exc, "code", None) == "42703" and missing:
-            schema_degraded = True
-            schema_degraded_reason = (
-                "player_badges missing columns "
-                f"{', '.join(sorted(missing))}; apply migrations/20260625_badge_recompute_runs.sql and "
-                "migrations/20260630_player_badges_revocation.sql."
-            )
-            legacy_select = ",".join(PLAYER_BADGES_BASE_COLUMNS)
-            pb_resp = (
-                supabase.table("player_badges")
-                .select(legacy_select)
-                .eq("club_id", club_id)
-                .execute()
-            )
-        else:
-            raise
+    pb_resp = (
+        supabase.table("player_badges")
+        .select(select_cols)
+        .eq("club_id", club_id)
+        .execute()
+    )
     df_player_badges = pd.DataFrame(pb_resp.data or [])
     df_player_badges = _ensure_player_badges_columns(df_player_badges)
-    return df_player_badges, schema_degraded, schema_degraded_reason
+    return df_player_badges
 
 
 def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
@@ -200,8 +168,6 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
 
     for attempt in range(max_retries):
         try:
-            schema_degraded = False
-            schema_degraded_reason = None
             # Players
             p_resp = (
                 supabase.table("players")
@@ -253,35 +219,20 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_meta = pd.DataFrame(meta_resp.data or [])
 
             # Badges (global definitions)
-            try:
-                # Support older badge schema variants that lack state-related columns.
-                badges_resp = (
-                    supabase.table("badges")
-                    .select(
-                        "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                        "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
-                    )
-                    .execute()
+            badges_resp = (
+                supabase.table("badges")
+                .select(
+                    "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                    "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
                 )
-            except APIError as exc:
-                message = str(exc)
-                if getattr(exc, "code", None) == "42703" or "badges.state does not exist" in message:
-                    badges_resp = (
-                        supabase.table("badges")
-                        .select(
-                            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                            "tier,icon_key,scope,created_at"
-                        )
-                        .execute()
-                    )
-                else:
-                    raise
+                .execute()
+            )
             df_badges = pd.DataFrame(badges_resp.data or [])
             if not df_badges.empty and "badge_id" in df_badges.columns:
                 if "state" not in df_badges.columns:
-                    df_badges["state"] = "live"
+                    raise RuntimeError("Schema mismatch: badges.state missing.")
                 if "eval_triggers" not in df_badges.columns:
-                    df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
+                    raise RuntimeError("Schema mismatch: badges.eval_triggers missing.")
                 requirements_map = load_requirements_map()
                 df_badges["requirements"] = (
                     df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
@@ -301,7 +252,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 )
 
             # Player badges (club-scoped)
-            df_player_badges, schema_degraded, schema_degraded_reason = _fetch_player_badges(
+            df_player_badges = _fetch_player_badges(
                 supabase,
                 club_id,
             )
@@ -357,8 +308,8 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 df_player_badges,
                 name_to_id,
                 id_to_name,
-                schema_degraded,
-                schema_degraded_reason,
+                False,
+                None,
             )
 
         except Exception as e:
