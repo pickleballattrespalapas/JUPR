@@ -46,3 +46,7 @@ def sb_update(
         query = query.eq(col, value)
 
     return query.execute()
+
+
+def sb_rpc(supabase: Any, name: str, payload: Dict) -> Any:
+    return supabase.rpc(name, payload).execute()

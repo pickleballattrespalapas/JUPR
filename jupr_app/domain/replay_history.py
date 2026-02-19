@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_rpc, sb_update
 
+import json
 import random
 import time
 from typing import Any, Callable, Dict, Optional
@@ -25,6 +26,39 @@ def _exec_with_retry(fn, *, retries: int = 6, base_sleep: float = 0.5):
                 raise
             delay = base_sleep * (2**attempt) + random.uniform(0.0, 0.2)
             time.sleep(delay)
+
+
+def _json_size_bytes(payload: Any) -> int:
+    return len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
+def _chunk_rows_by_payload_limit(rows: list[Dict[str, Any]], *, max_payload_bytes: int) -> list[list[Dict[str, Any]]]:
+    if not rows:
+        return []
+
+    chunks: list[list[Dict[str, Any]]] = []
+    current: list[Dict[str, Any]] = []
+    current_size = 2  # []
+
+    for row in rows:
+        row_size = _json_size_bytes(row)
+        if row_size + 2 > max_payload_bytes:
+            raise RuntimeError("replace_league_ratings row exceeds max payload size")
+
+        delim = 1 if current else 0
+        if current and current_size + delim + row_size > max_payload_bytes:
+            chunks.append(current)
+            current = [row]
+            current_size = 2 + row_size
+            continue
+
+        current.append(row)
+        current_size += delim + row_size
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 
 def replay_history(
@@ -198,11 +232,6 @@ def replay_history(
             )
 
     # Rebuild league_ratings
-    if str(target_reset).strip() != FULL_RESET_LABEL:
-        supabase.table("league_ratings").delete().eq("club_id", club_id).eq("league_name", str(target_reset)).execute()
-    else:
-        supabase.table("league_ratings").delete().eq("club_id", club_id).execute()
-
     new_rows = []
     for (pid, lg), s in island_map.items():
         if str(target_reset).strip() == FULL_RESET_LABEL or str(lg).strip() == str(target_reset).strip():
@@ -229,9 +258,27 @@ def replay_history(
                 }
             )
 
-    for i in range(0, len(new_rows), 1000):
-        chunk = new_rows[i : i + 1000]
-        _exec_with_retry(lambda chunk=chunk: sb_insert(supabase, "league_ratings", chunk))
+    new_rows = sorted(new_rows, key=lambda row: (str(row.get("league_name") or ""), int(row.get("player_id") or 0)))
+    payload_chunks = _chunk_rows_by_payload_limit(new_rows, max_payload_bytes=5 * 1024 * 1024)
+
+    if not payload_chunks:
+        if str(target_reset).strip() != FULL_RESET_LABEL:
+            supabase.table("league_ratings").delete().eq("club_id", club_id).eq("league_name", str(target_reset)).execute()
+        else:
+            supabase.table("league_ratings").delete().eq("club_id", club_id).execute()
+    else:
+        for idx, chunk in enumerate(payload_chunks):
+            _exec_with_retry(
+                lambda chunk=chunk, idx=idx: sb_rpc(
+                    supabase,
+                    "replace_league_ratings",
+                    {
+                        "p_club_id": club_id,
+                        "p_rows": chunk,
+                        "p_reset": bool(idx == 0),
+                    },
+                )
+            )
 
     # Rewrite match snapshots (in-place updates on existing match rows)
     snapshot_columns = {
