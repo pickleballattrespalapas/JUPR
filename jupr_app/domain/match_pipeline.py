@@ -28,6 +28,7 @@ from jupr_app.data.retry import sb_retry
 from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update
 from jupr_app.domain.audit_logger import log_event
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.player_merge import merge_player_into as merge_player_into_domain
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
 
 _ALLOWED_MATCH_KEYS = {
@@ -444,60 +445,14 @@ def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict
 
 
 def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, target_player_id: int) -> dict[str, Any]:
-    """Replace all source-player match slots with target-player slots for `club_id`.
-
-    Invariant: player merge operations must atomically rewrite match references
-    through this module and trigger full projection rebuilds.
-    """
-    scoped_club_id = _require_club_id(club_id)
-    src = int(source_player_id)
-    dst = int(target_player_id)
-    if src == dst:
-        raise ValueError("source_player_id and target_player_id must differ")
-
-    operation_success = False
-    rewritten = 0
-    try:
-        matches = (
-            supabase.table("matches")
-            .select("id,t1_p1,t1_p2,t2_p1,t2_p2")
-            .eq("club_id", scoped_club_id)
-            .or_(f"t1_p1.eq.{src},t1_p2.eq.{src},t2_p1.eq.{src},t2_p2.eq.{src}")
-            .execute()
-            .data
-            or []
-        )
-
-        for row in matches:
-            match_id = int(row["id"])
-            patch: dict[str, int] = {}
-            for slot in _SLOT_KEYS:
-                if _as_int(row.get(slot)) == src:
-                    patch[slot] = dst
-            if not patch:
-                continue
-            _run_write(lambda match_id=match_id, patch=patch: sb_update(
-                supabase,
-                "matches",
-                patch,
-                filters=_scoped_filters(scoped_club_id, {"club_id": scoped_club_id, "id": match_id}),
-            ))
-            rewritten += 1
-
-        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
-        operation_success = True
-        return _pipeline_result(success=True, match_id=None, warnings=[], matches_rewritten=rewritten, rebuild=rebuild)
-    except Exception as exc:
-        err = MatchPipelineError(f"merge_player_into failed: {exc}")
-        return _pipeline_result(success=False, match_id=None, warnings=[], error=str(err))
-    finally:
-        log_event(
-            supabase=supabase,
-            club_id=scoped_club_id,
-            actor="match_pipeline",
-            action_type="merge_player",
-            payload={"source_player_id": src, "target_player_id": dst, "matches_rewritten": rewritten, "success": operation_success},
-        )
+    """Backward-compatible wrapper around the dedicated domain merge function."""
+    return merge_player_into_domain(
+        supabase=supabase,
+        club_id=club_id,
+        source_player_id=source_player_id,
+        destination_player_id=target_player_id,
+        actor="match_pipeline",
+    )
 
 
 def reassign_match_players(

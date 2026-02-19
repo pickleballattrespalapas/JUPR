@@ -4,7 +4,7 @@ import time
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_ops import safe_add_player
-from jupr_app.domain.match_pipeline import merge_player_into
+from jupr_app.domain.player_merge import merge_player_into
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
@@ -182,10 +182,11 @@ def render(ctx):
             supabase=supabase,
             club_id=str(club_id),
             source_player_id=int(src_id),
-            target_player_id=int(dst_id),
+            destination_player_id=int(dst_id),
+            actor="player_editor",
         )
         if result.get("success"):
-            st.success("Merge completed through match pipeline. Replay history if cached views need refresh.")
+            st.success("Merge completed. Replay was suggested for downstream recalculation.")
         else:
             st.error(result.get("error") or "Merge failed.")
         time.sleep(0.4)
