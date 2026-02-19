@@ -5,9 +5,6 @@ from typing import Tuple
 
 from postgrest.exceptions import APIError
 
-from jupr_app.data.sb_write import sb_upsert
-
-
 def safe_add_player(
     *,
     supabase,
@@ -20,8 +17,7 @@ def safe_add_player(
 
     Behavior:
     - Inserts player using ON CONFLICT (club_id, normalized_name)
-    - If player already exists (active=true), returns existing id
-    - Never throws duplicate key error
+    - Returns the upserted row id directly from the upsert response
     - Deterministic and race-safe
     """
 
@@ -48,52 +44,17 @@ def safe_add_player(
     }
 
     try:
-        try:
-            resp = sb_upsert(
-                supabase,
-                "players",
-                payload,
-                conflict="club_id,normalized_name",
-            )
-        except TypeError:
-            # Fallback for older supabase-py clients that do not support
-            # upsert(..., on_conflict="...").
-            supabase.rpc("upsert_player_safe", {"p_payload": payload}).execute()
-            resp = None
-
-        if resp and resp.data and len(resp.data) > 0:
-            return True, resp.data[0]["id"]
-
-        existing = (
+        resp = (
             supabase
             .table("players")
-            .select("id")
-            .eq("club_id", str(club_id))
-            .eq("normalized_name", clean_name.lower())
-            .eq("active", True)
-            .limit(1)
+            .upsert(payload, on_conflict="club_id,normalized_name")
             .execute()
         )
 
-        if existing.data:
-            return True, existing.data[0]["id"]
+        if resp.data and len(resp.data) > 0 and resp.data[0].get("id"):
+            return True, resp.data[0]["id"]
 
-        return False, "Unknown insertion state"
+        return False, "Upsert did not return an id"
 
     except APIError as e:
-        if getattr(e, "code", None) == "23505":
-            existing = (
-                supabase
-                .table("players")
-                .select("id")
-                .eq("club_id", str(club_id))
-                .eq("normalized_name", clean_name.lower())
-                .eq("active", True)
-                .limit(1)
-                .execute()
-            )
-
-            if existing.data:
-                return True, existing.data[0]["id"]
-
         return False, str(e)
