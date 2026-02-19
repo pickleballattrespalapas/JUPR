@@ -5,114 +5,68 @@ from types import SimpleNamespace
 from jupr_app.domain import match_pipeline
 
 
-class DummyQuery:
-    def __init__(self, supabase: "DummySupabase", table_name: str) -> None:
-        self.supabase = supabase
-        self.table_name = table_name
-        self._filters: list[tuple[str, object, str]] = []
-        self._limit: int | None = None
-        self._payload = None
-        self._on_conflict = None
-        self._ignore_duplicates = False
+class _Query:
+    def __init__(self, rows):
+        self._rows = rows
 
     def select(self, _fields: str):
         return self
 
-    def eq(self, col: str, value):
-        self._filters.append((col, value, "eq"))
+    def eq(self, _col: str, _value):
         return self
 
-    def in_(self, col: str, values):
-        self._filters.append((col, list(values), "in"))
-        return self
-
-    def limit(self, value: int):
-        self._limit = int(value)
-        return self
-
-    def upsert(self, payload, on_conflict=None, ignore_duplicates=False):
-        self._payload = dict(payload)
-        self._on_conflict = on_conflict
-        self._ignore_duplicates = bool(ignore_duplicates)
+    def limit(self, _n: int):
         return self
 
     def execute(self):
-        if self._payload is not None:
-            return self._execute_upsert()
-        return self._execute_select()
-
-    def _execute_select(self):
-        rows = [dict(row) for row in self.supabase.tables[self.table_name]]
-        for col, value, mode in self._filters:
-            if mode == "eq":
-                rows = [row for row in rows if row.get(col) == value]
-            elif mode == "in":
-                rows = [row for row in rows if row.get(col) in value]
-        if self._limit is not None:
-            rows = rows[: self._limit]
-        return SimpleNamespace(data=rows)
-
-    def _execute_upsert(self):
-        if self.table_name != "matches":
-            raise AssertionError("unexpected upsert table")
-        key = self._payload.get("idempotency_key")
-        existing = None
-        for row in self.supabase.tables["matches"]:
-            if row.get(self._on_conflict) == key:
-                existing = row
-                break
-
-        if existing is not None and self._ignore_duplicates:
-            return SimpleNamespace(data=[])
-
-        if existing is not None:
-            existing.update(self._payload)
-            return SimpleNamespace(data=[dict(existing)])
-
-        inserted = dict(self._payload)
-        inserted.setdefault("id", f"m{len(self.supabase.tables['matches']) + 1}")
-        self.supabase.tables["matches"].append(inserted)
-        return SimpleNamespace(data=[dict(inserted)])
+        return SimpleNamespace(data=self._rows)
 
 
-class DummySupabase:
-    def __init__(self) -> None:
-        self.tables = {
-            "players": [
-                {"id": 1, "club_id": "club-1", "rating": 1200.0, "last_game_at": None},
-                {"id": 2, "club_id": "club-1", "rating": 1200.0, "last_game_at": None},
-            ],
-            "matches": [],
-        }
+class _Supabase:
+    def __init__(self, existing_rows=None):
+        self._existing_rows = existing_rows or []
 
     def table(self, name: str):
-        return DummyQuery(self, name)
+        assert name == "matches"
+        return _Query(self._existing_rows)
 
 
-def test_record_match_replay_is_idempotent(monkeypatch, capsys):
-    supabase = DummySupabase()
-    player_updates = []
+def test_record_match_idempotency_hit_returns_existing_and_skips_rebuild(monkeypatch):
+    supabase = _Supabase(existing_rows=[{"id": 9, "idempotency_key": "dup-1", "club_id": "club-1"}])
+    rebuild_calls = []
 
-    def fake_sb_update(_supabase, _table, payload, *, filters):
-        player_updates.append((dict(filters), dict(payload)))
-        return SimpleNamespace(data=[{"ok": True}])
+    monkeypatch.setattr(match_pipeline, "_rebuild_state", lambda **_: rebuild_calls.append(True))
+    monkeypatch.setattr(match_pipeline, "log_event", lambda **_: None)
 
-    monkeypatch.setattr(match_pipeline, "sb_update", fake_sb_update)
-    monkeypatch.setattr(match_pipeline, "sb_upsert", lambda *args, **kwargs: SimpleNamespace(data=[{"ok": True}]))
+    result = match_pipeline.record_match(
+        supabase=supabase,
+        club_id="club-1",
+        match_payload={"idempotency_key": "dup-1", "score_t1": 11, "score_t2": 9},
+    )
 
-    payload = {
-        "club_id": "club-1",
-        "team_a_player_ids": [1],
-        "team_b_player_ids": [2],
-        "score_a": 11,
-        "score_b": 9,
-        "played_at": "2026-01-01T00:00:00+00:00",
-    }
+    assert result["success"] is True
+    assert result["idempotent_hit"] is True
+    assert result["match_id"] == 9
+    assert rebuild_calls == []
 
-    first = match_pipeline.record_match(supabase, **payload)
-    second = match_pipeline.record_match(supabase, **payload)
 
-    assert first["status"] == "inserted"
-    assert second["status"] == "exists"
-    assert len(player_updates) == 2
-    assert "[PIPELINE] idempotent hit — skipping delta" in capsys.readouterr().out
+def test_record_match_new_idempotency_inserts_and_rebuilds(monkeypatch):
+    supabase = _Supabase(existing_rows=[])
+    rebuild_calls = []
+
+    monkeypatch.setattr(match_pipeline, "_run_write", lambda fn: fn())
+    monkeypatch.setattr(match_pipeline, "_snapshot_ratings_state", lambda **_: {"players": [], "league_ratings": []})
+    monkeypatch.setattr(match_pipeline, "sb_insert", lambda *_args, **_kwargs: SimpleNamespace(data=[{"id": 10}]))
+    monkeypatch.setattr(match_pipeline, "_rebuild_state", lambda **_: rebuild_calls.append(True) or {"matches_processed": 1})
+    monkeypatch.setattr(match_pipeline, "log_event", lambda **_: None)
+
+    result = match_pipeline.record_match(
+        supabase=supabase,
+        club_id="club-1",
+        match_payload={"idempotency_key": "new-1", "score_t1": 11, "score_t2": 9},
+    )
+
+    assert result["success"] is True
+    assert result.get("idempotent_hit") is not True
+    assert result["match_id"] == 10
+    assert rebuild_calls == [True]

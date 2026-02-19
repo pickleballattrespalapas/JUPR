@@ -1,8 +1,26 @@
 from __future__ import annotations
 # Match writes must go through match_pipeline.
+import hashlib
 from typing import Any
 
 from jupr_app.domain.match_pipeline import record_match, update_match
+
+
+def _build_tournament_match_idempotency_key(*, club_id: str, game_id: str, common_fields: dict[str, Any]) -> str:
+    seed = "|".join(
+        [
+            str(club_id).strip(),
+            str(game_id).strip(),
+            str(common_fields.get("tournament_id") or "").strip(),
+            str(common_fields.get("tournament_game_id") or "").strip(),
+            str(common_fields.get("t1_p1") or ""),
+            str(common_fields.get("t1_p2") or ""),
+            str(common_fields.get("t2_p1") or ""),
+            str(common_fields.get("t2_p2") or ""),
+        ]
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return f"tournament:{club_id}:{game_id}:{digest}"
 
 
 def sync_tournament_game_to_match(
@@ -53,6 +71,11 @@ def sync_tournament_game_to_match(
     }
 
     if not existing_rows:
+        idempotency_key = _build_tournament_match_idempotency_key(
+            club_id=str(club_id),
+            game_id=str(game_id),
+            common_fields=common_fields,
+        )
         record_match(
             supabase=supabase,
             club_id=str(club_id),
@@ -60,6 +83,7 @@ def sync_tournament_game_to_match(
                 **common_fields,
                 "context_type": "tournament",
                 "context_id": str(match_payload.get("tournament_id") or game.get("tournament_id") or ""),
+                "idempotency_key": idempotency_key,
             },
         )
         return

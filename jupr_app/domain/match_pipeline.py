@@ -177,6 +177,29 @@ def _coerce_match_payload(club_id: str, payload: Mapping[str, Any]) -> dict[str,
     return row
 
 
+def _require_idempotency_key(payload: Mapping[str, Any]) -> str:
+    key = str(payload.get("idempotency_key") or "").strip()
+    if not key:
+        raise ValueError("idempotency_key is required")
+    return key
+
+
+def _find_existing_match_by_idempotency_key(*, supabase: Any, club_id: str, idempotency_key: str) -> dict[str, Any] | None:
+    existing_rows = (
+        supabase.table("matches")
+        .select("*")
+        .eq("club_id", club_id)
+        .eq("idempotency_key", idempotency_key)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not existing_rows:
+        return None
+    return dict(existing_rows[0])
+
+
 def _rebuild_state(*, supabase: Any, club_id: str) -> dict[str, int]:
     """Rebuild all match-derived projections for a single club deterministically."""
     players_rows = (
@@ -419,6 +442,38 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     queue side-effects stay in sync.
     """
     scoped_club_id = _require_club_id(club_id)
+    scoped_idempotency_key = _require_idempotency_key(match_payload)
+
+    # Migration expectation: enforce DB uniqueness with
+    #   UNIQUE (club_id, idempotency_key)
+    # on matches to guarantee race-safe, cross-process idempotency.
+    existing_match = _find_existing_match_by_idempotency_key(
+        supabase=supabase,
+        club_id=scoped_club_id,
+        idempotency_key=scoped_idempotency_key,
+    )
+    if existing_match:
+        existing_match_id = _as_int(existing_match.get("id"))
+        log_event(
+            supabase=supabase,
+            club_id=scoped_club_id,
+            actor=str(match_payload.get("actor") or "match_pipeline"),
+            action_type="record_match",
+            payload={
+                "match_id": existing_match_id,
+                "success": True,
+                "idempotent_hit": True,
+                "match_payload": dict(match_payload),
+            },
+        )
+        return _pipeline_result(
+            success=True,
+            match_id=existing_match_id,
+            warnings=[],
+            existing=existing_match,
+            idempotent_hit=True,
+        )
+
     payload = _coerce_match_payload(scoped_club_id, match_payload)
     snapshot = _snapshot_ratings_state(supabase=supabase, club_id=scoped_club_id)
     inserted_rows: list[dict[str, Any]] = []
