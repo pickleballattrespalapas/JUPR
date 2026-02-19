@@ -19,7 +19,13 @@ def record_match(
     score_b: int,
     played_at: str | None = None,
     context_id: str | None = None,
+    context_type: str | None = None,
     source: str = "manual",
+    league: str | None = None,
+    week_tag: str | None = None,
+    tournament_id: str | None = None,
+    tournament_game_id: str | None = None,
+    is_popup: bool | None = None,
 ) -> dict:
     if not str(club_id or "").strip():
         raise ValueError("club_id is required")
@@ -34,6 +40,7 @@ def record_match(
     score_b = int(score_b)
     played_at_iso = _normalize_played_at(played_at)
     normalized_context_id = _normalize_optional_str(context_id)
+    normalized_context_type = _normalize_optional_str(context_type)
     source = _normalize_optional_str(source) or "manual"
 
     all_player_ids = sorted(set(normalized_team_a + normalized_team_b))
@@ -84,6 +91,19 @@ def record_match(
         "idempotency_key": idempotency_key,
         "match_type": source,
     }
+
+    if normalized_context_type:
+        match_payload["context_type"] = normalized_context_type
+    if league is not None:
+        match_payload["league"] = str(league)
+    if week_tag is not None:
+        match_payload["week_tag"] = str(week_tag)
+    if tournament_id is not None:
+        match_payload["tournament_id"] = str(tournament_id)
+    if tournament_game_id is not None:
+        match_payload["tournament_game_id"] = str(tournament_game_id)
+    if is_popup is not None:
+        match_payload["is_popup"] = bool(is_popup)
 
     inserted_match_resp = (
         supabase.table("matches")
@@ -175,8 +195,48 @@ def record_match(
     }
 
 
-def update_match(*args: Any, **kwargs: Any) -> dict:
-    raise NotImplementedError("update_match will be implemented in a future phase")
+def update_match(
+    supabase,
+    *,
+    match_id: str,
+    score_a: int,
+    score_b: int,
+    played_at: str | None = None,
+    league: str | None = None,
+    week_tag: str | None = None,
+    tournament_id: str | None = None,
+    tournament_game_id: str | None = None,
+    is_popup: bool | None = None,
+) -> dict:
+    normalized_match_id = str(match_id or "").strip()
+    if not normalized_match_id:
+        raise ValueError("match_id is required")
+
+    payload: dict[str, Any] = {
+        "score_t1": int(score_a),
+        "score_t2": int(score_b),
+        "date": _normalize_played_at(played_at),
+    }
+    if league is not None:
+        payload["league"] = str(league)
+    if week_tag is not None:
+        payload["week_tag"] = str(week_tag)
+    if tournament_id is not None:
+        payload["tournament_id"] = str(tournament_id)
+    if tournament_game_id is not None:
+        payload["tournament_game_id"] = str(tournament_game_id)
+    if is_popup is not None:
+        payload["is_popup"] = bool(is_popup)
+
+    result = sb_update(supabase, "matches", payload, filters={"id": normalized_match_id})
+    rows = getattr(result, "data", None) or []
+    if not rows:
+        raise RuntimeError(f"Failed to update matches row for id={normalized_match_id}")
+
+    return {
+        "status": "updated",
+        "match": dict(rows[0]),
+    }
 
 
 def void_match(*args: Any, **kwargs: Any) -> dict:
