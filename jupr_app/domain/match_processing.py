@@ -381,7 +381,13 @@ def process_matches(
         }
         if activity_update:
             payload.update(activity_update)
-        res = sb_update(supabase_admin, "players", payload, filters={"club_id": club_id, "id": pid})
+        res = sb_update(
+            supabase_admin,
+            "players",
+            payload,
+            filters={"club_id": club_id, "id": pid},
+            derived_from_match_history=True,
+        )
         if not res.data:
             payload_ins = {"club_id": club_id, "id": pid, **payload}
             sb_insert(supabase_admin, "players", payload_ins)
@@ -425,6 +431,7 @@ def process_matches(
                 "league_ratings",
                 payload,
                 conflict="club_id,player_id,league_name",
+                derived_from_match_history=True,
             ))
 
     # -------------------------
