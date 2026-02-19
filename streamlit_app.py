@@ -248,6 +248,10 @@ def main():
                         session = getattr(auth_response, "session", None)
         
                         if session:
+                            supabase.auth.set_session({
+                                "access_token": session.access_token,
+                                "refresh_token": session.refresh_token,
+                            })
                             st.session_state["sb_session"] = session
                             st.session_state["entry_mode"] = "auth"
                             st.rerun()
@@ -270,30 +274,27 @@ def main():
                 st.stop()
         
         # --------------------------------------------
-        # SESSION REFRESH / VALIDATION
+        # SESSION VALIDATION (non-destructive)
         # --------------------------------------------
-        
+
         session = st.session_state.get("sb_session")
-        
+
         if session:
             try:
-                supabase.auth.set_session({
-                    "access_token": session.access_token,
-                    "refresh_token": session.refresh_token,
-                })
-        
-                refreshed_obj = supabase.auth.get_session()
-                refreshed = getattr(refreshed_obj, "session", refreshed_obj)
-        
-                if not refreshed:
-                    raise Exception("Session refresh failed.")
-        
-                st.session_state["sb_session"] = refreshed
-        
+                current = supabase.auth.get_session()
+                current_session = getattr(current, "session", current)
+
+                if current_session:
+                    st.session_state["sb_session"] = current_session
+                else:
+                    # Only clear if Supabase truly has no session
+                    st.session_state.pop("sb_session", None)
+                    st.session_state["entry_mode"] = None
+                    st.rerun()
+
             except Exception:
-                st.session_state.pop("sb_session", None)
-                st.session_state["entry_mode"] = None
-                st.rerun()
+                # Do NOT wipe session on transient failure
+                pass
         
         # --------------------------------------------
         # PASSWORD RECOVERY MODE
