@@ -1,16 +1,10 @@
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 import streamlit as st
 import pandas as pd
-import time
 from datetime import datetime, timezone
-from jupr_app.domain.replay_history import replay_history
 
 from postgrest.exceptions import APIError
 
-from jupr_app.domain.ratings import calculate_hybrid_elo
-from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
-from jupr_app.domain.gamification.fact_replay import rebuild_facts_from_history
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.layout import page_shell
@@ -124,63 +118,40 @@ def render(ctx):
     # Replay History
     # -------------------------
     st.subheader("🔄 Recalculate / Replay History")
-    st.caption("This rebuilds snapshots and (optionally) players + league_ratings based on match history order.")
+    st.caption("Heavy replay jobs are not run from Streamlit page handlers.")
+    st.warning("Replay must be run via CLI or background job.")
 
-    df_meta = getattr(ctx, "df_meta", pd.DataFrame())
-    league_opts = ["ALL (Full System Reset)"]
-    if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
-        league_opts += sorted(df_meta["league_name"].dropna().astype(str).unique().tolist())
+    if _is_replay_schema_valid(supabase):
+        st.caption("Schema check: ready for CLI replay.")
+    else:
+        st.caption("Schema check: migrations required before CLI replay.")
 
-    target_reset = st.selectbox("Replay scope", league_opts)
+    st.code(
+        f"python -m jupr_app.cli.replay_ratings --club-id {club_id}",
+        language="bash",
+    )
 
-    if st.button(f"⚠️ Replay History for: {target_reset}"):
-        if not _is_replay_schema_valid(supabase):
-            st.error("Schema mismatch detected.\nRun migrations before replay.")
-            st.stop()
+    replay_runs = None
+    try:
+        replay_runs = (
+            supabase.table("replay_runs")
+            .select("started_at,finished_at,status,summary")
+            .eq("club_id", club_id)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        replay_runs = None
 
-        bar = st.progress(0.0)
-        with st.spinner("Crunching..."):
-            result = replay_history(
-                supabase=supabase,
-                club_id=club_id,
-                df_meta=df_meta,
-                target_reset=str(target_reset),
-                progress_cb=lambda x: bar.progress(float(x)),
-            )
-
-        st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
-        st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
-        st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
-        st.success("Replay complete.")
-        time.sleep(0.6)
-        st.rerun()
-
+    if replay_runs and replay_runs.data:
+        latest = replay_runs.data[0]
+        st.caption("Last replay run (read-only)")
+        st.json(latest)
 
     st.divider()
 
-    # -------------------------
-    # Historical Fact Replay
-    # -------------------------
-    st.subheader("🧱 Historical Fact Replay")
-    st.caption("Rebuild player badge facts from full match history in ascending date order.")
-    if st.button("Rebuild Badge Facts from History", key="badge_fact_replay"):
-        with st.spinner("Rebuilding badge facts from history..."):
-            try:
-                replay_summary = rebuild_facts_from_history(supabase, club_id=club_id)
-            except Exception as exc:  # noqa: BLE001 - UI should not crash
-                st.error("Failed to rebuild badge facts from history.")
-                st.exception(exc)
-            else:
-                st.success("Historical fact replay completed.")
-                st.info(
-                    " · ".join(
-                        [
-                            f"Matches seen: {replay_summary['matches_seen']}",
-                            f"Matches processed: {replay_summary['matches_processed']}",
-                            f"Players touched: {replay_summary['players_touched']}",
-                        ]
-                    )
-                )
+    df_meta = getattr(ctx, "df_meta", pd.DataFrame())
 
     st.divider()
 
