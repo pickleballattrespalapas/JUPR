@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 
+# Match writes must go through match_pipeline.
 from jupr_app.domain.dupes import canonical_dup_key
 from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
 from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.replay_history import replay_history
+from jupr_app.domain.match_pipeline import delete_matches
 
 
 
@@ -112,7 +114,7 @@ def render(ctx):
                         for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
                             if col in deleted_rows.columns:
                                 deleted_pids.update(deleted_rows[col].dropna().astype(int).tolist())
-                        ctx.supabase.table("matches").delete().eq("club_id", str(ctx.club_id)).in_("id", ids_to_delete).execute()
+                        delete_matches(supabase=ctx.supabase, club_id=str(ctx.club_id), match_ids=ids_to_delete)
                         if deleted_pids:
                             recompute_last_game_at_for_players(
                                 supabase=ctx.supabase,
@@ -492,7 +494,7 @@ def render(ctx):
             for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
                 if col in to_delete.columns:
                     deleted_pids.update(to_delete[col].dropna().astype(int).tolist())
-            ctx.supabase.table("matches").delete().eq("club_id", str(ctx.club_id)).in_("id", delete_ids).execute()
+            delete_matches(supabase=ctx.supabase, club_id=str(ctx.club_id), match_ids=delete_ids)
             if deleted_pids:
                 recompute_last_game_at_for_players(
                     supabase=ctx.supabase,

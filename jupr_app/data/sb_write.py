@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Match writes must go through match_pipeline.
+
 # SCHEMA STRICT MODE ENABLED
 # All environments must match migrations
 
@@ -41,6 +43,20 @@ def sb_update(
     filters: Dict,
 ) -> Any:
     query = supabase.table(table).update(payload)
+
+    for col, value in filters.items():
+        query = query.eq(col, value)
+
+    return query.execute()
+
+
+def sb_delete(
+    supabase: Any,
+    table: str,
+    *,
+    filters: Dict,
+) -> Any:
+    query = supabase.table(table).delete()
 
     for col, value in filters.items():
         query = query.eq(col, value)

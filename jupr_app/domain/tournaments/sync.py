@@ -1,4 +1,5 @@
 from __future__ import annotations
+# Match writes must go through match_pipeline.
 from typing import Any
 
 from jupr_app.domain.match_pipeline import record_match, update_match
@@ -37,35 +38,39 @@ def sync_tournament_game_to_match(
     existing_rows = getattr(existing_resp, "data", None) or []
 
     common_fields = {
-        "score_a": int(match_payload.get("s1") or 0),
-        "score_b": int(match_payload.get("s2") or 0),
-        "played_at": match_payload.get("date"),
+        "score_t1": int(match_payload.get("s1") or 0),
+        "score_t2": int(match_payload.get("s2") or 0),
+        "date": match_payload.get("date"),
         "league": match_payload.get("league"),
         "week_tag": match_payload.get("week_tag"),
         "tournament_id": match_payload.get("tournament_id"),
         "tournament_game_id": match_payload.get("tournament_game_id"),
-        "is_popup": bool(match_payload.get("is_popup", True)),
+        "match_type": "PopUp" if bool(match_payload.get("is_popup", True)) else match_payload.get("match_type"),
+        "t1_p1": team_a_player_ids[0] if len(team_a_player_ids) > 0 else None,
+        "t1_p2": team_a_player_ids[1] if len(team_a_player_ids) > 1 else None,
+        "t2_p1": team_b_player_ids[0] if len(team_b_player_ids) > 0 else None,
+        "t2_p2": team_b_player_ids[1] if len(team_b_player_ids) > 1 else None,
     }
 
     if not existing_rows:
         record_match(
-            supabase,
+            supabase=supabase,
             club_id=str(club_id),
-            team_a_player_ids=team_a_player_ids,
-            team_b_player_ids=team_b_player_ids,
-            context_type="tournament",
-            context_id=str(match_payload.get("tournament_id") or game.get("tournament_id") or ""),
-            source="tournament",
-            **common_fields,
+            match_payload={
+                **common_fields,
+                "context_type": "tournament",
+                "context_id": str(match_payload.get("tournament_id") or game.get("tournament_id") or ""),
+            },
         )
         return
 
     existing = existing_rows[0]
-    if int(existing.get("score_t1") or 0) == common_fields["score_a"] and int(existing.get("score_t2") or 0) == common_fields["score_b"]:
+    if int(existing.get("score_t1") or 0) == common_fields["score_t1"] and int(existing.get("score_t2") or 0) == common_fields["score_t2"]:
         return
 
     update_match(
-        supabase,
-        match_id=str(existing.get("id")),
-        **common_fields,
+        supabase=supabase,
+        club_id=str(club_id),
+        match_id=int(existing.get("id")),
+        patch=common_fields,
     )

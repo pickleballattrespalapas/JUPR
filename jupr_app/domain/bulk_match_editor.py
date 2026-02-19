@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Match writes must go through match_pipeline.
+
 from jupr_app.data.sb_write import sb_insert
 
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -214,20 +216,10 @@ def apply_bulk_match_edits(
 
         # Apply update via pipeline
         update_match(
-            supabase,
-            match_id=str(mid),
+            supabase=supabase,
             club_id=str(club_id),
-            played_at=update.get("date"),
-            league=update.get("league"),
-            week_tag=update.get("week_tag"),
-            match_type=update.get("match_type"),
-            notes=update.get("notes"),
-            is_active=update.get("is_active"),
-            score_a=update.get("score_t1"),
-            score_b=update.get("score_t2"),
-            tournament_id=update.get("tournament_id"),
-            tournament_game_id=update.get("tournament_game_id"),
-            is_popup=update.get("is_popup"),
+            match_id=int(mid),
+            patch=update,
         )
 
         updated_ids.append(mid)

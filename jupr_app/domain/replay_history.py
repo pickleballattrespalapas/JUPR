@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Match writes must go through match_pipeline.
+
 from jupr_app.data.sb_write import sb_rpc, sb_update
 
 import json
