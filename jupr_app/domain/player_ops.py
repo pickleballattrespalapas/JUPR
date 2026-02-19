@@ -48,14 +48,20 @@ def safe_add_player(
     }
 
     try:
-        resp = sb_upsert(
-            supabase,
-            "players",
-            payload,
-            conflict="club_id,normalized_name",
-        )
+        try:
+            resp = sb_upsert(
+                supabase,
+                "players",
+                payload,
+                conflict="club_id,normalized_name",
+            )
+        except TypeError:
+            # Fallback for older supabase-py clients that do not support
+            # upsert(..., on_conflict="...").
+            supabase.rpc("upsert_player_safe", {"p_payload": payload}).execute()
+            resp = None
 
-        if resp.data and len(resp.data) > 0:
+        if resp and resp.data and len(resp.data) > 0:
             return True, resp.data[0]["id"]
 
         existing = (
