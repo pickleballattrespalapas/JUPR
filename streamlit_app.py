@@ -121,7 +121,7 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
             prefix = "👉 " if label == selected else ""
             if st.sidebar.button(f"{prefix}{label}", key=f"nav_btn_{label}", use_container_width=True):
                 selected = label
-                st.session_state["main_nav"] = label
+                st.session_state["_nav"] = label
         st.sidebar.markdown(" ")
 
     return selected
@@ -154,207 +154,228 @@ def main():
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
-        # -------------------------
-        # Authentication handling
-        # -------------------------
+        # --------------------------------------------
+        # AUTH STATE INITIALIZATION
+        # --------------------------------------------
+        
+        st.session_state.setdefault("entry_mode", None)
+        
+        supabase = get_supabase()
+        
+        # --------------------------------------------
+        # HANDLE SUPABASE REDIRECT FLOWS
+        # --------------------------------------------
+        
         params = st.experimental_get_query_params()
         access_token = params.get("access_token", [None])[0]
         refresh_token = params.get("refresh_token", [None])[0]
         flow_type = params.get("type", [None])[0]
-
+        
+        if access_token and refresh_token:
+            try:
+                supabase.auth.set_session({
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                })
+        
+                session_obj = supabase.auth.get_session()
+                session = getattr(session_obj, "session", session_obj)
+        
+                if session:
+                    st.session_state["sb_session"] = session
+                    st.session_state["entry_mode"] = "auth"
+        
+                    if flow_type == "recovery":
+                        st.session_state["recovery_mode"] = True
+        
+            except Exception:
+                st.error("Authentication redirect failed.")
+                st.stop()
+        
+            # Clear URL params after handling
+            st.experimental_set_query_params()
+            st.rerun()
+        
+        # --------------------------------------------
+        # EMAIL CONFIRMATION HANDLING
+        # --------------------------------------------
+        
         if flow_type == "signup":
             st.success("Email confirmed successfully.")
             st.stop()
-
-        if (
-            st.session_state["entry_mode"] is None
-            and not (access_token and refresh_token)
-            and flow_type != "recovery"
-        ):
+        
+        # --------------------------------------------
+        # GATEWAY SCREEN
+        # --------------------------------------------
+        
+        if st.session_state["entry_mode"] is None:
             st.markdown("# JUPR Leagues 🌵")
-
+        
             col1, col2 = st.columns(2)
-
+        
             with col1:
                 if st.button("🔐 Login", use_container_width=True):
                     st.session_state["entry_mode"] = "login"
                     st.rerun()
-
+        
             with col2:
                 if st.button("🌎 Public Pages", use_container_width=True):
                     st.session_state["entry_mode"] = "public"
                     st.rerun()
-
+        
             st.stop()
-
-        # -------------------------
-        # Supabase initialization
-        # -------------------------
-        supabase = get_supabase()
-
-        if access_token and refresh_token:
-            try:
-                supabase.auth.set_session(
-                    {
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                    }
-                )
-                session_response = supabase.auth.get_session()
-                session = getattr(session_response, "session", session_response)
-                if session:
-                    st.session_state["sb_session"] = session
-                    st.session_state["entry_mode"] = "auth"
-                    st.session_state["auth_initialized"] = True
-            except Exception:
-                st.error("Unable to complete authentication redirect flow.")
-                st.stop()
-
-            st.experimental_set_query_params()
-            st.rerun()
-
-        if flow_type == "recovery":
-            st.subheader("Set New Password")
-
-            new_password = st.text_input("New Password", type="password")
-            confirm_password = st.text_input("Confirm Password", type="password")
-
-            if st.button("Update Password"):
-                if new_password != confirm_password:
-                    st.error("Passwords do not match.")
-                else:
-                    supabase.auth.update_user({"password": new_password})
-                    st.success("Password updated successfully.")
-                    st.session_state.pop("recovery_mode", None)
-                    st.rerun()
-
-            st.stop()
-
-        # ---- Public mode ----
-        PUBLIC_MODE = st.session_state["entry_mode"] == "public"
-
-        entry_mode = st.session_state.get("entry_mode")
-        if entry_mode == "login":
+        
+        # --------------------------------------------
+        # LOGIN FLOW
+        # --------------------------------------------
+        
+        if st.session_state["entry_mode"] == "login":
+        
             if not st.session_state.get("sb_session"):
+        
                 st.markdown("## Login")
-                email = st.text_input("Email", key="login_email")
-                password = st.text_input("Password", type="password", key="login_password")
-
+        
+                email = st.text_input("Email")
+                password = st.text_input("Password", type="password")
+        
                 if st.button("Login", use_container_width=True):
                     try:
-                        auth_response = supabase.auth.sign_in_with_password(
-                            {
-                                "email": email,
-                                "password": password,
-                            }
-                        )
-                        if getattr(auth_response, "session", None):
-                            st.session_state["sb_session"] = auth_response.session
+                        auth_response = supabase.auth.sign_in_with_password({
+                            "email": email,
+                            "password": password,
+                        })
+        
+                        session = getattr(auth_response, "session", None)
+        
+                        if session:
+                            st.session_state["sb_session"] = session
                             st.session_state["entry_mode"] = "auth"
-                            st.session_state["auth_initialized"] = True
                             st.rerun()
                         else:
-                            st.error("Login failed")
+                            st.error("Login failed.")
+        
                     except Exception:
-                        st.error("Login failed")
-
+                        st.error("Login failed.")
+        
                 if st.button("Send Magic Link", use_container_width=True):
                     if not email:
-                        st.error("Email is required for magic link login.")
+                        st.error("Email required.")
                     else:
                         try:
                             supabase.auth.sign_in_with_otp({"email": email})
-                            st.success("Magic link sent. Check your email.")
-                            st.stop()
+                            st.success("Magic link sent.")
                         except Exception:
                             st.error("Unable to send magic link.")
-                return
-
+        
+                st.stop()
+        
+        # --------------------------------------------
+        # SESSION REFRESH / VALIDATION
+        # --------------------------------------------
+        
         session = st.session_state.get("sb_session")
+        
         if session:
             try:
-                session_payload = {
-                    "access_token": getattr(session, "access_token", None),
-                    "refresh_token": getattr(session, "refresh_token", None),
-                }
-                if session_payload["access_token"] and session_payload["refresh_token"]:
-                    supabase.auth.set_session(session_payload)
-                refreshed_response = supabase.auth.get_session()
-                refreshed = getattr(refreshed_response, "session", refreshed_response)
-
-                if refreshed:
-                    st.session_state["sb_session"] = refreshed
-                    st.session_state["entry_mode"] = "auth"
-                    st.session_state["auth_initialized"] = True
+                supabase.auth.set_session({
+                    "access_token": session.access_token,
+                    "refresh_token": session.refresh_token,
+                })
+        
+                refreshed_obj = supabase.auth.get_session()
+                refreshed = getattr(refreshed_obj, "session", refreshed_obj)
+        
+                if not refreshed:
+                    raise Exception("Session refresh failed.")
+        
+                st.session_state["sb_session"] = refreshed
+        
             except Exception:
                 st.session_state.pop("sb_session", None)
                 st.session_state["entry_mode"] = None
-                st.session_state["auth_initialized"] = False
                 st.rerun()
-
-        if st.session_state.get("sb_session"):
+        
+        # --------------------------------------------
+        # PASSWORD RECOVERY MODE
+        # --------------------------------------------
+        
+        if st.session_state.get("recovery_mode"):
+            st.subheader("Set New Password")
+        
+            new_password = st.text_input("New Password", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+        
+            if st.button("Update Password"):
+                if not new_password or new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                else:
+                    try:
+                        supabase.auth.update_user({"password": new_password})
+                        st.success("Password updated successfully.")
+                        st.session_state.pop("recovery_mode", None)
+                        st.rerun()
+                    except Exception:
+                        st.error("Password update failed.")
+        
+            st.stop()
+        
+        # --------------------------------------------
+        # JWT CLAIM VALIDATION
+        # --------------------------------------------
+        
+        session = st.session_state.get("sb_session")
+        
+        if session:
             try:
-                token = st.session_state["sb_session"].access_token
-                base64.urlsafe_b64decode(token.split(".")[1] + "===")
+                token = session.access_token
                 payload = jwt.decode(token, options={"verify_signature": False})
-                st.session_state["jwt_payload"] = payload
-
-                if "club_id" not in payload.get("user_metadata", {}):
-                    st.error("JWT missing club_id claim.")
-                    st.stop()
-            except Exception as e:
-                st.error(f"JWT validation failed: {e}")
-                st.stop()
-
-        # -------------------------
-        # Resolve club_id dynamically
-        # -------------------------
-        club_id = None
-        if st.session_state.get("sb_session"):
-            session = st.session_state.get("sb_session")
-            user = getattr(session, "user", None)
-            user_metadata = getattr(user, "user_metadata", {}) if user else {}
-            if isinstance(user_metadata, dict):
+        
+                user_metadata = payload.get("user_metadata", {})
                 club_id = user_metadata.get("club_id")
-
-            if not club_id:
-                st.error("Authenticated user missing club_id in metadata.")
+        
+                if not club_id:
+                    st.error("Authenticated user missing club_id claim.")
+                    st.stop()
+        
+                # Store minimal safe payload
+                st.session_state["jwt_payload"] = {
+                    "sub": payload.get("sub"),
+                    "email": payload.get("email"),
+                    "club_id": club_id,
+                }
+        
+            except Exception:
+                st.error("Invalid authentication token.")
                 st.stop()
+        
+        # --------------------------------------------
+        # RESOLVE TENANT
+        # --------------------------------------------
+        
+        if st.session_state.get("sb_session"):
+            club_id = st.session_state["jwt_payload"]["club_id"]
         else:
             club_id = os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
-
-        # ---- Session defaults ----
-        st.session_state.setdefault("deep_link_applied", False)
-        # ---- Sidebar / Auth ----
-        if PUBLIC_MODE:
-            hide_sidebar_and_header_for_public()
-        else:
-            st.sidebar.title("JUPR Leagues 🌵")
-
-            if st.session_state.get("sb_session") and st.sidebar.button("Log Out"):
+        
+        PUBLIC_MODE = st.session_state["entry_mode"] == "public"
+        admin_logged_in = bool(st.session_state.get("sb_session"))
+        
+        # --------------------------------------------
+        # LOGOUT
+        # --------------------------------------------
+        
+        if admin_logged_in:
+            if st.sidebar.button("Log Out"):
                 try:
                     supabase.auth.sign_out()
                 except Exception:
                     pass
+        
                 st.session_state.pop("sb_session", None)
+                st.session_state.pop("jwt_payload", None)
                 st.session_state["entry_mode"] = None
-                st.session_state["auth_initialized"] = False
                 st.rerun()
 
-        # Canonical admin flag (never true in public mode)
-        if st.session_state.get("sb_session"):
-            st.session_state["entry_mode"] = "auth"
-            admin_logged_in = True
-        else:
-            admin_logged_in = False
-
-        # Optional: allow pages to request a refresh of cached data
-        if bool(st.session_state.get("force_data_refresh", False)):
-            try:
-                get_data.clear()
-            except Exception:
-                pass
-            st.session_state["force_data_refresh"] = False
 
         # ---- Load data + ctx ----
         (
