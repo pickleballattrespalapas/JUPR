@@ -11,6 +11,10 @@ from jupr_app.config import PRODUCTION_MODE
 
 
 RATING_STATE_DERIVATION_NOTE = "Rating state is derived from match history only."
+RATING_STATE_POLICY_GUIDANCE = (
+    "Set derived_from_match_history=True only for writes produced by match replay/pipeline "
+    "from canonical match history; manual edits to rating-state fields stay blocked in production."
+)
 
 
 def _enforce_rating_state_policy(*, table: str, payload: Dict, derived_from_match_history: bool) -> None:
@@ -26,7 +30,8 @@ def _enforce_rating_state_policy(*, table: str, payload: Dict, derived_from_matc
     if any(field in payload for field in forbidden_fields):
         kind = "league rating" if str(table) == "league_ratings" else "rating"
         raise RuntimeError(
-            f"Manual {kind} edits are disabled in PRODUCTION_MODE. {RATING_STATE_DERIVATION_NOTE}"
+            f"Manual {kind} edits are disabled in PRODUCTION_MODE. "
+            f"{RATING_STATE_DERIVATION_NOTE} {RATING_STATE_POLICY_GUIDANCE}"
         )
 
 
