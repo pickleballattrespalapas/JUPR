@@ -9,7 +9,7 @@ import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.audit_logger import log_event
-from jupr_app.domain.match_pipeline import update_match
+from jupr_app.domain.match_pipeline import recalculate_state, update_match
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
     """
@@ -196,12 +196,16 @@ def apply_bulk_match_edits(
             club_id=str(club_id),
             match_id=int(mid),
             patch=update,
+            rebuild_state=False,
         )
 
         updated_ids.append(mid)
         applied.append({"id": mid, **update})
 
     recompute_scope = compute_recompute_scope(patches)
+
+    if updated_ids:
+        recalculate_state(supabase=supabase, club_id=str(club_id))
 
     # Audit event (best effort)
     log_event(

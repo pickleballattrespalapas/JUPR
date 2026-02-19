@@ -120,7 +120,7 @@ def render(ctx):
                                 club_id=str(ctx.club_id),
                                 player_ids=deleted_pids,
                             )
-                        st.success("Deleted duplicates. Now run Admin Tools → Replay History → ALL.")
+                        st.success("Deleted duplicates. Ratings and standings were recalculated automatically.")
                         st.rerun()
 
     st.divider()
@@ -422,9 +422,9 @@ def render(ctx):
                 st.warning("Warnings:\n- " + "\n- ".join(result["warnings"][:10]))
 
             if result["recompute_scope"]["ratings"]:
-                st.warning("Ratings may be impacted. Run **Admin Tools → Replay History → ALL** (or the affected leagues) to fully re-sync ratings/standings.")
+                st.info("Ratings and standings were recalculated automatically after these edits.")
             else:
-                st.info("Week/league views may change immediately. If anything looks off, run **Replay History**.")
+                st.info("Week/league views may change immediately after edits.")
 
             # Reset editor state
             st.session_state["bulk_match_df"] = view.copy(deep=True)
@@ -436,7 +436,7 @@ def render(ctx):
             st.error(f"Unable to apply bulk edits: {exc}")
 
 
-    st.info("Replay should only be run from Admin Tools.")
+    st.info("Replay is a recovery tool, not required for normal edits. Run it only from Admin Tools when recovering from data drift.")
 
     st.divider()
 
@@ -475,5 +475,5 @@ def render(ctx):
                     club_id=str(ctx.club_id),
                     player_ids=deleted_pids,
                 )
-            st.success("Deleted. Run Replay ALL if you want ratings to be consistent.")
+            st.success("Deleted. Ratings and standings were recalculated automatically.")
             st.rerun()
