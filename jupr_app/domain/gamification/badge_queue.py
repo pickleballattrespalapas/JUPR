@@ -39,7 +39,7 @@ def enqueue_badge_eval(
     }
     try:
         if match_id:
-            sb_upsert(supabase, BADGE_QUEUE_TABLE, row, conflict="event_type,match_id")
+            sb_upsert(supabase, BADGE_QUEUE_TABLE, row, conflict="club_id,event_type,match_id")
         else:
             sb_insert(supabase, BADGE_QUEUE_TABLE, row)
     except APIError as exc:
