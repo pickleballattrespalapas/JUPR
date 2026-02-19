@@ -39,17 +39,9 @@ def get_supabase():
 
 
 def assert_schema_health(supabase):
-    required_tables = [
-        "players",
-        "matches",
-        "league_ratings",
-        "badges",
-        "player_badges",
-    ]
-    for table in required_tables:
-        resp = supabase.table(table).select("id").limit(1).execute()
-        if resp is None:
-            raise RuntimeError(f"Schema validation failed for table: {table}")
+    from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
+
+    ensure_badge_schema_preflight(supabase)
 
 
 @st.cache_data(ttl=30)

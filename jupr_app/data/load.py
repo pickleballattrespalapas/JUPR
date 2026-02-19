@@ -110,21 +110,6 @@ def submit_matches_from_loader(supabase, club_id: str, matches: list[dict], chun
     return submitted
 
 
-def _ensure_player_badges_columns(df: pd.DataFrame) -> pd.DataFrame:
-    defaults = {
-        "awarded_by": "engine",
-        "rule_version": None,
-        "eval_run_id": None,
-        "revoked_at": None,
-        "revoked_by": None,
-        "revoke_reason": None,
-    }
-    for col, default in defaults.items():
-        if col not in df.columns:
-            df[col] = default
-    return df
-
-
 def _fetch_player_badges(supabase, club_id: str) -> pd.DataFrame:
     select_cols = ",".join(PLAYER_BADGES_BASE_COLUMNS + PLAYER_BADGES_OPTIONAL_COLUMNS)
     pb_resp = (
@@ -134,7 +119,6 @@ def _fetch_player_badges(supabase, club_id: str) -> pd.DataFrame:
         .execute()
     )
     df_player_badges = pd.DataFrame(pb_resp.data or [])
-    df_player_badges = _ensure_player_badges_columns(df_player_badges)
     return df_player_badges
 
 
