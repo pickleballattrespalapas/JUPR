@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from jupr_app.config import DEBUG_MODE
 from jupr_app.data.sb_write import sb_update, sb_upsert
 from jupr_app.domain.ratings import calculate_hybrid_elo
 
@@ -110,6 +111,11 @@ def record_match(
     if is_popup is not None:
         match_payload["is_popup"] = bool(is_popup)
 
+    _debug_log_match_write(
+        payload=match_payload,
+        idempotency_key=idempotency_key,
+        club_id=club_id,
+    )
     inserted_match_resp = (
         supabase.table("matches")
         .upsert(
@@ -142,6 +148,12 @@ def record_match(
     )
 
     for player_id, update_payload in updates_by_player.items():
+        _debug_log_match_write(
+            payload=update_payload,
+            idempotency_key=idempotency_key,
+            club_id=club_id,
+            match_id=inserted_match_id,
+        )
         result = sb_update(
             supabase,
             "players",
@@ -161,6 +173,12 @@ def record_match(
                 "is_active": True,
                 "inactive_at": None,
             }
+            _debug_log_match_write(
+                payload=league_payload,
+                idempotency_key=idempotency_key,
+                club_id=club_id,
+                match_id=inserted_match_id,
+            )
             sb_upsert(
                 supabase,
                 "league_ratings",
@@ -183,6 +201,12 @@ def record_match(
         },
         "status": "pending",
     }
+    _debug_log_match_write(
+        payload=badge_payload,
+        idempotency_key=idempotency_key,
+        club_id=club_id,
+        match_id=inserted_match_id,
+    )
     badge_resp = sb_upsert(
         supabase,
         "badge_eval_queue",
@@ -252,6 +276,11 @@ def update_match(
     if club_id is not None and str(club_id).strip():
         filters["club_id"] = str(club_id).strip()
 
+    _debug_log_match_write(
+        payload=payload,
+        club_id=filters.get("club_id"),
+        match_id=normalized_match_id,
+    )
     result = sb_update(supabase, "matches", payload, filters=filters)
     rows = getattr(result, "data", None) or []
     if not rows:
@@ -266,6 +295,25 @@ def update_match(
 def void_match(*args: Any, **kwargs: Any) -> dict:
     raise NotImplementedError("void_match will be implemented in a future phase")
 
+
+
+def _debug_log_match_write(
+    *,
+    payload: dict[str, Any],
+    idempotency_key: str | None = None,
+    club_id: str | None = None,
+    match_id: str | None = None,
+) -> None:
+    if not DEBUG_MODE:
+        return
+
+    write_log = {
+        "club_id": club_id,
+        "idempotency_key": idempotency_key,
+        "match_id": match_id,
+        "payload": payload,
+    }
+    print("MATCH WRITE:", json.dumps(write_log, sort_keys=True, default=str))
 
 def _normalize_played_at(played_at: str | None) -> str:
     if played_at is None or str(played_at).strip() == "":
