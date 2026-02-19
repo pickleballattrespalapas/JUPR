@@ -1,0 +1,1812 @@
+[
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "context_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "event_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "player_ids",
+    "data_type": "ARRAY"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "match_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "payload_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "attempts",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "last_error",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_queue",
+    "column_name": "processed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "created_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "mode",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "scope_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "started_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "finished_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "summary_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "badge_eval_runs",
+    "column_name": "error",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "user_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "event_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "event_ts",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "data",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "idempotency_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_events_v2",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_fact_registry",
+    "column_name": "fact_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_fact_registry",
+    "column_name": "description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_fact_registry",
+    "column_name": "data_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_fact_registry",
+    "column_name": "allowed_scope",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_rule_conditions",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_rule_conditions",
+    "column_name": "badge_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_rule_conditions",
+    "column_name": "fact_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_rule_conditions",
+    "column_name": "operator",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_rule_conditions",
+    "column_name": "value_numeric",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "badge_rule_conditions",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "badge_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "rule_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "params",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "trigger_event",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "evaluation_mode",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "enabled",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badge_rules_v2",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "badge_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "prestige",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "category",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "is_stackable",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "is_active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "rarity",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "tier",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "icon_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "lore",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "hint",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "scope",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "is_locked",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "award_count",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "published_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "archived_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "is_system_badge",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges",
+    "column_name": "created_by_admin_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "slug",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "display_text",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "icon_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "icon_emoji",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "category",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "rarity",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "sort_order",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "is_active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "is_hidden",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "is_locked",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "award_count",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "published_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "archived_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "is_system_badge",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "badges_v2",
+    "column_name": "created_by_admin_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "club_user_roles",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "club_user_roles",
+    "column_name": "user_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "club_user_roles",
+    "column_name": "role",
+    "data_type": "text"
+  },
+  {
+    "table_name": "club_user_roles",
+    "column_name": "assigned_by",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "club_user_roles",
+    "column_name": "assigned_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "clubs",
+    "column_name": "id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "clubs",
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "clubs",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "clubs",
+    "column_name": "logo_url",
+    "data_type": "text"
+  },
+  {
+    "table_name": "clubs",
+    "column_name": "primary_color",
+    "data_type": "text"
+  },
+  {
+    "table_name": "clubs",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "events",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "events",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "events",
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "events",
+    "column_name": "event_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "events",
+    "column_name": "is_active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "events",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "events",
+    "column_name": "starts_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "events",
+    "column_name": "ends_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "events",
+    "column_name": "notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "actor",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "action_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "entity_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "entity_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "before",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "after",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "ladder_audit_log",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "challenge_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "match_no",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "def_partner_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "chal_partner_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "g1_def",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "g1_chal",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "g2_def",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "g2_chal",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "g3_def",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "g3_chal",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "verified",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "verified_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenge_matches",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "challenger_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "defender_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "challenger_rank_at_create",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "defender_rank_at_create",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "ledger_ref",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "created_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "accept_by",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "accepted_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "play_by",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "scheduled_for",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "pass_used_by",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "pass_used_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "forfeit_by",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "forfeit_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "winner_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "completed_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "resolution_notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "tier_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_challenges",
+    "column_name": "notice_sent_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "month_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "used_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "challenge_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_pass_usage",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "vacation_until",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "reinstate_required",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "reinstate_notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "tier_move_flag",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "tier_move_dest_tier",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "tier_move_count",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "tier_move_triggered_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_player_flags",
+    "column_name": "tier_move_last_eval_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "rank",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "is_active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "joined_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "left_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "notes",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_roster",
+    "column_name": "tier_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "challenge_range",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "accept_window_hours",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "play_window_days",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "cooldown_hours",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "protected_hours",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "pass_hold_hours",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "ladder_settings",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "league_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "rating",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "matches_played",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "wins",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "losses",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "starting_rating",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "is_active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "league_ratings",
+    "column_name": "inactive_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "league_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "league_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "min_weeks",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "is_active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "min_games",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "description",
+    "data_type": "text"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "k_factor",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "ended_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "ended_by",
+    "data_type": "text"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "end_awards",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "started_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "schedule_config",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "court_board_defaults",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "rules_config",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "leagues_metadata",
+    "column_name": "awards_config",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "date",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "league",
+    "data_type": "text"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t1_p1",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t1_p2",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t2_p1",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t2_p2",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "score_t1",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "score_t2",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "elo_delta",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "match_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "week_tag",
+    "data_type": "text"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t1_p1_r",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t1_p2_r",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t2_p1_r",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t2_p2_r",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t1_p1_r_end",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t1_p2_r_end",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t2_p1_r_end",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "t2_p2_r_end",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "elo_delta_t1",
+    "data_type": "double precision"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "elo_delta_t2",
+    "data_type": "double precision"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "context_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "context_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "tournament_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "tournament_game_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "matches",
+    "column_name": "idempotency_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badge_facts",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badge_facts",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "player_badge_facts",
+    "column_name": "context_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badge_facts",
+    "column_name": "fact_key",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badge_facts",
+    "column_name": "fact_value_num",
+    "data_type": "double precision"
+  },
+  {
+    "table_name": "player_badge_facts",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "badge_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "earned_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "context_type",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "context_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "match_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "value_num",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "value_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "awarded_by",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "rule_version",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "eval_run_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "revoked_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "revoked_by",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "revoked_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_badges",
+    "column_name": "revoke_reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "preferred_channel",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "email",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "phone",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "whatsapp",
+    "data_type": "text"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "player_profiles",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "players",
+    "column_name": "id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "players",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "players",
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "players",
+    "column_name": "rating",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "players",
+    "column_name": "starting_rating",
+    "data_type": "numeric"
+  },
+  {
+    "table_name": "players",
+    "column_name": "matches_played",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "players",
+    "column_name": "wins",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "players",
+    "column_name": "losses",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "players",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "players",
+    "column_name": "active",
+    "data_type": "boolean"
+  },
+  {
+    "table_name": "players",
+    "column_name": "last_game_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "players",
+    "column_name": "inactive_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "players",
+    "column_name": "normalized_name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "processed_match_facts",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "processed_match_facts",
+    "column_name": "match_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "processed_match_facts",
+    "column_name": "player_id",
+    "data_type": "bigint"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "tournament_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "stage",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "rr_round_number",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "rr_slot_number",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "playoff_game_code",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "playoff_round",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "team_a_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "team_b_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "team_a_source",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "team_b_source",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "score_a",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "score_b",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "winner_team_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "loser_team_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "finalized_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "tournament_games",
+    "column_name": "series_game_number",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_podium",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_podium",
+    "column_name": "tournament_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_podium",
+    "column_name": "placement",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_podium",
+    "column_name": "team_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_podium",
+    "column_name": "source",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournament_podium",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "tournament_teams",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_teams",
+    "column_name": "tournament_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournament_teams",
+    "column_name": "team_number",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_teams",
+    "column_name": "player1_id",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_teams",
+    "column_name": "player2_id",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournament_teams",
+    "column_name": "seed",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "name",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "team_count",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "playoff_advance_count",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "created_by_admin_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "tournaments",
+    "column_name": "playoff_best_of",
+    "data_type": "integer"
+  },
+  {
+    "table_name": "user_badges_v2",
+    "column_name": "user_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "user_badges_v2",
+    "column_name": "badge_id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "user_badges_v2",
+    "column_name": "awarded_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "user_badges_v2",
+    "column_name": "awarded_by",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "user_badges_v2",
+    "column_name": "reason",
+    "data_type": "text"
+  },
+  {
+    "table_name": "user_badges_v2",
+    "column_name": "metadata",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "id",
+    "data_type": "uuid"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "club_id",
+    "data_type": "text"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "week_start",
+    "data_type": "date"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "week_end",
+    "data_type": "date"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "status",
+    "data_type": "text"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "generated_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "edits_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "final_json",
+    "data_type": "jsonb"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "created_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "updated_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "published_at",
+    "data_type": "timestamp with time zone"
+  },
+  {
+    "table_name": "weekly_recaps",
+    "column_name": "published_by",
+    "data_type": "text"
+  }
+]
