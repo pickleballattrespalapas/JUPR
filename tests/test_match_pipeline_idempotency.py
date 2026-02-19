@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import pandas as pd
 
 from jupr_app.domain import match_pipeline
 
@@ -19,7 +19,10 @@ class _Query:
         return self
 
     def execute(self):
-        return SimpleNamespace(data=self._rows)
+        class _Resp:
+            data = self._rows
+
+        return _Resp()
 
 
 class _Supabase:
@@ -27,15 +30,16 @@ class _Supabase:
         self._existing_rows = existing_rows or []
 
     def table(self, name: str):
-        assert name == "matches"
-        return _Query(self._existing_rows)
+        if name == "matches":
+            return _Query(self._existing_rows)
+        return _Query([])
 
 
-def test_record_match_idempotency_hit_returns_existing_and_skips_rebuild(monkeypatch):
+def test_record_match_idempotency_hit_returns_existing_and_skips_processing(monkeypatch):
     supabase = _Supabase(existing_rows=[{"id": 9, "idempotency_key": "dup-1", "club_id": "club-1"}])
-    rebuild_calls = []
+    process_calls = []
 
-    monkeypatch.setattr(match_pipeline, "_rebuild_state", lambda **_: rebuild_calls.append(True))
+    monkeypatch.setattr(match_pipeline, "process_matches", lambda *_args, **_kwargs: process_calls.append(True))
     monkeypatch.setattr(match_pipeline, "log_event", lambda **_: None)
 
     result = match_pipeline.record_match(
@@ -47,17 +51,28 @@ def test_record_match_idempotency_hit_returns_existing_and_skips_rebuild(monkeyp
     assert result["success"] is True
     assert result["idempotent_hit"] is True
     assert result["match_id"] == 9
-    assert rebuild_calls == []
+    assert process_calls == []
 
 
-def test_record_match_new_idempotency_inserts_and_rebuilds(monkeypatch):
+def test_record_match_new_idempotency_processes_matches(monkeypatch):
     supabase = _Supabase(existing_rows=[])
-    rebuild_calls = []
 
+    monkeypatch.setattr(match_pipeline, "_build_processing_context", lambda **_: {
+        "name_to_id": {},
+        "df_players_all": pd.DataFrame([]),
+        "df_leagues": pd.DataFrame([]),
+        "df_meta": pd.DataFrame([]),
+    })
+
+    def fake_process(match_list, **kwargs):
+        row = dict(match_list[0])
+        row["club_id"] = "club-1"
+        kwargs["match_writer"](row, None, "admin", "new-1")
+        return {"inserted": 1}
+
+    monkeypatch.setattr(match_pipeline, "process_matches", fake_process)
     monkeypatch.setattr(match_pipeline, "_run_write", lambda fn: fn())
-    monkeypatch.setattr(match_pipeline, "_snapshot_ratings_state", lambda **_: {"players": [], "league_ratings": []})
-    monkeypatch.setattr(match_pipeline, "sb_insert", lambda *_args, **_kwargs: SimpleNamespace(data=[{"id": 10}]))
-    monkeypatch.setattr(match_pipeline, "_rebuild_state", lambda **_: rebuild_calls.append(True) or {"matches_processed": 1})
+    monkeypatch.setattr(match_pipeline, "sb_insert", lambda *_args, **_kwargs: type("R", (), {"data": [{"id": 10}]})())
     monkeypatch.setattr(match_pipeline, "log_event", lambda **_: None)
 
     result = match_pipeline.record_match(
@@ -69,4 +84,3 @@ def test_record_match_new_idempotency_inserts_and_rebuilds(monkeypatch):
     assert result["success"] is True
     assert result.get("idempotent_hit") is not True
     assert result["match_id"] == 10
-    assert rebuild_calls == [True]

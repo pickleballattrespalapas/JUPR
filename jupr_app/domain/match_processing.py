@@ -16,7 +16,6 @@ from jupr_app.domain.player_activity import (
     max_activity_time,
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
-from services.match_pipeline import submit_match
 
 
 def process_matches(
@@ -33,6 +32,7 @@ def process_matches(
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
+    match_writer: Callable[[dict[str, Any], str | None, str, str], Any] | None = None,
 ) -> dict[str, int]:
     """
     - Applies overall rating updates to players table
@@ -325,6 +325,20 @@ def process_matches(
     # -------------------------
     # Write match rows
     # -------------------------
+    if match_writer is None:
+        from services.match_pipeline import submit_match
+
+        def match_writer(match_row: dict[str, Any], context_id: str | None, context_type: str, idempotency_key: str):
+            return submit_match(
+                club_id=str(club_id),
+                context_type=context_type,
+                context_id=context_id,
+                match_payload=match_row,
+                idempotency_key=idempotency_key,
+                # match_processing already persists league_ratings; avoid pipeline hook double writes.
+                run_context_hooks=False,
+            )
+
     queued_badge_events: list[dict[str, Any]] = []
     if db_matches:
         CHUNK_M = 300
@@ -334,17 +348,7 @@ def process_matches(
                 context_type = resolve_context_type(match_row, str(match_row.get("league") or "").strip())
                 context_id = resolve_context_id(match_row, context_type, str(match_row.get("league") or "").strip())
                 idempotency_key = build_idempotency_key(match_row)
-                sb_retry(
-                    lambda match_row=match_row, context_type=context_type, context_id=context_id, idempotency_key=idempotency_key: submit_match(
-                        club_id=str(club_id),
-                        context_type=context_type,
-                        context_id=context_id,
-                        match_payload=match_row,
-                        idempotency_key=idempotency_key,
-                        # match_processing already persists league_ratings; avoid pipeline hook double writes.
-                        run_context_hooks=False,
-                    )
-                )
+                sb_retry(lambda match_row=match_row, context_id=context_id, context_type=context_type, idempotency_key=idempotency_key: match_writer(match_row, context_id, context_type, idempotency_key))
                 queued_badge_events.append({
                     "context_id": str(context_id or "overall"),
                     "match_id": str(idempotency_key),

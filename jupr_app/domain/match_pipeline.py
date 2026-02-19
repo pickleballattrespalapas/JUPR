@@ -22,9 +22,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import pandas as pd
+
 from jupr_app.data.retry import sb_retry
-from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update
 from jupr_app.domain.audit_logger import log_event
+from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
 
 _ALLOWED_MATCH_KEYS = {
@@ -79,76 +82,6 @@ def _pipeline_result(
     }
     payload.update(extra)
     return payload
-
-
-def _snapshot_ratings_state(*, supabase: Any, club_id: str) -> dict[str, list[dict[str, Any]]]:
-    players_rows = (
-        supabase.table("players")
-        .select("id,rating,wins,losses,matches_played,last_game_at,is_active,inactive_at")
-        .eq("club_id", club_id)
-        .execute()
-        .data
-        or []
-    )
-    league_rows = (
-        supabase.table("league_ratings")
-        .select("club_id,player_id,league_name,rating,wins,losses,matches_played,starting_rating,is_active,inactive_at")
-        .eq("club_id", club_id)
-        .execute()
-        .data
-        or []
-    )
-    return {
-        "players": [dict(r) for r in players_rows],
-        "league_ratings": [dict(r) for r in league_rows],
-    }
-
-
-def _restore_ratings_state(*, supabase: Any, club_id: str, snapshot: Mapping[str, Any]) -> None:
-    for row in snapshot.get("players", []):
-        pid = _as_int(row.get("id"))
-        if pid is None:
-            continue
-        payload = {
-            "rating": row.get("rating"),
-            "wins": row.get("wins"),
-            "losses": row.get("losses"),
-            "matches_played": row.get("matches_played"),
-            "last_game_at": row.get("last_game_at"),
-            "is_active": row.get("is_active"),
-            "inactive_at": row.get("inactive_at"),
-        }
-        _run_write(lambda pid=pid, payload=payload: sb_update(
-            supabase,
-            "players",
-            payload,
-            filters=_scoped_filters(club_id, {"club_id": club_id, "id": int(pid)}),
-        ))
-
-    _run_write(lambda: sb_delete(
-        supabase,
-        "league_ratings",
-        filters=_scoped_filters(club_id, {"club_id": club_id}),
-    ))
-    for row in snapshot.get("league_ratings", []):
-        payload = {
-            "club_id": club_id,
-            "player_id": int(row["player_id"]),
-            "league_name": str(row.get("league_name") or ""),
-            "rating": row.get("rating"),
-            "wins": row.get("wins"),
-            "losses": row.get("losses"),
-            "matches_played": row.get("matches_played"),
-            "starting_rating": row.get("starting_rating"),
-            "is_active": row.get("is_active"),
-            "inactive_at": row.get("inactive_at"),
-        }
-        _run_write(lambda payload=payload: sb_upsert(
-            supabase,
-            "league_ratings",
-            _scoped_payload(club_id, payload),
-            conflict="club_id,player_id,league_name",
-        ))
 
 
 def _run_write(fn):
@@ -231,6 +164,44 @@ def _rebuild_state(*, supabase: Any, club_id: str) -> dict[str, int]:
     }
 
 
+def _build_processing_context(*, supabase: Any, club_id: str) -> dict[str, Any]:
+    players_rows = (
+        supabase.table("players")
+        .select("id,name,rating,wins,losses,matches_played,last_game_at")
+        .eq("club_id", club_id)
+        .execute()
+        .data
+        or []
+    )
+    leagues_rows = (
+        supabase.table("league_ratings")
+        .select("player_id,league_name,rating,wins,losses,matches_played,starting_rating")
+        .eq("club_id", club_id)
+        .execute()
+        .data
+        or []
+    )
+    meta_rows = (
+        supabase.table("league_settings")
+        .select("league_name,k_factor")
+        .eq("club_id", club_id)
+        .execute()
+        .data
+        or []
+    )
+    name_to_id = {
+        str(row.get("name") or "").strip(): int(row["id"])
+        for row in players_rows
+        if str(row.get("name") or "").strip() and _as_int(row.get("id")) is not None
+    }
+    return {
+        "name_to_id": name_to_id,
+        "df_players_all": pd.DataFrame(players_rows),
+        "df_leagues": pd.DataFrame(leagues_rows),
+        "df_meta": pd.DataFrame(meta_rows),
+    }
+
+
 def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any]) -> dict[str, Any]:
     """Create one match for `club_id` and rebuild all dependent projections.
 
@@ -272,24 +243,46 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
         )
 
     payload = _coerce_match_payload(scoped_club_id, match_payload)
-    snapshot = _snapshot_ratings_state(supabase=supabase, club_id=scoped_club_id)
     inserted_rows: list[dict[str, Any]] = []
     inserted_match_id: int | None = None
     warnings: list[str] = []
     operation_success = False
 
     try:
-        inserted = _run_write(lambda: sb_insert(supabase, "matches", _scoped_payload(scoped_club_id, payload)))
-        inserted_rows = getattr(inserted, "data", None) or []
-        inserted_match_id = _as_int((inserted_rows[0] or {}).get("id")) if inserted_rows else None
-        rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        processing_ctx = _build_processing_context(supabase=supabase, club_id=scoped_club_id)
+
+        def _write_match(match_row: dict[str, Any], context_id: str | None, context_type: str, idempotency_key: str):
+            nonlocal inserted_match_id
+            insert_payload = dict(match_row)
+            insert_payload["context_id"] = context_id
+            insert_payload["context_type"] = context_type
+            insert_payload["idempotency_key"] = idempotency_key
+            inserted = _run_write(lambda: sb_insert(supabase, "matches", _scoped_payload(scoped_club_id, insert_payload)))
+            rows = getattr(inserted, "data", None) or []
+            inserted_rows.extend(rows)
+            if rows and inserted_match_id is None:
+                inserted_match_id = _as_int((rows[0] or {}).get("id"))
+            return inserted
+
+        process_matches(
+            [payload],
+            supabase_admin=supabase,
+            supabase=supabase,
+            club_id=scoped_club_id,
+            name_to_id=processing_ctx["name_to_id"],
+            df_players_all=processing_ctx["df_players_all"],
+            df_leagues=processing_ctx["df_leagues"],
+            df_meta=processing_ctx["df_meta"],
+            sb_retry=_run_write,
+            match_writer=_write_match,
+        )
+        inserted_match_id = inserted_match_id or (_as_int((inserted_rows[0] or {}).get("id")) if inserted_rows else None)
         operation_success = True
         return _pipeline_result(
             success=True,
             match_id=inserted_match_id,
             warnings=warnings,
             inserted=inserted_rows,
-            rebuild=rebuild,
         )
     except Exception as exc:
         if inserted_match_id is not None:
@@ -299,8 +292,6 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
                 filters=_scoped_filters(scoped_club_id, {"club_id": scoped_club_id, "id": int(inserted_match_id)}),
             ))
             warnings.append("rolled_back_inserted_match")
-        _restore_ratings_state(supabase=supabase, club_id=scoped_club_id, snapshot=snapshot)
-        warnings.append("ratings_restored_from_snapshot")
         err = MatchPipelineError(f"record_match failed: {exc}")
         return _pipeline_result(
             success=False,
@@ -332,7 +323,6 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
     target_match_id = int(match_id)
     safe_patch = _coerce_match_payload(scoped_club_id, patch)
     safe_patch.pop("club_id", None)
-    snapshot = _snapshot_ratings_state(supabase=supabase, club_id=scoped_club_id)
     match_before_rows = (
         supabase.table("matches")
         .select("*")
@@ -374,8 +364,6 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
                 filters=_scoped_filters(scoped_club_id, {"club_id": scoped_club_id, "id": target_match_id}),
             ))
             warnings.append("rolled_back_match_patch")
-        _restore_ratings_state(supabase=supabase, club_id=scoped_club_id, snapshot=snapshot)
-        warnings.append("ratings_restored_from_snapshot")
         err = MatchPipelineError(f"update_match failed: {exc}")
         return _pipeline_result(
             success=False,
