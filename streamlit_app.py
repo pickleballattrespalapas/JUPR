@@ -166,10 +166,10 @@ def main():
         # HANDLE SUPABASE REDIRECT FLOWS
         # --------------------------------------------
         
-        params = st.experimental_get_query_params()
-        access_token = params.get("access_token", [None])[0]
-        refresh_token = params.get("refresh_token", [None])[0]
-        flow_type = params.get("type", [None])[0]
+        params = st.query_params
+        access_token = params.get("access_token")
+        refresh_token = params.get("refresh_token")
+        flow_type = params.get("type")
         
         if access_token and refresh_token:
             try:
@@ -193,7 +193,7 @@ def main():
                 st.stop()
         
             # Clear URL params after handling
-            st.experimental_set_query_params()
+            st.query_params.clear()
             st.rerun()
         
         # --------------------------------------------
