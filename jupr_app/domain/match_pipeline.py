@@ -188,7 +188,7 @@ def _build_processing_context(*, supabase: Any, club_id: str) -> dict[str, Any]:
         or []
     )
     meta_rows = (
-        supabase.table("league_settings")
+        supabase.table("leagues_metadata")
         .select("league_name,k_factor")
         .eq("club_id", club_id)
         .execute()
