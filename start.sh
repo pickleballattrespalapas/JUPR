@@ -11,4 +11,5 @@ enableCORS = false
 enableXsrfProtection = false
 EOF
 
-exec streamlit run app.py
+exec streamlit run streamlit_app.py --server.port=$PORT --server.address=0.0.0.0
+
