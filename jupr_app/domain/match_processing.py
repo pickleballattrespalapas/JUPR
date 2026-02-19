@@ -340,18 +340,22 @@ def process_matches(
     # Write match rows
     # -------------------------
     if match_writer is None:
-        from services.match_pipeline import submit_match
-
-        def match_writer(match_row: dict[str, Any], context_id: str | None, context_type: str, idempotency_key: str):
-            return submit_match(
-                club_id=str(club_id),
-                context_type=context_type,
-                context_id=context_id,
-                match_payload=match_row,
-                idempotency_key=idempotency_key,
-                # match_processing already persists league_ratings; avoid pipeline hook double writes.
-                run_context_hooks=False,
+        # IMPORTANT: process_matches() already computes + writes all projections
+        # (players, league_ratings, badge queue). The default writer must insert the
+        # match row only — calling services.match_pipeline.submit_match() recurses back
+        # into the pipeline and can double-apply updates.
+        def match_writer(match_row: dict[str, Any], context_id: str | None, context_type: str, idempotency_key: str) -> dict[str, Any]:
+            payload = dict(match_row or {})
+            payload.update(
+                {
+                    "club_id": club_id,
+                    "context_type": context_type,
+                    "context_id": context_id,
+                    "idempotency_key": idempotency_key,
+                }
             )
+            sb_insert(supabase_admin, "matches", payload)
+            return {"inserted": True}
 
     queued_badge_events: list[dict[str, Any]] = []
     if db_matches:
