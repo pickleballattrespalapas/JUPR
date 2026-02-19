@@ -16,6 +16,9 @@ from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.layout import page_shell
 
 
+REQUIRED_SCHEMA_VERSION = "rebuild_phase1_alignment"
+
+
 def _get_api_error_code(exc: APIError) -> str | None:
     code = getattr(exc, "code", None)
     if code:
@@ -23,6 +26,20 @@ def _get_api_error_code(exc: APIError) -> str | None:
     if exc.args and isinstance(exc.args[0], dict):
         return exc.args[0].get("code")
     return None
+
+
+def _is_replay_schema_valid(supabase) -> bool:
+    try:
+        response = (
+            supabase.table("schema_version")
+            .select("version")
+            .eq("version", REQUIRED_SCHEMA_VERSION)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return False
+    return bool(response.data)
 
 
 def render(ctx):
@@ -117,6 +134,10 @@ def render(ctx):
     target_reset = st.selectbox("Replay scope", league_opts)
 
     if st.button(f"⚠️ Replay History for: {target_reset}"):
+        if not _is_replay_schema_valid(supabase):
+            st.error("Schema mismatch detected.\nRun migrations before replay.")
+            st.stop()
+
         bar = st.progress(0.0)
         with st.spinner("Crunching..."):
             result = replay_history(
