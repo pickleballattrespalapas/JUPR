@@ -12,6 +12,8 @@ class _Query:
         self.supabase = supabase
         self.table = table
         self.filters: list[tuple[str, object]] = []
+        self._mode = "select"
+        self._payload: dict | None = None
 
     def select(self, _fields: str):
         return self
@@ -23,8 +25,41 @@ class _Query:
     def order(self, *_args, **_kwargs):
         return self
 
+    def insert(self, payload: dict):
+        self._mode = "insert"
+        self._payload = dict(payload)
+        return self
+
+    def update(self, payload: dict):
+        self._mode = "update"
+        self._payload = dict(payload)
+        return self
+
+    def delete(self):
+        self._mode = "delete"
+        return self
+
     def execute(self):
-        rows = [dict(row) for row in self.supabase.tables[self.table]]
+        rows = self.supabase.tables.setdefault(self.table, [])
+
+        if self._mode == "insert":
+            rows.append(dict(self._payload or {}))
+            return SimpleNamespace(data=[dict(self._payload or {})])
+
+        if self._mode == "update":
+            updated = []
+            for row in rows:
+                if all(row.get(col) == val for col, val in self.filters):
+                    row.update(self._payload or {})
+                    updated.append(dict(row))
+            return SimpleNamespace(data=updated)
+
+        if self._mode == "delete":
+            kept = [dict(r) for r in rows if not all(r.get(col) == val for col, val in self.filters)]
+            self.supabase.tables[self.table] = kept
+            return SimpleNamespace(data=[])
+
+        rows = [dict(row) for row in rows]
         for col, val in self.filters:
             rows = [r for r in rows if r.get(col) == val]
         return SimpleNamespace(data=rows)
@@ -54,6 +89,7 @@ class _Supabase:
                     "score_t2": 8,
                 }
             ],
+            "replay_lock": [],
         }
         self.rpc_calls: list[tuple[str, dict]] = []
 

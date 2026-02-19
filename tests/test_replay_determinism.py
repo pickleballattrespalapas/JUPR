@@ -236,3 +236,35 @@ def test_lock_prevents_concurrent():
         raised = True
 
     assert raised
+
+
+def test_replay_history_enforces_running_lock():
+    supabase = _FakeSupabase()
+    supabase.storage["replay_lock"] = [{"club_id": "club-1", "status": "running"}]
+
+    try:
+        replay_history(supabase=supabase, club_id="club-1", df_meta=None, target_reset=FULL_RESET_LABEL)
+        raised = False
+    except RuntimeError:
+        raised = True
+
+    assert raised
+
+
+def test_replay_history_updates_lock_and_summary(monkeypatch):
+    supabase = _FakeSupabase()
+    summary = replay_history(supabase=supabase, club_id="club-1", df_meta=None, target_reset=FULL_RESET_LABEL)
+
+    assert summary["log_summary"]["lock"]["final_status"] == "success"
+    assert supabase.storage["replay_lock"][0]["status"] == "success"
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("forced")
+
+    monkeypatch.setattr("jupr_app.domain.replay_history.sb_rpc", _boom)
+    try:
+        replay_history(supabase=supabase, club_id="club-1", df_meta=None, target_reset=FULL_RESET_LABEL)
+    except RuntimeError:
+        pass
+
+    assert supabase.storage["replay_lock"][0]["status"] == "failed"
