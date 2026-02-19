@@ -4,40 +4,16 @@ import argparse
 import json
 import os
 import sys
-from contextlib import contextmanager
-from pathlib import Path
 
 import pandas as pd
 
 from jupr_app.data.client import make_supabase
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
-
-
-@contextmanager
-def _replay_lock(club_id: str, force: bool = False):
-    lock_path = Path(f"/tmp/jupr_replay_{club_id}.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with lock_path.open("a+") as lock_file:
-        try:
-            import fcntl
-
-            lock_mode = fcntl.LOCK_EX | (0 if force else fcntl.LOCK_NB)
-            fcntl.flock(lock_file.fileno(), lock_mode)
-        except BlockingIOError as exc:
-            raise RuntimeError(
-                f"Replay lock is already held for club_id={club_id}. Use --force to wait for lock release."
-            ) from exc
-
-        try:
-            yield
-        finally:
-            try:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
+from jupr_app.domain.replay_lock import (
+    ReplayAlreadyRunningError,
+    acquire_replay_lock_with_wait,
+    release_replay_lock,
+)
 
 
 def _load_df_meta(supabase, club_id: str) -> pd.DataFrame:
@@ -90,8 +66,11 @@ def main() -> int:
         print(json.dumps({"club_id": args.club_id, "dry_run": True, "status": "validated"}, indent=2))
         return 0
 
+    summary: dict = {}
+
     try:
-        with _replay_lock(args.club_id, force=args.force):
+        acquire_replay_lock_with_wait(supabase, str(args.club_id), wait=bool(args.force))
+        try:
             df_meta = _load_df_meta(supabase, args.club_id)
             summary = replay_history(
                 supabase=supabase,
@@ -101,6 +80,11 @@ def main() -> int:
                 progress_cb=None,
             )
             _record_run(supabase, str(args.club_id), "success", summary)
+        finally:
+            release_replay_lock(supabase, str(args.club_id))
+    except ReplayAlreadyRunningError as exc:
+        print(f"Replay failed: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         _record_run(supabase, str(args.club_id), "failed", {"error": str(exc)})
         print(f"Replay failed: {exc}", file=sys.stderr)

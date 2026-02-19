@@ -7,6 +7,7 @@ from postgrest.exceptions import APIError
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.replay_lock import is_replay_running
 from jupr_app.ui.layout import page_shell
 
 
@@ -148,6 +149,18 @@ def render(ctx):
         latest = replay_runs.data[0]
         st.caption("Last replay run (read-only)")
         st.json(latest)
+
+    replay_lock_info = None
+    try:
+        replay_lock_info = is_replay_running(supabase, club_id)
+    except Exception:
+        replay_lock_info = None
+
+    if replay_lock_info is None:
+        st.caption("Replay lock: not running")
+    else:
+        st.caption("Replay lock: running")
+        st.json({"club_id": replay_lock_info.club_id, "started_at": replay_lock_info.started_at, "status": replay_lock_info.status})
 
     st.divider()
 
