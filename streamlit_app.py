@@ -244,6 +244,21 @@ def main():
                             "email": email,
                             "password": password,
                         })
+                
+                        st.write("Auth response:", auth_response)
+                
+                        session = getattr(auth_response, "session", None)
+                
+                        if session:
+                            st.session_state["sb_session"] = session
+                            st.session_state["entry_mode"] = "auth"
+                            st.rerun()
+                        else:
+                            st.error("Login failed — no session returned.")
+                
+                    except Exception as e:
+                        st.error(f"Login exception: {e}")
+
         
                         session = getattr(auth_response, "session", None)
         
