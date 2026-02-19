@@ -268,6 +268,35 @@ def _migration_files() -> list[Path]:
     return files
 
 
+def _extract_schema_version(sql_text: str) -> str | None:
+    match = re.search(
+        r"""\bINSERT\s+INTO\s+(?:\w+\.)?schema_version\s*\(\s*version\s*\)\s*\n?\s*VALUES\s*\(\s*'([^']+)'\s*\)""",
+        sql_text,
+        flags=re.IGNORECASE | re.VERBOSE,
+    )
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _validate_latest_schema_version(migration_files: list[Path]) -> list[str]:
+    failures: list[str] = []
+    expected_state = _build_state(migration_files)
+    if "schema_version" not in expected_state:
+        failures.append("SCHEMA_VERSION_MISMATCH missing schema_version table in migration state")
+
+    latest_migration = migration_files[-1]
+    latest_sql = _strip_comments(latest_migration.read_text(encoding="utf-8"))
+    latest_version = _extract_schema_version(latest_sql)
+    if latest_version is None:
+        failures.append(
+            "SCHEMA_VERSION_MISMATCH "
+            f"latest migration {latest_migration.name} must insert into schema_version(version)"
+        )
+
+    return failures
+
+
 def _compare_schemas(live: SchemaState, expected: SchemaState) -> list[dict[str, str]]:
     diffs: list[dict[str, str]] = []
     for table in sorted(expected):
@@ -315,12 +344,16 @@ def main() -> int:
     live_snapshot = _latest_live_snapshot()
     migration_files = _migration_files()
 
+    version_failures = _validate_latest_schema_version(migration_files)
+    for failure in version_failures:
+        print(failure)
+
     live_state = _build_state([live_snapshot])
     expected_state = _build_state(migration_files)
     diffs = _compare_schemas(live_state, expected_state)
     _print_diffs(diffs)
 
-    return 1 if diffs else 0
+    return 1 if diffs or version_failures else 0
 
 
 if __name__ == "__main__":
