@@ -18,11 +18,13 @@ schema/API contract is finalized.
 
 from __future__ import annotations
 
+# Match writes must go through match_pipeline.
+
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from jupr_app.data.retry import sb_retry
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update, sb_upsert
 from jupr_app.domain.constants import CAP_LOSER_GAIN_ELO, DEFAULT_K_FACTOR, MIN_WIN_DELTA_ELO
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
@@ -352,11 +354,30 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
     to avoid stale ratings, snapshots, player activity, or badge queue drift.
     """
     scoped_club_id = _require_club_id(club_id)
-    deleted = _run_write(lambda: (
-        supabase.table("matches").delete().eq("club_id", scoped_club_id).eq("id", int(match_id)).execute()
+    deleted = _run_write(lambda: sb_delete(
+        supabase,
+        "matches",
+        filters={"club_id": scoped_club_id, "id": int(match_id)},
     ))
     rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
     return {"deleted": getattr(deleted, "data", None) or [], "rebuild": rebuild}
+
+
+def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict[str, Any]:
+    """Delete many match rows for `club_id` and rebuild dependent projections once."""
+    scoped_club_id = _require_club_id(club_id)
+    ids = sorted({int(mid) for mid in (match_ids or [])})
+    deleted_rows: list[dict[str, Any]] = []
+    for match_id in ids:
+        deleted = _run_write(lambda match_id=match_id: sb_delete(
+            supabase,
+            "matches",
+            filters={"club_id": scoped_club_id, "id": int(match_id)},
+        ))
+        deleted_rows.extend(getattr(deleted, "data", None) or [])
+
+    rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+    return {"deleted": deleted_rows, "rebuild": rebuild}
 
 
 def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, target_player_id: int) -> dict[str, Any]:
@@ -437,6 +458,7 @@ __all__ = [
     "record_match",
     "update_match",
     "delete_match",
+    "delete_matches",
     "merge_player_into",
     "reassign_match_players",
 ]

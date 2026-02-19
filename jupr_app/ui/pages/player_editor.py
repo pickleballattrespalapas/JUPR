@@ -1,4 +1,5 @@
 from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+# Match writes must go through match_pipeline.
 import streamlit as st
 import pandas as pd
 import time
@@ -6,6 +7,7 @@ from datetime import datetime, timezone
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_ops import safe_add_player
+from jupr_app.domain.match_pipeline import merge_player_into
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
@@ -229,9 +231,13 @@ def render(ctx):
 
     confirm = st.text_input("Type MERGE to confirm", value="", key="merge_confirm_text")
     if st.button("🧬 Execute Merge Now", type="primary", disabled=(confirm.strip().upper() != "MERGE")):
-        # Update matches
-        for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
-            sb_update(supabase, "matches", {col: int(dst_id)}, filters={"club_id": club_id, col: int(src_id)})
+        # Update matches via canonical pipeline
+        merge_player_into(
+            supabase=supabase,
+            club_id=str(club_id),
+            source_player_id=int(src_id),
+            target_player_id=int(dst_id),
+        )
 
         # Move league_ratings
         sb_update(supabase, "league_ratings", {"player_id": int(dst_id)}, filters={"club_id": club_id, "player_id": int(src_id)})
