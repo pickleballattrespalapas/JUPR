@@ -274,26 +274,29 @@ def main():
                 st.stop()
         
         # --------------------------------------------
-        # SESSION VALIDATION (non-destructive)
+        # SESSION VALIDATION (NON-DESTRUCTIVE)
         # --------------------------------------------
 
         session = st.session_state.get("sb_session")
 
         if session:
             try:
-                current = supabase.auth.get_session()
-                current_session = getattr(current, "session", current)
+                current_obj = supabase.auth.get_session()
+                current_session = getattr(current_obj, "session", current_obj)
 
                 if current_session:
+                    # Update session if Supabase refreshed it internally
                     st.session_state["sb_session"] = current_session
-                else:
-                    # Only clear if Supabase truly has no session
-                    st.session_state.pop("sb_session", None)
-                    st.session_state["entry_mode"] = None
-                    st.rerun()
+
+                # IMPORTANT:
+                # Do NOT clear session on transient failure.
+                # Do NOT reset entry_mode here.
+                # Only explicit logout should clear session.
 
             except Exception:
-                # Do NOT wipe session on transient failure
+                # Never wipe session automatically.
+                # Streamlit reruns or minor Supabase hiccups
+                # should not log out admin.
                 pass
         
         # --------------------------------------------
