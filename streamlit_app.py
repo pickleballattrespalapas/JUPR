@@ -7,6 +7,7 @@ import re
 import base64
 
 import jwt
+from supabase import create_client
 
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
@@ -25,34 +26,16 @@ LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 # -------------------------
 @st.cache_resource
 def get_supabase():
-    """
-    Supabase bootstrap using environment variables (Fly-compatible).
+    url = os.getenv("SUPABASE_URL")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-    Required ENV variables:
-        SUPABASE_URL
-        SUPABASE_ANON_KEY
-    """
-    import os
+    if os.getenv("SUPABASE_ANON_KEY"):
+        raise RuntimeError("Anon key detected. Writes must use service role only.")
 
-    from jupr_app.data.client import make_supabase
+    if not url or not service_key:
+        raise RuntimeError("Supabase environment variables missing. Require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
 
-    url = os.environ.get("SUPABASE_URL", "")
-    key = os.environ.get("SUPABASE_ANON_KEY", "")
-
-    if not url or not key:
-        st.error("Supabase environment variables are missing.")
-        st.code(
-            "Required environment variables:\n"
-            "SUPABASE_URL\n"
-            "SUPABASE_ANON_KEY\n"
-        )
-        st.stop()
-
-    if not url.startswith("https://"):
-        st.error("SUPABASE_URL appears invalid.")
-        st.stop()
-
-    return make_supabase(url, key)
+    return create_client(url, service_key)
 
 
 @st.cache_data(ttl=30)
@@ -150,7 +133,7 @@ def main():
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
         # Fly env vars required in production/staging: PUBLIC_BASE_URL, SUPABASE_URL,
-        # and SUPABASE_ANON_KEY.
+        # and SUPABASE_SERVICE_ROLE_KEY.
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
