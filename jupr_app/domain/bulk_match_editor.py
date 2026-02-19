@@ -2,14 +2,13 @@ from __future__ import annotations
 
 # Match writes must go through match_pipeline.
 
-from jupr_app.data.sb_write import sb_insert
-
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.audit_logger import log_event
 from jupr_app.domain.match_pipeline import update_match
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
@@ -55,29 +54,6 @@ def _normalize_blank_to_none(v: Any) -> Any:
     return v
 
 
-def _safe_insert_audit_event(
-    supabase,
-    payload: Dict[str, Any],
-) -> None:
-    """
-    Best-effort: if the table doesn't exist, do not fail the admin operation.
-    Recommended table shape (optional):
-      admin_audit_events(created_at timestamptz default now(), club_id text, actor text, action_type text, payload_json jsonb)
-    """
-    try:
-        sb_insert(
-            supabase,
-            "admin_audit_events",
-            {
-                "club_id": payload.get("club_id"),
-                "actor": payload.get("actor"),
-                "action_type": payload.get("action_type", "bulk_match_edit"),
-                "payload_json": payload,
-            },
-        )
-    except Exception:
-        # Intentionally swallow errors (table may not exist in some deployments)
-        return
 
 
 def apply_bulk_match_edits(
@@ -228,12 +204,14 @@ def apply_bulk_match_edits(
     recompute_scope = compute_recompute_scope(patches)
 
     # Audit event (best effort)
-    _safe_insert_audit_event(
-        supabase,
-        {
+    log_event(
+        supabase=supabase,
+        club_id=str(club_id),
+        actor=actor,
+        action_type="bulk_match_edit",
+        payload={
             "club_id": club_id,
             "actor": actor,
-            "action_type": "bulk_match_edit",
             "source": source,
             "updated_count": len(updated_ids),
             "updated_ids": updated_ids,

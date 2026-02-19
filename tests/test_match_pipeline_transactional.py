@@ -89,3 +89,24 @@ def test_update_match_rolls_back_patch_and_returns_structured_error(monkeypatch)
     assert "restore_ratings" in writes
     assert writes[0][1] == {"score_t1": 1, "score_t2": 11}
     assert writes[1][2] == {"club_id": "club-1", "id": 8}
+
+
+def test_record_match_logs_audit_event(monkeypatch):
+    logged = []
+
+    monkeypatch.setattr(match_pipeline, "_run_write", lambda fn: fn())
+    monkeypatch.setattr(match_pipeline, "_snapshot_ratings_state", lambda **_: {"players": [], "league_ratings": []})
+    monkeypatch.setattr(match_pipeline, "sb_insert", lambda *_args, **_kwargs: SimpleNamespace(data=[{"id": 12}]))
+    monkeypatch.setattr(match_pipeline, "_rebuild_state", lambda **_: {"matches_processed": 1})
+    monkeypatch.setattr(match_pipeline, "log_event", lambda **payload: logged.append(payload))
+
+    result = match_pipeline.record_match(
+        supabase=object(),
+        club_id="club-1",
+        match_payload={"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 9},
+    )
+
+    assert result["success"] is True
+    assert logged
+    assert logged[0]["action_type"] == "record_match"
+    assert logged[0]["payload"]["match_id"] == 12

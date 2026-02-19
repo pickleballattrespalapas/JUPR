@@ -25,6 +25,7 @@ from typing import Any, Mapping
 
 from jupr_app.data.retry import sb_retry
 from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update, sb_upsert
+from jupr_app.domain.audit_logger import log_event
 from jupr_app.domain.constants import CAP_LOSER_GAIN_ELO, DEFAULT_K_FACTOR, MIN_WIN_DELTA_ELO
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
@@ -423,12 +424,14 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     inserted_rows: list[dict[str, Any]] = []
     inserted_match_id: int | None = None
     warnings: list[str] = []
+    operation_success = False
 
     try:
         inserted = _run_write(lambda: sb_insert(supabase, "matches", payload))
         inserted_rows = getattr(inserted, "data", None) or []
         inserted_match_id = _as_int((inserted_rows[0] or {}).get("id")) if inserted_rows else None
         rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        operation_success = True
         return _pipeline_result(
             success=True,
             match_id=inserted_match_id,
@@ -452,6 +455,18 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
             match_id=inserted_match_id,
             warnings=warnings,
             error=str(err),
+        )
+    finally:
+        log_event(
+            supabase=supabase,
+            club_id=scoped_club_id,
+            actor=str(match_payload.get("actor") or "match_pipeline"),
+            action_type="record_match",
+            payload={
+                "match_id": inserted_match_id,
+                "success": operation_success,
+                "match_payload": dict(match_payload),
+            },
         )
 
 
@@ -478,6 +493,7 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
     )
     match_before = dict(match_before_rows[0]) if match_before_rows else None
     warnings: list[str] = []
+    operation_success = False
 
     try:
         updated = _run_write(lambda: sb_update(
@@ -488,6 +504,7 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
         ))
         updated_rows = getattr(updated, "data", None) or []
         rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        operation_success = True
         return _pipeline_result(
             success=True,
             match_id=target_match_id,
@@ -514,6 +531,18 @@ def update_match(*, supabase: Any, club_id: str, match_id: int, patch: Mapping[s
             warnings=warnings,
             error=str(err),
         )
+    finally:
+        log_event(
+            supabase=supabase,
+            club_id=scoped_club_id,
+            actor=str(patch.get("actor") or "match_pipeline"),
+            action_type="update_match",
+            payload={
+                "match_id": target_match_id,
+                "success": operation_success,
+                "patch": dict(patch),
+            },
+        )
 
 
 def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any]:
@@ -524,6 +553,7 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
     """
     scoped_club_id = _require_club_id(club_id)
     target_match_id = int(match_id)
+    operation_success = False
     try:
         deleted = _run_write(lambda: sb_delete(
             supabase,
@@ -531,6 +561,7 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
             filters={"club_id": scoped_club_id, "id": target_match_id},
         ))
         rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        operation_success = True
         return _pipeline_result(
             success=True,
             match_id=target_match_id,
@@ -541,6 +572,14 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
     except Exception as exc:
         err = MatchPipelineError(f"delete_match failed: {exc}")
         return _pipeline_result(success=False, match_id=target_match_id, warnings=[], error=str(err))
+    finally:
+        log_event(
+            supabase=supabase,
+            club_id=scoped_club_id,
+            actor="match_pipeline",
+            action_type="delete_match",
+            payload={"match_id": target_match_id, "success": operation_success},
+        )
 
 
 def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict[str, Any]:
@@ -576,6 +615,8 @@ def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, tar
     if src == dst:
         raise ValueError("source_player_id and target_player_id must differ")
 
+    operation_success = False
+    rewritten = 0
     try:
         matches = (
             supabase.table("matches")
@@ -587,7 +628,6 @@ def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, tar
             or []
         )
 
-        rewritten = 0
         for row in matches:
             match_id = int(row["id"])
             patch: dict[str, int] = {}
@@ -605,10 +645,19 @@ def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, tar
             rewritten += 1
 
         rebuild = _rebuild_state(supabase=supabase, club_id=scoped_club_id)
+        operation_success = True
         return _pipeline_result(success=True, match_id=None, warnings=[], matches_rewritten=rewritten, rebuild=rebuild)
     except Exception as exc:
         err = MatchPipelineError(f"merge_player_into failed: {exc}")
         return _pipeline_result(success=False, match_id=None, warnings=[], error=str(err))
+    finally:
+        log_event(
+            supabase=supabase,
+            club_id=scoped_club_id,
+            actor="match_pipeline",
+            action_type="merge_player",
+            payload={"source_player_id": src, "target_player_id": dst, "matches_rewritten": rewritten, "success": operation_success},
+        )
 
 
 def reassign_match_players(
