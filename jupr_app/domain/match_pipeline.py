@@ -25,9 +25,12 @@ from typing import Any, Mapping
 import pandas as pd
 
 from jupr_app.data.retry import sb_retry
+from jupr_app.data.schema_preflight import ensure_app_write_invariants
 from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update
 from jupr_app.domain.audit_logger import log_event
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.domain.player_merge import merge_player_into as merge_player_into_domain
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
 
@@ -53,6 +56,10 @@ _SLOT_KEYS = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 
 class MatchPipelineError(RuntimeError):
     """Raised when a match pipeline mutation fails and cannot complete safely."""
+
+
+class MissingMatchDatetime(ValueError):
+    """Raised when a match write is attempted without an explicit deterministic datetime."""
 
 
 def require_club_scope(club_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -88,6 +95,10 @@ def _pipeline_result(
 def _run_write(fn):
     """Execute a write callable through the module's single retry wrapper."""
     return sb_retry(fn)
+
+
+def _enforce_write_preflight(supabase: Any) -> None:
+    ensure_app_write_invariants(supabase)
 
 
 def _scoped_filters(club_id: str, filters: Mapping[str, Any]) -> dict[str, Any]:
@@ -126,6 +137,14 @@ def _coerce_match_payload(club_id: str, payload: Mapping[str, Any]) -> dict[str,
         row["score_t2"] = int(row.get("score_t2") or 0)
     return row
 
+
+
+
+def _require_match_datetime(payload: Mapping[str, Any]) -> str:
+    raw = str(payload.get("date") or payload.get("match_datetime") or "").strip()
+    if not raw:
+        raise MissingMatchDatetime("match date/match_datetime is required for deterministic pipelines")
+    return raw
 
 def _require_idempotency_key(payload: Mapping[str, Any]) -> str:
     key = str(payload.get("idempotency_key") or "").strip()
@@ -208,6 +227,115 @@ def _build_processing_context(*, supabase: Any, club_id: str) -> dict[str, Any]:
     }
 
 
+def _fetch_matches_by_ids(*, supabase: Any, club_id: str, match_ids: list[int]) -> list[dict[str, Any]]:
+    normalized_ids = [int(mid) for mid in match_ids if _as_int(mid) is not None]
+    if not normalized_ids:
+        return []
+    rows = (
+        supabase.table("matches")
+        .select("*")
+        .eq("club_id", str(club_id))
+        .in_("id", normalized_ids)
+        .order("date", desc=False)
+        .order("id", desc=False)
+        .execute()
+        .data
+        or []
+    )
+    return [dict(row) for row in rows]
+
+
+def _process_persisted_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict[str, int]:
+    persisted_rows = _fetch_matches_by_ids(supabase=supabase, club_id=club_id, match_ids=match_ids)
+    if not persisted_rows:
+        return {"inserted": 0, "skipped_incomplete": 0, "skipped_empty": 0}
+    processing_ctx = _build_processing_context(supabase=supabase, club_id=club_id)
+    return process_matches(
+        persisted_rows,
+        supabase_admin=supabase,
+        supabase=supabase,
+        club_id=club_id,
+        name_to_id=processing_ctx["name_to_id"],
+        df_players_all=processing_ctx["df_players_all"],
+        df_leagues=processing_ctx["df_leagues"],
+        df_meta=processing_ctx["df_meta"],
+        sb_retry=_run_write,
+    )
+
+
+
+
+def _resolve_player_identities_for_ingest(*, supabase: Any, club_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    resolved = dict(payload or {})
+    for slot in _SLOT_KEYS:
+        raw = resolved.get(slot)
+        if raw is None:
+            continue
+        if isinstance(raw, int):
+            resolved[slot] = int(raw)
+            continue
+        text_value = str(raw).strip()
+        if not text_value:
+            continue
+        if text_value.isdigit():
+            resolved[slot] = int(text_value)
+            continue
+
+        ok, player_id_or_error = safe_add_player(
+            supabase=supabase,
+            club_id=club_id,
+            name=text_value,
+            rating_jupr=3.0,
+        )
+        if not ok:
+            raise MatchPipelineError(f"failed to resolve player identity for '{text_value}': {player_id_or_error}")
+        resolved[slot] = int(player_id_or_error)
+
+    return resolved
+
+
+def ingest_match_with_identity_resolution(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any]) -> dict[str, Any]:
+    resolved_payload = _resolve_player_identities_for_ingest(
+        supabase=supabase,
+        club_id=club_id,
+        payload=match_payload,
+    )
+    if not str(resolved_payload.get("idempotency_key") or "").strip():
+        resolved_payload["idempotency_key"] = build_match_idempotency_key_v1(
+            {
+                "club_id": str(club_id),
+                "date": resolved_payload.get("date"),
+                "context_type": resolved_payload.get("context_type"),
+                "context_id": resolved_payload.get("context_id"),
+                "competition_id": resolved_payload.get("competition_id"),
+                "division_id": resolved_payload.get("division_id"),
+                "tournament_id": resolved_payload.get("tournament_id"),
+                "tournament_game_id": resolved_payload.get("tournament_game_id"),
+                "match_type": resolved_payload.get("match_type"),
+                "match_format": resolved_payload.get("match_format"),
+                "best_of": resolved_payload.get("best_of"),
+                "t1_p1": resolved_payload.get("t1_p1"),
+                "t1_p2": resolved_payload.get("t1_p2"),
+                "t2_p1": resolved_payload.get("t2_p1"),
+                "t2_p2": resolved_payload.get("t2_p2"),
+                "score_t1": resolved_payload.get("score_t1"),
+                "score_t2": resolved_payload.get("score_t2"),
+                "score_json": resolved_payload.get("score_json"),
+                "games": resolved_payload.get("games"),
+            }
+        )
+    return record_match(supabase=supabase, club_id=club_id, match_payload=resolved_payload)
+
+
+def ingest_and_process_match(*, payload: Mapping[str, Any], ctx: Mapping[str, Any]) -> dict[str, Any]:
+    """Compatibility helper for UI flows that need a one-call ingest entrypoint."""
+    supabase = ctx.get("supabase")
+    club_id = str(ctx.get("club_id") or "").strip()
+    if not club_id or supabase is None:
+        raise ValueError("ctx must include supabase and club_id")
+    return ingest_match_with_identity_resolution(supabase=supabase, club_id=club_id, match_payload=payload)
+
+
 def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any]) -> dict[str, Any]:
     """Create one match for `club_id` and rebuild all dependent projections.
 
@@ -215,12 +343,11 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     canonical creation path and ensures snapshots, ratings, activity, and badge
     queue side-effects stay in sync.
     """
+    _enforce_write_preflight(supabase)
     scoped_club_id = _require_club_id(club_id)
+    _require_match_datetime(match_payload)
     scoped_idempotency_key = _require_idempotency_key(match_payload)
 
-    # Migration expectation: enforce DB uniqueness with
-    #   UNIQUE (club_id, idempotency_key)
-    # on matches to guarantee race-safe, cross-process idempotency.
     existing_match = _find_existing_match_by_idempotency_key(
         supabase=supabase,
         club_id=scoped_club_id,
@@ -255,34 +382,15 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     operation_success = False
 
     try:
-        processing_ctx = _build_processing_context(supabase=supabase, club_id=scoped_club_id)
+        inserted = _run_write(lambda: sb_insert(supabase, "matches", _scoped_payload(scoped_club_id, payload)))
+        inserted_rows = list(getattr(inserted, "data", None) or [])
+        if inserted_rows:
+            inserted_match_id = _as_int((inserted_rows[0] or {}).get("id"))
 
-        def _write_match(match_row: dict[str, Any], context_id: str | None, context_type: str, idempotency_key: str):
-            nonlocal inserted_match_id
-            insert_payload = dict(match_row)
-            insert_payload["context_id"] = context_id
-            insert_payload["context_type"] = context_type
-            insert_payload["idempotency_key"] = idempotency_key
-            inserted = _run_write(lambda: sb_insert(supabase, "matches", _scoped_payload(scoped_club_id, insert_payload)))
-            rows = getattr(inserted, "data", None) or []
-            inserted_rows.extend(rows)
-            if rows and inserted_match_id is None:
-                inserted_match_id = _as_int((rows[0] or {}).get("id"))
-            return inserted
+        if inserted_match_id is None:
+            raise MatchPipelineError("record_match failed: inserted row missing id")
 
-        process_matches(
-            [payload],
-            supabase_admin=supabase,
-            supabase=supabase,
-            club_id=scoped_club_id,
-            name_to_id=processing_ctx["name_to_id"],
-            df_players_all=processing_ctx["df_players_all"],
-            df_leagues=processing_ctx["df_leagues"],
-            df_meta=processing_ctx["df_meta"],
-            sb_retry=_run_write,
-            match_writer=_write_match,
-        )
-        inserted_match_id = inserted_match_id or (_as_int((inserted_rows[0] or {}).get("id")) if inserted_rows else None)
+        _process_persisted_matches(supabase=supabase, club_id=scoped_club_id, match_ids=[inserted_match_id])
         operation_success = True
         return _pipeline_result(
             success=True,
@@ -332,6 +440,7 @@ def update_match(
     Invariant: any mutable match-field change must flow through this function so
     downstream snapshots/ratings/activity remain deterministic.
     """
+    _enforce_write_preflight(supabase)
     scoped_club_id = _require_club_id(club_id)
     target_match_id = int(match_id)
     safe_patch = _coerce_match_payload(scoped_club_id, patch)
@@ -404,6 +513,7 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
     Invariant: deletions must be followed by a deterministic projection rebuild
     to avoid stale ratings, snapshots, player activity, or badge queue drift.
     """
+    _enforce_write_preflight(supabase)
     scoped_club_id = _require_club_id(club_id)
     target_match_id = int(match_id)
     operation_success = False
@@ -437,6 +547,7 @@ def delete_match(*, supabase: Any, club_id: str, match_id: int) -> dict[str, Any
 
 def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict[str, Any]:
     """Delete many match rows for `club_id` and rebuild dependent projections once."""
+    _enforce_write_preflight(supabase)
     scoped_club_id = _require_club_id(club_id)
     ids = sorted({int(mid) for mid in (match_ids or [])})
     deleted_rows: list[dict[str, Any]] = []
@@ -458,6 +569,7 @@ def delete_matches(*, supabase: Any, club_id: str, match_ids: list[int]) -> dict
 
 def merge_player_into(*, supabase: Any, club_id: str, source_player_id: int, target_player_id: int) -> dict[str, Any]:
     """Backward-compatible wrapper around the dedicated domain merge function."""
+    _enforce_write_preflight(supabase)
     return merge_player_into_domain(
         supabase=supabase,
         club_id=club_id,
@@ -479,6 +591,7 @@ def reassign_match_players(
     Invariant: slot-level reassignment must always remain scoped by `club_id`
     and trigger full projection recalculation.
     """
+    _enforce_write_preflight(supabase)
     scoped_club_id = _require_club_id(club_id)
     target_match_id = int(match_id)
     patch = {
@@ -511,7 +624,10 @@ def reassign_match_players(
 
 __all__ = [
     "MatchPipelineError",
+    "MissingMatchDatetime",
     "require_club_scope",
+    "ingest_match_with_identity_resolution",
+    "ingest_and_process_match",
     "record_match",
     "update_match",
     "recalculate_state",

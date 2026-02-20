@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
-import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -10,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.data.retry import sb_retry
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from jupr_app.ui.layout import page_shell
 from services.match_pipeline import submit_match
 
@@ -127,9 +127,27 @@ def _load_division_match(supabase, club_id: str, division_match_id: str) -> dict
     return rows[0] if rows else None
 
 
-def _build_division_match_idempotency_key(club_id: str, division_id: str, division_match_id: str) -> str:
-    raw = f"division_match_submission:{club_id}:{division_id}:{division_match_id}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _build_division_match_idempotency_key(club_id: str, division_id: str, division_match_id: str, payload: dict) -> str:
+    return build_match_idempotency_key_v1(
+        {
+            "club_id": str(club_id),
+            "date": str(payload.get("date") or datetime.now(timezone.utc).isoformat()),
+            "context_type": "tournament",
+            "context_id": str(division_id),
+            "competition_id": str(division_id),
+            "division_id": str(division_id),
+            "tournament_game_id": str(division_match_id),
+            "match_type": str(payload.get("match_type") or ""),
+            "t1_p1": int(payload.get("t1_p1") or 0),
+            "t1_p2": int(payload.get("t1_p2") or 0),
+            "t2_p1": int(payload.get("t2_p1") or 0),
+            "t2_p2": int(payload.get("t2_p2") or 0),
+            "score_t1": int(payload.get("score_t1") or 0),
+            "score_t2": int(payload.get("score_t2") or 0),
+            "score_json": payload.get("score_json"),
+            "games": payload.get("games"),
+        }
+    )
 
 
 def _build_division_match_payload(
@@ -227,7 +245,7 @@ def _complete_division_match(
         context_type="tournament",
         context_id=division_id,
         match_payload=payload,
-        idempotency_key=_build_division_match_idempotency_key(club_id, division_id, match_id),
+        idempotency_key=_build_division_match_idempotency_key(club_id, division_id, match_id, payload),
     )
 
 

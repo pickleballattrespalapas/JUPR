@@ -21,13 +21,18 @@ def process_badge_eval_queue(
     time_budget_seconds: int = 5,
     ctx: Any | None = None,
     match_limit: int = 5000,
+    club_id: str | None = None,
 ) -> dict[str, int]:
     started = time.time()
     processed = 0
     errored = 0
 
+    target_club_id = str(club_id or getattr(ctx, "club_id", "") or "").strip()
+    if not target_club_id:
+        raise ValueError("club_id is required to process badge queue")
+
     while processed < max_jobs and (time.time() - started) < time_budget_seconds:
-        job = dequeue_badge_eval(supabase)
+        job = dequeue_badge_eval(supabase, club_id=target_club_id, max_jobs=1)
         if not job:
             break
         try:

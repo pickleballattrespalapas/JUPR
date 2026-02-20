@@ -95,7 +95,7 @@ def render(ctx):
     if st.button("Process queued badge evaluations", key="badge_eval_queue_process"):
         with st.spinner("Processing queued badge evaluations..."):
             try:
-                result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
+                result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2, club_id=club_id)
             except APIError as exc:
                 code = _get_api_error_code(exc)
                 if code in {"PGRST205", "42P01"}:

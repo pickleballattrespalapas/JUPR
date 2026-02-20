@@ -7,6 +7,8 @@ from typing import Any
 
 from postgrest.exceptions import APIError
 
+from jupr_app.data.sb_write import sb_rpc
+
 
 REQUIRED_PLAYER_BADGES_COLUMNS = {
     "awarded_by",
@@ -20,10 +22,11 @@ REQUIRED_REVOKED_COLUMNS = {
     "revoke_reason",
 }
 MIGRATION_HINT = (
-    "DB schema out of date. Apply migrations/20260625_badge_recompute_runs.sql and "
-    "migrations/20260630_player_badges_revocation.sql. If you just applied them in "
-    "Supabase, run \"NOTIFY pgrst, 'reload schema';\" in the SQL editor to refresh the "
-    "PostgREST schema cache"
+    "DB schema out of date. Apply migrations/20260625_badge_recompute_runs.sql, "
+    "migrations/20260630_player_badges_revocation.sql, and "
+    "supabase/migrations/202602200001_enforce_uniques_and_preflight.sql. "
+    "If you just applied them in Supabase, run \"NOTIFY pgrst, 'reload schema';\" in the SQL editor "
+    "to refresh the PostgREST schema cache"
 )
 REQUIRED_BADGE_TABLES = {"badge_eval_runs"}
 OPTIONAL_BADGE_TABLES = {"badge_eval_queue"}
@@ -35,13 +38,13 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_UPSERT_INDEXES = (
     {
-        "index_name": "badge_eval_queue_event_match_uidx",
+        "index_name": "badge_eval_queue_club_event_eventkey_uidx",
         "table": "badge_eval_queue",
-        "columns": ["club_id", "event_type", "match_id"],
-        "predicate": "match_id IS NOT NULL",
+        "columns": ["club_id", "event_type", "event_key"],
+        "predicate": None,
         "create_sql": (
-            "CREATE UNIQUE INDEX badge_eval_queue_event_match_uidx ON public.badge_eval_queue "
-            "(club_id,event_type,match_id) WHERE match_id IS NOT NULL;"
+            "CREATE UNIQUE INDEX badge_eval_queue_club_event_eventkey_uidx ON public.badge_eval_queue "
+            "(club_id,event_type,event_key);"
         ),
     },
     {
@@ -61,6 +64,7 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
     if _should_skip_preflight():
         return True
     _ensure_required_schema_version(supabase)
+    _ensure_required_write_indexes(supabase)
     missing_columns = _find_missing_player_badges_columns(supabase)
     missing_tables = _find_missing_tables(supabase, REQUIRED_BADGE_TABLES)
     missing_optional_tables = _find_missing_tables(supabase, OPTIONAL_BADGE_TABLES)
@@ -81,6 +85,27 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
     return True
 
 
+
+def ensure_app_write_invariants(supabase: Any) -> bool:
+    """Require schema + index invariants for write paths; raises on mismatch."""
+    if _should_skip_preflight():
+        return True
+    _ensure_required_schema_version(supabase)
+    _ensure_required_write_indexes(supabase)
+    return True
+
+
+def _ensure_required_write_indexes(supabase: Any) -> None:
+    try:
+        sb_rpc(supabase, "assert_app_invariants", {})
+    except Exception as exc:
+        raise RuntimeError(
+            "Database write preflight failed. Required unique indexes are missing. "
+            "Apply supabase/migrations/202602200001_enforce_uniques_and_preflight.sql "
+            "and reload PostgREST schema cache."
+        ) from exc
+
+
 def check_required_upsert_indexes(supabase: Any) -> tuple[bool, str | None]:
     """Read-only check for unique indexes required by PostgREST upserts."""
     if _should_skip_preflight():
@@ -95,8 +120,12 @@ def check_required_upsert_indexes(supabase: Any) -> tuple[bool, str | None]:
             .execute()
         )
     except Exception as exc:
-        logger.warning("Failed to run upsert index preflight; continuing without degradation", exc_info=exc)
-        return False, None
+        reason = (
+            "Failed to run upsert index preflight; app will run read-only. "
+            "Apply required unique indexes and reload PostgREST schema cache."
+        )
+        logger.warning(reason, exc_info=exc)
+        return True, reason
 
     rows = resp.data or []
     missing_specs = [spec for spec in REQUIRED_UPSERT_INDEXES if not _has_matching_index(rows, spec)]

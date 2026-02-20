@@ -13,6 +13,7 @@ import pandas as pd
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 FULL_RESET_LABEL = "ALL (Full System Reset)"
+DEFAULT_BASELINE_RATING = 1200.0
 
 
 def _exec_with_retry(fn, *, retries: int = 6, base_sleep: float = 0.5):
@@ -99,6 +100,7 @@ def replay_history(
     df_meta: Optional[pd.DataFrame],
     target_reset: str,
     progress_cb: Optional[Callable[[float], None]] = None,
+    acquire_lock: bool = True,
 ) -> Dict[str, Any]:
     """
     Extracted replay logic from jupr_app/ui/pages/admin_tools.py.
@@ -111,7 +113,11 @@ def replay_history(
     progress_cb: called with fraction [0..1] during match snapshot rewrites.
     """
 
-    lock_info = _set_replay_lock_running(supabase=supabase, club_id=club_id)
+    lock_info = (
+        _set_replay_lock_running(supabase=supabase, club_id=club_id)
+        if acquire_lock
+        else {"club_id": str(club_id), "status_before": "externally_managed", "status_after": "externally_managed", "created": False}
+    )
     try:
         all_players = supabase.table("players").select("*").eq("club_id", club_id).execute().data or []
         all_matches = (
@@ -142,18 +148,25 @@ def replay_history(
             return int(k_map.get(str(lg), DEFAULT_K_FACTOR))
 
         p_map: Dict[int, Dict[str, Any]] = {}
+        baseline_by_player: Dict[int, float] = {}
         for p in all_players:
-            base = p.get("starting_rating", None)
-            if base is None:
-                base = p.get("rating", 1200.0)
             try:
-                p_map[int(p["id"])] = {"r": float(base), "w": 0, "l": 0, "mp": 0}
+                pid = int(p["id"])
             except Exception:
                 continue
+            base_raw = p.get("starting_rating", None)
+            try:
+                base = float(base_raw) if base_raw is not None else float(DEFAULT_BASELINE_RATING)
+            except Exception:
+                base = float(DEFAULT_BASELINE_RATING)
+            baseline_by_player[pid] = float(base)
+            p_map[pid] = {"r": float(base), "w": 0, "l": 0, "mp": 0}
 
         def ensure_player(pid: int) -> None:
             if pid not in p_map:
-                p_map[pid] = {"r": 1200.0, "w": 0, "l": 0, "mp": 0}
+                baseline = float(baseline_by_player.get(int(pid), DEFAULT_BASELINE_RATING))
+                baseline_by_player[int(pid)] = baseline
+                p_map[pid] = {"r": baseline, "w": 0, "l": 0, "mp": 0}
 
         def gr(pid: int) -> float:
             ensure_player(int(pid))
@@ -246,11 +259,12 @@ def replay_history(
         new_rows = []
         for (pid, lg), s in island_map.items():
             if str(target_reset).strip() == FULL_RESET_LABEL or str(lg).strip() == str(target_reset).strip():
-                start_base = 1200.0
+                start_base = float(DEFAULT_BASELINE_RATING)
                 for p in all_players:
                     try:
                         if int(p["id"]) == int(pid):
-                            start_base = float(p.get("starting_rating", p.get("rating", 1200.0)) or 1200.0)
+                            start_raw = p.get("starting_rating", None)
+                            start_base = float(start_raw) if start_raw is not None else float(DEFAULT_BASELINE_RATING)
                             break
                     except Exception:
                         continue
@@ -340,6 +354,7 @@ def replay_history(
             "log_summary": {
                 "club_id": str(club_id),
                 "lock": {**lock_info, "final_status": "success"},
+                "baseline": {"default": float(DEFAULT_BASELINE_RATING), "player_baselines": baseline_by_player},
                 "constraints": {
                     "match_player_ids_changed": False,
                     "scores_changed": False,
@@ -348,8 +363,10 @@ def replay_history(
                 },
             },
         }
-        _set_replay_lock_status(supabase=supabase, club_id=club_id, status="success")
+        if acquire_lock:
+            _set_replay_lock_status(supabase=supabase, club_id=club_id, status="success")
         return summary
     except Exception:
-        _set_replay_lock_status(supabase=supabase, club_id=club_id, status="failed")
+        if acquire_lock:
+            _set_replay_lock_status(supabase=supabase, club_id=club_id, status="failed")
         raise

@@ -89,22 +89,45 @@ class FakeTable:
         return SimpleNamespace(data=rows)
 
 
+class _RpcQuery:
+    def __init__(self, storage, name: str, payload: dict):
+        self.storage = storage
+        self.name = name
+        self.payload = payload
+
+    def execute(self):
+        if self.name != "dequeue_badge_eval_jobs":
+            return SimpleNamespace(data=[])
+        club_id = str(self.payload.get("p_club_id") or "")
+        rows = [r for r in self.storage.get("badge_eval_queue", []) if str(r.get("club_id")) == club_id and str(r.get("status")) == "pending"]
+        if not rows:
+            return SimpleNamespace(data=[])
+        row = rows[0]
+        row["status"] = "processing"
+        row["attempts"] = int(row.get("attempts") or 0) + 1
+        return SimpleNamespace(data=[dict(row)])
+
+
 class FakeSupabase:
     def __init__(self, storage=None):
         self.storage = storage if storage is not None else {}
+        self.postgrest = object()
 
     def table(self, name):
         return FakeTable(self.storage, name)
+
+    def rpc(self, name: str, payload: dict):
+        return _RpcQuery(self.storage, name, payload)
 
 
 def test_badge_v3_pipeline_updates_facts_before_enqueue_and_award(monkeypatch):
     storage = {
         "matches": [],
         "players": [
-            {"club_id": "club", "id": 1, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0},
-            {"club_id": "club", "id": 2, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0},
-            {"club_id": "club", "id": 3, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0},
-            {"club_id": "club", "id": 4, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0},
+            {"club_id": "club", "id": 1, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 2, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 3, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0, "starting_rating": 1200.0},
+            {"club_id": "club", "id": 4, "rating": 1200.0, "wins": 0, "losses": 0, "matches_played": 0, "starting_rating": 1200.0},
         ],
         "league_ratings": [],
         "player_badge_facts": [],
@@ -115,25 +138,14 @@ def test_badge_v3_pipeline_updates_facts_before_enqueue_and_award(monkeypatch):
     }
     supabase = FakeSupabase(storage)
 
-    def _fake_submit_match(*, club_id, context_type, context_id, match_payload, idempotency_key, run_context_hooks):
-        row = dict(match_payload)
-        row["club_id"] = club_id
-        row["context_type"] = context_type
-        row["context_id"] = context_id
-        row["id"] = idempotency_key or f"m{len(storage['matches']) + 1}"
-        storage["matches"].append(row)
-        storage.setdefault("ops", []).append(("matches", "insert"))
-        return {"id": row["id"]}
-
-    monkeypatch.setattr("jupr_app.domain.match_processing.submit_match", _fake_submit_match)
-
     match_list = [{
+        "id": 1,
         "t1_p1": 1,
         "t1_p2": 2,
         "t2_p1": 3,
         "t2_p2": 4,
-        "s1": 11,
-        "s2": 7,
+        "score_t1": 11,
+        "score_t2": 7,
         "league": "Open",
         "date": "2024-01-01T00:00:00Z",
         "match_type": "League",
@@ -156,7 +168,7 @@ def test_badge_v3_pipeline_updates_facts_before_enqueue_and_award(monkeypatch):
     ctx = SimpleNamespace(
         supabase=supabase,
         club_id="club",
-        df_matches=pd.DataFrame(storage["matches"]),
+        df_matches=pd.DataFrame(match_list),
         df_players_all=pd.DataFrame(storage["players"]),
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
@@ -168,7 +180,7 @@ def test_badge_v3_pipeline_updates_facts_before_enqueue_and_award(monkeypatch):
         admin_logged_in=True,
     )
 
-    result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
+    result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx, club_id="club")
     assert result == {"processed": 1, "errored": 0}
     assert len(storage.get("player_badges", [])) == 4
 

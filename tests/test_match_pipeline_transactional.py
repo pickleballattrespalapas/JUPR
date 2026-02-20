@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pandas as pd
-
 from jupr_app.domain import match_pipeline
 
 
@@ -37,20 +35,10 @@ class _DummySupabase:
 def test_record_match_rolls_back_and_returns_structured_error(monkeypatch):
     writes = []
 
+    monkeypatch.setattr(match_pipeline, "_enforce_write_preflight", lambda _supabase: None)
     monkeypatch.setattr(match_pipeline, "_run_write", lambda fn: fn())
     monkeypatch.setattr(match_pipeline, "_find_existing_match_by_idempotency_key", lambda **_: None)
-    monkeypatch.setattr(match_pipeline, "_build_processing_context", lambda **_: {
-        "name_to_id": {},
-        "df_players_all": pd.DataFrame([]),
-        "df_leagues": pd.DataFrame([]),
-        "df_meta": pd.DataFrame([]),
-    })
-
-    def fake_process(_match_list, **kwargs):
-        kwargs["match_writer"]({"club_id": "club-1", "score_t1": 11, "score_t2": 9}, None, "admin", "key-1")
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(match_pipeline, "process_matches", fake_process)
+    monkeypatch.setattr(match_pipeline, "_process_persisted_matches", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(match_pipeline, "sb_insert", lambda *_args, **_kwargs: SimpleNamespace(data=[{"id": 42}]))
     monkeypatch.setattr(
         match_pipeline,
@@ -63,6 +51,7 @@ def test_record_match_rolls_back_and_returns_structured_error(monkeypatch):
         club_id="club-1",
         match_payload={
             "idempotency_key": "key-1",
+            "date": "2026-01-01T12:00:00+00:00",
             "t1_p1": 1,
             "t1_p2": 2,
             "t2_p1": 3,
@@ -82,6 +71,7 @@ def test_update_match_rolls_back_patch_and_returns_structured_error(monkeypatch)
     writes = []
     supabase = _DummySupabase(match_rows=[{"id": 8, "score_t1": 11, "score_t2": 9, "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4}])
 
+    monkeypatch.setattr(match_pipeline, "_enforce_write_preflight", lambda _supabase: None)
     monkeypatch.setattr(match_pipeline, "_run_write", lambda fn: fn())
 
     def fake_sb_update(_supabase, table, payload, *, filters):
@@ -109,22 +99,10 @@ def test_update_match_rolls_back_patch_and_returns_structured_error(monkeypatch)
 def test_record_match_logs_audit_event(monkeypatch):
     logged = []
 
+    monkeypatch.setattr(match_pipeline, "_enforce_write_preflight", lambda _supabase: None)
     monkeypatch.setattr(match_pipeline, "_run_write", lambda fn: fn())
     monkeypatch.setattr(match_pipeline, "_find_existing_match_by_idempotency_key", lambda **_: None)
-    monkeypatch.setattr(match_pipeline, "_build_processing_context", lambda **_: {
-        "name_to_id": {},
-        "df_players_all": pd.DataFrame([]),
-        "df_leagues": pd.DataFrame([]),
-        "df_meta": pd.DataFrame([]),
-    })
-
-    def fake_process(match_list, **kwargs):
-        row = dict(match_list[0])
-        row["club_id"] = "club-1"
-        kwargs["match_writer"](row, None, "admin", "key-1")
-        return {"inserted": 1}
-
-    monkeypatch.setattr(match_pipeline, "process_matches", fake_process)
+    monkeypatch.setattr(match_pipeline, "_process_persisted_matches", lambda **_kwargs: {"inserted": 1})
     monkeypatch.setattr(match_pipeline, "sb_insert", lambda *_args, **_kwargs: SimpleNamespace(data=[{"id": 12}]))
     monkeypatch.setattr(match_pipeline, "log_event", lambda **payload: logged.append(payload))
 
@@ -133,6 +111,7 @@ def test_record_match_logs_audit_event(monkeypatch):
         club_id="club-1",
         match_payload={
             "idempotency_key": "key-1",
+            "date": "2026-01-01T12:00:00+00:00",
             "t1_p1": 1,
             "t1_p2": 2,
             "t2_p1": 3,
@@ -148,12 +127,13 @@ def test_record_match_logs_audit_event(monkeypatch):
     assert logged[0]["payload"]["match_id"] == 12
 
 
-def test_record_match_requires_idempotency_key():
+def test_record_match_requires_idempotency_key(monkeypatch):
+    monkeypatch.setattr(match_pipeline, "_enforce_write_preflight", lambda _supabase: None)
     try:
         match_pipeline.record_match(
             supabase=object(),
             club_id="club-1",
-            match_payload={"score_t1": 11, "score_t2": 9},
+            match_payload={"date": "2026-01-01T12:00:00+00:00", "score_t1": 11, "score_t2": 9},
         )
         assert False, "expected ValueError"
     except ValueError as exc:
@@ -164,6 +144,7 @@ def test_record_match_returns_existing_on_idempotency_hit(monkeypatch):
     existing = {"id": 55, "club_id": "club-1", "idempotency_key": "dup-key"}
     process_calls = []
 
+    monkeypatch.setattr(match_pipeline, "_enforce_write_preflight", lambda _supabase: None)
     monkeypatch.setattr(match_pipeline, "_find_existing_match_by_idempotency_key", lambda **_: existing)
     monkeypatch.setattr(match_pipeline, "process_matches", lambda *_args, **_kwargs: process_calls.append(True))
     monkeypatch.setattr(match_pipeline, "log_event", lambda **_: None)
@@ -171,7 +152,7 @@ def test_record_match_returns_existing_on_idempotency_hit(monkeypatch):
     result = match_pipeline.record_match(
         supabase=object(),
         club_id="club-1",
-        match_payload={"idempotency_key": "dup-key", "score_t1": 11, "score_t2": 9},
+        match_payload={"idempotency_key": "dup-key", "date": "2026-01-01T12:00:00+00:00", "score_t1": 11, "score_t2": 9},
     )
 
     assert result["success"] is True
