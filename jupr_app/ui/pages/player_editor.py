@@ -11,6 +11,11 @@ def render(ctx):
     page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
     PICK_KEY = "player_editor_pick"
 
+    # Process reset before widgets are created
+    if st.session_state.get("_reset_add_player_form"):
+        st.session_state["add_player_name"] = ""
+        st.session_state["_reset_add_player_form"] = False
+
     def _normalize_name(raw: str) -> str:
         cleaned = re.sub(r"[^a-z0-9_]+", "", (raw or "").strip().lower().replace(" ", "_"))
         cleaned = re.sub(r"_+", "_", cleaned).strip("_")
@@ -68,7 +73,7 @@ def render(ctx):
                 st.success(f"Player created: {name_clean} (Starting JUPR {float(rating):.1f})")
                 st.session_state["_force_data_reload"] = True
                 st.session_state["_player_editor_pending_pick"] = name_clean
-                st.session_state["add_player_name"] = ""
+                st.session_state["_reset_add_player_form"] = True
                 st.rerun()
 
     st.divider()
