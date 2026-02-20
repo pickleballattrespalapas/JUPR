@@ -5,7 +5,16 @@ from datetime import datetime, timezone
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_ops import safe_add_player
+st.header("FORM TEST")
 
+with st.form("test_form"):
+    name = st.text_input("Name")
+    submit = st.form_submit_button("Add Player")
+
+st.write("Submit value:", submit)
+
+if submit:
+    st.success("FORM WORKS")
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
