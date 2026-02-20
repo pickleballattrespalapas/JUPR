@@ -7,7 +7,6 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_merge import merge_player_into
 
 def render(ctx):
-    st.write("BUILD MARKER: rebuild branch player_editor v1")
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
     PICK_KEY = "player_editor_pick"
@@ -33,12 +32,8 @@ def render(ctx):
             name = st.text_input("Name", key="add_player_name")
             rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1, key="add_player_starting_jupr")
             submit = st.form_submit_button("Add Player")
-            st.write("Submit value:", submit)
 
             if submit:
-                st.write("Submit is TRUE")
-                st.write("DEBUG club_id:", club_id)
-                st.write("DEBUG name:", name)
                 name_clean = name.strip()
                 normalized_name = _normalize_name(name_clean)
                 if not name_clean:
@@ -69,10 +64,8 @@ def render(ctx):
                     "active": True,
                     "rating": int(round(float(rating) * 400.0)),
                 }
-                st.write("Supabase client session:", supabase.auth.get_session())
-                resp = supabase.table("players").insert(payload).execute()
-                st.write("DIRECT INSERT RESPONSE:", resp.data)
-                st.success("Direct insert attempted.")
+                supabase.table("players").insert(payload).execute()
+                st.success(f"Player created: {name_clean} (Starting JUPR {float(rating):.1f})")
                 st.session_state["_force_data_reload"] = True
                 st.session_state["_player_editor_pending_pick"] = name_clean
                 st.session_state["add_player_name"] = ""
