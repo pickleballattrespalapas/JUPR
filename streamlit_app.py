@@ -67,7 +67,7 @@ def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> 
     )
 
 
-def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> str:
+def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool, label_to_page_key: dict[str, str]) -> str:
     taxonomy = [
         ("Command Center", ["🧭 Command Center"]),
         ("Competitions", ["🪜 Challenge Ladder", "🏆 Tournaments", "🏆 Tournament Manager", "🏆 Division Manager", "💰 Moneyball"]),
@@ -93,6 +93,14 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
             prefix = "👉 " if label == selected else ""
             if st.sidebar.button(f"{prefix}{label}", key=f"nav_btn_{label}", use_container_width=True):
                 selected = label
+                try:
+                    from streamlit.runtime.scriptrunner import get_script_run_ctx
+                except Exception:
+                    pass
+                # Persist selection into query params
+                page_key = label_to_page_key.get(label)
+                if page_key:
+                    st.query_params["page"] = page_key
         st.sidebar.markdown(" ")
 
     return selected
@@ -500,7 +508,11 @@ def main():
                     clear_requirements_cache()
                 except Exception:
                     pass
-            sel = render_admin_sidebar_nav(current_label=sel, admin_logged_in=admin_logged_in)
+            sel = render_admin_sidebar_nav(
+                current_label=sel,
+                admin_logged_in=admin_logged_in,
+                label_to_page_key=LABEL_TO_PAGE_KEY,
+            )
             if sel not in visible_labels:
                 sel = visible_labels[0]
 
