@@ -69,6 +69,7 @@ def render(ctx):
                     "active": True,
                     "rating": int(round(float(rating) * 400.0)),
                 }
+                st.write("Supabase client session:", supabase.auth.get_session())
                 resp = supabase.table("players").insert(payload).execute()
                 st.write("DIRECT INSERT RESPONSE:", resp.data)
                 st.success("Direct insert attempted.")
