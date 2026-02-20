@@ -28,6 +28,9 @@ def render(ctx):
             name = st.text_input("Name")
             rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1)
             if st.form_submit_button("Add Player"):
+                st.write("DEBUG: Add Player form submitted")
+                st.write("DEBUG club_id:", club_id)
+                st.write("DEBUG name:", name)
                 name_clean = name.strip()
                 if not name_clean:
                     st.error("Name required.")
@@ -47,12 +50,18 @@ def render(ctx):
                     st.session_state[PICK_KEY] = name_clean
                     time.sleep(0.1)
                     st.rerun()
-                ok, err = safe_add_player(
-                    supabase=supabase,
-                    club_id=club_id,
-                    name=name_clean,
-                    rating_jupr=float(rating),
-                )
+                try:
+                    ok, err = safe_add_player(
+                        supabase=supabase,
+                        club_id=club_id,
+                        name=name_clean,
+                        rating_jupr=float(rating),
+                    )
+                    st.write("DEBUG safe_add_player returned:", ok, err)
+                except Exception as e:
+                    st.error("safe_add_player crashed")
+                    st.exception(e)
+                    raise
                 if not ok:
                     st.error(err or "Unable to add player.")
                     st.stop()
