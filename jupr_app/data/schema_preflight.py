@@ -97,11 +97,18 @@ def ensure_app_write_invariants(supabase: Any) -> bool:
 
 def _ensure_required_write_indexes(supabase: Any) -> None:
     try:
-        sb_rpc(supabase, "assert_app_invariants", {})
+        # Bind the jsonb argument by name so PostgREST selects the
+        # assert_app_invariants(payload jsonb) signature deterministically.
+        sb_rpc(supabase, "assert_app_invariants", {"payload": {}})
         return
     except APIError as exc:
         code = _get_api_error_code(exc)
         message = _get_api_error_message(exc)
+        if code == "P0001":
+            raise RuntimeError(
+                "Database write preflight failed. assert_app_invariants rejected schema invariants. "
+                f"(code={code} message={message})"
+            ) from exc
         if code == "PGRST202" and "assert_app_invariants" in message:
             degraded, _ = check_required_upsert_indexes(supabase)
             if degraded:
@@ -116,15 +123,13 @@ def _ensure_required_write_indexes(supabase: Any) -> None:
             )
             return
         raise RuntimeError(
-            "Database write preflight failed. Required unique indexes are missing. "
-            "Apply supabase/migrations/202602200001_enforce_uniques_and_preflight.sql "
-            "and reload PostgREST schema cache."
+            "Database write preflight failed while executing assert_app_invariants. "
+            f"(code={code} message={message})"
         ) from exc
     except Exception as exc:
         raise RuntimeError(
-            "Database write preflight failed. Required unique indexes are missing. "
-            "Apply supabase/migrations/202602200001_enforce_uniques_and_preflight.sql "
-            "and reload PostgREST schema cache."
+            "Database write preflight failed while executing assert_app_invariants. "
+            f"(error={exc})"
         ) from exc
 
 
