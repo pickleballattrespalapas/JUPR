@@ -40,8 +40,8 @@ def _nav_card(
         unsafe_allow_html=True,
     )
     if clicked:
-        st.session_state["_admin_selected_page"] = label
-        # Do NOT call st.rerun()
+        st.session_state["_admin_selected_page"] = target_label
+        
 
 
 def render(ctx):
