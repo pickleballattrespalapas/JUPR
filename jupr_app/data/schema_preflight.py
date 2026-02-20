@@ -131,26 +131,25 @@ def _ensure_required_schema_version(supabase: Any) -> None:
 
 def _get_table_columns(supabase: Any, table_name: str) -> set[str]:
     """
-    Deterministically fetch column names from information_schema.
+    Deterministically fetch column names using SECURITY DEFINER RPC.
     Single round-trip. Transport-safe.
     """
     try:
-        resp = (
-            supabase
-            .table("information_schema.columns")
-            .select("column_name")
-            .eq("table_schema", "public")
-            .eq("table_name", table_name)
-            .execute()
-        )
+        resp = supabase.rpc(
+            "get_public_table_columns",
+            {"p_table": table_name}
+        ).execute()
 
         if resp.data:
             return {row["column_name"] for row in resp.data}
 
         return set()
 
-    except (APIError, httpx.RemoteProtocolError, Exception) as e:
-        print("Schema inspection failed:", str(e))
+    except (APIError, httpx.RemoteProtocolError) as e:
+        print("Schema inspection transport warning:", str(e))
+        return set()
+    except Exception as e:
+        print("Schema inspection unexpected warning:", str(e))
         return set()
 
 
