@@ -1,26 +1,32 @@
 from __future__ import annotations
 # Match writes must go through match_pipeline.
-import hashlib
 from typing import Any
 
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from jupr_app.domain.match_pipeline import record_match, update_match
 
 
 def _build_tournament_match_idempotency_key(*, club_id: str, game_id: str, common_fields: dict[str, Any]) -> str:
-    seed = "|".join(
-        [
-            str(club_id).strip(),
-            str(game_id).strip(),
-            str(common_fields.get("tournament_id") or "").strip(),
-            str(common_fields.get("tournament_game_id") or "").strip(),
-            str(common_fields.get("t1_p1") or ""),
-            str(common_fields.get("t1_p2") or ""),
-            str(common_fields.get("t2_p1") or ""),
-            str(common_fields.get("t2_p2") or ""),
-        ]
+    return build_match_idempotency_key_v1(
+        {
+            "club_id": str(club_id),
+            "date": str(common_fields.get("date") or ""),
+            "context_type": "tournament",
+            "context_id": str(common_fields.get("tournament_id") or ""),
+            "competition_id": str(common_fields.get("tournament_id") or ""),
+            "tournament_id": str(common_fields.get("tournament_id") or ""),
+            "tournament_game_id": str(common_fields.get("tournament_game_id") or game_id),
+            "match_type": str(common_fields.get("match_type") or ""),
+            "t1_p1": int(common_fields.get("t1_p1") or 0),
+            "t1_p2": int(common_fields.get("t1_p2") or 0),
+            "t2_p1": int(common_fields.get("t2_p1") or 0),
+            "t2_p2": int(common_fields.get("t2_p2") or 0),
+            "score_t1": int(common_fields.get("score_t1") or 0),
+            "score_t2": int(common_fields.get("score_t2") or 0),
+            "games": common_fields.get("games"),
+            "score_json": common_fields.get("score_json"),
+        }
     )
-    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    return f"tournament:{club_id}:{game_id}:{digest}"
 
 
 def sync_tournament_game_to_match(

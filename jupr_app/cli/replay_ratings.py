@@ -78,6 +78,7 @@ def main() -> int:
                 df_meta=df_meta,
                 target_reset=FULL_RESET_LABEL,
                 progress_cb=None,
+                acquire_lock=False,
             )
             _record_run(supabase, str(args.club_id), "success", summary)
         finally:

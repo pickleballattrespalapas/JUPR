@@ -114,12 +114,40 @@ class FakeTable:
         return SimpleNamespace(data=data)
 
 
+class _RpcQuery:
+    def __init__(self, storage, name: str, payload: dict):
+        self.storage = storage
+        self.name = name
+        self.payload = payload
+
+    def execute(self):
+        if self.storage.get("raise_missing_table"):
+            raise APIError({"code": "PGRST205", "message": "missing table"})
+        if self.name != "dequeue_badge_eval_jobs":
+            return SimpleNamespace(data=[])
+        club_id = str(self.payload.get("p_club_id") or "")
+        pending = [
+            row for row in self.storage.get(BADGE_QUEUE_TABLE, [])
+            if str(row.get("club_id")) == club_id and str(row.get("status")) == "pending"
+        ]
+        pending = sorted(pending, key=lambda r: str(r.get("created_at") or ""))
+        if not pending:
+            return SimpleNamespace(data=[])
+        row = pending[0]
+        row["status"] = "processing"
+        row["attempts"] = int(row.get("attempts") or 0) + 1
+        return SimpleNamespace(data=[dict(row)])
+
+
 class FakeSupabase:
     def __init__(self, storage=None):
         self.storage = storage if storage is not None else {}
 
     def table(self, name):
         return FakeTable(self.storage, name)
+
+    def rpc(self, name: str, payload: dict):
+        return _RpcQuery(self.storage, name, payload)
 
 
 def _build_ctx(supabase=None):
@@ -166,6 +194,7 @@ def test_worker_processes_queue_and_awards_badge():
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
+        "players": [{"id": 1, "club_id": "club", "starting_rating": 1200.0}],
     }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
@@ -176,7 +205,7 @@ def test_worker_processes_queue_and_awards_badge():
         match_id="m1",
     )
     ctx = _build_ctx(supabase)
-    result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
+    result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx, club_id="club")
     assert result["processed"] == 1
     assert storage.get("player_badges")
 
@@ -187,6 +216,7 @@ def test_worker_dedupes_duplicate_events():
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
+        "players": [{"id": 1, "club_id": "club", "starting_rating": 1200.0}],
     }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
@@ -204,7 +234,7 @@ def test_worker_dedupes_duplicate_events():
         match_id="m1",
     )
     ctx = _build_ctx(supabase)
-    process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2, ctx=ctx)
+    process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2, ctx=ctx, club_id="club")
     assert len(storage.get("player_badges", [])) == 1
 
 
@@ -214,6 +244,7 @@ def test_worker_error_marks_queue(monkeypatch):
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
+        "players": [{"id": 1, "club_id": "club", "starting_rating": 1200.0}],
     }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
@@ -232,23 +263,26 @@ def test_worker_error_marks_queue(monkeypatch):
         "jupr_app.domain.gamification.v3_engine.evaluate_badges_v3_for_player",
         boom,
     )
-    process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
+    process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx, club_id="club")
     rows = storage.get("badge_eval_queue", [])
     assert rows[0]["status"] == "error"
     assert rows[0]["attempts"] == 1
 
 
-def test_enqueue_badge_eval_missing_table_is_ignored():
+def test_enqueue_badge_eval_missing_table_is_fatal():
     storage = {"raise_missing_table": True}
     supabase = FakeSupabase(storage)
-    enqueue_badge_eval(
-        supabase,
-        club_id="club",
-        event_type="match_recorded",
-        player_ids=[1],
-        match_id="m1",
-    )
-    assert storage.get(BADGE_QUEUE_TABLE) is None
+    try:
+        enqueue_badge_eval(
+            supabase,
+            club_id="club",
+            event_type="match_recorded",
+            player_ids=[1],
+            match_id="m1",
+        )
+        assert False, "expected APIError"
+    except APIError:
+        assert storage.get(BADGE_QUEUE_TABLE) is None
 
 
 def test_worker_passes_match_id_to_fact_engine(monkeypatch):
@@ -257,6 +291,7 @@ def test_worker_passes_match_id_to_fact_engine(monkeypatch):
         "badge_rule_conditions": [{"badge_id": "grinder", "fact_key": "total_matches", "operator": ">=", "value_numeric": 1}],
         "player_badge_facts": [],
         "player_badges": [],
+        "players": [{"id": 1, "club_id": "club", "starting_rating": 1200.0}],
     }
     supabase = FakeSupabase(storage)
     enqueue_badge_eval(
@@ -276,6 +311,6 @@ def test_worker_passes_match_id_to_fact_engine(monkeypatch):
         "jupr_app.domain.gamification.badge_worker.update_match_facts_for_players",
         fake_update,
     )
-    process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=_build_ctx(supabase))
+    process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=_build_ctx(supabase), club_id="club")
 
     assert captured["match_id"] == "m42"

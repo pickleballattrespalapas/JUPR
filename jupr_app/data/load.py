@@ -1,6 +1,4 @@
 import time
-import json
-import hashlib
 import pandas as pd
 
 from jupr_app.domain.player_activity import add_activity_columns
@@ -11,6 +9,7 @@ from jupr_app.data.schema_preflight import (
     check_required_upsert_indexes,
     ensure_badge_schema_preflight,
 )
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from services.match_pipeline import submit_match
 
 
@@ -61,27 +60,29 @@ def _resolve_loader_context(match_row: dict) -> tuple[str, str | None]:
 
 
 def _loader_idempotency_key(club_id: str, match_row: dict) -> str:
-    original_id = match_row.get("id", match_row.get("match_id"))
-    external_id = match_row.get("external_id", match_row.get("source_match_id"))
-    signature_payload = {
-        "club_id": str(club_id),
-        "source": "data_loader",
-        "original_id": str(original_id) if original_id is not None else None,
-        "external_id": str(external_id) if external_id is not None else None,
-        "date": str(match_row.get("date") or match_row.get("created_at") or ""),
-        "league": str(match_row.get("league") or ""),
-        "context_type": str(match_row.get("context_type") or ""),
-        "context_id": str(match_row.get("context_id") or ""),
-        "t1_p1": int(match_row.get("t1_p1") or 0),
-        "t1_p2": int(match_row.get("t1_p2") or 0),
-        "t2_p1": int(match_row.get("t2_p1") or 0),
-        "t2_p2": int(match_row.get("t2_p2") or 0),
-        "score_t1": int(match_row.get("score_t1") or 0),
-        "score_t2": int(match_row.get("score_t2") or 0),
-    }
-    normalized = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    return f"loader:{club_id}:{original_id}:{digest}"
+    return build_match_idempotency_key_v1(
+        {
+            "club_id": str(club_id),
+            "date": str(match_row.get("date") or match_row.get("created_at") or ""),
+            "context_type": str(match_row.get("context_type") or ""),
+            "context_id": str(match_row.get("context_id") or ""),
+            "competition_id": str(match_row.get("competition_id") or ""),
+            "division_id": str(match_row.get("division_id") or ""),
+            "tournament_id": str(match_row.get("tournament_id") or ""),
+            "tournament_game_id": str(match_row.get("tournament_game_id") or ""),
+            "match_type": str(match_row.get("match_type") or ""),
+            "match_format": str(match_row.get("match_format") or ""),
+            "best_of": int(match_row.get("best_of") or 0),
+            "t1_p1": int(match_row.get("t1_p1") or 0),
+            "t1_p2": int(match_row.get("t1_p2") or 0),
+            "t2_p1": int(match_row.get("t2_p1") or 0),
+            "t2_p2": int(match_row.get("t2_p2") or 0),
+            "score_t1": int(match_row.get("score_t1") or 0),
+            "score_t2": int(match_row.get("score_t2") or 0),
+            "score_json": match_row.get("score_json"),
+            "games": match_row.get("games"),
+        }
+    )
 
 
 def submit_matches_from_loader(supabase, club_id: str, matches: list[dict], chunk_size: int = 500) -> int:

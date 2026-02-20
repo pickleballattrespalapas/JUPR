@@ -13,6 +13,7 @@ import streamlit as st
 
 from jupr_app.domain.leagues import get_league_meta_row
 from jupr_app.domain.ratings import calculate_hybrid_elo
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
 from jupr_app.ui.layout import page_shell
 from services.match_pipeline import submit_match
@@ -305,16 +306,24 @@ def _deterministic_idempotency_key(
     score_t2: int,
     match_date: str,
 ) -> str:
-    seed = "|".join(
-        [
-            str(club_id).strip(),
-            str(league_id).strip(),
-            "-".join(str(int(pid)) for pid in player_ids),
-            f"{int(score_t1)}-{int(score_t2)}",
-            str(match_date).strip(),
-        ]
+    if len(player_ids) != 4:
+        raise ValueError("player_ids must include exactly four players")
+
+    return build_match_idempotency_key_v1(
+        {
+            "club_id": str(club_id),
+            "date": str(match_date),
+            "context_type": "league",
+            "context_id": str(league_id),
+            "match_type": "League",
+            "t1_p1": int(player_ids[0]),
+            "t1_p2": int(player_ids[1]),
+            "t2_p1": int(player_ids[2]),
+            "t2_p2": int(player_ids[3]),
+            "score_t1": int(score_t1),
+            "score_t2": int(score_t2),
+        }
     )
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
 
 def _build_submission_fingerprint(payload: dict[str, Any]) -> str:
@@ -1234,7 +1243,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
                 )
 
                 finalize_payload = finalize_game({**selected_game, "score_a": int(score_t1), "score_b": int(score_t2)})
-                sb_update(supabase, "tournament_games", finalize_payload, filters={"id": selected_game["id"]})
+                sb_update(supabase, "tournament_games", finalize_payload, filters={"club_id": club_id, "id": selected_game["id"]})
 
                 if str(selected_game.get("stage") or "").upper() == "PLAYOFF":
                     playoff_games_resp = (
@@ -1247,7 +1256,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
                     playoff_games = getattr(playoff_games_resp, "data", None) or []
                     updates = resolve_playoff_dependencies(playoff_games)
                     for upd in updates:
-                        sb_update(supabase, "tournament_games", upd, filters={"id": upd["id"]})
+                        sb_update(supabase, "tournament_games", upd, filters={"club_id": club_id, "id": upd["id"]})
 
                 _set_submit_feedback(
                     {

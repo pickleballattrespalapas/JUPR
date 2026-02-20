@@ -268,3 +268,30 @@ def test_replay_history_updates_lock_and_summary(monkeypatch):
         pass
 
     assert supabase.storage["replay_lock"][0]["status"] == "failed"
+
+
+def test_replay_history_skips_internal_lock_when_acquire_lock_false():
+    supabase = _FakeSupabase()
+    supabase.storage["replay_lock"] = [{"club_id": "club-1", "status": "running"}]
+
+    summary = replay_history(
+        supabase=supabase,
+        club_id="club-1",
+        df_meta=None,
+        target_reset=FULL_RESET_LABEL,
+        acquire_lock=False,
+    )
+
+    assert summary["log_summary"]["lock"]["status_before"] == "externally_managed"
+    assert supabase.storage["replay_lock"][0]["status"] == "running"
+
+
+def test_replay_history_uses_default_baseline_when_starting_rating_missing():
+    supabase = _FakeSupabase()
+    supabase.storage["players"][0]["starting_rating"] = None
+    supabase.storage["players"][0]["rating"] = 1733.0
+
+    summary = replay_history(supabase=supabase, club_id="club-1", df_meta=None, target_reset=FULL_RESET_LABEL)
+
+    baseline = summary["log_summary"]["baseline"]["player_baselines"][1]
+    assert float(baseline) == 1200.0

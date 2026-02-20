@@ -1,6 +1,12 @@
 -- V3 Badge Engine Schema Migration
 -- Idempotent, Supabase-compatible migration
 
+-- 0. Ensure badges_v2 exists for clean installs
+CREATE TABLE IF NOT EXISTS public.badges_v2 (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- 1. Extend badges_v2
 ALTER TABLE public.badges_v2
 ADD COLUMN IF NOT EXISTS status TEXT CHECK (status IN ('draft','published','archived')) DEFAULT 'draft',

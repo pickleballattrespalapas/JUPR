@@ -7,7 +7,7 @@ import uuid
 from typing import Any, Literal, Mapping
 
 from jupr_app.data.client import make_supabase
-from jupr_app.domain.match_pipeline import record_match
+from jupr_app.domain.match_pipeline import ingest_match_with_identity_resolution
 
 _ALLOWED_CONTEXT_TYPES = {"league", "ladder", "tournament", "round_robin", "moneyball", "admin"}
 
@@ -60,7 +60,7 @@ def submit_match(
         payload["idempotency_key"] = idempotency_key
 
     supabase = get_supabase_client()
-    result = record_match(supabase=supabase, club_id=club_id, match_payload=payload)
+    result = ingest_match_with_identity_resolution(supabase=supabase, club_id=club_id, match_payload=payload)
     result["run_context_hooks"] = bool(run_context_hooks)
     return result
 

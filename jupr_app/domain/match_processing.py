@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_update, sb_upsert
 
-import hashlib
-import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
@@ -17,6 +15,27 @@ from jupr_app.domain.player_activity import (
     max_activity_time,
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+
+
+class NonCanonicalMatchWrite(RuntimeError):
+    """Raised when `process_matches` receives non-persisted match payloads."""
+
+
+class UnknownPlayerId(RuntimeError):
+    """Raised when a persisted match references a player id not present in players."""
+
+    def __init__(self, match_id: int | None, player_id: int):
+        self.match_id = match_id
+        self.player_id = int(player_id)
+        super().__init__(f"Unknown player id {self.player_id} for match_id={self.match_id}")
+
+
+class MissingMatchDatetime(ValueError):
+    """Raised when match processing receives rows without deterministic datetimes."""
+
+    def __init__(self, match_id: int | None):
+        self.match_id = match_id
+        super().__init__(f"Missing match datetime for match_id={self.match_id}")
 
 
 def process_matches(
@@ -33,12 +52,11 @@ def process_matches(
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
-    match_writer: Callable[[dict[str, Any], str | None, str, str], Any] | None = None,
 ) -> dict[str, int]:
     """
     - Applies overall rating updates to players table
     - Applies league rating updates to league_ratings table (skips PopUp)
-    - Inserts match rows with snapshot start/end ratings for each player in that match
+    - Recomputes projections for persisted match rows with snapshot start/end ratings
 
     match_list rows may contain player ids (int) or names (str). Supported score keys:
       - s1/s2 (preferred; used by live ladder + uploader)
@@ -61,6 +79,7 @@ def process_matches(
     island_updates: dict[tuple[int, str], dict[str, Any]] = {}  # (pid, league) -> {"r","start","w","l","mp"}
     last_game_updates: dict[int, datetime] = {}
     affected_players: set[int] = set()
+    known_player_ids = {int(pid) for pid in df_players_all.get("id", []) if str(pid).strip() != ""}
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -101,21 +120,6 @@ def process_matches(
             if parsed_tournament_id:
                 return parsed_tournament_id
         return None
-
-    def build_idempotency_key(match_row: dict[str, Any]) -> str:
-        signature_payload = {
-            "club_id": str(club_id),
-            "date": str(match_row.get("date") or ""),
-            "t1_p1": int(match_row.get("t1_p1") or 0),
-            "t1_p2": int(match_row.get("t1_p2") or 0),
-            "t2_p1": int(match_row.get("t2_p1") or 0),
-            "t2_p2": int(match_row.get("t2_p2") or 0),
-            "score_t1": int(match_row.get("score_t1") or 0),
-            "score_t2": int(match_row.get("score_t2") or 0),
-        }
-        normalized = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-        return f"batch:{digest}"
 
     def get_k(league_name: str) -> int:
         if df_meta is None or getattr(df_meta, "empty", True):
@@ -228,6 +232,11 @@ def process_matches(
     # Main match loop
     # -------------------------
     for m in match_list:
+        if int(m.get("id") or 0) <= 0:
+            raise NonCanonicalMatchWrite(
+                "process_matches requires persisted matches with numeric IDs; canonical writes must go through record_match/submit_match first"
+            )
+
         p1 = as_pid(m.get("t1_p1"))
         p2 = as_pid(m.get("t1_p2"))
         p3 = as_pid(m.get("t2_p1"))
@@ -238,6 +247,10 @@ def process_matches(
             continue
 
         p1, p2, p3, p4 = int(p1), int(p2), int(p3), int(p4)
+        match_id = int(m.get("id") or 0)
+        for pid in (p1, p2, p3, p4):
+            if int(pid) not in known_player_ids:
+                raise UnknownPlayerId(match_id=match_id, player_id=int(pid))
 
         s1 = int(m.get("s1", m.get("score_t1", 0) or 0) or 0)
         s2 = int(m.get("s2", m.get("score_t2", 0) or 0) or 0)
@@ -255,7 +268,7 @@ def process_matches(
         dt_val = m.get("date", None)
         match_dt = coerce_utc_datetime(dt_val)
         if match_dt is None:
-            match_dt = datetime.now(timezone.utc)
+            raise MissingMatchDatetime(match_id=match_id)
         dt_val = match_dt.isoformat()
 
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
@@ -309,6 +322,7 @@ def process_matches(
 
         db_matches.append(
             {
+                "id": int(m.get("id") or 0),
                 "club_id": club_id,
                 "date": dt_val,
                 "league": league_name,
@@ -336,27 +350,6 @@ def process_matches(
             }
         )
 
-    # -------------------------
-    # Write match rows
-    # -------------------------
-    if match_writer is None:
-        # IMPORTANT: process_matches() already computes + writes all projections
-        # (players, league_ratings, badge queue). The default writer must insert the
-        # match row only — calling services.match_pipeline.submit_match() recurses back
-        # into the pipeline and can double-apply updates.
-        def match_writer(match_row: dict[str, Any], context_id: str | None, context_type: str, idempotency_key: str) -> dict[str, Any]:
-            payload = dict(match_row or {})
-            payload.update(
-                {
-                    "club_id": club_id,
-                    "context_type": context_type,
-                    "context_id": context_id,
-                    "idempotency_key": idempotency_key,
-                }
-            )
-            sb_insert(supabase_admin, "matches", payload)
-            return {"inserted": True}
-
     queued_badge_events: list[dict[str, Any]] = []
     if db_matches:
         CHUNK_M = 300
@@ -365,14 +358,12 @@ def process_matches(
             for match_row in chunk:
                 context_type = resolve_context_type(match_row, str(match_row.get("league") or "").strip())
                 context_id = resolve_context_id(match_row, context_type, str(match_row.get("league") or "").strip())
-                idempotency_key = build_idempotency_key(match_row)
-                sb_retry(lambda match_row=match_row, context_id=context_id, context_type=context_type, idempotency_key=idempotency_key: match_writer(match_row, context_id, context_type, idempotency_key))
                 queued_badge_events.append({
                     "context_id": str(context_id or "overall"),
-                    "match_id": str(idempotency_key),
+                    "match_id": str(match_row.get("id")),
                     "player_ids": [int(match_row["t1_p1"]), int(match_row["t1_p2"]), int(match_row["t2_p1"]), int(match_row["t2_p2"])],
                     "payload": {
-                        "match_id": str(idempotency_key),
+                        "match_id": str(match_row.get("id")),
                         "score_t1": int(match_row["score_t1"]),
                         "score_t2": int(match_row["score_t2"]),
                         "t1_p1": int(match_row["t1_p1"]),
@@ -407,8 +398,7 @@ def process_matches(
             derived_from_match_history=True,
         )
         if not res.data:
-            payload_ins = {"club_id": club_id, "id": pid, **payload}
-            sb_insert(supabase_admin, "players", payload_ins)
+            raise UnknownPlayerId(match_id=None, player_id=pid)
 
     for pid, stats in overall_updates.items():
         row = {
