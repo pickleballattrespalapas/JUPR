@@ -36,16 +36,12 @@ def _enforce_rating_state_policy(*, table: str, payload: Dict, derived_from_matc
 
 
 def sb_insert(supabase: Any, table: str, payload: Dict) -> Any:
-    try:
-        return (
-            supabase
-            .table(table)
-            .insert(payload)
-            .execute()
-        )
-    except Exception as e:
-        print("SUPABASE WRITE FAILURE:", e)
-        raise
+    return (
+        supabase
+        .table(table)
+        .insert(payload)
+        .execute()
+    )
 
 
 def sb_upsert(
@@ -61,19 +57,15 @@ def sb_upsert(
         payload=payload,
         derived_from_match_history=derived_from_match_history,
     )
-    try:
-        return (
-            supabase
-            .table(table)
-            .upsert(
-                payload,
-                on_conflict=conflict,
-            )
-            .execute()
+    return (
+        supabase
+        .table(table)
+        .upsert(
+            payload,
+            on_conflict=conflict,
         )
-    except Exception as e:
-        print("SUPABASE WRITE FAILURE:", e)
-        raise
+        .execute()
+    )
 
 
 def sb_update(
@@ -94,11 +86,7 @@ def sb_update(
     for col, value in filters.items():
         query = query.eq(col, value)
 
-    try:
-        return query.execute()
-    except Exception as e:
-        print("SUPABASE WRITE FAILURE:", e)
-        raise
+    return query.execute()
 
 
 def sb_delete(
@@ -112,16 +100,8 @@ def sb_delete(
     for col, value in filters.items():
         query = query.eq(col, value)
 
-    try:
-        return query.execute()
-    except Exception as e:
-        print("SUPABASE WRITE FAILURE:", e)
-        raise
+    return query.execute()
 
 
 def sb_rpc(supabase: Any, name: str, payload: Dict) -> Any:
-    try:
-        return supabase.rpc(name, payload).execute()
-    except Exception as e:
-        print("SUPABASE WRITE FAILURE:", e)
-        raise
+    return supabase.rpc(name, payload).execute()
