@@ -51,36 +51,11 @@ def safe_add_player(
     }
 
     try:
-        resp = (
-            supabase
-            .table("players")
-            .upsert(payload, on_conflict="club_id,normalized_name")
-            .execute()
-        )
-
+        resp = supabase.table("players").insert(payload).execute()
+        print("DEBUG INSERT RESPONSE:", resp.data)
         if resp.data and len(resp.data) > 0 and resp.data[0].get("id"):
             return True, resp.data[0]["id"]
-
-        existing = (
-            supabase
-            .table("players")
-            .select("id")
-            .eq("club_id", str(club_id))
-            .eq("normalized_name", normalized_name)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if existing and existing[0].get("id"):
-            return True, existing[0]["id"]
-
-        return False, "Upsert did not return an id"
-
+        return False, "Insert did not return an id"
     except APIError as e:
-        if getattr(e, "code", "") == "42P10":
-            return False, (
-                "Schema mismatch: players upsert requires a unique index or constraint on "
-                "(club_id, normalized_name)."
-            )
-        return False, str(e)
+        print("DEBUG INSERT ERROR:", e)
+        raise
