@@ -5,7 +5,6 @@ from jupr_app.domain.player_activity import add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
-from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
 from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from services.match_pipeline import submit_match
 
@@ -146,7 +145,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
     club_id = str(club_id)
-    ensure_badge_schema_preflight(supabase)
+    # Preflight runs once at app startup in main(); do not duplicate here.
     schema_degraded, schema_degraded_reason = False, None
 
     max_retries = 3
