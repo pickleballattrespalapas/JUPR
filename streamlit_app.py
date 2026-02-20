@@ -72,6 +72,9 @@ def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> 
 
 
 def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> str:
+    def _nav_to(target: str):
+        st.session_state["_nav_pending"] = target
+
     taxonomy = [
         ("Command Center", ["🧭 Command Center"]),
         ("Competitions", ["🪜 Challenge Ladder", "🏆 Tournaments", "🏆 Tournament Manager", "🏆 Division Manager", "💰 Moneyball"]),
@@ -81,7 +84,6 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
         ("Administration", ["🏟️ League Manager", "🛠️ Challenge Ladder Admin", "⚙️ Admin Tools", "📘 Admin Guide", "🎨 Theme QA", "❓ FAQs"]),
     ]
 
-    selected = current_label
     for section_name, labels in taxonomy:
         available = []
         for label in labels:
@@ -94,12 +96,17 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
 
         st.sidebar.markdown(f"### {section_name}")
         for label in available:
-            prefix = "👉 " if label == selected else ""
-            if st.sidebar.button(f"{prefix}{label}", key=f"nav_btn_{label}", use_container_width=True):
-                selected = label
+            prefix = "👉 " if label == current_label else ""
+            st.sidebar.button(
+                f"{prefix}{label}",
+                key=f"nav_btn_{label}",
+                use_container_width=True,
+                on_click=_nav_to,
+                args=(label,),
+            )
         st.sidebar.markdown(" ")
 
-    return selected
+    return current_label
 
 
 def resolve_auth_session(supabase):
@@ -139,6 +146,23 @@ def resolve_entry_mode(session):
     return "gateway"
 
 
+def _init_session():
+    defaults = {
+        "_nav_target": "home",
+        "_nav_pending": None,
+        "_ui_event": None,
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
+
+
+def _process_pending_nav():
+    pending = st.session_state.get("_nav_pending")
+    if pending:
+        st.session_state["_nav_target"] = pending
+        st.session_state["_nav_pending"] = None
+
+
 def resolve_tenant(session):
     if session:
         token = session.access_token
@@ -158,26 +182,12 @@ def resolve_tenant(session):
     return os.getenv("DEFAULT_PUBLIC_CLUB_ID", "tres_palapas")
 
 
-def resolve_route(entry_mode, session, visible_labels, page_key_to_label, public_labels_in_order):
-    deep_page_key = st.query_params.get("page", "").strip().lower()
-    label = page_key_to_label.get(deep_page_key)
-    if label in visible_labels:
-        return label
-
-    if entry_mode == "auth" and session and "🧭 Command Center" in visible_labels:
-        return "🧭 Command Center"
-
-    if entry_mode == "public" and public_labels_in_order:
-        return public_labels_in_order[0]
-
-    return visible_labels[0]
-
-
 def main():
     try:
         from jupr_app.ui.context import AppContext
         from jupr_app.ui.theme_clean import apply_clean_theme
 
+        _init_session()
         st.session_state.setdefault("entry_mode", None)
 
         st.set_page_config(
@@ -202,7 +212,7 @@ def main():
 
         if flow_type == "signup":
             st.success("Email confirmed successfully.")
-            st.stop()
+            return
 
         entry_mode = resolve_entry_mode(session)
         st.session_state["entry_mode"] = entry_mode
@@ -216,7 +226,7 @@ def main():
             with col2:
                 if st.button("🌎 Public Pages", use_container_width=True):
                     st.session_state["entry_mode"] = "public"
-            st.stop()
+            return
 
         if entry_mode == "login" and not session:
             st.markdown("## Login")
@@ -244,7 +254,7 @@ def main():
                         st.success("Magic link sent.")
                     except Exception:
                         st.error("Unable to send magic link.")
-            st.stop()
+            return
 
         session = st.session_state.get("sb_session")
         if session:
@@ -272,7 +282,7 @@ def main():
                         st.session_state.pop("recovery_mode", None)
                     except Exception:
                         st.error("Password update failed.")
-            st.stop()
+            return
 
         try:
             club_id = resolve_tenant(session)
@@ -298,7 +308,7 @@ def main():
             except Exception:
                 pass
             st.session_state.clear()
-            st.stop()
+            st.rerun()
 
         if st.session_state.pop("_force_data_reload", False):
             _clear_app_caches()
@@ -471,9 +481,6 @@ def main():
         all_labels = list(PAGES.keys())
         visible_labels = all_labels if admin_logged_in else [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         st.session_state["_visible_labels"] = visible_labels
-        # Initialize admin-selected page state (session-based navigation)
-        if "_admin_selected_page" not in st.session_state:
-            st.session_state["_admin_selected_page"] = None
 
         PUBLIC_NAV_KEYS = [
             "leaderboards",
@@ -505,50 +512,51 @@ def main():
             deep_label = ""
         if deep_label:
             st.query_params["page"] = LABEL_TO_PAGE_KEY.get(deep_label, "leaderboards")
+            st.session_state["_nav_pending"] = deep_label
+        else:
+            deep_page_key = st.query_params.get("page", "").strip().lower()
+            deep_page_label = PAGE_KEY_TO_LABEL.get(deep_page_key)
+            if deep_page_label in visible_labels:
+                st.session_state["_nav_pending"] = deep_page_label
 
-        sel = resolve_route(
-            entry_mode=st.session_state["entry_mode"],
-            session=session,
-            visible_labels=visible_labels,
-            page_key_to_label=PAGE_KEY_TO_LABEL,
-            public_labels_in_order=public_labels_in_order,
-        )
+        if st.session_state["_nav_target"] == "home":
+            if st.session_state["entry_mode"] == "auth" and "🧭 Command Center" in visible_labels:
+                st.session_state["_nav_pending"] = "🧭 Command Center"
+            elif st.session_state["entry_mode"] == "public" and public_labels_in_order:
+                st.session_state["_nav_pending"] = public_labels_in_order[0]
+            elif visible_labels:
+                st.session_state["_nav_pending"] = visible_labels[0]
+
+        _process_pending_nav()
+
+        current_page = st.session_state["_nav_target"]
+        if current_page not in visible_labels:
+            current_page = visible_labels[0]
+            st.session_state["_nav_target"] = current_page
 
         if PUBLIC_MODE:
-            sel = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=sel)
+            selected = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=current_page)
+            if selected != current_page:
+                st.session_state["_nav_pending"] = selected
         else:
-            # Session-state-driven admin navigation
-            current = st.session_state.get("_admin_selected_page")
-
-            # Render sidebar using current selection (or first visible as fallback)
-            sel = render_admin_sidebar_nav(
-                current_label=current or visible_labels[0],
-                admin_logged_in=admin_logged_in,
-            )
-
-            # If a different button was clicked, update session state
-            if sel != current:
-                st.session_state["_admin_selected_page"] = sel
-
-            # Final resolved selection
-            sel = st.session_state["_admin_selected_page"] or visible_labels[0]
+            render_admin_sidebar_nav(current_label=current_page, admin_logged_in=admin_logged_in)
 
         if PUBLIC_MODE:
             try:
-                page_key = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
+                page_key = LABEL_TO_PAGE_KEY.get(current_page, "leaderboards")
                 if st.query_params.get("page") != page_key:
                     st.query_params["page"] = page_key
             except Exception:
                 pass
 
-        page_mod = PAGES.get(sel)
+        page_mod = PAGES.get(current_page)
         if page_mod is None:
-            st.error(f"Unknown page selection: {sel}")
+            st.error(f"Unknown page selection: {current_page}")
             st.stop()
 
         render_fn = getattr(page_mod, "render", None)
         if not callable(render_fn):
-            st.error(f"Page module for '{sel}' has no render(ctx) function.")
+            st.error(f"Page module for '{current_page}' has no render(ctx) function.")
             st.stop()
 
         render_fn(ctx)

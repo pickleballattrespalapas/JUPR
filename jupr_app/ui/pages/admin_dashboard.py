@@ -7,6 +7,10 @@ from jupr_app.domain.system_health import get_system_health
 from jupr_app.ui.layout import page_shell
 
 
+def _nav_to(target: str):
+    st.session_state["_nav_pending"] = target
+
+
 def _nav_card(
     title: str,
     desc: str,
@@ -16,10 +20,12 @@ def _nav_card(
 ):
     wrapper_key = f"card_{target_label}"
 
-    clicked = st.button(
+    st.button(
         f"{title}\n\n{desc}",
         key=wrapper_key,
         use_container_width=True,
+        on_click=_nav_to,
+        args=(target_label,),
     )
 
     status_class = {
@@ -39,9 +45,6 @@ def _nav_card(
         """,
         unsafe_allow_html=True,
     )
-    if clicked:
-        st.session_state["_admin_selected_page"] = target_label
-        
 
 
 def render(ctx):
