@@ -3,10 +3,10 @@ import pandas as pd
 import time
 
 from jupr_app.ui.layout import page_shell
-from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.domain.player_merge import merge_player_into
 
 def render(ctx):
+    st.write("BUILD MARKER: rebuild branch player_editor v1")
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
     PICK_KEY = "player_editor_pick"
@@ -17,6 +17,7 @@ def render(ctx):
 
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
+    st.write("SUPABASE URL:", ctx.supabase_url)
 
     df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
 
@@ -27,8 +28,11 @@ def render(ctx):
         with st.form("add_player_form"):
             name = st.text_input("Name")
             rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1)
-            if st.form_submit_button("Add Player"):
-                st.write("DEBUG: Add Player form submitted")
+            submit = st.form_submit_button("Add Player")
+            st.write("Submit value:", submit)
+
+            if submit:
+                st.write("Submit is TRUE")
                 st.write("DEBUG club_id:", club_id)
                 st.write("DEBUG name:", name)
                 name_clean = name.strip()
@@ -50,22 +54,14 @@ def render(ctx):
                     st.session_state[PICK_KEY] = name_clean
                     time.sleep(0.1)
                     st.rerun()
-                try:
-                    ok, err = safe_add_player(
-                        supabase=supabase,
-                        club_id=club_id,
-                        name=name_clean,
-                        rating_jupr=float(rating),
-                    )
-                    st.write("DEBUG safe_add_player returned:", ok, err)
-                except Exception as e:
-                    st.error("safe_add_player crashed")
-                    st.exception(e)
-                    raise
-                if not ok:
-                    st.error(err or "Unable to add player.")
-                    st.stop()
-                st.success("Added.")
+                resp = supabase.table("players").insert({
+                    "club_id": club_id,
+                    "name": "TEST_PLAYER_DIRECT",
+                    "normalized_name": "test_player_direct",
+                    "active": True,
+                }).execute()
+                st.write("DIRECT INSERT RESPONSE:", resp.data)
+                st.success("Direct insert attempted.")
                 st.session_state[PICK_KEY] = name_clean
                 time.sleep(0.2)
                 st.rerun()
