@@ -466,6 +466,9 @@ def main():
         all_labels = list(PAGES.keys())
         visible_labels = all_labels if admin_logged_in else [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         st.session_state["_visible_labels"] = visible_labels
+        # Initialize admin-selected page state (session-based navigation)
+        if "_admin_selected_page" not in st.session_state:
+            st.session_state["_admin_selected_page"] = None
 
         PUBLIC_NAV_KEYS = [
             "leaderboards",
@@ -509,15 +512,21 @@ def main():
         if PUBLIC_MODE:
             sel = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=sel)
         else:
-            sel = render_admin_sidebar_nav(current_label=sel, admin_logged_in=admin_logged_in)
-            if sel not in visible_labels:
-                sel = visible_labels[0]
-            try:
-                page_key = LABEL_TO_PAGE_KEY.get(sel)
-                if page_key and st.query_params.get("page") != page_key:
-                    st.query_params["page"] = page_key
-            except Exception:
-                pass
+            # Session-state-driven admin navigation
+            current = st.session_state.get("_admin_selected_page")
+
+            # Render sidebar using current selection (or first visible as fallback)
+            sel = render_admin_sidebar_nav(
+                current_label=current or visible_labels[0],
+                admin_logged_in=admin_logged_in,
+            )
+
+            # If a different button was clicked, update session state
+            if sel != current:
+                st.session_state["_admin_selected_page"] = sel
+
+            # Final resolved selection
+            sel = st.session_state["_admin_selected_page"] or visible_labels[0]
 
         if PUBLIC_MODE:
             try:
