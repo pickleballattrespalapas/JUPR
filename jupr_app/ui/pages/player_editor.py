@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
+import re
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_merge import merge_player_into
@@ -10,6 +11,11 @@ def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
     PICK_KEY = "player_editor_pick"
+
+    def _normalize_name(raw: str) -> str:
+        cleaned = re.sub(r"[^a-z0-9_]+", "", (raw or "").strip().lower().replace(" ", "_"))
+        cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+        return cleaned
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")
@@ -24,8 +30,8 @@ def render(ctx):
     # -------------------------
     with st.expander("➕ Add New Player", expanded=False):
         with st.form("add_player_form"):
-            name = st.text_input("Name")
-            rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1)
+            name = st.text_input("Name", key="add_player_name")
+            rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1, key="add_player_starting_jupr")
             submit = st.form_submit_button("Add Player")
             st.write("Submit value:", submit)
 
@@ -34,8 +40,12 @@ def render(ctx):
                 st.write("DEBUG club_id:", club_id)
                 st.write("DEBUG name:", name)
                 name_clean = name.strip()
+                normalized_name = _normalize_name(name_clean)
                 if not name_clean:
                     st.error("Name required.")
+                    st.stop()
+                if not normalized_name:
+                    st.error("Name must include at least one letter or number.")
                     st.stop()
                 existing = (
                     supabase.table("players")
@@ -49,19 +59,22 @@ def render(ctx):
                 )
                 if existing:
                     st.info("Player already exists — opening existing record.")
-                    st.session_state[PICK_KEY] = name_clean
-                    time.sleep(0.1)
+                    st.session_state["_force_data_reload"] = True
+                    st.session_state["_player_editor_pending_pick"] = name_clean
                     st.rerun()
-                resp = supabase.table("players").insert({
+                payload = {
                     "club_id": club_id,
-                    "name": "TEST_PLAYER_DIRECT",
-                    "normalized_name": "test_player_direct",
+                    "name": name_clean,
+                    "normalized_name": normalized_name,
                     "active": True,
-                }).execute()
+                    "rating": int(round(float(rating) * 400.0)),
+                }
+                resp = supabase.table("players").insert(payload).execute()
                 st.write("DIRECT INSERT RESPONSE:", resp.data)
                 st.success("Direct insert attempted.")
-                st.session_state[PICK_KEY] = name_clean
-                time.sleep(0.2)
+                st.session_state["_force_data_reload"] = True
+                st.session_state["_player_editor_pending_pick"] = name_clean
+                st.session_state["add_player_name"] = ""
                 st.rerun()
 
     st.divider()
@@ -74,6 +87,12 @@ def render(ctx):
         st.stop()
 
     all_names = sorted(df_players_all["name"].astype(str).tolist())
+    pending = st.session_state.pop("_player_editor_pending_pick", None)
+    if pending:
+        if pending in all_names:
+            st.session_state[PICK_KEY] = pending
+        else:
+            st.session_state["_player_editor_pending_pick"] = pending
     pick = st.selectbox("Select Player", [""] + all_names, index=0, key=PICK_KEY)
 
     if not pick:
