@@ -5,6 +5,10 @@ from typing import Tuple
 
 from postgrest.exceptions import APIError
 
+
+def _normalized_player_name(name: str) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
 def safe_add_player(
     *,
     supabase,
@@ -30,9 +34,12 @@ def safe_add_player(
     except Exception:
         return False, "Invalid rating."
 
+    normalized_name = _normalized_player_name(clean_name)
+
     payload = {
         "club_id": str(club_id),
         "name": clean_name,
+        "normalized_name": normalized_name,
         "active": True,
         "rating": float(elo),
         "starting_rating": float(elo),
@@ -54,7 +61,26 @@ def safe_add_player(
         if resp.data and len(resp.data) > 0 and resp.data[0].get("id"):
             return True, resp.data[0]["id"]
 
+        existing = (
+            supabase
+            .table("players")
+            .select("id")
+            .eq("club_id", str(club_id))
+            .eq("normalized_name", normalized_name)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if existing and existing[0].get("id"):
+            return True, existing[0]["id"]
+
         return False, "Upsert did not return an id"
 
     except APIError as e:
+        if getattr(e, "code", "") == "42P10":
+            return False, (
+                "Schema mismatch: players upsert requires a unique index or constraint on "
+                "(club_id, normalized_name)."
+            )
         return False, str(e)
