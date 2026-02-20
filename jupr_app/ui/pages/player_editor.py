@@ -25,56 +25,51 @@ def render(ctx):
     # Add New Player
     # -------------------------
     with st.expander("➕ Add New Player", expanded=False):
-        with st.form("add_player_form"):
+    
+        with st.form("add_player_form", clear_on_submit=True):
             name = st.text_input("Name")
             rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1)
-            if st.form_submit_button("Add Player"):
-                name_clean = name.strip()
-                if not name_clean:
-                    st.error("Name required.")
-                    st.stop()
-                existing = (
-                    supabase.table("players")
-                    .select("id,name")
-                    .eq("club_id", club_id)
-                    .eq("name", name_clean)
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
-                )
-                if existing:
-                    st.info("Player already exists — opening existing record.")
-                    st.session_state[PICK_KEY] = name_clean
-                    time.sleep(0.1)
-                    st.rerun()
-                payload = {
-                    "club_id": club_id,
-                    "name": name_clean,
-                    "rating": float(rating) * 400.0,
-                    "starting_rating": float(rating) * 400.0,
-                    "wins": 0,
-                    "losses": 0,
-                    "matches_played": 0,
-                    "active": True,
-                    "inactive_at": None,
-                }
-                ok, err = safe_add_player(
-                    supabase=supabase,
-                    club_id=club_id,
-                    name=name_clean,
-                    rating_jupr=float(rating),
-                )
-                if not ok:
-                    st.error(err or "Unable to add player.")
-                    st.stop()
-                st.success("Added.")
+            submit = st.form_submit_button("Add Player")
+    
+        if submit:
+            name_clean = name.strip()
+    
+            if not name_clean:
+                st.error("Name required.")
+                st.stop()
+    
+            existing = (
+                supabase.table("players")
+                .select("id,name")
+                .eq("club_id", club_id)
+                .eq("name", name_clean)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+    
+            if existing:
+                st.info("Player already exists — opening existing record.")
                 st.session_state[PICK_KEY] = name_clean
-                time.sleep(0.2)
                 st.rerun()
-
+    
+            ok, err = safe_add_player(
+                supabase=supabase,
+                club_id=club_id,
+                name=name_clean,
+                rating_jupr=float(rating),
+            )
+    
+            if not ok:
+                st.error(err or "Unable to add player.")
+                st.stop()
+    
+            st.success("Added.")
+            st.session_state[PICK_KEY] = name_clean
+            st.rerun()
+    
     st.divider()
-
     # -------------------------
     # Select Player
     # -------------------------
