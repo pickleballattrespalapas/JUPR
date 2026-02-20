@@ -17,8 +17,6 @@ def render(ctx):
 
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
-    st.write("SUPABASE URL:", ctx.supabase_url)
-
     df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
 
     # -------------------------
