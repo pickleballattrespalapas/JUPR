@@ -15,21 +15,25 @@ LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
 @st.cache_resource
-def get_supabase():
+def get_supabase_service():
     url = os.getenv("SUPABASE_URL")
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-    if os.getenv("SUPABASE_ANON_KEY"):
-        raise RuntimeError("Anon key detected. Writes must use service role only.")
-
     if not url or not service_key:
-        raise RuntimeError("Supabase environment variables missing. Require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.")
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
 
     return create_client(url, service_key)
 
 
-def init_supabase():
-    return get_supabase()
+@st.cache_resource
+def get_supabase_auth():
+    url = os.getenv("SUPABASE_URL")
+    anon_key = os.getenv("SUPABASE_ANON_KEY")
+
+    if not url or not anon_key:
+        raise RuntimeError("Missing SUPABASE_URL or SUPABASE_ANON_KEY")
+
+    return create_client(url, anon_key)
 
 
 def assert_schema_health(supabase):
@@ -42,7 +46,7 @@ def assert_schema_health(supabase):
 def get_data(club_id: str):
     from jupr_app.data.load import load_data
 
-    supabase = get_supabase()
+    supabase = get_supabase_service()
     return load_data(supabase, club_id, match_limit=5000)
 
 
@@ -187,10 +191,11 @@ def main():
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
-        supabase = init_supabase()
-        assert_schema_health(supabase)
+        supabase_service = get_supabase_service()
+        supabase_auth = get_supabase_auth()
+        assert_schema_health(supabase_service)
 
-        session = resolve_auth_session(supabase)
+        session = resolve_auth_session(supabase_auth)
         flow_type = st.query_params.get("type")
         if flow_type == "recovery":
             st.session_state["recovery_mode"] = True
@@ -220,7 +225,7 @@ def main():
 
             if st.button("Login", use_container_width=True):
                 try:
-                    auth_response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    auth_response = supabase_auth.auth.sign_in_with_password({"email": email, "password": password})
                     login_session = getattr(auth_response, "session", None)
                     if login_session:
                         st.session_state["sb_session"] = login_session
@@ -235,7 +240,7 @@ def main():
                     st.error("Email required.")
                 else:
                     try:
-                        supabase.auth.sign_in_with_otp({"email": email})
+                        supabase_auth.auth.sign_in_with_otp({"email": email})
                         st.success("Magic link sent.")
                     except Exception:
                         st.error("Unable to send magic link.")
@@ -244,7 +249,7 @@ def main():
         session = st.session_state.get("sb_session")
         if session:
             try:
-                current_obj = supabase.auth.get_session()
+                current_obj = supabase_auth.auth.get_session()
                 current_session = getattr(current_obj, "session", current_obj)
                 if current_session:
                     st.session_state["sb_session"] = current_session
@@ -262,7 +267,7 @@ def main():
                     st.error("Passwords do not match.")
                 else:
                     try:
-                        supabase.auth.update_user({"password": new_password})
+                        supabase_auth.auth.update_user({"password": new_password})
                         st.success("Password updated successfully.")
                         st.session_state.pop("recovery_mode", None)
                     except Exception:
@@ -289,7 +294,7 @@ def main():
 
         if admin_logged_in and st.sidebar.button("Log Out", key="logout_btn"):
             try:
-                supabase.auth.sign_out()
+                supabase_auth.auth.sign_out()
             except Exception:
                 pass
             st.session_state.clear()
@@ -318,7 +323,7 @@ def main():
         ) = get_data(club_id)
 
         ctx = AppContext(
-            supabase=supabase,
+            supabase=supabase_service,
             club_id=club_id,
             df_players_all=df_players_all,
             df_players_active=df_players_active,
@@ -345,7 +350,7 @@ def main():
             if df_players_all is not None and not df_players_all.empty and "id" in df_players_all.columns:
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
             enqueue_badge_eval(
-                supabase,
+                supabase_service,
                 club_id=club_id,
                 event_type="match_recorded",
                 player_ids=player_ids,
