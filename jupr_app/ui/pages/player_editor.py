@@ -16,20 +16,16 @@ st.write("Submit value:", submit)
 if submit:
     st.success("FORM WORKS")
 def render(ctx):
-    mode_label = "Public" if bool(ctx.public_mode) else "Admin"
-    page_shell("👥 Player Editor", "Edit player records and league ratings.", mode_label=mode_label)
-    PICK_KEY = "player_editor_pick"
+    import streamlit as st
+    st.write("STATIC PAGE")
 
-    if not bool(getattr(ctx, "admin_logged_in", False)):
-        st.error("Admin login required.")
-        st.stop()
+    with st.form("static_form"):
+        submit = st.form_submit_button("Click Me")
 
-    supabase = ctx.supabase
-    club_id = str(ctx.club_id)
+    st.write("Submit:", submit)
 
-    df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
-    df_meta = getattr(ctx, "df_meta", pd.DataFrame())
-
+    if submit:
+        st.success("IT WORKS")
     # -------------------------
     # Add New Player
     # -------------------------
