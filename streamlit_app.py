@@ -278,13 +278,30 @@ def main():
         PUBLIC_MODE = st.session_state["entry_mode"] == "public"
         admin_logged_in = bool(st.session_state.get("sb_session"))
 
-        if admin_logged_in and st.sidebar.button("Log Out"):
+        def _clear_app_caches():
+            get_data.clear()
+            try:
+                from jupr_app.domain.gamification.requirements import clear_requirements_cache
+
+                clear_requirements_cache()
+            except Exception:
+                pass
+
+        if admin_logged_in and st.sidebar.button("Log Out", key="logout_btn"):
             try:
                 supabase.auth.sign_out()
             except Exception:
                 pass
             st.session_state.clear()
             st.stop()
+
+        if st.session_state.pop("_force_data_reload", False):
+            _clear_app_caches()
+
+        if (not PUBLIC_MODE) and admin_logged_in:
+            if st.sidebar.button("🔄 Refresh data", key="refresh_data_btn"):
+                _clear_app_caches()
+                st.rerun()
 
         (
             df_players_all,
@@ -492,21 +509,21 @@ def main():
         if PUBLIC_MODE:
             sel = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=sel)
         else:
-            if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
-                get_data.clear()
-                try:
-                    from jupr_app.domain.gamification.requirements import clear_requirements_cache
-
-                    clear_requirements_cache()
-                except Exception:
-                    pass
             sel = render_admin_sidebar_nav(current_label=sel, admin_logged_in=admin_logged_in)
             if sel not in visible_labels:
                 sel = visible_labels[0]
+            try:
+                page_key = LABEL_TO_PAGE_KEY.get(sel)
+                if page_key and st.query_params.get("page") != page_key:
+                    st.query_params["page"] = page_key
+            except Exception:
+                pass
 
         if PUBLIC_MODE:
             try:
-                st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
+                page_key = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
+                if st.query_params.get("page") != page_key:
+                    st.query_params["page"] = page_key
             except Exception:
                 pass
 
