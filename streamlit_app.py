@@ -111,10 +111,15 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
 
 
 def resolve_auth_session(supabase):
-    params = st.query_params
+    try:
+        session_obj = supabase.auth.get_session()
+        session = getattr(session_obj, "session", session_obj)
+        if session:
+            return session
+    except Exception:
+        pass
 
-    if "sb_session" in st.session_state:
-        return st.session_state["sb_session"]
+    params = st.query_params
 
     access_token = params.get("access_token")
     refresh_token = params.get("refresh_token")
@@ -130,7 +135,6 @@ def resolve_auth_session(supabase):
             session_obj = supabase.auth.get_session()
             session = getattr(session_obj, "session", session_obj)
             if session:
-                st.session_state["sb_session"] = session
                 st.query_params.clear()
                 return session
         except Exception:
@@ -222,9 +226,25 @@ def main():
         supabase_auth = get_supabase_auth()
         assert_schema_health(supabase_service)
 
+        # Attempt token rehydration before resolving session
+        if (
+            "sb_access_token" in st.session_state
+            and "sb_refresh_token" in st.session_state
+        ):
+            try:
+                supabase_auth.auth.set_session(
+                    {
+                        "access_token": st.session_state["sb_access_token"],
+                        "refresh_token": st.session_state["sb_refresh_token"],
+                    }
+                )
+            except Exception:
+                # If token invalid or expired, clear them
+                st.session_state.pop("sb_access_token", None)
+                st.session_state.pop("sb_refresh_token", None)
+
         session = resolve_auth_session(supabase_auth)
         st.write("DEBUG — resolve_auth_session:", bool(session))
-        st.write("DEBUG — session_state sb_session:", bool(st.session_state.get("sb_session")))    
         if session is not None:
             st.session_state["auth"]["mode"] = "user"
             st.session_state["auth"]["supabase_session"] = session
@@ -260,15 +280,21 @@ def main():
 
             if submitted:
                 try:
-                    session = supabase_auth.auth.sign_in_with_password(
+                    auth_response = supabase_auth.auth.sign_in_with_password(
                         {
                             "email": email.strip(),
                             "password": password,
                         }
                     )
+                    session_obj = getattr(auth_response, "session", auth_response)
+
+                    # Persist raw tokens
+                    st.session_state["sb_access_token"] = session_obj.access_token
+                    st.session_state["sb_refresh_token"] = session_obj.refresh_token
+
+                    # Update layered auth state
                     st.session_state["auth"]["mode"] = "user"
-                    st.session_state["auth"]["supabase_session"] = session
-                    st.session_state["sb_session"] = getattr(session, "session", session)
+                    st.session_state["auth"]["supabase_session"] = session_obj
                     st.session_state["entry_mode"] = "auth"
                 except Exception as e:
                     st.error(f"Login exception: {e}")
@@ -284,13 +310,12 @@ def main():
                         st.error("Unable to send magic link.")
             return
 
-        session = st.session_state.get("sb_session")
+        session = st.session_state["auth"].get("supabase_session")
         if session:
             try:
                 current_obj = supabase_auth.auth.get_session()
                 current_session = getattr(current_obj, "session", current_obj)
                 if current_session:
-                    st.session_state["sb_session"] = current_session
                     st.session_state["auth"]["supabase_session"] = current_session
                     session = current_session
             except Exception:
@@ -346,7 +371,8 @@ def main():
                 "supabase_session": None,
                 "admin_override": False,
             }
-            st.session_state.pop("sb_session", None)
+            st.session_state.pop("sb_access_token", None)
+            st.session_state.pop("sb_refresh_token", None)
             st.session_state["entry_mode"] = "gateway"
 
         if st.session_state["auth"]["mode"] != "public":
