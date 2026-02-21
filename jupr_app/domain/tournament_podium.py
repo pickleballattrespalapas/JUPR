@@ -35,14 +35,18 @@ def fetch_tournament_podium(supabase: Any, tournament_id: str) -> list[dict[str,
 
 def upsert_tournament_podium(
     supabase: Any,
+    club_id: str,
     tournament_id: str,
     payload: list[dict[str, Any]],
 ) -> None:
     if supabase is None or not tournament_id or not payload:
         return
+    assert club_id, "club_id must be present for tournament writes"
     for row in payload:
         if "club_id" not in row:
-            raise RuntimeError("Missing club_id in tournament write payload.")
+            # Explicit club_id for tenant isolation (RLS + multi-club safety)
+            row["club_id"] = str(club_id)
+
     try:
         sb_upsert(
             supabase,
