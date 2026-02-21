@@ -34,6 +34,13 @@ TOURNAMENT_CHARTS = [
 ]
 
 
+def _require_club_id_payload(payload):
+    rows = payload if isinstance(payload, list) else [payload]
+    for row in rows:
+        if "club_id" not in row:
+            raise RuntimeError("Missing club_id in tournament write payload.")
+
+
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🏆 Tournaments", "Admin-only tournament manager.", mode_label=mode_label)
@@ -237,6 +244,7 @@ def render(ctx):
             for _, row in editor_df.iterrows():
                 payload.append(
                     {
+                        "club_id": str(club_id),
                         "tournament_id": tournament_id,
                         "team_number": int(row.get("Team")),
                         "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
@@ -244,7 +252,9 @@ def render(ctx):
                     }
                 )
 
-            sb_upsert(supabase, "tournament_teams", payload, conflict="tournament_id,team_number")
+            _require_club_id_payload(payload)
+
+            sb_upsert(supabase, "tournament_teams", payload, conflict="club_id,tournament_id,team_number")
             st.success("Teams saved.")
             st.session_state["force_data_refresh"] = True
 
@@ -259,6 +269,9 @@ def render(ctx):
         if st.button("Generate RR Schedule", disabled=bool(rr_games) or not ready_teams or is_complete):
             team_ids = {int(num): t["id"] for num, t in teams_by_number.items()}
             games_payload = build_round_robin_games(tournament_id=tournament_id, team_ids_by_number=team_ids)
+            for game in games_payload:
+                game["club_id"] = str(club_id)
+            _require_club_id_payload(games_payload)
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
@@ -384,6 +397,10 @@ def render(ctx):
                             best_of=int(tournament.get("playoff_best_of", 1)),
                         )
 
+                        for game in games_payload:
+                            game["club_id"] = str(club_id)
+                        _require_club_id_payload(games_payload)
+
                         supabase.table("tournament_games").insert(games_payload).execute()
 
                         st.success("Playoff bracket regenerated.")
@@ -404,6 +421,9 @@ def render(ctx):
                 standings=standings,
                 best_of=int(tournament.get("playoff_best_of", 1)),
             )
+            for game in games_payload:
+                game["club_id"] = str(club_id)
+            _require_club_id_payload(games_payload)
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(
                 supabase,
@@ -601,7 +621,10 @@ def _render_podium_review(
             return
         try:
             payload = build_podium_payload(tournament_id, placements, source)
-        except ValueError as exc:
+            for row in payload:
+                row["club_id"] = str(ctx.club_id)
+            _require_club_id_payload(payload)
+        except (ValueError, RuntimeError) as exc:
             st.error(str(exc))
             return
         if not payload:

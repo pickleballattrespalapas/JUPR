@@ -40,12 +40,15 @@ def upsert_tournament_podium(
 ) -> None:
     if supabase is None or not tournament_id or not payload:
         return
+    for row in payload:
+        if "club_id" not in row:
+            raise RuntimeError("Missing club_id in tournament write payload.")
     try:
         sb_upsert(
             supabase,
             "tournament_podium",
             payload,
-            conflict="tournament_id,placement",
+            conflict="club_id,tournament_id,placement",
         )
     except Exception:
         logger.exception("Failed to upsert tournament podium", extra={"tournament_id": tournament_id})
