@@ -11,7 +11,7 @@ CREATE TABLE badge_eval_queue (
   club_id text NULL,
   context_id text NULL,
   event_type text NULL,
-  player_ids ARRAY NULL,
+  player_ids bigint[] NULL,
   match_id text NULL,
   payload_json jsonb NULL,
   status text NULL,
