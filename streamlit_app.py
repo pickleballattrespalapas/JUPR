@@ -354,8 +354,13 @@ def main():
         st.session_state["admin_logged_in"] = admin_logged_in
 
         def elevate_admin():
-            expected = str(get_secret(["supabase", "admin_password"], "") or "")
-            pwd = st.session_state.get("admin_pwd", "")
+            expected = os.getenv("ADMIN_PASSWORD", "").strip()
+            pwd = str(st.session_state.get("admin_pwd", "")).strip()
+        
+            if not expected:
+                st.error("Admin password not configured.")
+                return
+        
             if pwd == expected:
                 st.session_state["auth"]["admin_override"] = True
             else:
