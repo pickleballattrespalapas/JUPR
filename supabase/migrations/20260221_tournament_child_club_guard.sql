@@ -1,3 +1,13 @@
+begin;
+
+drop trigger if exists trg_teams_club_guard on public.tournament_teams;
+drop trigger if exists trg_games_club_guard on public.tournament_games;
+drop trigger if exists trg_podium_club_guard on public.tournament_podium;
+
+drop function if exists public.tournament_child_enforce_club();
+
+
+
 create or replace function public.tournament_child_enforce_club()
 returns trigger
 language plpgsql
@@ -32,3 +42,7 @@ for each row execute function public.tournament_child_enforce_club();
 create trigger trg_podium_club_guard
 before insert or update on public.tournament_podium
 for each row execute function public.tournament_child_enforce_club();
+
+-- recreate function + triggers here
+
+commit;
