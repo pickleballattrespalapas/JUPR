@@ -34,6 +34,14 @@ TOURNAMENT_CHARTS = [
 ]
 
 
+def _require_club_id_payload(payload):
+    # NOTE: non-functional touch to retrigger CI checks.
+    rows = payload if isinstance(payload, list) else [payload]
+    for row in rows:
+        if "club_id" not in row:
+            raise RuntimeError("Missing club_id in tournament write payload.")
+
+
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🏆 Tournaments", "Admin-only tournament manager.", mode_label=mode_label)
@@ -215,6 +223,7 @@ def render(ctx):
         )
 
         if st.button("Save Teams", disabled=is_complete):
+            assert club_id, "club_id must be present for tournament writes"
             selected_ids = []
             for _, row in editor_df.iterrows():
                 p1 = row.get("Player 1")
@@ -237,6 +246,8 @@ def render(ctx):
             for _, row in editor_df.iterrows():
                 payload.append(
                     {
+                        # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                        "club_id": str(club_id),
                         "tournament_id": tournament_id,
                         "team_number": int(row.get("Team")),
                         "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
@@ -244,7 +255,9 @@ def render(ctx):
                     }
                 )
 
-            sb_upsert(supabase, "tournament_teams", payload, conflict="tournament_id,team_number")
+            _require_club_id_payload(payload)
+
+            sb_upsert(supabase, "tournament_teams", payload, conflict="club_id,tournament_id,team_number")
             st.success("Teams saved.")
             st.session_state["force_data_refresh"] = True
 
@@ -257,8 +270,13 @@ def render(ctx):
             st.warning("Assign exactly two players to every team to enable schedule generation.")
 
         if st.button("Generate RR Schedule", disabled=bool(rr_games) or not ready_teams or is_complete):
+            assert club_id, "club_id must be present for tournament writes"
             team_ids = {int(num): t["id"] for num, t in teams_by_number.items()}
             games_payload = build_round_robin_games(tournament_id=tournament_id, team_ids_by_number=team_ids)
+            for game in games_payload:
+                # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                game["club_id"] = str(club_id)
+            _require_club_id_payload(games_payload)
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
@@ -370,6 +388,7 @@ def render(ctx):
                     st.warning("Playoff scores have already been entered. Bracket cannot be regenerated.")
                 else:
                     if st.button("Regenerate Playoff Bracket", type="secondary"):
+                        assert club_id, "club_id must be present for tournament writes"
                         supabase.table("tournament_games").delete().eq("club_id", str(club_id)).eq("tournament_id", tournament_id).eq("stage", "PLAYOFF").execute()
 
                         standings = compute_round_robin_standings(
@@ -384,6 +403,11 @@ def render(ctx):
                             best_of=int(tournament.get("playoff_best_of", 1)),
                         )
 
+                        for game in games_payload:
+                            # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                            game["club_id"] = str(club_id)
+                        _require_club_id_payload(games_payload)
+
                         supabase.table("tournament_games").insert(games_payload).execute()
 
                         st.success("Playoff bracket regenerated.")
@@ -392,6 +416,7 @@ def render(ctx):
         if not playoff_games:
             st.info("No playoff bracket generated yet.")
         if st.button("Generate Playoff Bracket", disabled=bool(playoff_games) or is_complete):
+            assert club_id, "club_id must be present for tournament writes"
             standings = compute_round_robin_standings(list(teams_by_id.values()), rr_games)
             if len(standings) < int(selected_advance):
                 st.error("Not enough seeded teams to generate the bracket.")
@@ -404,6 +429,10 @@ def render(ctx):
                 standings=standings,
                 best_of=int(tournament.get("playoff_best_of", 1)),
             )
+            for game in games_payload:
+                # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                game["club_id"] = str(club_id)
+            _require_club_id_payload(games_payload)
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(
                 supabase,
@@ -593,6 +622,7 @@ def _render_podium_review(
                 placements.append({"placement": placement, "team_id": selection})
 
     if st.button("Finalize Tournament", type="primary", disabled=max_places == 0):
+        assert ctx.club_id, "club_id must be present for tournament writes"
         if max_places == 0:
             st.error("No teams available for podium placement.")
             return
@@ -601,14 +631,18 @@ def _render_podium_review(
             return
         try:
             payload = build_podium_payload(tournament_id, placements, source)
-        except ValueError as exc:
+            for row in payload:
+                # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                row["club_id"] = str(ctx.club_id)
+            _require_club_id_payload(payload)
+        except (ValueError, RuntimeError) as exc:
             st.error(str(exc))
             return
         if not payload:
             st.error("Podium placements are required to complete the tournament.")
             return
 
-        upsert_tournament_podium(ctx.supabase, tournament_id, payload)
+        upsert_tournament_podium(ctx.supabase, str(ctx.club_id), tournament_id, payload)
         award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
         ctx.supabase.table("tournaments") \
             .update({"status": "COMPLETE"}) \
