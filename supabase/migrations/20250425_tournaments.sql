@@ -1,13 +1,23 @@
 -- Tournament tables and match context columns
 
-ALTER TABLE public.matches
-  ADD COLUMN IF NOT EXISTS context_type text NULL,
-  ADD COLUMN IF NOT EXISTS context_id uuid NULL,
-  ADD COLUMN IF NOT EXISTS tournament_id uuid NULL,
-  ADD COLUMN IF NOT EXISTS tournament_game_id uuid NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'matches'
+  ) THEN
+    ALTER TABLE public.matches
+      ADD COLUMN IF NOT EXISTS context_type text NULL,
+      ADD COLUMN IF NOT EXISTS context_id uuid NULL,
+      ADD COLUMN IF NOT EXISTS tournament_id uuid NULL,
+      ADD COLUMN IF NOT EXISTS tournament_game_id uuid NULL;
 
-CREATE INDEX IF NOT EXISTS idx_matches_tournament_id ON public.matches (tournament_id);
-CREATE INDEX IF NOT EXISTS idx_matches_context_type ON public.matches (context_type);
+    CREATE INDEX IF NOT EXISTS idx_matches_tournament_id ON public.matches (tournament_id);
+    CREATE INDEX IF NOT EXISTS idx_matches_context_type ON public.matches (context_type);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.tournaments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
