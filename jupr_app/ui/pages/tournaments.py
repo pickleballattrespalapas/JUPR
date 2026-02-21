@@ -35,6 +35,7 @@ TOURNAMENT_CHARTS = [
 
 
 def _require_club_id_payload(payload):
+    # NOTE: non-functional touch to retrigger CI checks.
     rows = payload if isinstance(payload, list) else [payload]
     for row in rows:
         if "club_id" not in row:
