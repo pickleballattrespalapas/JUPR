@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import traceback
 import re
+from typing import Any
 
 import jwt
 from supabase import create_client
@@ -146,6 +147,16 @@ def resolve_entry_mode(session):
     return "gateway"
 
 
+def get_secret(path: list[str], default: Any = None):
+    current: Any = st.secrets
+    try:
+        for key in path:
+            current = current[key]
+        return current
+    except Exception:
+        return default
+
+
 def _init_session():
     defaults = {
         "_nav_target": "home",
@@ -189,6 +200,12 @@ def main():
 
         _init_session()
         st.session_state.setdefault("entry_mode", None)
+        if "auth" not in st.session_state:
+            st.session_state["auth"] = {
+                "mode": "public",
+                "supabase_session": None,
+                "admin_override": False,
+            }
 
         st.set_page_config(
             page_title="JUPR Leagues",
@@ -206,6 +223,9 @@ def main():
         assert_schema_health(supabase_service)
 
         session = resolve_auth_session(supabase_auth)
+        if session is not None:
+            st.session_state["auth"]["mode"] = "user"
+            st.session_state["auth"]["supabase_session"] = session
         flow_type = st.query_params.get("type")
         if flow_type == "recovery":
             st.session_state["recovery_mode"] = True
@@ -226,22 +246,28 @@ def main():
             with col2:
                 if st.button("🌎 Public Pages", use_container_width=True):
                     st.session_state["entry_mode"] = "public"
+                    st.session_state["auth"]["mode"] = "public"
             return
 
         if entry_mode == "login" and not session:
             st.markdown("## Login")
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
+            with st.form("login_form"):
+                email = st.text_input("Email", key="sb_email")
+                password = st.text_input("Password", type="password", key="sb_password")
+                submitted = st.form_submit_button("Login")
 
-            if st.button("Login", use_container_width=True):
+            if submitted:
                 try:
-                    auth_response = supabase_auth.auth.sign_in_with_password({"email": email, "password": password})
-                    login_session = getattr(auth_response, "session", None)
-                    if login_session:
-                        st.session_state["sb_session"] = login_session
-                        st.session_state["entry_mode"] = "auth"
-                    else:
-                        st.error("Login failed — no session returned.")
+                    session = supabase_auth.auth.sign_in_with_password(
+                        {
+                            "email": email.strip(),
+                            "password": password,
+                        }
+                    )
+                    st.session_state["auth"]["mode"] = "user"
+                    st.session_state["auth"]["supabase_session"] = session
+                    st.session_state["sb_session"] = getattr(session, "session", session)
+                    st.session_state["entry_mode"] = "auth"
                 except Exception as e:
                     st.error(f"Login exception: {e}")
 
@@ -263,6 +289,7 @@ def main():
                 current_session = getattr(current_obj, "session", current_obj)
                 if current_session:
                     st.session_state["sb_session"] = current_session
+                    st.session_state["auth"]["supabase_session"] = current_session
                     session = current_session
             except Exception:
                 pass
@@ -290,8 +317,40 @@ def main():
             st.error("Invalid authentication token.")
             st.stop()
 
-        PUBLIC_MODE = st.session_state["entry_mode"] == "public"
-        admin_logged_in = bool(st.session_state.get("sb_session"))
+        auth = st.session_state["auth"]
+        PUBLIC_MODE = auth["mode"] == "public"
+        admin_logged_in = (
+            auth["mode"] == "user"
+            and auth["supabase_session"] is not None
+            and auth["admin_override"]
+        )
+        st.session_state["admin_logged_in"] = admin_logged_in
+
+        def elevate_admin():
+            expected = str(get_secret(["supabase", "admin_password"], "") or "")
+            pwd = st.session_state.get("admin_pwd", "")
+            if pwd == expected:
+                st.session_state["auth"]["admin_override"] = True
+            else:
+                st.error("Incorrect admin password.")
+
+        def logout():
+            try:
+                supabase_auth.auth.sign_out()
+            except Exception:
+                pass
+            st.session_state["auth"] = {
+                "mode": "public",
+                "supabase_session": None,
+                "admin_override": False,
+            }
+            st.session_state.pop("sb_session", None)
+            st.session_state["entry_mode"] = "gateway"
+
+        if st.session_state["auth"]["mode"] != "public":
+            with st.sidebar.expander("🔒 Admin Access"):
+                st.text_input("Admin Password", type="password", key="admin_pwd")
+                st.button("Elevate", on_click=elevate_admin)
 
         def _clear_app_caches():
             get_data.clear()
@@ -302,15 +361,7 @@ def main():
             except Exception:
                 pass
 
-        if admin_logged_in and st.sidebar.button("Log Out", key="logout_btn"):
-            try:
-                supabase_auth.auth.sign_out()
-            except Exception:
-                pass
-            st.session_state.pop("sb_session", None)
-            st.session_state["entry_mode"] = "gateway"
-            st.session_state["_nav_pending"] = "gateway"
-            return
+        st.sidebar.button("Logout", on_click=logout)
 
         if st.session_state.pop("_force_data_reload", False) or st.session_state.pop("force_data_refresh", False):
             _clear_app_caches()
@@ -546,10 +597,18 @@ def main():
 
         _process_pending_nav()
 
+        if st.session_state.get("_nav_target") == "login":
+            st.session_state["entry_mode"] = "login"
+            return
+
         current_page = st.session_state["_nav_target"]
         if current_page not in visible_labels:
             current_page = visible_labels[0]
             st.session_state["_nav_target"] = current_page
+
+        if current_page in ADMIN_ONLY_LABELS and not admin_logged_in:
+            st.session_state["_nav_pending"] = "login"
+            return
 
         if PUBLIC_MODE:
             selected = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=current_page)
