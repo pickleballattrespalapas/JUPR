@@ -34,6 +34,20 @@ TOURNAMENT_CHARTS = [
 ]
 
 
+def _ensure_tournament_write_payload_has_club_id(payload: dict | list[dict], club_id: str) -> dict | list[dict]:
+    if isinstance(payload, list):
+        for row in payload:
+            row["club_id"] = str(club_id)
+            if "club_id" not in row or not row.get("club_id"):
+                raise RuntimeError("Missing club_id in tournament write payload.")
+        return payload
+
+    payload["club_id"] = str(club_id)
+    if "club_id" not in payload or not payload.get("club_id"):
+        raise RuntimeError("Missing club_id in tournament write payload.")
+    return payload
+
+
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🏆 Tournaments", "Admin-only tournament manager.", mode_label=mode_label)
@@ -236,15 +250,18 @@ def render(ctx):
             payload = []
             for _, row in editor_df.iterrows():
                 payload.append(
-                    {
-                        "tournament_id": tournament_id,
-                        "team_number": int(row.get("Team")),
-                        "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
-                        "player2_id": name_to_id.get(row.get("Player 2")) if row.get("Player 2") else None,
-                    }
+                    _ensure_tournament_write_payload_has_club_id(
+                        {
+                            "tournament_id": tournament_id,
+                            "team_number": int(row.get("Team")),
+                            "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
+                            "player2_id": name_to_id.get(row.get("Player 2")) if row.get("Player 2") else None,
+                        },
+                        str(club_id),
+                    )
                 )
 
-            sb_upsert(supabase, "tournament_teams", payload, conflict="tournament_id,team_number")
+            sb_upsert(supabase, "tournament_teams", payload, conflict="club_id,tournament_id,team_number")
             st.success("Teams saved.")
             st.session_state["force_data_refresh"] = True
 
@@ -259,6 +276,7 @@ def render(ctx):
         if st.button("Generate RR Schedule", disabled=bool(rr_games) or not ready_teams or is_complete):
             team_ids = {int(num): t["id"] for num, t in teams_by_number.items()}
             games_payload = build_round_robin_games(tournament_id=tournament_id, team_ids_by_number=team_ids)
+            games_payload = _ensure_tournament_write_payload_has_club_id(games_payload, str(club_id))
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
@@ -383,6 +401,7 @@ def render(ctx):
                             standings=standings,
                             best_of=int(tournament.get("playoff_best_of", 1)),
                         )
+                        games_payload = _ensure_tournament_write_payload_has_club_id(games_payload, str(club_id))
 
                         supabase.table("tournament_games").insert(games_payload).execute()
 
@@ -404,6 +423,7 @@ def render(ctx):
                 standings=standings,
                 best_of=int(tournament.get("playoff_best_of", 1)),
             )
+            games_payload = _ensure_tournament_write_payload_has_club_id(games_payload, str(club_id))
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(
                 supabase,
@@ -608,7 +628,7 @@ def _render_podium_review(
             st.error("Podium placements are required to complete the tournament.")
             return
 
-        upsert_tournament_podium(ctx.supabase, tournament_id, payload)
+        upsert_tournament_podium(ctx.supabase, str(ctx.club_id), tournament_id, payload)
         award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
         ctx.supabase.table("tournaments") \
             .update({"status": "COMPLETE"}) \

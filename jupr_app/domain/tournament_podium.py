@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jupr_app.data.sb_write import sb_upsert
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+
+if TYPE_CHECKING:
+    from jupr_app.domain.gamification.badge_types import BadgeCandidate
 
 
 logger = logging.getLogger(__name__)
@@ -35,25 +37,28 @@ def fetch_tournament_podium(supabase: Any, tournament_id: str) -> list[dict[str,
 
 def upsert_tournament_podium(
     supabase: Any,
+    club_id: str,
     tournament_id: str,
     payload: list[dict[str, Any]],
 ) -> None:
-    if supabase is None or not tournament_id or not payload:
+    if supabase is None or not club_id or not tournament_id or not payload:
         return
-    try:
-        sb_upsert(
-            supabase,
-            "tournament_podium",
-            payload,
-            conflict="tournament_id,placement",
-        )
-    except Exception:
-        logger.exception("Failed to upsert tournament podium", extra={"tournament_id": tournament_id})
+    for row in payload:
+        row["club_id"] = str(club_id)
+        if "club_id" not in row or not row.get("club_id"):
+            raise RuntimeError("Missing club_id in tournament write payload.")
+
+    sb_upsert(
+        supabase,
+        "tournament_podium",
+        payload,
+        conflict="club_id,tournament_id,placement",
+    )
 
 
 def build_tournament_podium_candidates(
     ctx: Any, tournament_id: str, tournament_name: str | None
-) -> list[BadgeCandidate]:
+) -> list["BadgeCandidate"]:
     supabase = getattr(ctx, "supabase", None)
     club_id = str(getattr(ctx, "club_id", "") or "")
     if supabase is None or not club_id or not tournament_id:
@@ -80,6 +85,8 @@ def build_tournament_podium_candidates(
         return []
 
     teams_by_id = {t["id"]: t for t in teams}
+    from jupr_app.domain.gamification.badge_types import BadgeCandidate
+
     candidates: list[BadgeCandidate] = []
     for row in podium_rows:
         placement = int(row.get("placement", 0) or 0)
@@ -115,7 +122,7 @@ def build_tournament_podium_candidates(
     return candidates
 
 
-def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
+def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None) -> list["BadgeCandidate"]:
     from jupr_app.domain.gamification.ensure_badges import ensure_badges
 
     return ensure_badges(
