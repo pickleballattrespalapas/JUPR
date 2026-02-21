@@ -307,16 +307,19 @@ def main():
                 supabase_auth.auth.sign_out()
             except Exception:
                 pass
-            st.session_state.clear()
-            st.rerun()
+            st.session_state.pop("sb_session", None)
+            st.session_state["entry_mode"] = "gateway"
+            st.session_state["_nav_pending"] = "gateway"
+            return
 
-        if st.session_state.pop("_force_data_reload", False):
+        if st.session_state.pop("_force_data_reload", False) or st.session_state.pop("force_data_refresh", False):
             _clear_app_caches()
 
         if (not PUBLIC_MODE) and admin_logged_in:
             if st.sidebar.button("🔄 Refresh data", key="refresh_data_btn"):
                 _clear_app_caches()
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
+                return
 
         (
             df_players_all,
@@ -349,6 +352,20 @@ def main():
             schema_degraded=schema_degraded,
             schema_degraded_reason=schema_degraded_reason,
         )
+
+        event = st.session_state.get("_ui_event")
+        if event:
+            if event.get("type") == "replay":
+                from jupr_app.domain.replay_history import replay_history
+
+                replay_history(
+                    supabase=ctx.supabase,
+                    club_id=str(ctx.club_id),
+                    df_meta=ctx.df_meta,
+                    target_reset=event.get("target"),
+                )
+                st.session_state["force_data_refresh"] = True
+            st.session_state["_ui_event"] = None
 
         if admin_logged_in and schema_degraded:
             st.warning(f"Schema preflight degraded mode enabled. {schema_degraded_reason}")

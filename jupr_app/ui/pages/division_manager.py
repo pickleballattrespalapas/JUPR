@@ -345,7 +345,7 @@ def render(ctx):
             try:
                 _insert_entry(supabase, club_id, division_id, selected_team_id, clean_seed)
                 st.success("Team added.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:
                 st.error(f"Could not add team: {exc}")
 
@@ -396,7 +396,7 @@ def render(ctx):
                 _update_entry_seed(supabase, club_id, entry_id, clean_seed)
 
             st.success("Division entries updated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
         except Exception as exc:
             st.error(f"Could not save entry changes: {exc}")
 
@@ -489,6 +489,6 @@ def render(ctx):
                         score_t2=int(score_t2),
                     )
                     st.success("Division match recorded and submitted through canonical match pipeline.")
-                    st.rerun()
+                    st.session_state["force_data_refresh"] = True
                 except Exception as exc:
                     st.error(f"Could not record division result: {exc}")

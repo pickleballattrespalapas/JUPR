@@ -184,7 +184,7 @@ def render(ctx):
             ):
                 st.query_params["division_id"] = row_division_id
                 st.query_params["route"] = f"tournament/{tournament_id}/division/{row_division_id}"
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
     selected_division = divisions_by_id.get(division_id)
     if not selected_division:

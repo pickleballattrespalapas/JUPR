@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import time
 import re
 
 from jupr_app.ui.layout import page_shell
@@ -75,6 +74,7 @@ def render(ctx):
                 get_data.clear()
                 st.session_state["_player_editor_pending_pick"] = name_clean
                 st.session_state["_reset_add_player_form"] = True
+                st.session_state["force_data_refresh"] = True
 
     st.divider()
 
@@ -209,6 +209,6 @@ def render(ctx):
         if result.get("success"):
             st.success("Merge completed. Replay was suggested for downstream recalculation.")
             get_data.clear()
+            st.session_state["force_data_refresh"] = True
         else:
             st.error(result.get("error") or "Merge failed.")
-        time.sleep(0.4)

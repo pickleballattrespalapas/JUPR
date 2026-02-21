@@ -113,7 +113,7 @@ def _render_confirm_submit_button(button_key: str, disabled: bool) -> bool:
         return True
     if st.button("Confirm & Submit", type="primary", disabled=disabled, key=button_key):
         st.session_state[loading_key] = True
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
     return False
 
 
@@ -145,7 +145,7 @@ def _render_undo_banner() -> None:
             st.session_state.pop("record_match_last_submit", None)
             st.session_state.pop("record_match_undo_state", None)
             st.info("Submission feedback cleared.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
 
 def _step_1_competition_type(_tokens: dict[str, str]) -> None:
@@ -167,7 +167,7 @@ def _step_1_competition_type(_tokens: dict[str, str]) -> None:
     with controls[0]:
         if st.button("Next →", type="primary"):
             st.session_state[WIZARD_STEP_KEY] = 2
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
 
 def _clean_divisions(meta_row: dict[str, Any] | None) -> list[str]:
@@ -527,7 +527,7 @@ def _step_2_bulk_match_entry(ctx, _tokens: dict[str, str]) -> None:
     with controls[0]:
         if st.button("← Back", key="rm_step2_back_bulk"):
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         confirm = _render_confirm_submit_button("rm_bulk_submit", disabled=not can_submit)
 
@@ -595,7 +595,7 @@ def _step_2_bulk_match_entry(ctx, _tokens: dict[str, str]) -> None:
             undo_label="bulk submission",
         )
         _clear_confirm_loading("rm_bulk_submit")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     last_submit = st.session_state.get("record_match_last_submit")
     summary = (last_submit or {}).get("bulk_summary") if isinstance(last_submit, dict) else None
@@ -624,7 +624,7 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
         with controls[0]:
             if st.button("← Back", key="rm_step2_back_no_league"):
                 st.session_state[WIZARD_STEP_KEY] = 1
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
         return
 
     selected_league = st.selectbox("Select League", leagues, key="record_match_ll_league")
@@ -728,7 +728,7 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
         if st.button("← Back", key="rm_step2_back"):
             _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         if _render_confirm_submit_button("rm_ll_submit", disabled=not can_submit):
             club_id = str(getattr(ctx, "club_id", "")).strip()
@@ -781,7 +781,7 @@ def _step_2_ladder_league(ctx, tokens: dict[str, str]) -> None:
                 )
                 _clear_pending_submission()
                 _clear_confirm_loading("rm_ll_submit")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:
                 _clear_confirm_loading("rm_ll_submit")
                 st.error(f"Submit failed: {exc}")
@@ -813,7 +813,7 @@ def _step_2_placeholder(_tokens: dict[str, str]) -> None:
     with controls[0]:
         if st.button("← Back"):
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         st.button("Submit (coming soon)", type="primary", disabled=True)
 
@@ -851,7 +851,7 @@ def _step_2_challenge_ladder(ctx, _tokens: dict[str, str]) -> None:
         with controls[0]:
             if st.button("← Back", key="rm_step2_back_challenge_empty"):
                 st.session_state[WIZARD_STEP_KEY] = 1
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
         return
 
     id_to_name = getattr(ctx, "id_to_name", None) or {}
@@ -949,7 +949,7 @@ def _step_2_challenge_ladder(ctx, _tokens: dict[str, str]) -> None:
         if st.button("← Back", key="rm_step2_back_challenge"):
             _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         if _render_confirm_submit_button("rm_cl_submit", disabled=not has_score):
             match_date, idem_key = _resolve_submission_date_and_idem_key(
@@ -994,7 +994,7 @@ def _step_2_challenge_ladder(ctx, _tokens: dict[str, str]) -> None:
                 )
                 _clear_pending_submission()
                 _clear_confirm_loading("rm_cl_submit")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:
                 _clear_confirm_loading("rm_cl_submit")
                 st.error(f"Submit failed: {exc}")
@@ -1052,7 +1052,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
         with controls[0]:
             if st.button("← Back", key="rm_step2_back_tourney_empty"):
                 st.session_state[WIZARD_STEP_KEY] = 1
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
         return
 
     tournament_options = {
@@ -1198,7 +1198,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
         if st.button("← Back", key="rm_step2_back_tournament"):
             _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         if _render_confirm_submit_button("rm_tournament_submit", disabled=not (has_score and has_winner)):
             match_date, idem_key = _resolve_submission_date_and_idem_key(
@@ -1270,7 +1270,7 @@ def _step_2_tournament(ctx, _tokens: dict[str, str]) -> None:
                 )
                 _clear_pending_submission()
                 _clear_confirm_loading("rm_tournament_submit")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:
                 _clear_confirm_loading("rm_tournament_submit")
                 st.error(f"Submit failed: {exc}")
@@ -1417,7 +1417,7 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
         with controls[0]:
             if st.button("← Back", key="rm_step2_back_rr_empty"):
                 st.session_state[WIZARD_STEP_KEY] = 1
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
         return
 
     session_options = {
@@ -1550,7 +1550,7 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
         if st.button("← Back", key="rm_step2_back_round_robin"):
             _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         if _render_confirm_submit_button("rm_round_robin_submit", disabled=not has_score):
             if None in (team_a_p1, team_a_p2, team_b_p1, team_b_p2):
@@ -1641,7 +1641,7 @@ def _step_2_round_robin(ctx, tokens: dict[str, str]) -> None:
                 )
                 _clear_pending_submission()
                 _clear_confirm_loading("rm_round_robin_submit")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:
                 _clear_confirm_loading("rm_round_robin_submit")
                 st.error(f"Submit failed: {exc}")
@@ -1692,7 +1692,7 @@ def _step_2_moneyball(ctx, _tokens: dict[str, str]) -> None:
         with controls[0]:
             if st.button("← Back", key="rm_step2_back_moneyball_empty"):
                 st.session_state[WIZARD_STEP_KEY] = 1
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
         return
 
     event_options = {
@@ -1774,7 +1774,7 @@ def _step_2_moneyball(ctx, _tokens: dict[str, str]) -> None:
         if st.button("← Back", key="rm_step2_back_moneyball"):
             _clear_pending_submission()
             st.session_state[WIZARD_STEP_KEY] = 1
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
     with controls[1]:
         if _render_confirm_submit_button("rm_moneyball_submit", disabled=not (unique_ids and has_score and bool(event_id))):
             match_date, idem_key = _resolve_submission_date_and_idem_key(
@@ -1827,7 +1827,7 @@ def _step_2_moneyball(ctx, _tokens: dict[str, str]) -> None:
                 )
                 _clear_pending_submission()
                 _clear_confirm_loading("rm_moneyball_submit")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:
                 _clear_confirm_loading("rm_moneyball_submit")
                 st.error(f"Submit failed: {exc}")

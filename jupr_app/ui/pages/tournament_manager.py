@@ -91,7 +91,7 @@ def _render_division_modal(supabase, club_id: str, tournament_id: str) -> None:
         try:
             _insert_division(supabase, club_id, tournament_id, clean_title, fmt, clean_max)
             st.success("Division created.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
         except Exception as exc:
             st.error(f"Could not create division: {exc}")
 
@@ -147,7 +147,7 @@ def _render_divisions_tab(supabase, club_id: str, tournament: dict) -> None:
                     st.query_params["route"] = f"tournament/{tournament_id}/division/{division_id}"
                     st.query_params["tournament_id"] = tournament_id
                     st.query_params["division_id"] = division_id
-                    st.rerun()
+                    st.session_state["force_data_refresh"] = True
                 generate_clicked = st.button(
                     "Generate Bracket",
                     key=f"generate_bracket_{division_id}",
@@ -163,7 +163,7 @@ def _render_divisions_tab(supabase, club_id: str, tournament: dict) -> None:
                             "Bracket generated "
                             f"({result['match_count']} matches, {result['entry_count']} teams, size {result['bracket_size']})."
                         )
-                        st.rerun()
+                        st.session_state["force_data_refresh"] = True
                     except ValueError as exc:
                         st.error(str(exc))
                     except Exception as exc:
