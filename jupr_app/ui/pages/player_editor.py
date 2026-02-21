@@ -5,6 +5,7 @@ import re
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_merge import merge_player_into
+from streamlit_app import get_data
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
@@ -15,11 +16,6 @@ def render(ctx):
     if st.session_state.get("_reset_add_player_form"):
         st.session_state["add_player_name"] = ""
         st.session_state["_reset_add_player_form"] = False
-
-    # Process refresh
-    if st.session_state.get("_refresh_players"):
-        ctx.reload_players()
-        st.session_state["_refresh_players"] = False
 
     def _normalize_name(raw: str) -> str:
         cleaned = re.sub(r"[^a-z0-9_]+", "", (raw or "").strip().lower().replace(" ", "_"))
@@ -64,7 +60,7 @@ def render(ctx):
                 )
                 if existing:
                     st.info("Player already exists — opening existing record.")
-                    st.session_state["_refresh_players"] = True
+                    get_data.clear()
                     st.session_state["_player_editor_pending_pick"] = name_clean
                     st.stop()
                 payload = {
@@ -76,7 +72,7 @@ def render(ctx):
                 }
                 supabase.table("players").insert(payload).execute()
                 st.success(f"Player created: {name_clean} (Starting JUPR {float(rating):.1f})")
-                st.session_state["_refresh_players"] = True
+                get_data.clear()
                 st.session_state["_player_editor_pending_pick"] = name_clean
                 st.session_state["_reset_add_player_form"] = True
 
@@ -212,7 +208,7 @@ def render(ctx):
         )
         if result.get("success"):
             st.success("Merge completed. Replay was suggested for downstream recalculation.")
-            st.session_state["_refresh_players"] = True
+            get_data.clear()
         else:
             st.error(result.get("error") or "Merge failed.")
         time.sleep(0.4)
