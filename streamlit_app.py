@@ -596,29 +596,41 @@ def main():
         ]
         public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
 
-        deep_label = ""
-        deep_route = st.query_params.get("route", "").strip().strip("/")
-        tournament_match = re.fullmatch(r"tournament/([^/]+)", deep_route)
-        route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
-        if tournament_match:
-            if PUBLIC_MODE:
-                st.query_params["tournament_id"] = tournament_match.group(1)
-            deep_label = "🏆 Tournament Bracket"
-        if route_match:
-            if PUBLIC_MODE:
-                st.query_params["tournament_id"] = route_match.group(1)
-                st.query_params["division_id"] = route_match.group(2)
-            deep_label = "🏆 Tournament Bracket" if PUBLIC_MODE else "🏆 Division Manager"
-        if PUBLIC_MODE and deep_label in ADMIN_ONLY_LABELS:
+        # Respect explicit in-app navigation clicks.
+        # Sidebar buttons set `_nav_pending` via callback before the script reruns.
+        if not st.session_state.get("_nav_pending"):
             deep_label = ""
-        if deep_label:
-            st.query_params["page"] = LABEL_TO_PAGE_KEY.get(deep_label, "leaderboards")
-            st.session_state["_nav_pending"] = deep_label
-        else:
-            deep_page_key = st.query_params.get("page", "").strip().lower()
-            deep_page_label = PAGE_KEY_TO_LABEL.get(deep_page_key)
-            if deep_page_label in visible_labels:
-                st.session_state["_nav_pending"] = deep_page_label
+            deep_route = st.query_params.get("route", "").strip().strip("/")
+        
+            tournament_match = re.fullmatch(r"tournament/([^/]+)", deep_route)
+            route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
+        
+            if tournament_match:
+                if PUBLIC_MODE:
+                    st.query_params["tournament_id"] = tournament_match.group(1)
+                deep_label = "🏆 Tournament Bracket"
+        
+            if route_match:
+                if PUBLIC_MODE:
+                    st.query_params["tournament_id"] = route_match.group(1)
+                    st.query_params["division_id"] = route_match.group(2)
+                deep_label = "🏆 Tournament Bracket" if PUBLIC_MODE else "🏆 Division Manager"
+        
+            if PUBLIC_MODE and deep_label in ADMIN_ONLY_LABELS:
+                deep_label = ""
+        
+            if deep_label:
+                # Only keep URL 'page=' syncing for public mode (your existing intent)
+                if PUBLIC_MODE:
+                    st.query_params["page"] = LABEL_TO_PAGE_KEY.get(deep_label, "leaderboards")
+                st.session_state["_nav_pending"] = deep_label
+        
+            elif PUBLIC_MODE:
+                # In admin mode, do NOT let ?page=... force navigation every rerun.
+                deep_page_key = st.query_params.get("page", "").strip().lower()
+                deep_page_label = PAGE_KEY_TO_LABEL.get(deep_page_key)
+                if deep_page_label in visible_labels:
+                    st.session_state["_nav_pending"] = deep_page_label
 
         if st.session_state["_nav_target"] == "home":
             if st.session_state["entry_mode"] == "auth" and "🧭 Command Center" in visible_labels:
