@@ -194,7 +194,6 @@ def resolve_tenant(session):
 
 
 def main():
-    st.write("DEBUG — session id:", id(st.session_state))
     try:
         from jupr_app.ui.context import AppContext
         from jupr_app.ui.theme_clean import apply_clean_theme
@@ -215,7 +214,7 @@ def main():
             initial_sidebar_state="collapsed",
         )
         apply_clean_theme(accent_hex="#2F6FED")
-
+        st.write("DEBUG — session id:", id(st.session_state))
         base_url = os.getenv("PUBLIC_BASE_URL", LOCAL_PUBLIC_BASE_URL_DEFAULT)
         st.session_state["base_url"] = str(base_url)
 
