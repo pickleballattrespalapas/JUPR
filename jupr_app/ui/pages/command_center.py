@@ -98,7 +98,7 @@ def _render_badge_admin_ui(ctx) -> None:
                         try:
                             _publish_badge(ctx.supabase, badge_id)
                             st.success(f"Published {badge_id}.")
-                            st.rerun()
+                            st.session_state["force_data_refresh"] = True
                         except Exception as exc:  # noqa: BLE001
                             st.error(f"Publish failed: {exc}")
     else:
@@ -186,7 +186,7 @@ def _render_badge_admin_ui(ctx) -> None:
                 if condition_inserts:
                     ctx.supabase.table("badge_rule_conditions").insert(condition_inserts).execute()
                 st.success(f"Created draft badge {normalized_badge_id}.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Failed to create draft badge: {exc}")
 

@@ -380,7 +380,7 @@ def render(ctx):
                 st.session_state["last_notice_sms"] = notice["sms"]
 
                 st.success(f"Challenge created. ID = {new_id}")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
         # Post-create notice tools (outside form; safe even if no new challenge)
         if st.session_state.get("last_notice_challenge_id"):
@@ -413,7 +413,7 @@ def render(ctx):
 
                 st.success("48-hour clock started in the app.")
                 time.sleep(0.2)
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
     # -------------------------
     # TAB 3: CHALLENGE DETAIL
@@ -493,7 +493,7 @@ def render(ctx):
                 sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
                 ladder_audit(supabase, club_id, "challenge_accept", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Accepted.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             if c2.button("🗑 Cancel (Admin)", type="secondary", key=f"cancel_{ch_id}"):
                 before = ch_row.copy()
@@ -501,7 +501,7 @@ def render(ctx):
                 sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
                 ladder_audit(supabase, club_id, "challenge_cancel", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Canceled.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             with c3:
                 forfeit_by = st.selectbox("Forfeit by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"ff_by_{ch_id}")
@@ -527,7 +527,7 @@ def render(ctx):
 
                 ladder_audit(supabase, club_id, "challenge_forfeit", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Forfeit recorded.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             with c4:
                 pass_user = st.selectbox("Pass used by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"pass_by_{ch_id}")
@@ -555,7 +555,7 @@ def render(ctx):
                 sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
                 ladder_audit(supabase, club_id, "challenge_pass_used", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Pass recorded (challenge closed).")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             st.divider()
             st.subheader("🏁 Record Match Result (Swing Partner Swap)")
@@ -776,7 +776,7 @@ def render(ctx):
 
                         if edit:
                             st.session_state.pop(draft_key, None)
-                            st.rerun()
+                            st.session_state["force_data_refresh"] = True
 
                         if confirm:
                             before = ch_row.copy()
@@ -839,7 +839,7 @@ def render(ctx):
                             )
 
                             st.session_state.pop(draft_key, None)
-                            st.rerun()
+                            st.session_state["force_data_refresh"] = True
 
     # -------------------------
     # TAB: ROSTER (full tools)
@@ -991,7 +991,7 @@ def render(ctx):
                 ladder_audit(supabase, club_id, "roster_append", "ladder_roster", f"{club_id}:{pid}", None, ins)
                 st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
 
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         st.divider()
 
@@ -1134,7 +1134,7 @@ def render(ctx):
                 f"Moved {ladder_nm(pid, ctx.id_to_name)} from {tier_title(cur_tier)} (rank {cur_rank}) "
                 f"to {tier_title(dest_tier)} (rank {next_rank})."
             )
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
 
         # -------------------------
@@ -1185,7 +1185,7 @@ def render(ctx):
             ladder_audit(supabase, club_id, "roster_replace_tier", "ladder_roster", f"{club_id}:{tier_ctx}", None, {"tier": str(tier_ctx), "count": len(rows)})
 
             st.success(f"Tier roster replaced for {tier_title(tier_ctx)}.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         st.divider()
 
@@ -1341,7 +1341,7 @@ def render(ctx):
                             pass
 
                         st.success(f"Moved {ladder_nm(pid, ctx.id_to_name)} to {tier_title(dest_tier)} at rank {next_rank}.")
-                        st.rerun()
+                        st.session_state["force_data_refresh"] = True
 
 
     # -------------------------
@@ -1397,7 +1397,7 @@ def render(ctx):
             sb_retry(lambda: sb_upsert(supabase, "ladder_player_flags", payload, conflict="club_id,player_id"))
             ladder_audit(supabase, club_id, "flags_save", "ladder_player_flags", f"{club_id}:{pid}", before, payload)
             st.success("Saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
     # -------------------------
     # TAB 6: AUDIT

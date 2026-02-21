@@ -8,6 +8,7 @@ from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.replay_lock import is_replay_running
+from jupr_app.domain.replay_history import FULL_RESET_LABEL
 from jupr_app.data.sb_write import sb_update
 from jupr_app.ui.layout import page_shell
 
@@ -120,8 +121,21 @@ def render(ctx):
     # Replay History
     # -------------------------
     st.subheader("🔄 Recalculate / Replay History")
-    st.caption("Heavy replay jobs are not run from Streamlit page handlers.")
-    st.warning("Replay must be run via CLI or background job.")
+    st.caption("Replay is dispatched as a UI event and executed at top-of-run.")
+
+    target_reset = st.selectbox(
+        "Replay target",
+        [FULL_RESET_LABEL, "Round Robin", "Kings and Queens"],
+        key="admin_tools_replay_target",
+    )
+
+    def queue_replay():
+        st.session_state["_ui_event"] = {
+            "type": "replay",
+            "target": target_reset,
+        }
+
+    st.button("Replay", on_click=queue_replay, use_container_width=True)
 
     if _is_replay_schema_valid(supabase):
         st.caption("Schema check: ready for CLI replay.")

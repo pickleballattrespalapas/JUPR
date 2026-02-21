@@ -93,7 +93,7 @@ def render(ctx):
                     },
                 )
                 st.success("Tournament created.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
     st.divider()
 
@@ -193,7 +193,7 @@ def render(ctx):
         if not team_count_locked and st.button("Update team count"):
             sb_update(supabase, "tournaments", {"team_count": int(new_team_count)}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Team count updated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         rows = []
         for num in range(1, int(tournament.get("team_count", 4)) + 1):
@@ -246,7 +246,7 @@ def render(ctx):
 
             sb_upsert(supabase, "tournament_teams", payload, conflict="tournament_id,team_number")
             st.success("Teams saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
     with tabs[1]:
         st.subheader("Round Robin")
@@ -262,7 +262,7 @@ def render(ctx):
             sb_insert(supabase, "tournament_games", games_payload)
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         if rr_games:
             with st.expander("Regenerate schedule"):
@@ -276,7 +276,7 @@ def render(ctx):
                     sb_update(supabase, "tournament_teams", {"seed": None}, filters={"club_id": str(club_id), "tournament_id": tournament_id})
                     sb_update(supabase, "tournaments", {"status": "DRAFT", "playoff_advance_count": None}, filters={"club_id": str(club_id), "id": tournament_id})
                     st.success("Schedule cleared.")
-                    st.rerun()
+                    st.session_state["force_data_refresh"] = True
 
         if rr_games:
             _render_games_table(
@@ -320,7 +320,7 @@ def render(ctx):
                     for row in standings:
                         sb_update(supabase, "tournament_teams", {"seed": int(row["seed"])}, filters={"club_id": str(club_id), "id": row["team_id"]})
                     st.success("Seeds updated.")
-                    st.rerun()
+                    st.session_state["force_data_refresh"] = True
 
     with tabs[3]:
         st.subheader("Playoffs")
@@ -340,7 +340,7 @@ def render(ctx):
         if st.button("Save advance count", disabled=is_complete):
             sb_update(supabase, "tournaments", {"playoff_advance_count": int(selected_advance)}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Advance count saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         best_of = st.selectbox(
             "Playoff Format",
@@ -354,7 +354,7 @@ def render(ctx):
         if st.button("Save format", disabled=is_complete):
             supabase.table("tournaments").update({"playoff_best_of": int(best_of)}).eq("club_id", str(club_id)).eq("id", tournament_id).execute()
             st.success("Playoff format saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         # --- Regenerate Playoff Bracket ---
         if playoff_games:
@@ -387,7 +387,7 @@ def render(ctx):
                         supabase.table("tournament_games").insert(games_payload).execute()
 
                         st.success("Playoff bracket regenerated.")
-                        st.rerun()
+                        st.session_state["force_data_refresh"] = True
 
         if not playoff_games:
             st.info("No playoff bracket generated yet.")
@@ -412,7 +412,7 @@ def render(ctx):
                 filters={"club_id": str(club_id), "id": tournament_id},
             )
             st.success("Playoff bracket generated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         if playoff_games:
             _render_playoff_bracket(
@@ -617,7 +617,7 @@ def _render_podium_review(
             .execute()
         st.success("Tournament completed and podium locked.")
         st.session_state.pop(f"podium_review_open_{tournament_id}", None)
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
 
 def _render_podium_read_only(podium_rows: list[dict], teams_by_id: dict[str, dict], id_to_name: dict) -> None:
@@ -786,7 +786,7 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
                 supabase.table("tournament_games").update(upd).eq("club_id", str(ctx.club_id)).eq("id", upd["id"]).execute()
 
         st.success("Scores saved.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
 
 

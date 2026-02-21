@@ -121,7 +121,7 @@ def render(ctx):
                                 player_ids=deleted_pids,
                             )
                         st.success("Deleted duplicates. Ratings and standings were recalculated automatically.")
-                        st.rerun()
+                        return
 
     st.divider()
 
@@ -321,14 +321,14 @@ def render(ctx):
             df_select["Select"] = True
             st.session_state["bulk_match_df"] = df_select
             st.session_state["bulk_match_editor_version"] += 1
-            st.rerun()
+            return
     with c_clear:
         if st.button("Clear selection", key="bulk_match_clear", disabled=total_count == 0):
             df_clear = st.session_state["bulk_match_df"].copy()
             df_clear["Select"] = False
             st.session_state["bulk_match_df"] = df_clear
             st.session_state["bulk_match_editor_version"] += 1
-            st.rerun()
+            return
     with c_summary:
         st.caption(f"Selected: {selected_count} / {total_count}")
 
@@ -430,7 +430,7 @@ def render(ctx):
             st.session_state["bulk_match_df"] = view.copy(deep=True)
             st.session_state["bulk_match_baseline"] = view.copy(deep=True)
             st.session_state["bulk_match_editor_version"] += 1
-            st.rerun()
+            return
 
         except Exception as exc:
             st.error(f"Unable to apply bulk edits: {exc}")
@@ -476,4 +476,4 @@ def render(ctx):
                     player_ids=deleted_pids,
                 )
             st.success("Deleted. Ratings and standings were recalculated automatically.")
-            st.rerun()
+            return

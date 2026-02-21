@@ -390,7 +390,7 @@ def render(ctx):
         st.session_state["mb_saved"] = False
         st.session_state["mb_event_id"] = str(uuid4())
         st.session_state["mb_event_signature"] = current_sig
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     if "mb_schedule_df" not in st.session_state:
         return

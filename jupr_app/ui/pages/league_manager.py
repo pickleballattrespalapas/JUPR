@@ -311,7 +311,7 @@ def render(ctx):
                 st.session_state.ladder_temp_new = new_ps
                 st.session_state.ladder_state = "REVIEW_ROSTER"
                 st.session_state.ladder_round_num = 1
-                st.rerun()
+                return
 
         # -------------------------
         # 2) REVIEW / NEW PLAYERS
@@ -320,7 +320,7 @@ def render(ctx):
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit league/week/rounds/roster)"):
                 st.session_state.ladder_state = "SETUP"
-                st.rerun()
+                return
 
             st.markdown("#### Step 2: Confirm Roster")
 
@@ -451,10 +451,10 @@ def render(ctx):
                     st.session_state.ladder_state = "CONFIG_COURTS"
 
                     # Optional: refresh global cached data so other pages see them immediately
-                    st.session_state["force_data_refresh"] = True
+                    return
 
                     st.success("New players created. Continuing to court setup…")
-                    st.rerun()
+                    return
 
                 # Keep this to prevent falling through while new players exist
                 st.stop()
@@ -471,7 +471,7 @@ def render(ctx):
                 st.session_state.ladder_state = "CONFIG_COURTS"
                 st.session_state.pop("current_schedule", None)
                 st.session_state.pop("current_schedule_round", None)
-                st.rerun()
+                return
 
 
         # -------------------------
@@ -481,7 +481,7 @@ def render(ctx):
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit roster)"):
                 st.session_state.ladder_state = "REVIEW_ROSTER"
-                st.rerun()
+                return
 
             st.markdown("#### Step 3: Configure Courts")
             total_p = len(st.session_state.ladder_roster)
@@ -539,7 +539,7 @@ def render(ctx):
                     st.session_state.ladder_print_sheet = print_df
 
                     st.session_state.ladder_state = "CONFIRM_START"
-                    st.rerun()
+                    return
 
         # -------------------------
         # 3.5) CONFIRM START (Court Board)
@@ -549,7 +549,7 @@ def render(ctx):
             if c_back.button("⬅️ Back (edit courts)"):
                 st.session_state.pop("ladder_live_roster", None)
                 st.session_state.ladder_state = "CONFIG_COURTS"
-                st.rerun()
+                return
 
             st.markdown("#### Step 4: Court Board Preview (Drag & Drop)")
             st.caption("Use the Court Board to make final adjustments. Bench players will not be scheduled.")
@@ -580,7 +580,7 @@ def render(ctx):
                     st.session_state.ladder_live_roster = new_df
                     st.session_state.pop("current_schedule", None)
                     st.session_state.pop("current_schedule_round", None)
-                    st.rerun()
+                    return
 
             # Validation
             target_sizes = st.session_state.get("ladder_court_sizes", None)
@@ -599,7 +599,7 @@ def render(ctx):
                 st.session_state.ladder_state = "PLAY_ROUND"
                 st.session_state.pop("current_schedule", None)
                 st.session_state.pop("current_schedule_round", None)
-                st.rerun()
+                return
 
         # -------------------------
         # 4) PLAY ROUND (scoring + save + movement)
@@ -624,7 +624,7 @@ def render(ctx):
                 if cC.button("Swap", key=f"swap_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = compress_courts(swap_players(roster_df, a, b))
                     st.session_state.pop("current_schedule", None)
-                    st.rerun()
+                    return
 
                 st.divider()
 
@@ -636,7 +636,7 @@ def render(ctx):
                 if st.button("Apply reorder", key=f"re_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = compress_courts(move_within_court(roster_df, p, int(new_pos)))
                     st.session_state.pop("current_schedule", None)
-                    st.rerun()
+                    return
 
                 st.divider()
 
@@ -649,7 +649,7 @@ def render(ctx):
                 if m4.button("Move", key=f"mv_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = move_player_to_court(roster_df, mv_player, int(target_court), int(target_pos))
                     st.session_state.pop("current_schedule", None)
-                    st.rerun()
+                    return
 
             # Build schedule once per round unless roster changed
             if ("current_schedule" not in st.session_state) or (st.session_state.get("current_schedule_round") != current_r):
@@ -709,7 +709,7 @@ def render(ctx):
             if movement_df is None or movement_df.empty:
                 st.error("No movement preview found.")
                 st.session_state.ladder_state = "PLAY_ROUND"
-                st.rerun()
+                return
 
             # Display per court
             for c_num in sorted(movement_df["court"].astype(int).unique()):
@@ -803,7 +803,7 @@ def render(ctx):
                     with close_cols[0]:
                         if st.button("Close", key="ladder_roster_change_close"):
                             st.session_state.ladder_show_roster_change_dialog = False
-                            st.rerun()
+                            return
 
                     def _player_options() -> tuple[list[str], dict[str, dict]]:
                         rows = ctx.df_players_all if ctx.df_players_all is not None else pd.DataFrame()
@@ -909,7 +909,7 @@ def render(ctx):
                                 st.session_state.ladder_roster_bench_ids = result.bench_ids
                                 st.session_state.ladder_show_roster_change_dialog = False
                                 st.success("Substitution queued for next round.")
-                                st.rerun()
+                                return
                             except RosterChangeError as exc:
                                 st.error(str(exc))
 
@@ -986,7 +986,7 @@ def render(ctx):
                                 st.session_state.ladder_roster_bench_ids = result.bench_ids
                                 st.session_state.ladder_show_roster_change_dialog = False
                                 st.success("Player added for next round.")
-                                st.rerun()
+                                return
                             except RosterChangeError as exc:
                                 st.error(str(exc))
 
@@ -1009,7 +1009,7 @@ def render(ctx):
                     ]:
                         st.session_state.pop(k, None)
                     st.session_state.ladder_state = "SETUP"
-                    st.rerun()
+                    return
 
                 override = st.session_state.get("ladder_next_roster_override")
                 if override is None:
@@ -1036,7 +1036,7 @@ def render(ctx):
                 st.session_state.ladder_round_num = current_r + 1
                 st.session_state.ladder_state = "CONFIRM_START"
                 st.session_state.pop("current_schedule", None)
-                st.rerun()
+                return
 
     # ============================================================
     # TAB 2: SETTINGS
@@ -1097,9 +1097,9 @@ def render(ctx):
                     st.error(f"Could not create league: {resp.error}")
                     st.stop()
 
-                st.session_state["force_data_refresh"] = True
+                return
                 st.success("League draft created.")
-                st.rerun()
+                return
 
         if df_meta is None or df_meta.empty:
             st.info("No league metadata loaded.")
@@ -1142,10 +1142,9 @@ def render(ctx):
                 payload,
                 filters={"id": int(meta_row["id"]), "club_id": str(ctx.club_id)},
             )
-            st.session_state["force_data_refresh"] = True
+            return
             st.success("League updated.")
-            time.sleep(0.3)
-            st.rerun()
+            return
 
         def _build_payload(
             *,
@@ -1255,9 +1254,9 @@ def render(ctx):
                 "awards_config": awards_cfg,
             }
             ctx.sb_insert(supabase, "leagues_metadata", payload)
-            st.session_state["force_data_refresh"] = True
+            return
             st.success("Draft duplicated.")
-            st.rerun()
+            return
 
         tabs_editor = st.tabs(
             [
@@ -1551,7 +1550,7 @@ def render(ctx):
                     st.session_state["end_league_frozen_at"] = ended_at
                     st.session_state["end_league_step"] = 2
                     st.session_state["end_league_wizard_open"] = True
-                    st.rerun()
+                    return
 
             elif step == 2:
                 awards = compute_top_performer_awards_for_config(
@@ -1576,7 +1575,7 @@ def render(ctx):
                     if st.button("Continue to Overrides"):
                         st.session_state["end_league_step"] = 3
                         st.session_state["end_league_wizard_open"] = True
-                        st.rerun()
+                        return
                 else:
                     st.warning("No winners found. Check eligibility rules or standings.")
 
@@ -1613,7 +1612,7 @@ def render(ctx):
                 if st.button("Continue to Confirm"):
                     st.session_state["end_league_step"] = 4
                     st.session_state["end_league_wizard_open"] = True
-                    st.rerun()
+                    return
 
             elif step == 4:
                 awards = st.session_state.get("end_league_awards", [])
@@ -1650,7 +1649,7 @@ def render(ctx):
                     st.success(f"Minted {len(created)} top performer badges.")
                     st.session_state["end_league_step"] = 5
                     st.session_state["end_league_wizard_open"] = True
-                    st.rerun()
+                    return
 
             elif step == 5:
                 st.success("League closed. You can archive it now.")
@@ -1686,5 +1685,4 @@ def render(ctx):
                     )
 
                 st.success("Saved.")
-                time.sleep(0.3)
-                st.rerun()
+                return

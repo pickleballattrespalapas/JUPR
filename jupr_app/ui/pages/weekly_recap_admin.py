@@ -200,7 +200,7 @@ def render(ctx):
                     return
                 raise
             st.success("Draft generated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
     if not row:
         st.info("No draft yet. Generate a draft to begin editing.")
@@ -368,7 +368,7 @@ def render(ctx):
                 return
             raise
         st.success("Draft saved.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     st.markdown("<div class='no-print'>", unsafe_allow_html=True)
     theme_options = {
@@ -425,7 +425,7 @@ def render(ctx):
                 return
             raise
         st.success("Published.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     if st.button("Unpublish"):
         payload = {
@@ -446,4 +446,4 @@ def render(ctx):
                 return
             raise
         st.success("Unpublished.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
