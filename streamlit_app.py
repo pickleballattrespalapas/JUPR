@@ -223,6 +223,8 @@ def main():
         assert_schema_health(supabase_service)
 
         session = resolve_auth_session(supabase_auth)
+        st.write("DEBUG — resolve_auth_session:", bool(session))
+        st.write("DEBUG — session_state sb_session:", bool(st.session_state.get("sb_session")))    
         if session is not None:
             st.session_state["auth"]["mode"] = "user"
             st.session_state["auth"]["supabase_session"] = session
