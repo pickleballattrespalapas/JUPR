@@ -194,6 +194,7 @@ def resolve_tenant(session):
 
 
 def main():
+    st.write("DEBUG — session id:", id(st.session_state))
     try:
         from jupr_app.ui.context import AppContext
         from jupr_app.ui.theme_clean import apply_clean_theme
