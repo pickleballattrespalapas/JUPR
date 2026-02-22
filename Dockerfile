@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 # App code
 COPY . /app
 
+# Fail build early if Streamlit component frontend assets are missing.
+RUN test -f /app/jupr_court_board/frontend/build/index.html
+
 # Make start script executable
 RUN chmod +x /app/start.sh
 
