@@ -201,8 +201,18 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -> None:
+    def _court_number(court_id: str) -> int | None:
+        m = re.search(r"(\d+)", str(court_id or ""))
+        if not m:
+            return None
+        return int(m.group(1))
+
     playable = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() != "bench"]
     bench = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() == "bench"]
+    playable = sorted(
+        playable,
+        key=lambda c: (_court_number(str(c.get("court_id") or "")) is None, _court_number(str(c.get("court_id") or "")) or 10_000),
+    )
     courts = playable + bench
 
     if not courts:
@@ -213,9 +223,29 @@ def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -
     for start in range(0, len(courts), per_row):
         row = courts[start : start + per_row]
         cols = st.columns(len(row))
-        for col, court in zip(cols, row):
+        cols_count = len(cols)
+        for default_local_idx, court in enumerate(row):
+            court_id = str(court.get("court_id") or "Court")
+            court_num = _court_number(court_id)
+            intended_global_idx = int(court_num - 1) if isinstance(court_num, int) else int(start + default_local_idx)
+            intended_local_idx = int(intended_global_idx - start)
+
+            if not (0 <= intended_local_idx < cols_count):
+                raise AssertionError(
+                    f"Court column index out of range: court_id={court_id}, court_num={court_num}, "
+                    f"intended_local_idx={intended_local_idx}, cols_count={cols_count}, row_start={start}."
+                )
+
+            col = cols[intended_local_idx]
             with col:
-                court_id = str(court.get("court_id") or "Court")
+                logger.debug(
+                    "Rendering court %s into column %s (row_start=%s, cols=%s, court_num=%s)",
+                    court_id,
+                    intended_local_idx,
+                    start,
+                    cols_count,
+                    court_num,
+                )
                 players = list(court.get("players") or [])
                 st.markdown(f"##### {court_id}")
                 st.caption(f"{len(players)} player(s)")
