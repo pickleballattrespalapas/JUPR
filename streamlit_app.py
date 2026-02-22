@@ -12,6 +12,22 @@ from supabase import create_client
 import streamlit as st
 import pandas as pd  # noqa: F401  # kept because pages may rely on it
 
+try:
+    from streamlit.runtime.scriptrunner.exceptions import RerunException, StopException
+except ImportError:
+    try:
+        from streamlit.runtime.scriptrunner_utils.exceptions import (
+            RerunException,
+            StopException,
+        )
+    except ImportError:
+        from streamlit.runtime.scriptrunner.script_runner import (
+            RerunException,
+            StopException,
+        )
+
+STREAMLIT_CONTROL_FLOW_EXCEPTIONS = (RerunException, StopException)
+
 LOCAL_PUBLIC_BASE_URL_DEFAULT = "http://localhost:8501"
 
 
@@ -701,6 +717,8 @@ def main():
 
         render_fn(ctx)
 
+    except STREAMLIT_CONTROL_FLOW_EXCEPTIONS:
+        raise
     except Exception:
         st.error("streamlit_app.main() crashed")
         st.code(traceback.format_exc())
