@@ -5,6 +5,7 @@ from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
 import json
 import logging
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from jupr_app.domain.player_ops import get_or_create_player
@@ -207,12 +208,13 @@ def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -
             return None
         return int(m.group(1))
 
+    def _sort_key(court: dict) -> tuple[bool, int]:
+        court_num = _court_number(str(court.get("court_id") or ""))
+        return (court_num is None, court_num or 10_000)
+
     playable = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() != "bench"]
     bench = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() == "bench"]
-    playable = sorted(
-        playable,
-        key=lambda c: (_court_number(str(c.get("court_id") or "")) is None, _court_number(str(c.get("court_id") or "")) or 10_000),
-    )
+    playable = sorted(playable, key=_sort_key)
     courts = playable + bench
 
     if not courts:
@@ -231,10 +233,17 @@ def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -
             intended_local_idx = int(intended_global_idx - start)
 
             if not (0 <= intended_local_idx < cols_count):
-                raise AssertionError(
-                    f"Court column index out of range: court_id={court_id}, court_num={court_num}, "
-                    f"intended_local_idx={intended_local_idx}, cols_count={cols_count}, row_start={start}."
+                logger.warning(
+                    "Court column index out of range; falling back to default column index: "
+                    "court_id=%s, court_num=%s, intended_local_idx=%s, default_local_idx=%s, cols_count=%s, row_start=%s",
+                    court_id,
+                    court_num,
+                    intended_local_idx,
+                    default_local_idx,
+                    cols_count,
+                    start,
                 )
+                intended_local_idx = default_local_idx
 
             col = cols[intended_local_idx]
             with col:
