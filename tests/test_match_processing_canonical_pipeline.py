@@ -177,7 +177,15 @@ def test_ingestion_with_player_names_creates_players_via_safe_add_player_and_per
 
     def fake_safe_add_player(*, supabase, club_id, name, rating_jupr):
         safe_add_calls.append(name)
-        return True, 100 + len(safe_add_calls)
+        supabase.storage.setdefault("players", []).append(
+            {
+                "id": 100 + len(safe_add_calls),
+                "club_id": club_id,
+                "name": name,
+                "normalized_name": name.strip().lower(),
+            }
+        )
+        return True, None
 
     persisted_payloads: list[dict] = []
 

@@ -58,7 +58,7 @@ def test_safe_add_player_sets_normalized_name_and_conflict_target():
     supabase = _Supabase()
     supabase.upsert_data = [{"id": 17}]
 
-    ok, player_id = safe_add_player(
+    ok, err = safe_add_player(
         supabase=supabase,
         club_id="club-1",
         name="  Alice   Smith ",
@@ -66,7 +66,7 @@ def test_safe_add_player_sets_normalized_name_and_conflict_target():
     )
 
     assert ok is True
-    assert player_id == 17
+    assert err is None
     assert supabase.last_on_conflict == "club_id,normalized_name"
     assert supabase.last_payload["normalized_name"] == "alice smith"
 
@@ -76,7 +76,7 @@ def test_safe_add_player_falls_back_to_lookup_when_upsert_returns_empty_data():
     supabase.upsert_data = []
     supabase.rows["players"].append({"id": 99, "club_id": "club-1", "normalized_name": "alice smith"})
 
-    ok, player_id = safe_add_player(
+    ok, err = safe_add_player(
         supabase=supabase,
         club_id="club-1",
         name="Alice Smith",
@@ -84,7 +84,7 @@ def test_safe_add_player_falls_back_to_lookup_when_upsert_returns_empty_data():
     )
 
     assert ok is True
-    assert player_id == 99
+    assert err is None
 
 
 def test_safe_add_player_surfaces_schema_mismatch_for_on_conflict():
@@ -107,3 +107,21 @@ def test_safe_add_player_surfaces_schema_mismatch_for_on_conflict():
 
     assert ok is False
     assert "Schema mismatch" in err
+
+
+def test_safe_add_player_converts_unexpected_exception_to_error(caplog):
+    class _BrokenSupabase:
+        def table(self, _name: str):
+            raise RuntimeError("db unavailable")
+
+    with caplog.at_level("ERROR"):
+        ok, err = safe_add_player(
+            supabase=_BrokenSupabase(),
+            club_id="club-1",
+            name="Alice Smith",
+            rating_jupr=3.5,
+        )
+
+    assert ok is False
+    assert err == "db unavailable"
+    assert "safe_add_player failed unexpectedly" in caplog.text

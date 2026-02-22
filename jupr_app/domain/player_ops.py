@@ -1,9 +1,11 @@
 # jupr_app/domain/player_ops.py
 from __future__ import annotations
 
-from typing import Tuple
+import logging
 
 from postgrest.exceptions import APIError
+
+logger = logging.getLogger(__name__)
 
 
 def _normalized_player_name(name: str) -> str:
@@ -16,7 +18,7 @@ def safe_add_player(
     club_id: str,
     name: str,
     rating_jupr: float,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str | None]:
     try:
         normalized_name = _normalized_player_name(name)
         if not club_id:
@@ -39,7 +41,7 @@ def safe_add_player(
         )
         upsert_rows = upsert_resp.data or []
         if upsert_rows:
-            return True, int(upsert_rows[0].get("id"))
+            return True, None
 
         lookup_resp = (
             supabase.table("players")
@@ -51,7 +53,7 @@ def safe_add_player(
         )
         lookup_rows = lookup_resp.data or []
         if lookup_rows:
-            return True, int(lookup_rows[0].get("id"))
+            return True, None
 
         return False, "Player create succeeded but no player row was returned."
 
@@ -65,4 +67,5 @@ def safe_add_player(
             )
         return False, message or "Failed to add player."
     except Exception as exc:
+        logger.exception("safe_add_player failed unexpectedly")
         return False, str(exc) or "Failed to add player."

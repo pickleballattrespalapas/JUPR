@@ -55,6 +55,28 @@ _ALLOWED_MATCH_KEYS = {
 _SLOT_KEYS = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 
 
+def _normalized_player_name(name: str) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
+
+def _lookup_player_id_by_name(*, supabase: Any, club_id: str, name: str) -> int | None:
+    normalized_name = _normalized_player_name(name)
+    if not normalized_name:
+        return None
+    resp = (
+        supabase.table("players")
+        .select("id")
+        .eq("club_id", str(club_id))
+        .eq("normalized_name", normalized_name)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    if not rows:
+        return None
+    return int(rows[0].get("id"))
+
+
 class MatchPipelineError(RuntimeError):
     """Raised when a match pipeline mutation fails and cannot complete safely."""
 
@@ -282,15 +304,18 @@ def _resolve_player_identities_for_ingest(*, supabase: Any, club_id: str, payloa
             resolved[slot] = int(text_value)
             continue
 
-        ok, player_id_or_error = safe_add_player(
+        ok, err = safe_add_player(
             supabase=supabase,
             club_id=club_id,
             name=text_value,
             rating_jupr=3.0,
         )
         if not ok:
-            raise MatchPipelineError(f"failed to resolve player identity for '{text_value}': {player_id_or_error}")
-        resolved[slot] = int(player_id_or_error)
+            raise MatchPipelineError(f"failed to resolve player identity for '{text_value}': {err}")
+        player_id = _lookup_player_id_by_name(supabase=supabase, club_id=club_id, name=text_value)
+        if player_id is None:
+            raise MatchPipelineError(f"failed to resolve player identity for '{text_value}': player could not be loaded")
+        resolved[slot] = int(player_id)
 
     return resolved
 
