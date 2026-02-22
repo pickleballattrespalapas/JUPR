@@ -22,8 +22,8 @@ REQUIRED_REVOKED_COLUMNS = {
     "revoke_reason",
 }
 MIGRATION_HINT = (
-    "DB schema out of date. Apply migrations/20260625_badge_recompute_runs.sql, "
-    "migrations/20260630_player_badges_revocation.sql, and "
+    "DB schema out of date. Apply supabase/migrations/20260625_badge_recompute_runs.sql, "
+    "supabase/migrations/20260630_player_badges_revocation.sql, and "
     "supabase/migrations/202602200001_enforce_uniques_and_preflight.sql. "
     "If you just applied them in Supabase, run \"NOTIFY pgrst, 'reload schema';\" in the SQL editor "
     "to refresh the PostgREST schema cache"

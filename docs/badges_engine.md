@@ -63,8 +63,8 @@ awards by setting `revoked_at`, `revoked_by`, and `revoke_reason`.
 
 ## Schema notes (player_badges provenance + revocation)
 The recompute engine expects the migrations in:
-- `migrations/20260625_badge_recompute_runs.sql`
-- `migrations/20260630_player_badges_revocation.sql`
+- `supabase/migrations/20260625_badge_recompute_runs.sql`
+- `supabase/migrations/20260630_player_badges_revocation.sql`
 
 If your Supabase environment isn't applying migrations automatically, run the SQL below in the
 Supabase SQL editor to add the missing columns and grants:

@@ -101,11 +101,11 @@ def render(ctx):
                 code = _get_api_error_code(exc)
                 if code in {"PGRST205", "42P01"}:
                     st.error(
-                        "Missing table badge_eval_queue; apply migrations/20260705_badge_eval_queue.sql and "
+                        "Missing table badge_eval_queue; apply supabase/migrations/20260705_badge_eval_queue.sql and "
                         "run NOTIFY pgrst, 'reload schema';"
                     )
                     st.code(
-                        "-- Apply migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
+                        "-- Apply supabase/migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
                         language="sql",
                     )
                 else:

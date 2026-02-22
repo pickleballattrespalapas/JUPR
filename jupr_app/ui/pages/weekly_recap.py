@@ -20,7 +20,7 @@ def _get_api_error_code(exc: APIError) -> str | None:
 def _handle_missing_table(exc: APIError) -> bool:
     code = _get_api_error_code(exc)
     if code in {"PGRST205", "42P01"}:
-        st.error("Weekly recaps table not found. Apply migration migrations/20260207_weekly_recaps.sql in Supabase.")
+        st.error("Weekly recaps table not found. Apply migration supabase/migrations/20260207_weekly_recaps.sql in Supabase.")
         return True
     return False
 
