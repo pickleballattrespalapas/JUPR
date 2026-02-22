@@ -37,10 +37,8 @@ class _Query:
         return self
 
     def execute(self):
-        if self.supabase.raise_api_error is not None and self.supabase.last_operation in {"insert", "upsert"}:
-            err = self.supabase.raise_api_error
-            self.supabase.raise_api_error = None
-            raise err
+        if self.supabase.raise_api_errors and self.supabase.last_operation in {"insert", "upsert"}:
+            raise self.supabase.raise_api_errors.pop(0)
         if self.supabase.upsert_data is not None:
             data = self.supabase.upsert_data
             self.supabase.upsert_data = None
@@ -56,7 +54,7 @@ class _Supabase:
     def __init__(self):
         self.rows = {"players": []}
         self.upsert_data = None
-        self.raise_api_error = None
+        self.raise_api_errors = []
         self.last_payload = None
         self.last_on_conflict = None
         self.last_returning = None
@@ -102,14 +100,16 @@ def test_safe_add_player_falls_back_to_lookup_when_upsert_returns_empty_data():
 
 def test_safe_add_player_surfaces_schema_mismatch_for_on_conflict():
     supabase = _Supabase()
-    supabase.raise_api_error = APIError(
-        {
-            "code": "42P10",
-            "message": "there is no unique or exclusion constraint matching the ON CONFLICT specification",
-            "hint": None,
-            "details": None,
-        }
-    )
+    supabase.raise_api_errors = [
+        APIError(
+            {
+                "code": "42P10",
+                "message": "there is no unique or exclusion constraint matching the ON CONFLICT specification",
+                "hint": None,
+                "details": None,
+            }
+        )
+    ]
 
     ok, err = safe_add_player(
         supabase=supabase,
@@ -154,20 +154,30 @@ def test_get_or_create_player_inserts_and_returns_row():
     assert ok is True
     assert row == {"id": 7, "name": "Alice Smith"}
     assert err is None
-    assert supabase.last_operation == "insert"
+    assert supabase.last_operation == "upsert"
     assert supabase.last_returning == "representation"
 
 
-def test_get_or_create_player_duplicate_returns_existing_active_row():
+def test_get_or_create_player_falls_back_when_upsert_conflict_target_unavailable():
     supabase = _Supabase()
-    supabase.raise_api_error = APIError(
-        {
-            "code": "23505",
-            "message": "duplicate key value violates unique constraint",
-            "hint": None,
-            "details": None,
-        }
-    )
+    supabase.raise_api_errors = [
+        APIError(
+            {
+                "code": "42P10",
+                "message": "there is no unique or exclusion constraint matching the ON CONFLICT specification",
+                "hint": None,
+                "details": None,
+            }
+        ),
+        APIError(
+            {
+                "code": "23505",
+                "message": "duplicate key value violates unique constraint",
+                "hint": None,
+                "details": None,
+            }
+        ),
+    ]
     supabase.rows["players"].append(
         {
             "id": 99,
@@ -192,14 +202,16 @@ def test_get_or_create_player_duplicate_returns_existing_active_row():
 
 def test_get_or_create_player_non_duplicate_api_error_returns_failure():
     supabase = _Supabase()
-    supabase.raise_api_error = APIError(
-        {
-            "code": "42501",
-            "message": "permission denied",
-            "hint": None,
-            "details": None,
-        }
-    )
+    supabase.raise_api_errors = [
+        APIError(
+            {
+                "code": "42501",
+                "message": "permission denied",
+                "hint": None,
+                "details": None,
+            }
+        )
+    ]
 
     ok, row, err = get_or_create_player(
         supabase=supabase,
