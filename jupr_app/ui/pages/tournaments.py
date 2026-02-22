@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
 from datetime import datetime, timezone
 from pathlib import Path
