@@ -19,25 +19,16 @@ def get_or_create_player(
     normalized_name: str,
     payload: dict,
 ) -> tuple[bool, dict | None, str | None]:
-    """Insert a player, falling back to existing active row for duplicate-name conflicts."""
-    try:
-        created = (
-            supabase.table("players")
-            .insert(payload, returning="representation")
-            .execute()
-            .data
-            or []
-        )
-        if created:
-            return True, created[0], None
-        return False, None, "Player create succeeded but no player row was returned."
-    except APIError as exc:
-        code = str(getattr(exc, "code", "") or "")
-        message = str(getattr(exc, "message", "") or str(exc))
-        if code != "23505":
-            return False, None, message or "Failed to add player."
+    """Create/load player idempotently.
 
-        existing_rows = (
+    Prefer a single upsert on (club_id, normalized_name). If the schema does not expose
+    a matching unique/exclusion constraint (e.g. partial unique index), fall back to
+    insert + 23505 recovery.
+    """
+    upsert_conflict = "club_id,normalized_name"
+
+    def _lookup_existing_active() -> list[dict]:
+        return (
             supabase.table("players")
             .select("id,club_id,name,normalized_name,active,rating")
             .eq("club_id", str(club_id))
@@ -48,9 +39,61 @@ def get_or_create_player(
             .data
             or []
         )
+
+    try:
+        upserted = (
+            supabase.table("players")
+            .upsert(
+                payload,
+                on_conflict=upsert_conflict,
+                returning="representation",
+            )
+            .execute()
+            .data
+            or []
+        )
+        if upserted:
+            return True, upserted[0], None
+
+        existing_rows = _lookup_existing_active()
         if existing_rows:
             return True, existing_rows[0], "already_exists"
-        return False, None, "Player already exists but could not be loaded."
+        return False, None, "Player create succeeded but no player row was returned."
+    except APIError as exc:
+        code = str(getattr(exc, "code", "") or "")
+        message = str(getattr(exc, "message", "") or str(exc))
+        upsert_conflict_missing = (
+            code == "42P10"
+            or "NO UNIQUE OR EXCLUSION CONSTRAINT MATCHING THE ON CONFLICT SPECIFICATION"
+            in message.upper()
+        )
+        if not upsert_conflict_missing:
+            return False, None, message or "Failed to add player."
+
+        try:
+            created = (
+                supabase.table("players")
+                .insert(payload, returning="representation")
+                .execute()
+                .data
+                or []
+            )
+            if created:
+                return True, created[0], None
+            existing_rows = _lookup_existing_active()
+            if existing_rows:
+                return True, existing_rows[0], "already_exists"
+            return False, None, "Player create succeeded but no player row was returned."
+        except APIError as fallback_exc:
+            fallback_code = str(getattr(fallback_exc, "code", "") or "")
+            fallback_message = str(getattr(fallback_exc, "message", "") or str(fallback_exc))
+            if fallback_code != "23505":
+                return False, None, fallback_message or "Failed to add player."
+
+            existing_rows = _lookup_existing_active()
+            if existing_rows:
+                return True, existing_rows[0], "already_exists"
+            return False, None, "Player already exists but could not be loaded."
     except Exception as exc:
         logger.exception("get_or_create_player failed unexpectedly")
         return False, None, str(exc) or "Failed to add player."
