@@ -4,9 +4,10 @@ from __future__ import annotations
 from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 
 import json
+import logging
 import time
 from datetime import date, datetime, timedelta, timezone
-from jupr_app.domain.player_ops import safe_add_player
+from jupr_app.domain.player_ops import get_or_create_player
 
 import pandas as pd
 import streamlit as st
@@ -38,6 +39,9 @@ from jupr_app.domain.roster import (
 )
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.ui.layout import page_shell
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_iso_now() -> str:
@@ -381,53 +385,75 @@ def render(ctx):
 
                 c1, c2 = st.columns([1, 3])
                 if c1.button("Save New Players & Continue", type="primary"):
-                    errs = 0
+                    blocking_errs = 0
+                    created_or_existing: dict[str, dict] = {}
                     for _, r in edited_new.iterrows():
                         nm = str(r["Name"]).strip()
+                        normalized_name = " ".join(nm.lower().split())
+                        player_email = str(r.get("Email", "") or "").strip()
                         try:
                             jupr = float(r["Starting JUPR"])
-                        except (TypeError, ValueError):
-                            errs += 1
+                        except (TypeError, ValueError, KeyError):
+                            blocking_errs += 1
+                            logger.warning(
+                                "Ladder step2 add player validation failed club_id=%s normalized_name=%s name=%s email=%s err=%s",
+                                str(ctx.club_id),
+                                normalized_name,
+                                nm,
+                                player_email,
+                                "invalid Starting JUPR value",
+                            )
                             st.error(f"Could not add {nm}: invalid Starting JUPR value.")
                             continue
 
-                        ok, err = safe_add_player(
-                            supabase=ctx.supabase,
-                            club_id=str(ctx.club_id),
-                            name=nm,
-                            rating_jupr=jupr,
-                        )
+                        payload = {
+                            "club_id": str(ctx.club_id),
+                            "name": nm,
+                            "normalized_name": normalized_name,
+                            "rating": float(jupr),
+                        }
+                        try:
+                            ok, player_row, err = get_or_create_player(
+                                supabase=ctx.supabase,
+                                club_id=str(ctx.club_id),
+                                normalized_name=normalized_name,
+                                payload=payload,
+                            )
+                        except Exception as exc:
+                            ok, player_row, err = False, None, str(exc)
+
                         if not ok:
-                            errs += 1
+                            blocking_errs += 1
+                            logger.warning(
+                                "Ladder step2 add player failed club_id=%s normalized_name=%s name=%s email=%s err=%s",
+                                str(ctx.club_id),
+                                normalized_name,
+                                nm,
+                                player_email,
+                                err,
+                            )
                             st.error(f"Could not add {nm}: {err}")
+                            continue
 
-                    # If any inserts failed, stop here (do NOT continue)
-                    if errs > 0:
-                        st.stop()
+                        if err == "already_exists":
+                            logger.info(
+                                "Ladder step2 player already exists club_id=%s normalized_name=%s name=%s email=%s",
+                                str(ctx.club_id),
+                                normalized_name,
+                                nm,
+                                player_email,
+                            )
+                            st.info(f"{nm} is already in your club roster. Using existing player record.")
 
-                    # -------------------------
-                    # SUCCESS PATH: fetch + advance
-                    # -------------------------
+                        if isinstance(player_row, dict):
+                            created_or_existing[normalized_name] = player_row
+
+                    # Required operations failed; keep user on step 2.
+                    if blocking_errs > 0:
+                        st.warning("Some players could not be processed. Fix the errors above and try again.")
+                        return
+
                     created_names = [str(x).strip() for x in edited_new["Name"].tolist() if str(x).strip()]
-                    resp = (
-                        ctx.supabase.table("players")
-                        .select("id,name,rating")
-                        .eq("club_id", str(ctx.club_id))
-                        .execute()
-                    )
-                    all_rows = resp.data or []
-
-                    def norm(s: str) -> str:
-                        return str(s or "").strip().lower()
-
-                    wanted = {norm(x) for x in created_names}
-                    created_rows = [r for r in all_rows if norm(r.get("name")) in wanted]
-
-                    if not created_rows:
-                        st.error("Players were inserted, but could not be re-fetched. Try Refresh and re-run Analyze & Seed.")
-                        st.stop()
-
-                    created_by_name = {str(rr["name"]).strip(): rr for rr in created_rows}
 
                     base_roster = st.session_state.get("ladder_temp_roster", []) or []
                     base_roster_names = {str(x.get("name", "")).strip() for x in base_roster}
@@ -435,14 +461,28 @@ def render(ctx):
                     for nm in created_names:
                         if nm in base_roster_names:
                             continue
-                        row = created_by_name.get(nm)
+                        row = created_or_existing.get(" ".join(nm.lower().split()))
                         if not row:
+                            logger.warning(
+                                "Ladder step2 missing returned row club_id=%s normalized_name=%s name=%s email=%s err=%s",
+                                str(ctx.club_id),
+                                " ".join(nm.lower().split()),
+                                nm,
+                                "",
+                                "player row not returned from create/get",
+                            )
+                            st.error(f"Could not load {nm} after processing. Please retry.")
+                            blocking_errs += 1
                             continue
                         base_roster.append({
                             "name": str(row["name"]).strip(),
                             "rating": float(row.get("rating", 1200.0) or 1200.0),
                             "id": int(row["id"]),
                         })
+
+                    if blocking_errs > 0:
+                        st.warning("Some players could not be loaded into the roster yet. Please retry.")
+                        return
 
                     # Clear "new players" list so Step 2 doesn't trap you again
                     st.session_state.ladder_temp_roster = base_roster
