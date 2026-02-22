@@ -28,7 +28,6 @@ from jupr_app.data.retry import sb_retry
 from jupr_app.data.schema_preflight import ensure_app_write_invariants
 from jupr_app.data.sb_write import sb_delete, sb_insert, sb_update
 from jupr_app.domain.audit_logger import log_event
-from jupr_app.domain.idempotency import build_match_idempotency_key_v1
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.domain.player_merge import merge_player_into as merge_player_into_domain
@@ -149,7 +148,7 @@ def _require_match_datetime(payload: Mapping[str, Any]) -> str:
 def _require_idempotency_key(payload: Mapping[str, Any]) -> str:
     key = str(payload.get("idempotency_key") or "").strip()
     if not key:
-        raise ValueError("idempotency_key is required")
+        raise RuntimeError("All match writes require idempotency_key.")
     return key
 
 
@@ -300,30 +299,6 @@ def ingest_match_with_identity_resolution(*, supabase: Any, club_id: str, match_
         club_id=club_id,
         payload=match_payload,
     )
-    if not str(resolved_payload.get("idempotency_key") or "").strip():
-        resolved_payload["idempotency_key"] = build_match_idempotency_key_v1(
-            {
-                "club_id": str(club_id),
-                "date": resolved_payload.get("date"),
-                "context_type": resolved_payload.get("context_type"),
-                "context_id": resolved_payload.get("context_id"),
-                "competition_id": resolved_payload.get("competition_id"),
-                "division_id": resolved_payload.get("division_id"),
-                "tournament_id": resolved_payload.get("tournament_id"),
-                "tournament_game_id": resolved_payload.get("tournament_game_id"),
-                "match_type": resolved_payload.get("match_type"),
-                "match_format": resolved_payload.get("match_format"),
-                "best_of": resolved_payload.get("best_of"),
-                "t1_p1": resolved_payload.get("t1_p1"),
-                "t1_p2": resolved_payload.get("t1_p2"),
-                "t2_p1": resolved_payload.get("t2_p1"),
-                "t2_p2": resolved_payload.get("t2_p2"),
-                "score_t1": resolved_payload.get("score_t1"),
-                "score_t2": resolved_payload.get("score_t2"),
-                "score_json": resolved_payload.get("score_json"),
-                "games": resolved_payload.get("games"),
-            }
-        )
     return record_match(supabase=supabase, club_id=club_id, match_payload=resolved_payload)
 
 
