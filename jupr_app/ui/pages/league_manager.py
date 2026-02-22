@@ -1187,7 +1187,7 @@ def render(ctx):
                 }
 
                 try:
-                    resp = ctx.sb_insert(supabase, "leagues_metadata", payload)
+                    resp = sb_insert(ctx.supabase, "leagues_metadata", payload)
                 except Exception as exc:
                     st.error(f"Could not create league: {exc}")
                     st.stop()
@@ -1352,7 +1352,7 @@ def render(ctx):
                 "rules_config": rules_cfg,
                 "awards_config": awards_cfg,
             }
-            ctx.sb_insert(supabase, "leagues_metadata", payload)
+            sb_insert(ctx.supabase, "leagues_metadata", payload)
             return
             st.success("Draft duplicated.")
             return
