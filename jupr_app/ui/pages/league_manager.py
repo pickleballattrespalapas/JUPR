@@ -8,6 +8,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from jupr_app.domain.player_ops import get_or_create_player
+from jupr_app.domain.ratings import jupr_to_elo
 
 import pandas as pd
 import streamlit as st
@@ -574,7 +575,7 @@ def render(ctx):
                             "club_id": str(ctx.club_id),
                             "name": nm,
                             "normalized_name": normalized_name,
-                            "rating": float(jupr),
+                            "rating": float(jupr_to_elo(jupr)),
                         }
                         try:
                             ok, player_row, err = get_or_create_player(
@@ -1070,7 +1071,7 @@ def render(ctx):
                                         "club_id": str(ctx.club_id),
                                         "name": str(sub_player["name"]).strip(),
                                         "normalized_name": normalized_name,
-                                        "rating": float(sub_player.get("rating", 3.5)),
+                                        "rating": float(jupr_to_elo(sub_player.get("rating", 3.5))),
                                     }
                                     ok, player_row, err = get_or_create_player(
                                         supabase=ctx.supabase,
@@ -1145,7 +1146,7 @@ def render(ctx):
                                         "club_id": str(ctx.club_id),
                                         "name": str(add_player["name"]).strip(),
                                         "normalized_name": normalized_name,
-                                        "rating": float(add_player.get("rating", 3.5)),
+                                        "rating": float(jupr_to_elo(add_player.get("rating", 3.5))),
                                     }
                                     ok, player_row, err = get_or_create_player(
                                         supabase=ctx.supabase,

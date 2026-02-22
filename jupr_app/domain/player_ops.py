@@ -8,6 +8,32 @@ from postgrest.exceptions import APIError
 logger = logging.getLogger(__name__)
 
 
+def _coerce_rating_to_elo(value: float | int | str | None) -> float:
+    """Normalize incoming rating writes to canonical ELO storage.
+
+    We store ratings as ELO points in DB (e.g., 1400), while some UI paths
+    collect JUPR inputs (e.g., 3.5). Defensive rule for new writes:
+    if rating < 20, treat it as JUPR and convert to ELO.
+    """
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 1200.0
+
+    if parsed < 20.0:
+        return parsed * 400.0
+    return parsed
+
+
+def _normalize_player_payload_for_write(payload: dict) -> dict:
+    normalized = dict(payload or {})
+    if "rating" in normalized:
+        normalized["rating"] = _coerce_rating_to_elo(normalized.get("rating"))
+    if "starting_rating" in normalized:
+        normalized["starting_rating"] = _coerce_rating_to_elo(normalized.get("starting_rating"))
+    return normalized
+
+
 def _normalized_player_name(name: str) -> str:
     return " ".join(str(name or "").strip().lower().split())
 
@@ -26,6 +52,7 @@ def get_or_create_player(
     insert + 23505 recovery.
     """
     upsert_conflict = "club_id,normalized_name"
+    write_payload = _normalize_player_payload_for_write(payload)
 
     def _lookup_existing_active() -> list[dict]:
         return (
@@ -44,7 +71,7 @@ def get_or_create_player(
         upserted = (
             supabase.table("players")
             .upsert(
-                payload,
+                write_payload,
                 on_conflict=upsert_conflict,
                 returning="representation",
             )
@@ -73,7 +100,7 @@ def get_or_create_player(
         try:
             created = (
                 supabase.table("players")
-                .insert(payload, returning="representation")
+                .insert(write_payload, returning="representation")
                 .execute()
                 .data
                 or []
@@ -117,7 +144,7 @@ def safe_add_player(
             "club_id": str(club_id),
             "name": str(name or "").strip(),
             "normalized_name": normalized_name,
-            "rating": float(rating_jupr),
+            "rating": _coerce_rating_to_elo(rating_jupr),
         }
 
         upsert_resp = (
