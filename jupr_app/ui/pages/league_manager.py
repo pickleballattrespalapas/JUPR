@@ -12,8 +12,6 @@ from jupr_app.domain.player_ops import get_or_create_player
 import pandas as pd
 import streamlit as st
 
-from jupr_court_board import court_board
-
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
 from jupr_app.domain.league_night_roster import (
@@ -30,7 +28,6 @@ from jupr_app.domain.leagues import (
 )
 from jupr_app.domain.roster import (
     compress_courts,
-    courts_to_roster_df,
     move_player_to_court,
     move_within_court,
     normalize_slots,
@@ -201,6 +198,37 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
     df["court"] = pd.to_numeric(df.get("court"), errors="coerce").fillna(0).astype(int)
     df["slot"] = pd.to_numeric(df.get("slot"), errors="coerce").fillna(0).astype(int)
     return df.sort_values(["court", "slot"]).reset_index(drop=True)
+
+
+def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -> None:
+    playable = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() != "bench"]
+    bench = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() == "bench"]
+    courts = playable + bench
+
+    if not courts:
+        st.info("No courts to display.")
+        return
+
+    per_row = max(1, int(max_per_row))
+    for start in range(0, len(courts), per_row):
+        row = courts[start : start + per_row]
+        cols = st.columns(len(row))
+        for col, court in zip(cols, row):
+            with col:
+                court_id = str(court.get("court_id") or "Court")
+                players = list(court.get("players") or [])
+                st.markdown(f"##### {court_id}")
+                st.caption(f"{len(players)} player(s)")
+                if not players:
+                    st.markdown("_No players assigned._")
+                    continue
+                for idx, player in enumerate(players, start=1):
+                    name = str(player.get("name") or f"Player {idx}")
+                    rating = player.get("rating")
+                    if isinstance(rating, (int, float)):
+                        st.markdown(f"{idx}. {name} ({float(rating):.3f})")
+                    else:
+                        st.markdown(f"{idx}. {name}")
 
 
 def render(ctx):
@@ -616,17 +644,9 @@ def render(ctx):
 
             courts_payload = roster_df_to_courts(roster_df, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
 
-            round_num = int(st.session_state.get("ladder_round_num", 1))
-            result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}")
+            _render_court_board_grid(courts_payload, max_per_row=4)
 
-            if result and isinstance(result, dict) and "courts" in result:
-                updated_courts = result["courts"]
-                new_df = courts_to_roster_df(updated_courts, roster_df)
-                if not new_df.equals(st.session_state.ladder_live_roster):
-                    st.session_state.ladder_live_roster = new_df
-                    st.session_state.pop("current_schedule", None)
-                    st.session_state.pop("current_schedule_round", None)
-                    return
+            round_num = int(st.session_state.get("ladder_round_num", 1))
 
             # Validation
             target_sizes = st.session_state.get("ladder_court_sizes", None)
