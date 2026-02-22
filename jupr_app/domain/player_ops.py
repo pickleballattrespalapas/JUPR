@@ -35,8 +35,11 @@ def safe_add_player(
 
         upsert_resp = (
             supabase.table("players")
-            .upsert(payload, on_conflict="club_id,normalized_name")
-            .select("id")
+            .upsert(
+                payload,
+                on_conflict="club_id,normalized_name",
+                returning="representation",
+            )
             .execute()
         )
         upsert_rows = upsert_resp.data or []
