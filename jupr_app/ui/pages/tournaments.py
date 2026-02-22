@@ -147,9 +147,9 @@ def render(ctx):
         .execute()
     )
     games = games_resp.data or []
-    game_ids = [g["id"] for g in games]
-    if len(game_ids) != len(set(game_ids)):
-        raise RuntimeError("Duplicate tournament_game IDs detected in render.")
+    ids = [g["id"] for g in games]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("Duplicate tournament_game rows detected.")
 
     rr_games = [g for g in games if g.get("stage") == "ROUND_ROBIN"]
     playoff_games = [g for g in games if g.get("stage") == "PLAYOFF"]
