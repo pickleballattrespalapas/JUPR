@@ -159,6 +159,8 @@ def _load_week_matches(
 ) -> pd.DataFrame:
     if df_matches is not None and not df_matches.empty:
         df_local = df_matches.copy()
+        if "club_id" in df_local.columns:
+            df_local = df_local[df_local["club_id"].astype(str) == str(club_id)].copy()
         df_local["date_dt"] = pd.to_datetime(df_local.get("date", None), utc=True, errors="coerce")
         in_range = df_local[(df_local["date_dt"] >= start_dt) & (df_local["date_dt"] <= end_dt)].copy()
         if not in_range.empty:

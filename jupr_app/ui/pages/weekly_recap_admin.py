@@ -143,7 +143,10 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
 
 @st.cache_data(show_spinner=False)
 def _pdf_for_recap(html: str) -> bytes:
-    from weasyprint import HTML
+    try:
+        from weasyprint import HTML
+    except Exception as exc:  # pragma: no cover - depends on deployment image
+        raise RuntimeError("PDF export unavailable: WeasyPrint is not installed.") from exc
 
     return HTML(string=html).write_pdf()
 
@@ -396,13 +399,17 @@ def render(ctx):
             st.session_state.pop("weekly_recap_render_mode", None)
     st.subheader("Download PDF")
     html = build_weekly_recap_html(final_json, print_view=True)
-    pdf_bytes = _pdf_for_recap(html)
-    st.download_button(
-        "Download PDF",
-        data=pdf_bytes,
-        file_name=_pdf_filename(final_json),
-        mime="application/pdf",
-    )
+    try:
+        pdf_bytes = _pdf_for_recap(html)
+    except Exception:
+        st.warning("PDF export is unavailable in this environment. Use browser print view as a fallback.")
+    else:
+        st.download_button(
+            "Download PDF",
+            data=pdf_bytes,
+            file_name=_pdf_filename(final_json),
+            mime="application/pdf",
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("Publish"):
