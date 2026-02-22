@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from time import sleep
 from typing import Any
 
@@ -28,7 +29,11 @@ def _get_api_error_code(exc: APIError) -> str | None:
 
 
 def acquire_replay_lock(supabase: Any, club_id: str) -> None:
-    payload = {"club_id": str(club_id), "status": "running"}
+    payload = {
+        "club_id": str(club_id),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "running",
+    }
     try:
         supabase.table("replay_lock").insert(payload).execute()
     except APIError as exc:

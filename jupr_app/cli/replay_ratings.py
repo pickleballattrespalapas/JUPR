@@ -16,6 +16,60 @@ from jupr_app.domain.replay_lock import (
 )
 
 
+def _count_rows(supabase, table: str, club_id: str) -> int:
+    result = (
+        supabase.table(table)
+        .select("id", count="exact")
+        .eq("club_id", str(club_id))
+        .limit(1)
+        .execute()
+    )
+    return int(getattr(result, "count", 0) or 0)
+
+
+def _load_previous_success_summary(supabase, club_id: str) -> dict:
+    try:
+        rows = (
+            supabase.table("replay_runs")
+            .select("summary")
+            .eq("club_id", str(club_id))
+            .eq("status", "success")
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return {}
+    if not rows:
+        return {}
+    summary = rows[0].get("summary")
+    return summary if isinstance(summary, dict) else {}
+
+
+def _verify_deterministic_counts_or_raise(supabase, club_id: str, summary: dict) -> None:
+    previous = _load_previous_success_summary(supabase, club_id)
+    current_counts = {
+        "matches": _count_rows(supabase, "matches", club_id),
+        "league_ratings": _count_rows(supabase, "league_ratings", club_id),
+    }
+    summary["post_replay_counts"] = current_counts
+
+    previous_counts = previous.get("post_replay_counts") if isinstance(previous, dict) else None
+    if not isinstance(previous_counts, dict):
+        return
+
+    if (
+        int(previous_counts.get("matches", -1)) != int(current_counts["matches"])
+        or int(previous_counts.get("league_ratings", -1)) != int(current_counts["league_ratings"])
+    ):
+        raise RuntimeError(
+            "Deterministic replay verification failed: current counts differ from previous successful run. "
+            f"previous={previous_counts} current={current_counts}"
+        )
+
+
 def _load_df_meta(supabase, club_id: str) -> pd.DataFrame:
     try:
         response = (
@@ -80,6 +134,7 @@ def main() -> int:
                 progress_cb=None,
                 acquire_lock=False,
             )
+            _verify_deterministic_counts_or_raise(supabase, str(args.club_id), summary)
             _record_run(supabase, str(args.club_id), "success", summary)
         finally:
             release_replay_lock(supabase, str(args.club_id))

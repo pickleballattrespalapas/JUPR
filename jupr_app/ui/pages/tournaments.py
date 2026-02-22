@@ -151,6 +151,19 @@ def render(ctx):
     if len(ids) != len(set(ids)):
         raise RuntimeError("Duplicate tournament_game rows detected.")
 
+    seen: set[tuple[object, object, object, object, object]] = set()
+    for g in games:
+        key = (
+            g.get("stage"),
+            g.get("rr_round_number"),
+            g.get("rr_slot_number"),
+            g.get("playoff_game_code"),
+            g.get("series_game_number"),
+        )
+        if key in seen:
+            raise RuntimeError("Duplicate tournament_game invariant violated.")
+        seen.add(key)
+
     rr_games = [g for g in games if g.get("stage") == "ROUND_ROBIN"]
     playoff_games = [g for g in games if g.get("stage") == "PLAYOFF"]
 
