@@ -201,7 +201,7 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(["court", "slot"]).reset_index(drop=True)
 
 
-def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -> None:
+def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> None:
     def _court_number(court_id: str) -> int | None:
         m = re.search(r"(\d+)", str(court_id or ""))
         if not m:
@@ -211,6 +211,21 @@ def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -
     def _sort_key(court: dict) -> tuple[bool, int]:
         court_num = _court_number(str(court.get("court_id") or ""))
         return (court_num is None, court_num or 10_000)
+
+    roster_now = compress_courts(normalize_slots(roster_df.copy()))
+    courts_payload = roster_df_to_courts(roster_now, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
+    bench_rows = list(st.session_state.get("ladder_bench_players", []))
+    for bench_row in bench_rows:
+        pid = bench_row.get("player_id")
+        if pid is None:
+            continue
+        courts_payload[-1]["players"].append(
+            {
+                "player_id": str(int(pid)),
+                "name": str(bench_row.get("name") or f"#{pid}"),
+                "rating": float(bench_row.get("rating", 1200.0)) / 400.0,
+            }
+        )
 
     playable = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() != "bench"]
     bench = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() == "bench"]
@@ -264,10 +279,92 @@ def _render_court_board_grid(courts_payload: list[dict], max_per_row: int = 4) -
                 for idx, player in enumerate(players, start=1):
                     name = str(player.get("name") or f"Player {idx}")
                     rating = player.get("rating")
+                    row_cols = st.columns([3, 1, 1])
                     if isinstance(rating, (int, float)):
-                        st.markdown(f"{idx}. {name} ({float(rating):.3f})")
+                        row_cols[0].markdown(f"{idx}. {name} ({float(rating):.3f})")
                     else:
-                        st.markdown(f"{idx}. {name}")
+                        row_cols[0].markdown(f"{idx}. {name}")
+
+                    if court_id.lower() != "bench":
+                        can_move_up = idx > 1
+                        can_move_down = idx < len(players)
+                        if row_cols[1].button("⬆️", key=f"cb_up_{court_id}_{idx}", disabled=not can_move_up):
+                            base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+                            updated = move_within_court(base, name, idx - 1)
+                            st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
+                            st.session_state.pop("current_schedule", None)
+                            st.rerun()
+                        if row_cols[2].button("⬇️", key=f"cb_down_{court_id}_{idx}", disabled=not can_move_down):
+                            base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+                            updated = move_within_court(base, name, idx + 1)
+                            st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
+                            st.session_state.pop("current_schedule", None)
+                            st.rerun()
+
+                        mv_cols = st.columns([2, 1, 1])
+                        court_options = sorted(roster_now["court"].astype(int).unique().tolist())
+                        target = mv_cols[0].selectbox(
+                            "Move to",
+                            options=[str(c) for c in court_options] + ["Bench"],
+                            index=0,
+                            key=f"cb_target_{court_id}_{idx}_{name}",
+                            label_visibility="collapsed",
+                        )
+                        if mv_cols[1].button("Move", key=f"cb_mv_{court_id}_{idx}"):
+                            base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+                            if target == "Bench":
+                                row = base[base["name"].astype(str) == name]
+                                if not row.empty:
+                                    bench_list = list(st.session_state.get("ladder_bench_players", []))
+                                    picked = row.iloc[0]
+                                    bench_list.append(
+                                        {
+                                            "player_id": int(picked.get("player_id")),
+                                            "name": str(picked.get("name")),
+                                            "rating": float(picked.get("rating", 1200.0)),
+                                        }
+                                    )
+                                    st.session_state["ladder_bench_players"] = bench_list
+                                updated = base[base["name"].astype(str) != name].copy()
+                            else:
+                                target_court = int(target)
+                                target_len = len(base[base["court"].astype(int) == target_court]) + 1
+                                updated = move_player_to_court(base, name, target_court, target_len)
+                            st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
+                            st.session_state.pop("current_schedule", None)
+                            st.rerun()
+                    else:
+                        bench_move_cols = st.columns([2, 1])
+                        court_options = sorted(roster_now["court"].astype(int).unique().tolist())
+                        add_target = bench_move_cols[0].selectbox(
+                            "Add to court",
+                            options=court_options,
+                            key=f"cb_add_target_{idx}_{name}",
+                            label_visibility="collapsed",
+                        )
+                        if bench_move_cols[1].button("Add", key=f"cb_add_{idx}_{name}"):
+                            bench_list = list(st.session_state.get("ladder_bench_players", []))
+                            picked = next((p for p in bench_list if str(p.get("name")) == name), None)
+                            if picked is not None:
+                                bench_list = [p for p in bench_list if str(p.get("name")) != name]
+                                st.session_state["ladder_bench_players"] = bench_list
+                                base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+                                insert_slot = len(base[base["court"].astype(int) == int(add_target)]) + 1
+                                new_row = pd.DataFrame(
+                                    [
+                                        {
+                                            "player_id": int(picked.get("player_id")),
+                                            "name": str(picked.get("name")),
+                                            "rating": float(picked.get("rating", 1200.0)),
+                                            "court": int(add_target),
+                                            "slot": int(insert_slot),
+                                        }
+                                    ]
+                                )
+                                updated = pd.concat([base, new_row], ignore_index=True)
+                                st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
+                                st.session_state.pop("current_schedule", None)
+                                st.rerun()
 
 
 def render(ctx):
@@ -662,8 +759,8 @@ def render(ctx):
                 st.session_state.ladder_state = "CONFIG_COURTS"
                 return
 
-            st.markdown("#### Step 4: Court Board Preview (Drag & Drop)")
-            st.caption("Use the Court Board to make final adjustments. Bench players will not be scheduled.")
+            st.markdown("#### Step 4: Court Board Preview")
+            st.caption("Use the Court Board controls to reorder players, move between courts, and manage bench.")
 
             ps = st.session_state.get("ladder_print_sheet", None)
             if isinstance(ps, pd.DataFrame) and not ps.empty:
@@ -679,9 +776,7 @@ def render(ctx):
             roster_df = compress_courts(normalize_slots(st.session_state.get("ladder_live_roster", pd.DataFrame()).copy()))
             st.session_state.ladder_live_roster = roster_df
 
-            courts_payload = roster_df_to_courts(roster_df, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
-
-            _render_court_board_grid(courts_payload, max_per_row=4)
+            _render_court_board_grid(roster_df, max_per_row=4)
 
             round_num = int(st.session_state.get("ladder_round_num", 1))
 
