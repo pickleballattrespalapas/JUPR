@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_update, sb_upsert
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -281,7 +281,10 @@ def render(ctx):
                 # Explicit club_id for tenant isolation (RLS + multi-club safety)
                 game["club_id"] = str(club_id)
             _require_club_id_payload(games_payload)
-            sb_insert(supabase, "tournament_games", games_payload)
+            supabase.table("tournament_games").upsert(
+                games_payload,
+                on_conflict="tournament_id,stage,rr_round_number,rr_slot_number"
+            ).execute()
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
             st.session_state["force_data_refresh"] = True

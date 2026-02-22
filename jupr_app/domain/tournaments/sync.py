@@ -1,32 +1,8 @@
 from __future__ import annotations
-# Match writes must go through match_pipeline.
+# Tournament match sync writes are idempotent via direct upsert.
 from typing import Any
 
-from jupr_app.domain.idempotency import build_match_idempotency_key_v1
-from jupr_app.domain.match_pipeline import record_match, update_match
-
-
-def _build_tournament_match_idempotency_key(*, club_id: str, game_id: str, common_fields: dict[str, Any]) -> str:
-    return build_match_idempotency_key_v1(
-        {
-            "club_id": str(club_id),
-            "date": str(common_fields.get("date") or ""),
-            "context_type": "tournament",
-            "context_id": str(common_fields.get("tournament_id") or ""),
-            "competition_id": str(common_fields.get("tournament_id") or ""),
-            "tournament_id": str(common_fields.get("tournament_id") or ""),
-            "tournament_game_id": str(common_fields.get("tournament_game_id") or game_id),
-            "match_type": str(common_fields.get("match_type") or ""),
-            "t1_p1": int(common_fields.get("t1_p1") or 0),
-            "t1_p2": int(common_fields.get("t1_p2") or 0),
-            "t2_p1": int(common_fields.get("t2_p1") or 0),
-            "t2_p2": int(common_fields.get("t2_p2") or 0),
-            "score_t1": int(common_fields.get("score_t1") or 0),
-            "score_t2": int(common_fields.get("score_t2") or 0),
-            "games": common_fields.get("games"),
-            "score_json": common_fields.get("score_json"),
-        }
-    )
+from jupr_app.data.sb_write import sb_upsert
 
 
 def sync_tournament_game_to_match(
@@ -40,7 +16,7 @@ def sync_tournament_game_to_match(
     df_leagues,
     df_meta,
 ) -> None:
-    """Persist tournament game scores through the canonical match pipeline."""
+    """Persist tournament game scores idempotently to matches."""
 
     game_id = game.get("id")
     if not game_id:
@@ -51,56 +27,25 @@ def sync_tournament_game_to_match(
     team_a_player_ids = [pid for pid in [match_payload.get("t1_p1"), match_payload.get("t1_p2")] if pid is not None]
     team_b_player_ids = [pid for pid in [match_payload.get("t2_p1"), match_payload.get("t2_p2")] if pid is not None]
 
-    existing_resp = (
-        supabase.table("matches")
-        .select("id,score_t1,score_t2")
-        .eq("club_id", str(club_id))
-        .eq("tournament_game_id", str(game_id))
-        .limit(1)
-        .execute()
-    )
-    existing_rows = getattr(existing_resp, "data", None) or []
-
-    common_fields = {
-        "score_t1": int(match_payload.get("s1") or 0),
-        "score_t2": int(match_payload.get("s2") or 0),
-        "date": match_payload.get("date"),
-        "league": match_payload.get("league"),
-        "week_tag": match_payload.get("week_tag"),
-        "tournament_id": match_payload.get("tournament_id"),
-        "tournament_game_id": match_payload.get("tournament_game_id"),
-        "match_type": "PopUp" if bool(match_payload.get("is_popup", True)) else match_payload.get("match_type"),
-        "t1_p1": team_a_player_ids[0] if len(team_a_player_ids) > 0 else None,
-        "t1_p2": team_a_player_ids[1] if len(team_a_player_ids) > 1 else None,
-        "t2_p1": team_b_player_ids[0] if len(team_b_player_ids) > 0 else None,
-        "t2_p2": team_b_player_ids[1] if len(team_b_player_ids) > 1 else None,
-    }
-
-    if not existing_rows:
-        idempotency_key = _build_tournament_match_idempotency_key(
-            club_id=str(club_id),
-            game_id=str(game_id),
-            common_fields=common_fields,
-        )
-        record_match(
-            supabase=supabase,
-            club_id=str(club_id),
-            match_payload={
-                **common_fields,
-                "context_type": "tournament",
-                "context_id": str(match_payload.get("tournament_id") or game.get("tournament_id") or ""),
-                "idempotency_key": idempotency_key,
-            },
-        )
-        return
-
-    existing = existing_rows[0]
-    if int(existing.get("score_t1") or 0) == common_fields["score_t1"] and int(existing.get("score_t2") or 0) == common_fields["score_t2"]:
-        return
-
-    update_match(
-        supabase=supabase,
-        club_id=str(club_id),
-        match_id=int(existing.get("id")),
-        patch=common_fields,
+    sb_upsert(
+        supabase,
+        "matches",
+        {
+            "club_id": str(club_id),
+            "score_t1": int(match_payload.get("s1") or 0),
+            "score_t2": int(match_payload.get("s2") or 0),
+            "date": match_payload.get("date"),
+            "league": match_payload.get("league"),
+            "week_tag": match_payload.get("week_tag"),
+            "tournament_id": match_payload.get("tournament_id"),
+            "tournament_game_id": str(match_payload.get("tournament_game_id") or game_id),
+            "match_type": "PopUp" if bool(match_payload.get("is_popup", True)) else match_payload.get("match_type"),
+            "t1_p1": team_a_player_ids[0] if len(team_a_player_ids) > 0 else None,
+            "t1_p2": team_a_player_ids[1] if len(team_a_player_ids) > 1 else None,
+            "t2_p1": team_b_player_ids[0] if len(team_b_player_ids) > 0 else None,
+            "t2_p2": team_b_player_ids[1] if len(team_b_player_ids) > 1 else None,
+            "context_type": "tournament",
+            "context_id": str(match_payload.get("tournament_id") or game.get("tournament_id") or ""),
+        },
+        conflict="club_id,tournament_game_id",
     )
