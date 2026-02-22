@@ -72,14 +72,21 @@ def _json_size_bytes(payload: Any) -> int:
 
 
 def _count_rows(*, supabase: Any, table: str, club_id: str) -> int:
-    rows = (
-        supabase.table(table)
-        .select("id", count="exact")
-        .eq("club_id", str(club_id))
-        .limit(1)
-        .execute()
-    )
-    return int(getattr(rows, "count", 0) or 0)
+    query = supabase.table(table)
+    try:
+        query = query.select("id", count="exact")
+    except TypeError:
+        query = query.select("id")
+
+    query = query.eq("club_id", str(club_id))
+    if hasattr(query, "limit"):
+        query = query.limit(1)
+
+    rows = query.execute()
+    count = getattr(rows, "count", None)
+    if count is not None:
+        return int(count)
+    return int(len(getattr(rows, "data", []) or []))
 
 
 def _chunk_rows_by_payload_limit(rows: list[Dict[str, Any]], *, max_payload_bytes: int) -> list[list[Dict[str, Any]]]:
