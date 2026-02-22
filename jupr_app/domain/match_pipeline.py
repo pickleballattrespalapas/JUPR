@@ -20,6 +20,8 @@ from __future__ import annotations
 
 # Match writes must go through match_pipeline.
 
+import os
+
 from typing import Any, Mapping
 
 import pandas as pd
@@ -321,6 +323,8 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     _enforce_write_preflight(supabase)
     scoped_club_id = _require_club_id(club_id)
     _require_match_datetime(match_payload)
+    if match_payload.get("idempotency_key") is None:
+        raise RuntimeError("All match writes require idempotency_key.")
     scoped_idempotency_key = _require_idempotency_key(match_payload)
 
     existing_match = _find_existing_match_by_idempotency_key(
@@ -351,6 +355,9 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
         )
 
     payload = _coerce_match_payload(scoped_club_id, match_payload)
+    env = str(os.getenv("JUPR_ENV") or os.getenv("ENV") or "").lower()
+    if env in {"dev", "development", "local"}:
+        assert payload.get("club_id") is not None
     inserted_rows: list[dict[str, Any]] = []
     inserted_match_id: int | None = None
     warnings: list[str] = []

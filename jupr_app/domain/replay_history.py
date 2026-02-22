@@ -6,6 +6,7 @@ from jupr_app.data.sb_write import sb_rpc, sb_update
 
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
@@ -46,7 +47,13 @@ def _set_replay_lock_running(*, supabase: Any, club_id: str) -> dict[str, Any]:
     if existing:
         supabase.table("replay_lock").update({"status": "running"}).eq("club_id", str(club_id)).execute()
     else:
-        supabase.table("replay_lock").insert({"club_id": str(club_id), "status": "running"}).execute()
+        supabase.table("replay_lock").insert(
+            {
+                "club_id": str(club_id),
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "status": "running",
+            }
+        ).execute()
 
     return {
         "club_id": str(club_id),
@@ -62,6 +69,17 @@ def _set_replay_lock_status(*, supabase: Any, club_id: str, status: str) -> None
 
 def _json_size_bytes(payload: Any) -> int:
     return len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
+def _count_rows(*, supabase: Any, table: str, club_id: str) -> int:
+    rows = (
+        supabase.table(table)
+        .select("id", count="exact")
+        .eq("club_id", str(club_id))
+        .limit(1)
+        .execute()
+    )
+    return int(getattr(rows, "count", 0) or 0)
 
 
 def _chunk_rows_by_payload_limit(rows: list[Dict[str, Any]], *, max_payload_bytes: int) -> list[list[Dict[str, Any]]]:
@@ -344,6 +362,11 @@ def replay_history(
                 except Exception:
                     pass
 
+        expected_match_count = int(len(all_matches))
+        actual_match_count = _count_rows(supabase=supabase, table="matches", club_id=club_id)
+        if expected_match_count != actual_match_count:
+            raise RuntimeError("Replay mismatch detected.")
+
         summary = {
             "target_reset": target_reset,
             "players_updated": players_updated,
@@ -351,6 +374,10 @@ def replay_history(
             "matches_rewritten": int(len(matches_to_update)),
             "league_ratings_rows": int(len(new_rows)),
             "matches_scanned_total": int(len(all_matches)),
+            "post_replay_counts": {
+                "matches": int(actual_match_count),
+                "league_ratings": _count_rows(supabase=supabase, table="league_ratings", club_id=club_id),
+            },
             "log_summary": {
                 "club_id": str(club_id),
                 "lock": {**lock_info, "final_status": "success"},
