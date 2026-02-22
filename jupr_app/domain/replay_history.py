@@ -76,17 +76,25 @@ def _count_rows(*, supabase: Any, table: str, club_id: str) -> int:
     try:
         query = query.select("id", count="exact")
     except TypeError:
-        query = query.select("id")
+        query = None
 
-    query = query.eq("club_id", str(club_id))
-    if hasattr(query, "limit"):
-        query = query.limit(1)
+    if query is not None:
+        query = query.eq("club_id", str(club_id))
+        if hasattr(query, "limit"):
+            try:
+                query = query.limit(1)
+            except TypeError:
+                pass
 
-    rows = query.execute()
-    count = getattr(rows, "count", None)
-    if count is not None:
-        return int(count)
-    return int(len(getattr(rows, "data", []) or []))
+        rows = query.execute()
+        count = rows.get("count") if isinstance(rows, dict) else getattr(rows, "count", None)
+        if count is not None:
+            return int(count)
+
+    rows = supabase.table(table).select("id").eq("club_id", str(club_id)).execute()
+    data = rows.get("data") if isinstance(rows, dict) else getattr(rows, "data", None)
+    data = data or []
+    return int(len(data))
 
 
 def _chunk_rows_by_payload_limit(rows: list[Dict[str, Any]], *, max_payload_bytes: int) -> list[list[Dict[str, Any]]]:
