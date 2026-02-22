@@ -43,6 +43,13 @@ from jupr_app.ui.layout import page_shell
 logger = logging.getLogger(__name__)
 
 
+def _rerun() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
 def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -405,6 +412,7 @@ def render(ctx):
                 st.session_state.ladder_temp_new = new_ps
                 st.session_state.ladder_state = "REVIEW_ROSTER"
                 st.session_state.ladder_round_num = 1
+                _rerun()
                 return
 
         # -------------------------
@@ -414,6 +422,7 @@ def render(ctx):
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit league/week/rounds/roster)"):
                 st.session_state.ladder_state = "SETUP"
+                _rerun()
                 return
 
             st.markdown("#### Step 2: Confirm Roster")
@@ -604,6 +613,7 @@ def render(ctx):
                 st.session_state.ladder_state = "CONFIG_COURTS"
                 st.session_state.pop("current_schedule", None)
                 st.session_state.pop("current_schedule_round", None)
+                _rerun()
                 return
 
 
@@ -614,6 +624,7 @@ def render(ctx):
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit roster)"):
                 st.session_state.ladder_state = "REVIEW_ROSTER"
+                _rerun()
                 return
 
             st.markdown("#### Step 3: Configure Courts")
@@ -673,6 +684,7 @@ def render(ctx):
                     st.session_state.ladder_print_sheet = print_df
 
                     st.session_state.ladder_state = "CONFIRM_START"
+                    _rerun()
                     return
 
         # -------------------------
@@ -723,6 +735,7 @@ def render(ctx):
                 st.session_state.ladder_state = "PLAY_ROUND"
                 st.session_state.pop("current_schedule", None)
                 st.session_state.pop("current_schedule_round", None)
+                _rerun()
                 return
 
         # -------------------------
@@ -748,6 +761,7 @@ def render(ctx):
                 if cC.button("Swap", key=f"swap_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = compress_courts(swap_players(roster_df, a, b))
                     st.session_state.pop("current_schedule", None)
+                    _rerun()
                     return
 
                 st.divider()
@@ -760,6 +774,7 @@ def render(ctx):
                 if st.button("Apply reorder", key=f"re_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = compress_courts(move_within_court(roster_df, p, int(new_pos)))
                     st.session_state.pop("current_schedule", None)
+                    _rerun()
                     return
 
                 st.divider()
@@ -773,6 +788,7 @@ def render(ctx):
                 if m4.button("Move", key=f"mv_btn_r{current_r}"):
                     st.session_state.ladder_live_roster = move_player_to_court(roster_df, mv_player, int(target_court), int(target_pos))
                     st.session_state.pop("current_schedule", None)
+                    _rerun()
                     return
 
             # Build schedule once per round unless roster changed
@@ -833,6 +849,7 @@ def render(ctx):
             if movement_df is None or movement_df.empty:
                 st.error("No movement preview found.")
                 st.session_state.ladder_state = "PLAY_ROUND"
+                _rerun()
                 return
 
             # Display per court
@@ -1127,6 +1144,7 @@ def render(ctx):
                     ]:
                         st.session_state.pop(k, None)
                     st.session_state.ladder_state = "SETUP"
+                    _rerun()
                     return
 
                 override = st.session_state.get("ladder_next_roster_override")
@@ -1154,6 +1172,7 @@ def render(ctx):
                 st.session_state.ladder_round_num = current_r + 1
                 st.session_state.ladder_state = "CONFIRM_START"
                 st.session_state.pop("current_schedule", None)
+                _rerun()
                 return
 
     # ============================================================
@@ -1662,6 +1681,7 @@ def render(ctx):
                     st.session_state["end_league_frozen_at"] = ended_at
                     st.session_state["end_league_step"] = 2
                     st.session_state["end_league_wizard_open"] = True
+                    _rerun()
                     return
 
             elif step == 2:
@@ -1687,6 +1707,7 @@ def render(ctx):
                     if st.button("Continue to Overrides"):
                         st.session_state["end_league_step"] = 3
                         st.session_state["end_league_wizard_open"] = True
+                        _rerun()
                         return
                 else:
                     st.warning("No winners found. Check eligibility rules or standings.")
@@ -1724,6 +1745,7 @@ def render(ctx):
                 if st.button("Continue to Confirm"):
                     st.session_state["end_league_step"] = 4
                     st.session_state["end_league_wizard_open"] = True
+                    _rerun()
                     return
 
             elif step == 4:
@@ -1761,6 +1783,7 @@ def render(ctx):
                     st.success(f"Minted {len(created)} top performer badges.")
                     st.session_state["end_league_step"] = 5
                     st.session_state["end_league_wizard_open"] = True
+                    _rerun()
                     return
 
             elif step == 5:

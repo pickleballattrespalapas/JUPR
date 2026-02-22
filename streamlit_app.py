@@ -178,6 +178,13 @@ def _process_pending_nav():
         st.session_state["_nav_pending"] = None
 
 
+def _rerun() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
 def resolve_tenant(session):
     if session:
         token = session.access_token
@@ -264,11 +271,16 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🔐 Login", use_container_width=True):
-                    st.session_state["entry_mode"] = "login"
+                    if st.session_state.get("entry_mode") != "login":
+                        st.session_state["entry_mode"] = "login"
+                        _rerun()
             with col2:
                 if st.button("🌎 Public Pages", use_container_width=True):
+                    changed = st.session_state.get("entry_mode") != "public" or st.session_state["auth"].get("mode") != "public"
                     st.session_state["entry_mode"] = "public"
                     st.session_state["auth"]["mode"] = "public"
+                    if changed:
+                        _rerun()
             return
 
         if entry_mode == "login" and not session:
@@ -296,6 +308,7 @@ def main():
                     st.session_state["auth"]["mode"] = "user"
                     st.session_state["auth"]["supabase_session"] = session_obj
                     st.session_state["entry_mode"] = "auth"
+                    _rerun()
                 except Exception as e:
                     st.error(f"Login exception: {e}")
 
@@ -333,7 +346,8 @@ def main():
                     try:
                         supabase_auth.auth.update_user({"password": new_password})
                         st.success("Password updated successfully.")
-                        st.session_state.pop("recovery_mode", None)
+                        if st.session_state.pop("recovery_mode", None) is not None:
+                            _rerun()
                     except Exception:
                         st.error("Password update failed.")
             return
@@ -643,7 +657,9 @@ def main():
         _process_pending_nav()
 
         if st.session_state.get("_nav_target") == "login":
-            st.session_state["entry_mode"] = "login"
+            if st.session_state.get("entry_mode") != "login":
+                st.session_state["entry_mode"] = "login"
+                _rerun()
             return
 
         current_page = st.session_state["_nav_target"]
@@ -652,13 +668,16 @@ def main():
             st.session_state["_nav_target"] = current_page
 
         if current_page in ADMIN_ONLY_LABELS and not admin_logged_in:
-            st.session_state["_nav_pending"] = "login"
+            if st.session_state.get("_nav_pending") != "login":
+                st.session_state["_nav_pending"] = "login"
+                _rerun()
             return
 
         if PUBLIC_MODE:
             selected = render_public_top_nav(labels_in_order=public_labels_in_order, current_label=current_page)
-            if selected != current_page:
+            if selected != current_page and st.session_state.get("_nav_pending") != selected:
                 st.session_state["_nav_pending"] = selected
+                _rerun()
         else:
             render_admin_sidebar_nav(current_label=current_page, admin_logged_in=admin_logged_in)
 
