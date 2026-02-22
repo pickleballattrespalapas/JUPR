@@ -206,6 +206,17 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
 def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> None:
     _ = max_per_row
     roster_now = compress_courts(normalize_slots(roster_df.copy()))
+    if roster_now.empty:
+        raise RuntimeError("Court board render aborted: ladder roster is empty.")
+    if "player_id" not in roster_now.columns:
+        raise RuntimeError("Court board render aborted: roster is missing player_id.")
+    if roster_now["player_id"].astype(str).duplicated().any():
+        dupes = roster_now.loc[roster_now["player_id"].astype(str).duplicated(), "player_id"].astype(str).tolist()
+        raise RuntimeError(f"Court board render aborted: duplicate player_id values in roster: {dupes}")
+
+    print("DEBUG: ladder_live_roster shape:", roster_now.shape)
+    print("DEBUG: ladder_live_roster columns:", list(roster_now.columns))
+
     courts_payload = roster_df_to_courts(roster_now, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
     for bench_row in list(st.session_state.get("ladder_bench_players", [])):
         pid = bench_row.get("player_id")
@@ -293,6 +304,10 @@ def render(ctx):
     df_players_all = ctx.df_players_all
     df_leagues = ctx.df_leagues
     df_meta = ctx.df_meta
+    print("DEBUG: admin_logged_in:", bool(getattr(ctx, "admin_logged_in", False)))
+    print("DEBUG: public_mode:", bool(getattr(ctx, "public_mode", False)))
+    print("DEBUG: df_leagues shape:", df_leagues.shape if isinstance(df_leagues, pd.DataFrame) else None)
+    print("DEBUG: df_leagues columns:", list(df_leagues.columns) if isinstance(df_leagues, pd.DataFrame) else None)
     id_to_name = ctx.id_to_name
     name_to_id = ctx.name_to_id
 
@@ -372,6 +387,9 @@ def render(ctx):
                 st.session_state.ladder_total_rounds = int(num_rounds)
 
                 parsed = [x.strip() for x in (raw or "").replace("\n", ",").split(",") if x.strip()]
+                duplicate_names = sorted({name for name in parsed if parsed.count(name) > 1})
+                if duplicate_names:
+                    raise RuntimeError(f"Duplicate player names found in roster input: {duplicate_names}")
                 roster_data = []
                 new_ps = []
 
