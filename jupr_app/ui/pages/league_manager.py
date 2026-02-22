@@ -5,13 +5,13 @@ from jupr_app.data.sb_write import sb_insert, sb_update
 
 import json
 import logging
-import re
 from datetime import date, datetime, timedelta, timezone
 from jupr_app.domain.player_ops import get_or_create_player
 from jupr_app.domain.ratings import jupr_to_elo
 
 import pandas as pd
 import streamlit as st
+from jupr_court_board import court_board
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.live_ladder import validate_courts
@@ -29,6 +29,7 @@ from jupr_app.domain.leagues import (
 )
 from jupr_app.domain.roster import (
     compress_courts,
+    courts_to_roster_df,
     move_player_to_court,
     move_within_court,
     normalize_slots,
@@ -203,20 +204,10 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> None:
-    def _court_number(court_id: str) -> int | None:
-        m = re.search(r"(\d+)", str(court_id or ""))
-        if not m:
-            return None
-        return int(m.group(1))
-
-    def _sort_key(court: dict) -> tuple[bool, int]:
-        court_num = _court_number(str(court.get("court_id") or ""))
-        return (court_num is None, court_num or 10_000)
-
+    _ = max_per_row
     roster_now = compress_courts(normalize_slots(roster_df.copy()))
     courts_payload = roster_df_to_courts(roster_now, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
-    bench_rows = list(st.session_state.get("ladder_bench_players", []))
-    for bench_row in bench_rows:
+    for bench_row in list(st.session_state.get("ladder_bench_players", [])):
         pid = bench_row.get("player_id")
         if pid is None:
             continue
@@ -228,144 +219,60 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
             }
         )
 
-    playable = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() != "bench"]
-    bench = [court for court in courts_payload if str(court.get("court_id", "")).strip().lower() == "bench"]
-    playable = sorted(playable, key=_sort_key)
-    courts = playable + bench
-
-    if not courts:
-        st.info("No courts to display.")
+    round_num = int(st.session_state.get("ladder_round_num", 1))
+    result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}")
+    if not (result and isinstance(result, dict) and "courts" in result):
         return
 
-    per_row = max(1, int(max_per_row))
-    for start in range(0, len(courts), per_row):
-        row = courts[start : start + per_row]
-        cols = st.columns(len(row))
-        cols_count = len(cols)
-        for default_local_idx, court in enumerate(row):
-            court_id = str(court.get("court_id") or "Court")
-            court_num = _court_number(court_id)
-            intended_global_idx = int(court_num - 1) if isinstance(court_num, int) else int(start + default_local_idx)
-            intended_local_idx = int(intended_global_idx - start)
+    updated_courts = result["courts"]
+    new_roster = courts_to_roster_df(updated_courts, roster_now)
 
-            if not (0 <= intended_local_idx < cols_count):
-                logger.warning(
-                    "Court column index out of range; falling back to default column index: "
-                    "court_id=%s, court_num=%s, intended_local_idx=%s, default_local_idx=%s, cols_count=%s, row_start=%s",
-                    court_id,
-                    court_num,
-                    intended_local_idx,
-                    default_local_idx,
-                    cols_count,
-                    start,
-                )
-                intended_local_idx = default_local_idx
+    player_lookup = {}
+    for _, row in roster_now.iterrows():
+        pid = int(row.get("player_id"))
+        player_lookup[pid] = {
+            "player_id": pid,
+            "name": str(row.get("name") or f"#{pid}"),
+            "rating": float(row.get("rating", 1200.0)),
+        }
+    for row in list(st.session_state.get("ladder_bench_players", [])):
+        pid = row.get("player_id")
+        if pid is None:
+            continue
+        pid = int(pid)
+        player_lookup[pid] = {
+            "player_id": pid,
+            "name": str(row.get("name") or f"#{pid}"),
+            "rating": float(row.get("rating", 1200.0)),
+        }
 
-            col = cols[intended_local_idx]
-            with col:
-                logger.debug(
-                    "Rendering court %s into column %s (row_start=%s, cols=%s, court_num=%s)",
-                    court_id,
-                    intended_local_idx,
-                    start,
-                    cols_count,
-                    court_num,
-                )
-                players = list(court.get("players") or [])
-                st.markdown(f"##### {court_id}")
-                st.caption(f"{len(players)} player(s)")
-                if not players:
-                    st.markdown("_No players assigned._")
-                    continue
-                for idx, player in enumerate(players, start=1):
-                    name = str(player.get("name") or f"Player {idx}")
-                    rating = player.get("rating")
-                    row_cols = st.columns([3, 1, 1])
-                    if isinstance(rating, (int, float)):
-                        row_cols[0].markdown(f"{idx}. {name} ({float(rating):.3f})")
-                    else:
-                        row_cols[0].markdown(f"{idx}. {name}")
+    new_bench: list[dict] = []
+    for court in updated_courts:
+        if str(court.get("court_id", "")).strip().lower() != "bench":
+            continue
+        for player in list(court.get("players") or []):
+            raw_pid = player.get("player_id")
+            if raw_pid is None:
+                continue
+            pid = int(raw_pid)
+            source = player_lookup.get(pid, {})
+            new_bench.append(
+                {
+                    "player_id": pid,
+                    "name": str(source.get("name") or player.get("name") or f"#{pid}"),
+                    "rating": float(source.get("rating", 1200.0)),
+                }
+            )
 
-                    if court_id.lower() != "bench":
-                        can_move_up = idx > 1
-                        can_move_down = idx < len(players)
-                        if row_cols[1].button("⬆️", key=f"cb_up_{court_id}_{idx}", disabled=not can_move_up):
-                            base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
-                            updated = move_within_court(base, name, idx - 1)
-                            st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
-                            st.session_state.pop("current_schedule", None)
-                            st.rerun()
-                        if row_cols[2].button("⬇️", key=f"cb_down_{court_id}_{idx}", disabled=not can_move_down):
-                            base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
-                            updated = move_within_court(base, name, idx + 1)
-                            st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
-                            st.session_state.pop("current_schedule", None)
-                            st.rerun()
+    new_roster = compress_courts(normalize_slots(new_roster.copy()))
+    old_bench = list(st.session_state.get("ladder_bench_players", []))
+    if new_roster.equals(roster_now) and new_bench == old_bench:
+        return
 
-                        mv_cols = st.columns([2, 1, 1])
-                        court_options = sorted(roster_now["court"].astype(int).unique().tolist())
-                        target = mv_cols[0].selectbox(
-                            "Move to",
-                            options=[str(c) for c in court_options] + ["Bench"],
-                            index=0,
-                            key=f"cb_target_{court_id}_{idx}_{name}",
-                            label_visibility="collapsed",
-                        )
-                        if mv_cols[1].button("Move", key=f"cb_mv_{court_id}_{idx}"):
-                            base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
-                            if target == "Bench":
-                                row = base[base["name"].astype(str) == name]
-                                if not row.empty:
-                                    bench_list = list(st.session_state.get("ladder_bench_players", []))
-                                    picked = row.iloc[0]
-                                    bench_list.append(
-                                        {
-                                            "player_id": int(picked.get("player_id")),
-                                            "name": str(picked.get("name")),
-                                            "rating": float(picked.get("rating", 1200.0)),
-                                        }
-                                    )
-                                    st.session_state["ladder_bench_players"] = bench_list
-                                updated = base[base["name"].astype(str) != name].copy()
-                            else:
-                                target_court = int(target)
-                                target_len = len(base[base["court"].astype(int) == target_court]) + 1
-                                updated = move_player_to_court(base, name, target_court, target_len)
-                            st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
-                            st.session_state.pop("current_schedule", None)
-                            st.rerun()
-                    else:
-                        bench_move_cols = st.columns([2, 1])
-                        court_options = sorted(roster_now["court"].astype(int).unique().tolist())
-                        add_target = bench_move_cols[0].selectbox(
-                            "Add to court",
-                            options=court_options,
-                            key=f"cb_add_target_{idx}_{name}",
-                            label_visibility="collapsed",
-                        )
-                        if bench_move_cols[1].button("Add", key=f"cb_add_{idx}_{name}"):
-                            bench_list = list(st.session_state.get("ladder_bench_players", []))
-                            picked = next((p for p in bench_list if str(p.get("name")) == name), None)
-                            if picked is not None:
-                                bench_list = [p for p in bench_list if str(p.get("name")) != name]
-                                st.session_state["ladder_bench_players"] = bench_list
-                                base = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
-                                insert_slot = len(base[base["court"].astype(int) == int(add_target)]) + 1
-                                new_row = pd.DataFrame(
-                                    [
-                                        {
-                                            "player_id": int(picked.get("player_id")),
-                                            "name": str(picked.get("name")),
-                                            "rating": float(picked.get("rating", 1200.0)),
-                                            "court": int(add_target),
-                                            "slot": int(insert_slot),
-                                        }
-                                    ]
-                                )
-                                updated = pd.concat([base, new_row], ignore_index=True)
-                                st.session_state.ladder_live_roster = compress_courts(normalize_slots(updated))
-                                st.session_state.pop("current_schedule", None)
-                                st.rerun()
+    st.session_state.ladder_live_roster = new_roster
+    st.session_state["ladder_bench_players"] = new_bench
+    st.session_state.pop("current_schedule", None)
+    st.rerun()
 
 
 def render(ctx):
