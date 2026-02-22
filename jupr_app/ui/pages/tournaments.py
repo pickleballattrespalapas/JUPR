@@ -34,6 +34,13 @@ TOURNAMENT_CHARTS = [
 ]
 
 
+def _rerun() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
 def _require_club_id_payload(payload):
     # NOTE: non-functional touch to retrigger CI checks.
     rows = payload if isinstance(payload, list) else [payload]
@@ -184,7 +191,10 @@ def render(ctx):
         _render_podium_read_only(podium_rows, teams_by_id, id_to_name)
     else:
         if st.button("🏁 Complete Tournament"):
-            st.session_state[f"podium_review_open_{tournament_id}"] = True
+            podium_key = f"podium_review_open_{tournament_id}"
+            if not st.session_state.get(podium_key):
+                st.session_state[podium_key] = True
+                _rerun()
         if st.session_state.get(f"podium_review_open_{tournament_id}"):
             _render_podium_review(
                 ctx,
@@ -785,6 +795,7 @@ def _render_podium_review(
         st.success("Tournament completed and podium locked.")
         st.session_state.pop(f"podium_review_open_{tournament_id}", None)
         st.session_state["force_data_refresh"] = True
+        _rerun()
 
 
 def _render_podium_read_only(podium_rows: list[dict], teams_by_id: dict[str, dict], id_to_name: dict) -> None:
