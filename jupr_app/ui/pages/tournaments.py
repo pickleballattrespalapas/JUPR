@@ -412,7 +412,10 @@ def render(ctx):
                             game["club_id"] = str(club_id)
                         _require_club_id_payload(games_payload)
 
-                        supabase.table("tournament_games").insert(games_payload).execute()
+                        supabase.table("tournament_games").upsert(
+                            games_payload,
+                            on_conflict="tournament_id,stage,rr_round_number,rr_slot_number"
+                        ).execute()
 
                         st.success("Playoff bracket regenerated.")
                         st.session_state["force_data_refresh"] = True
