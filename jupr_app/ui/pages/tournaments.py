@@ -414,7 +414,7 @@ def render(ctx):
 
                         supabase.table("tournament_games").upsert(
                             games_payload,
-                            on_conflict="tournament_id,stage,rr_round_number,rr_slot_number"
+                            on_conflict="tournament_id,stage,playoff_game_code,series_game_number"
                         ).execute()
 
                         st.success("Playoff bracket regenerated.")
@@ -440,7 +440,10 @@ def render(ctx):
                 # Explicit club_id for tenant isolation (RLS + multi-club safety)
                 game["club_id"] = str(club_id)
             _require_club_id_payload(games_payload)
-            sb_insert(supabase, "tournament_games", games_payload)
+            supabase.table("tournament_games").upsert(
+                games_payload,
+                on_conflict="tournament_id,stage,playoff_game_code,series_game_number"
+            ).execute()
             sb_update(
                 supabase,
                 "tournaments",
