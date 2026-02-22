@@ -359,10 +359,40 @@ def render(ctx):
                     hide_index=True,
                 )
 
+                st.markdown("#### Manual Seeding")
+                for row in standings:
+                    team_id = row["team_id"]
+                    st.number_input(
+                        f"Team {row['team_number']} seed",
+                        min_value=0,
+                        max_value=32,
+                        value=int(row.get("seed") or 0),
+                        key=f"seed_input_{team_id}",
+                        disabled=is_complete,
+                    )
+
+                if st.button("Save Manual Seeds", disabled=is_complete):
+                    for row in standings:
+                        team_id = row["team_id"]
+                        new_seed = int(st.session_state.get(f"seed_input_{team_id}") or 0)
+                        sb_update(
+                            supabase,
+                            "tournament_teams",
+                            {"seed": new_seed if new_seed > 0 else None},
+                            filters={"club_id": str(club_id), "tournament_id": tournament_id, "id": team_id},
+                        )
+                    st.success("Manual seeds updated.")
+                    st.session_state["force_data_refresh"] = True
+
                 if st.button("Update Seeds", disabled=is_complete):
                     for row in standings:
-                        sb_update(supabase, "tournament_teams", {"seed": int(row["seed"])}, filters={"club_id": str(club_id), "id": row["team_id"]})
-                    st.success("Seeds updated.")
+                        sb_update(
+                            supabase,
+                            "tournament_teams",
+                            {"seed": int(row["seed"])},
+                            filters={"club_id": str(club_id), "tournament_id": tournament_id, "id": row["team_id"]},
+                        )
+                    st.success("Recommended seeds updated.")
                     st.session_state["force_data_refresh"] = True
 
     with tabs[3]:
@@ -412,18 +442,37 @@ def render(ctx):
                 if existing_scored:
                     st.warning("Playoff scores have already been entered. Bracket cannot be regenerated.")
                 else:
+                    existing_playoffs = (
+                        supabase.table("tournament_games")
+                        .select("id")
+                        .eq("club_id", str(club_id))
+                        .eq("tournament_id", tournament_id)
+                        .eq("stage", "PLAYOFF")
+                        .limit(1)
+                        .execute()
+                    )
+                    requires_confirm = bool(existing_playoffs.data)
+                    if requires_confirm:
+                        st.warning("Playoffs already generated. Regenerate will overwrite.")
+                    confirm_regen = st.checkbox(
+                        "I understand this will overwrite the existing playoff bracket",
+                        key=f"confirm_playoff_regen_{tournament_id}",
+                    )
                     if st.button("Regenerate Playoff Bracket", type="secondary"):
+                        if requires_confirm and not confirm_regen:
+                            st.error("Confirm bracket overwrite before regenerating.")
+                            st.stop()
                         assert club_id, "club_id must be present for tournament writes"
                         supabase.table("tournament_games").delete().eq("club_id", str(club_id)).eq("tournament_id", tournament_id).eq("stage", "PLAYOFF").execute()
 
-                        standings = compute_round_robin_standings(
-                            list(teams_by_id.values()),
-                            rr_games,
-                        )
+                        standings = _load_seeded_standings(supabase, str(club_id), tournament_id)
+                        if len(standings) < int(tournament.get("playoff_advance_count") or selected_advance):
+                            st.error("Not enough stored seeds to regenerate the bracket.")
+                            st.stop()
 
                         games_payload = build_playoff_games(
                             tournament_id=tournament_id,
-                            advance_count=int(tournament.get("playoff_advance_count")),
+                            advance_count=int(tournament.get("playoff_advance_count") or selected_advance),
                             standings=standings,
                             best_of=int(tournament.get("playoff_best_of", 1)),
                         )
@@ -447,12 +496,10 @@ def render(ctx):
             st.info("No playoff bracket generated yet.")
         if st.button("Generate Playoff Bracket", disabled=bool(playoff_games) or is_complete):
             assert club_id, "club_id must be present for tournament writes"
-            standings = compute_round_robin_standings(list(teams_by_id.values()), rr_games)
+            standings = _load_seeded_standings(supabase, str(club_id), tournament_id)
             if len(standings) < int(selected_advance):
                 st.error("Not enough seeded teams to generate the bracket.")
                 st.stop()
-            for row in standings:
-                sb_update(supabase, "tournament_teams", {"seed": int(row["seed"])}, filters={"club_id": str(club_id), "id": row["team_id"]})
             games_payload = build_playoff_games(
                 tournament_id=tournament_id,
                 advance_count=int(selected_advance),
@@ -536,6 +583,23 @@ def _teams_ready(teams_by_number: dict[int, dict], team_count: int) -> bool:
         if not team.get("player1_id") or not team.get("player2_id"):
             return False
     return True
+
+
+def _load_seeded_standings(supabase, club_id: str, tournament_id: str) -> list[dict]:
+    seeded_resp = (
+        supabase.table("tournament_teams")
+        .select("id, seed")
+        .eq("club_id", club_id)
+        .eq("tournament_id", tournament_id)
+        .not_.is_("seed", "null")
+        .order("seed", desc=False)
+        .execute()
+    )
+
+    standings = []
+    for row in (seeded_resp.data or []):
+        standings.append({"team_id": row["id"], "seed": int(row["seed"])})
+    return standings
 
 
 def _render_games_table(*, games, teams_by_id, id_to_name, on_save, stage: str, disabled: bool = False):
