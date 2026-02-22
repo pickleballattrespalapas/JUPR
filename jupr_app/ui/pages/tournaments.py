@@ -143,9 +143,13 @@ def render(ctx):
         .eq("tournament_id", tournament_id)
         .order("rr_round_number", desc=False)
         .order("rr_slot_number", desc=False)
+        .order("id", desc=False)
         .execute()
     )
     games = games_resp.data or []
+    game_ids = [g["id"] for g in games]
+    if len(game_ids) != len(set(game_ids)):
+        raise RuntimeError("Duplicate tournament_game IDs detected in render.")
 
     rr_games = [g for g in games if g.get("stage") == "ROUND_ROBIN"]
     playoff_games = [g for g in games if g.get("stage") == "PLAYOFF"]
@@ -308,7 +312,7 @@ def render(ctx):
                     updates,
                     stage="ROUND_ROBIN",
                 ),
-                key_prefix="rr",
+                stage="ROUND_ROBIN",
                 disabled=is_complete,
             )
 
@@ -471,13 +475,13 @@ def _teams_ready(teams_by_number: dict[int, dict], team_count: int) -> bool:
     return True
 
 
-def _render_games_table(*, games, teams_by_id, id_to_name, on_save, key_prefix: str, disabled: bool = False):
+def _render_games_table(*, games, teams_by_id, id_to_name, on_save, stage: str, disabled: bool = False):
     rounds = sorted({int(g.get("rr_round_number", 0)) for g in games})
     for round_num in rounds:
         st.markdown(f"#### Round {round_num}")
         round_games = [g for g in games if int(g.get("rr_round_number", 0)) == round_num]
         scores = {}
-        with st.form(key=f"{key_prefix}_round_{round_num}"):
+        with st.form(key=f"{_score_key(stage, 'round', str(round_num))}"):
             for game in round_games:
                 team_a = teams_by_id.get(game.get("team_a_id"), {})
                 team_b = teams_by_id.get(game.get("team_b_id"), {})
@@ -491,14 +495,14 @@ def _render_games_table(*, games, teams_by_id, id_to_name, on_save, key_prefix: 
                     "Score A",
                     min_value=0,
                     value=int(game.get("score_a") or 0),
-                    key=f"{key_prefix}_a_{game['id']}",
+                    key=_score_key(stage, "a", game["id"]),
                     disabled=disabled,
                 )
                 col3.number_input(
                     "Score B",
                     min_value=0,
                     value=int(game.get("score_b") or 0),
-                    key=f"{key_prefix}_b_{game['id']}",
+                    key=_score_key(stage, "b", game["id"]),
                     disabled=disabled,
                 )
                 status = "Final" if game.get("finalized_at") else "Open"
@@ -535,14 +539,14 @@ def _render_playoff_bracket(*, games, teams_by_id, id_to_name, on_save, disabled
                         "Score A",
                         min_value=0,
                         value=int(game.get("score_a") or 0),
-                        key=f"playoff_a_{game['id']}",
+                        key=_score_key("PLAYOFF", "a", game["id"]),
                         disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
                     )
                     col3.number_input(
                         "Score B",
                         min_value=0,
                         value=int(game.get("score_b") or 0),
-                        key=f"playoff_b_{game['id']}",
+                        key=_score_key("PLAYOFF", "b", game["id"]),
                         disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
                     )
                     status = "Final" if game.get("finalized_at") else "Open"
@@ -717,9 +721,10 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
     updated_any = False
 
     for game_id in game_map.keys():
-
         score_a = int(st.session_state.get(_score_key(stage, "a", game_id), 0))
         score_b = int(st.session_state.get(_score_key(stage, "b", game_id), 0))
+        if getattr(ctx, "DEBUG_MODE", False):
+            print("Saving game:", game_id, "Scores:", score_a, score_b)
 
         fresh_game = (
             supabase.table("tournament_games")
