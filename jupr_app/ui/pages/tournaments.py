@@ -294,6 +294,11 @@ def render(ctx):
                 # Explicit club_id for tenant isolation (RLS + multi-club safety)
                 game["club_id"] = str(club_id)
             _require_club_id_payload(games_payload)
+            if getattr(ctx, "DEBUG_MODE", False):
+                print(
+                    "RR upsert conflict target:",
+                    "club_id,tournament_id,stage,rr_round_number,rr_slot_number",
+                )
             supabase.table("tournament_games").upsert(
                 games_payload,
                 on_conflict="club_id,tournament_id,stage,rr_round_number,rr_slot_number"
