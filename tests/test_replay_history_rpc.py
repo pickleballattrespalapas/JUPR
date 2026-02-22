@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.domain import replay_history
+from jupr_app.domain.replay_history import _count_rows
 
 
 class _Query:
@@ -132,3 +133,65 @@ def test_replay_history_uses_replace_league_ratings_rpc(monkeypatch):
     assert payload["p_club_id"] == "club-1"
     assert payload["p_reset"] is True
     assert [row["player_id"] for row in payload["p_rows"]] == [1, 2, 3, 4]
+
+
+def test_count_rows_falls_back_when_select_count_kwarg_not_supported():
+    class FakeQueryNoCount:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def select(self, _cols):
+            return self
+
+        def eq(self, _col, _value):
+            return self
+
+        def limit(self, n):
+            self._rows = self._rows[:n]
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=list(self._rows), count=None)
+
+    class FakeSupabase:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def table(self, _name):
+            return FakeQueryNoCount(self._rows)
+
+    supabase = FakeSupabase([{"id": 1}, {"id": 2}, {"id": 3}])
+
+    assert _count_rows(supabase=supabase, table="matches", club_id="club-1") == 3
+
+
+def test_count_rows_uses_fresh_unlimited_query_when_count_metadata_missing_dict_response():
+    class FakeQueryWithCountKwarg:
+        def __init__(self, rows):
+            self._rows = list(rows)
+            self._count_requested = False
+
+        def select(self, _cols, **kwargs):
+            self._count_requested = kwargs.get("count") == "exact"
+            return self
+
+        def eq(self, _col, _value):
+            return self
+
+        def limit(self, n):
+            self._rows = self._rows[:n]
+            return self
+
+        def execute(self):
+            return {"data": list(self._rows), "count": None if self._count_requested else None}
+
+    class FakeSupabase:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def table(self, _name):
+            return FakeQueryWithCountKwarg(self._rows)
+
+    supabase = FakeSupabase([{"id": 1}, {"id": 2}, {"id": 3}])
+
+    assert _count_rows(supabase=supabase, table="matches", club_id="club-1") == 3
