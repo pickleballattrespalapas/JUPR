@@ -13,9 +13,10 @@ class _Query:
         self.table_name = table_name
         self._filters: list[tuple[str, object]] = []
 
-    def upsert(self, payload, on_conflict=None):
+    def upsert(self, payload, on_conflict=None, returning=None):
         self.supabase.last_payload = dict(payload)
         self.supabase.last_on_conflict = on_conflict
+        self.supabase.last_returning = returning
         return self
 
     def select(self, _fields: str):
@@ -49,6 +50,7 @@ class _Supabase:
         self.raise_api_error = None
         self.last_payload = None
         self.last_on_conflict = None
+        self.last_returning = None
 
     def table(self, name: str):
         return _Query(self, name)
@@ -68,6 +70,7 @@ def test_safe_add_player_sets_normalized_name_and_conflict_target():
     assert ok is True
     assert err is None
     assert supabase.last_on_conflict == "club_id,normalized_name"
+    assert supabase.last_returning == "representation"
     assert supabase.last_payload["normalized_name"] == "alice smith"
 
 
