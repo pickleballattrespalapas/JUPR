@@ -1,12 +1,11 @@
 # jupr_app/ui/pages/league_manager.py
 from __future__ import annotations
 
-from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+from jupr_app.data.sb_write import sb_insert, sb_update
 
 import json
 import logging
 import re
-import time
 from datetime import date, datetime, timedelta, timezone
 from jupr_app.domain.player_ops import get_or_create_player
 
@@ -14,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
-from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
+from jupr_app.domain.live_ladder import validate_courts
 from jupr_app.domain.league_night_roster import (
     RosterChangeError,
     apply_roster_change,
@@ -156,7 +155,8 @@ def _schedule_to_ics(schedule_cfg: dict) -> str:
 
 def _league_options(df_meta: pd.DataFrame) -> list[str]:
     if df_meta is not None and not df_meta.empty and "is_active" in df_meta.columns and "league_name" in df_meta.columns:
-        opts = sorted(df_meta[df_meta["is_active"] == True]["league_name"].dropna().astype(str).tolist())
+        active_mask = df_meta["is_active"].fillna(False).astype(bool)
+        opts = sorted(df_meta[active_mask]["league_name"].dropna().astype(str).tolist())
         return opts if opts else ["Default"]
     return ["Default"]
 
@@ -302,7 +302,7 @@ def render(ctx):
         # -------------------------
         # 1) SETUP
         # -------------------------
-        if st.session_state.ladder_state == "SETUP":
+        if st.session_state.get("ladder_state", "SETUP") == "SETUP":
             st.markdown("#### Step 1: Select League & Roster")
 
             opts = _league_options(df_meta)
@@ -387,7 +387,7 @@ def render(ctx):
         # -------------------------
         # 2) REVIEW / NEW PLAYERS
         # -------------------------
-        if st.session_state.ladder_state == "REVIEW_ROSTER":
+        if st.session_state.get("ladder_state") == "REVIEW_ROSTER":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit league/week/rounds/roster)"):
                 st.session_state.ladder_state = "SETUP"
@@ -427,7 +427,7 @@ def render(ctx):
                     # Remove those from the "new" list
                     existing_names = {str(r["name"]).strip() for r in existing}
                     st.session_state.ladder_temp_new = [n for n in normalized if str(n).strip() not in existing_names]
-                    new_names = st.session_state.ladder_temp_new
+                    new_names = st.session_state.get("ladder_temp_new", [])
 
                 st.caption("Set a starting JUPR for each new player, then click Save & Continue. (This creates the accounts.)")
 
@@ -566,9 +566,6 @@ def render(ctx):
                     # Optional: refresh global cached data so other pages see them immediately
                     return
 
-                    st.success("New players created. Continuing to court setup…")
-                    return
-
                 # Keep this to prevent falling through while new players exist
                 st.stop()
 
@@ -590,14 +587,14 @@ def render(ctx):
         # -------------------------
         # 3) CONFIG COURTS
         # -------------------------
-        if st.session_state.ladder_state == "CONFIG_COURTS":
+        if st.session_state.get("ladder_state") == "CONFIG_COURTS":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit roster)"):
                 st.session_state.ladder_state = "REVIEW_ROSTER"
                 return
 
             st.markdown("#### Step 3: Configure Courts")
-            total_p = len(st.session_state.ladder_roster)
+            total_p = len(st.session_state.get("ladder_roster", []))
             st.info(f"Total Players: {total_p}")
 
             auto = suggest_court_sizes(total_p)
@@ -625,7 +622,8 @@ def render(ctx):
                     final_assignments = []
 
                     for c_idx, size in enumerate(court_sizes):
-                        group = st.session_state.ladder_roster[current_idx: current_idx + int(size)]
+                        roster_seed = st.session_state.get("ladder_roster", [])
+                        group = roster_seed[current_idx: current_idx + int(size)]
                         for pl in group:
                             final_assignments.append({
                                 "player_id": int(pl["id"]),
@@ -657,7 +655,7 @@ def render(ctx):
         # -------------------------
         # 3.5) CONFIRM START (Court Board)
         # -------------------------
-        if st.session_state.ladder_state == "CONFIRM_START":
+        if st.session_state.get("ladder_state") == "CONFIRM_START":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit courts)"):
                 st.session_state.pop("ladder_live_roster", None)
@@ -678,7 +676,7 @@ def render(ctx):
                 )
                 st.dataframe(ps, use_container_width=True, hide_index=True)
 
-            roster_df = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+            roster_df = compress_courts(normalize_slots(st.session_state.get("ladder_live_roster", pd.DataFrame()).copy()))
             st.session_state.ladder_live_roster = roster_df
 
             courts_payload = roster_df_to_courts(roster_df, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
@@ -709,12 +707,12 @@ def render(ctx):
         # -------------------------
         # 4) PLAY ROUND (scoring + save + movement)
         # -------------------------
-        if st.session_state.ladder_state == "PLAY_ROUND":
+        if st.session_state.get("ladder_state") == "PLAY_ROUND":
             current_r = int(st.session_state.get("ladder_round_num", 1))
             total_r = int(st.session_state.get("ladder_total_rounds", 1))
             st.markdown(f"### 🎾 Round {current_r} / {total_r}")
 
-            roster_now = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
+            roster_now = compress_courts(normalize_slots(st.session_state.get("ladder_live_roster", pd.DataFrame()).copy()))
             st.session_state.ladder_live_roster = roster_now
 
             # Quick edits
@@ -770,7 +768,7 @@ def render(ctx):
 
             all_results = []
             with st.form("round_score_form"):
-                for c_data in st.session_state.current_schedule:
+                for c_data in st.session_state.get("current_schedule", []):
                     st.markdown(f"### Court {c_data['c']}")
                     for m_idx, mm in enumerate(c_data["matches"]):
                         label = mm.get("desc", f"Game {m_idx+1}")
@@ -807,7 +805,7 @@ def render(ctx):
         # -------------------------
         # 5) CONFIRM MOVEMENT
         # -------------------------
-        if st.session_state.ladder_state == "CONFIRM_MOVEMENT":
+        if st.session_state.get("ladder_state") == "CONFIRM_MOVEMENT":
             st.markdown("#### Round Results & Movement")
 
             movement_df = st.session_state.get("ladder_movement_preview", pd.DataFrame())
@@ -860,7 +858,7 @@ def render(ctx):
             if st.session_state.get("ladder_next_roster_override") is not None:
                 st.info("Roster changes queued for the next round.")
                 st.dataframe(
-                    _summarize_roster(st.session_state.ladder_next_roster_override),
+                    _summarize_roster(st.session_state.get("ladder_next_roster_override")),
                     use_container_width=True,
                     hide_index=True,
                 )
@@ -1197,8 +1195,6 @@ def render(ctx):
                     st.stop()
 
                 return
-                st.success("League draft created.")
-                return
 
         if df_meta is None or df_meta.empty:
             st.info("No league metadata loaded.")
@@ -1241,8 +1237,6 @@ def render(ctx):
                 payload,
                 filters={"id": int(meta_row["id"]), "club_id": str(ctx.club_id)},
             )
-            return
-            st.success("League updated.")
             return
 
         def _build_payload(
@@ -1353,8 +1347,6 @@ def render(ctx):
                 "awards_config": awards_cfg,
             }
             sb_insert(ctx.supabase, "leagues_metadata", payload)
-            return
-            st.success("Draft duplicated.")
             return
 
         tabs_editor = st.tabs(
