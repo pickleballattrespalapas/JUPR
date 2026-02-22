@@ -567,173 +567,155 @@ def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
 
     updates = []
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    series_groups: dict[str, list[dict[str, Any]]] = {}
 
-    # Group games by playoff_game_code
-    for g in games:
-        if g.get("stage") != "PLAYOFF":
+    for game in games:
+        if game.get("stage") != "PLAYOFF":
             continue
-        code = g.get("playoff_game_code")
+        code = game.get("playoff_game_code")
         if not code:
             continue
-        grouped.setdefault(code, []).append(g)
+        series_groups.setdefault(code, []).append(game)
 
-    for _, series_games in grouped.items():
+    for series_games in series_groups.values():
+        ordered_games = sorted(series_games, key=_series_game_sort_key)
+        required_wins = 2 if len(ordered_games) >= 3 else 1
         wins: dict[str, int] = {}
 
-        for g in series_games:
-            winner = g.get("winner_team_id")
-            if winner:
-                wins[winner] = wins.get(winner, 0) + 1
+        for game in ordered_games:
+            winner = game.get("winner_team_id")
+            if not winner:
+                continue
+            wins[winner] = wins.get(winner, 0) + 1
 
-        if not wins:
+        winning_team_id = next((team_id for team_id, win_count in wins.items() if win_count >= required_wins), None)
+        if not winning_team_id:
             continue
 
-        # Determine required wins
-        required = 2 if len(series_games) >= 3 else 1
+        deciding_game = None
+        win_counter = 0
+        for game in ordered_games:
+            if game.get("winner_team_id") != winning_team_id:
+                continue
+            win_counter += 1
+            if win_counter == required_wins:
+                deciding_game = game
+                break
 
-        for team_id, win_count in wins.items():
-            if win_count >= required:
-                # Determine loser
-                opponents = [tid for tid in wins.keys() if tid != team_id]
-                loser_id = opponents[0] if opponents else None
+        if not deciding_game:
+            continue
 
-                # Sort series games by series_game_number ascending
-                ordered_games = sorted(
-                    series_games,
-                    key=lambda x: x.get("series_game_number") or 1,
-                )
+        opponent_ids = {
+            game.get("team_a_id") for game in ordered_games if game.get("team_a_id")
+        } | {
+            game.get("team_b_id") for game in ordered_games if game.get("team_b_id")
+        }
+        opponent_ids.discard(winning_team_id)
+        loser_id = next(iter(opponent_ids), None)
 
-                win_counter = 0
-                deciding_game = None
-
-                for g in ordered_games:
-                    if g.get("winner_team_id") == team_id:
-                        win_counter += 1
-                        if win_counter == required:
-                            deciding_game = g
-                            break
-
-                if not deciding_game:
-                    continue
-
-                updates.append(
-                    {
-                        "id": deciding_game["id"],
-                        "winner_team_id": team_id,
-                        "loser_team_id": loser_id,
-                        "finalized_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
+        updates.append(
+            {
+                "id": deciding_game["id"],
+                "winner_team_id": winning_team_id,
+                "loser_team_id": loser_id,
+                "finalized_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     return updates
 
 
 def resolve_playoff_dependencies(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
     updates: dict[str, dict[str, Any]] = {}
+    local_games = [dict(game) for game in games if game.get("stage") == "PLAYOFF" and game.get("playoff_game_code")]
 
-    # --- Collapse series rows into one logical row per playoff_game_code ---
-    series_map: dict[str, list[dict[str, Any]]] = {}
-    for g in games:
-        code = g.get("playoff_game_code")
-        if not code:
-            continue
-        series_map.setdefault(code, []).append(g)
-
-    by_code: dict[str, dict[str, Any]] = {}
-
-    for code, series_games in series_map.items():
-        # Prefer finalized game in series
-        finalized_game = next((g for g in series_games if g.get("finalized_at")), None)
-
-        if finalized_game:
-            by_code[code] = finalized_game
-        else:
-            # No finalized game -> treat series as unresolved
-            # Use a representative row but clear winner/loser logically
-            representative = series_games[0]
-            rep_copy = dict(representative)
-            rep_copy["winner_team_id"] = None
-            rep_copy["loser_team_id"] = None
-            rep_copy["finalized_at"] = None
-            by_code[code] = rep_copy
-
-    # Collapse to one logical game per playoff_game_code
-    logical_games = list(by_code.values())
-    local_games = [dict(g) for g in logical_games]
-
-    def resolve_source(source: Any) -> tuple[bool, str | None]:
-        if not source:
-            return False, None
-        if isinstance(source, str):
-            return False, None
-        if "winnerOf" in source:
-            return True, by_code.get(source["winnerOf"], {}).get("winner_team_id")
-        if "loserOf" in source:
-            return True, by_code.get(source["loserOf"], {}).get("loser_team_id")
-        return False, None
-
-    def set_update(game: dict[str, Any], field: str, value: Any) -> None:
-        gid = game["id"]
-        updates.setdefault(gid, {"id": gid})[field] = value
+    def set_update(game_id: str, field: str, value: Any) -> None:
+        updates.setdefault(game_id, {"id": game_id})[field] = value
 
     changed = True
     while changed:
         changed = False
-        series_map = {}
-
-        for g in local_games:
-            code = g.get("playoff_game_code")
-            if not code:
-                continue
-            series_map.setdefault(code, []).append(g)
-
-        by_code = {}
-        for code, series_games in series_map.items():
-            finalized_game = next((g for g in series_games if g.get("finalized_at")), None)
-
-            if finalized_game:
-                by_code[code] = finalized_game
-            else:
-                representative = series_games[0]
-                rep_copy = dict(representative)
-                rep_copy["winner_team_id"] = None
-                rep_copy["loser_team_id"] = None
-                rep_copy["finalized_at"] = None
-                by_code[code] = rep_copy
+        series_groups: dict[str, list[dict[str, Any]]] = {}
         for game in local_games:
-            if game.get("stage") != "PLAYOFF":
-                continue
-            dep_a, desired_a = resolve_source(_parse_source(game.get("team_a_source")))
-            dep_b, desired_b = resolve_source(_parse_source(game.get("team_b_source")))
+            series_groups.setdefault(game["playoff_game_code"], []).append(game)
 
-            for key, is_dep, desired in (
-                ("team_a_id", dep_a, desired_a),
-                ("team_b_id", dep_b, desired_b),
-            ):
-                if not is_dep:
-                    continue
-                if desired is None:
-                    if game.get(key) is not None:
-                        set_update(game, key, None)
-                        _clear_game_results(game, updates)
-                        game[key] = None
-                        changed = True
-                    continue
-                if game.get(key) != desired:
-                    set_update(game, key, desired)
-                    _clear_game_results(game, updates)
-                    game[key] = desired
+        series_outcomes = _compute_series_outcomes(series_groups)
+
+        def resolve_source(source: Any) -> tuple[bool, str | None]:
+            parsed = _parse_source(source)
+            if not parsed:
+                return False, None
+            if "winnerOf" in parsed:
+                return True, series_outcomes.get(parsed["winnerOf"], {}).get("winner_team_id")
+            if "loserOf" in parsed:
+                return True, series_outcomes.get(parsed["loserOf"], {}).get("loser_team_id")
+            return False, None
+
+        for code, series_games in series_groups.items():
+            anchor = _pick_series_anchor(series_games)
+            dep_a, desired_team_a = resolve_source(anchor.get("team_a_source"))
+            dep_b, desired_team_b = resolve_source(anchor.get("team_b_source"))
+
+            for series_game in series_games:
+                participants_changed = False
+
+                for key, is_dependency, desired_value in (
+                    ("team_a_id", dep_a, desired_team_a),
+                    ("team_b_id", dep_b, desired_team_b),
+                ):
+                    if not is_dependency:
+                        continue
+                    if series_game.get(key) == desired_value:
+                        continue
+                    set_update(series_game["id"], key, desired_value)
+                    series_game[key] = desired_value
+                    participants_changed = True
+
+                if participants_changed:
+                    _clear_game_results(series_game, updates)
                     changed = True
 
-            for field in ["winner_team_id", "loser_team_id", "finalized_at"]:
-                if field in updates.get(game["id"], {}):
-                    game[field] = updates[game["id"]].get(field)
-            for field in ["score_a", "score_b"]:
-                if field in updates.get(game["id"], {}):
-                    game[field] = updates[game["id"]].get(field)
-
     return list(updates.values())
+
+
+def _series_game_sort_key(game: dict[str, Any]) -> tuple[int, str]:
+    return int(game.get("series_game_number") or 1), str(game.get("id") or "")
+
+
+def _pick_series_anchor(series_games: list[dict[str, Any]]) -> dict[str, Any]:
+    ordered_games = sorted(series_games, key=_series_game_sort_key)
+    return next((game for game in ordered_games if int(game.get("series_game_number") or 1) == 1), ordered_games[0])
+
+
+def _compute_series_outcomes(series_groups: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    outcomes: dict[str, dict[str, Any]] = {}
+    for code, series_games in series_groups.items():
+        ordered_games = sorted(series_games, key=_series_game_sort_key)
+        required_wins = 2 if len(ordered_games) >= 3 else 1
+        wins: dict[str, int] = {}
+
+        for game in ordered_games:
+            winner = game.get("winner_team_id")
+            if winner:
+                wins[winner] = wins.get(winner, 0) + 1
+
+        winner_team_id = next((team_id for team_id, win_count in wins.items() if win_count >= required_wins), None)
+        loser_team_id = None
+        if winner_team_id:
+            participants = {
+                game.get("team_a_id") for game in ordered_games if game.get("team_a_id")
+            } | {
+                game.get("team_b_id") for game in ordered_games if game.get("team_b_id")
+            }
+            participants.discard(winner_team_id)
+            loser_team_id = next(iter(participants), None)
+
+        outcomes[code] = {
+            "winner_team_id": winner_team_id,
+            "loser_team_id": loser_team_id,
+        }
+
+    return outcomes
 
 
 def _parse_source(source: Any) -> dict[str, Any] | None:
