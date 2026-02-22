@@ -819,9 +819,9 @@ def render(ctx):
                 submitted = st.form_submit_button("Submit Round & Calculate Movement")
 
             if submitted:
-                st.warning("Round result submission moved to the unified Record Match Result wizard.")
-                st.link_button("Open Record Match Result", "/?page=record_match", use_container_width=True)
-                st.stop()
+                st.session_state["_nav_pending"] = "🧾 Record Match"
+                st.query_params["page"] = "record_match"
+                st.rerun()
 
         # -------------------------
         # 5) CONFIRM MOVEMENT
