@@ -12,4 +12,5 @@ create table if not exists schema_version (
 
 insert into schema_version (version)
 values ('rebuild_phase1_alignment')
-on conflict do nothing;
+on conflict (version)
+do update set applied_at = now();

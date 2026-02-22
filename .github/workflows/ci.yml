@@ -25,6 +25,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall .
 
+      - name: Enforce supabase canonical migrations
+        run: python scripts/check_root_migrations_no_ddl.py
+
       - name: Smoke import checks
         run: >-
           python -c "import services.match_pipeline; import jupr_app.domain.match_processing; import jupr_app.domain.replay_history; print('imports-ok')"

@@ -175,8 +175,8 @@ def test_preflight_raises_when_columns_missing(monkeypatch):
     supabase = _FakeSupabase({"schema_version": {"version"}, "player_badges": {"awarded_by"}})
     with pytest.raises(RuntimeError) as excinfo:
         ensure_badge_schema_preflight(supabase)
-    assert "migrations/20260625_badge_recompute_runs.sql" in str(excinfo.value)
-    assert "migrations/20260630_player_badges_revocation.sql" in str(excinfo.value)
+    assert "supabase/migrations/20260625_badge_recompute_runs.sql" in str(excinfo.value)
+    assert "supabase/migrations/20260630_player_badges_revocation.sql" in str(excinfo.value)
     assert "enforce_uniques_and_preflight" in str(excinfo.value)
     assert "badge_eval_runs" in str(excinfo.value)
 
