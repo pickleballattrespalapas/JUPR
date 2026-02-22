@@ -296,7 +296,7 @@ def render(ctx):
             _require_club_id_payload(games_payload)
             supabase.table("tournament_games").upsert(
                 games_payload,
-                on_conflict="tournament_id,stage,rr_round_number,rr_slot_number"
+                on_conflict="club_id,tournament_id,stage,rr_round_number,rr_slot_number"
             ).execute()
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
@@ -430,7 +430,7 @@ def render(ctx):
 
                         supabase.table("tournament_games").upsert(
                             games_payload,
-                            on_conflict="tournament_id,stage,playoff_game_code,series_game_number"
+                            on_conflict="club_id,tournament_id,stage,playoff_game_code,series_game_number"
                         ).execute()
 
                         st.success("Playoff bracket regenerated.")
@@ -458,7 +458,7 @@ def render(ctx):
             _require_club_id_payload(games_payload)
             supabase.table("tournament_games").upsert(
                 games_payload,
-                on_conflict="tournament_id,stage,playoff_game_code,series_game_number"
+                on_conflict="club_id,tournament_id,stage,playoff_game_code,series_game_number"
             ).execute()
             sb_update(
                 supabase,
