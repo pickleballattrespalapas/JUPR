@@ -972,33 +972,30 @@ def render(ctx):
                                 if use_guest_sub:
                                     if not sub_player.get("name"):
                                         raise RosterChangeError("Guest name is required.")
-                                    ok, err = safe_add_player(
+                                    normalized_name = " ".join(str(sub_player["name"]).strip().lower().split())
+                                    payload = {
+                                        "club_id": str(ctx.club_id),
+                                        "name": str(sub_player["name"]).strip(),
+                                        "normalized_name": normalized_name,
+                                        "rating": float(sub_player.get("rating", 3.5)),
+                                    }
+                                    ok, player_row, err = get_or_create_player(
                                         supabase=ctx.supabase,
                                         club_id=str(ctx.club_id),
-                                        name=sub_player["name"],
-                                        rating_jupr=float(sub_player.get("rating", 3.5)),
+                                        normalized_name=normalized_name,
+                                        payload=payload,
                                     )
                                     if not ok:
                                         raise RosterChangeError(f"Could not add guest: {err}")
-
-                                    fetch = (
-                                        ctx.supabase.table("players")
-                                        .select("id,name,rating")
-                                        .eq("club_id", str(ctx.club_id))
-                                        .eq("name", sub_player["name"])
-                                        .execute()
-                                    )
-                                    rows = fetch.data or []
-                                    if not rows:
+                                    if not isinstance(player_row, dict):
                                         raise RosterChangeError("Guest player was created but could not be loaded.")
-                                    row = rows[0]
                                     sub_player = {
-                                        "id": int(row["id"]),
-                                        "name": str(row["name"]),
-                                        "rating": float(row.get("rating", 1200.0) or 1200.0),
+                                        "id": int(player_row["id"]),
+                                        "name": str(player_row["name"]),
+                                        "rating": float(player_row.get("rating", 1200.0) or 1200.0),
                                     }
-                                    id_to_name[int(row["id"])] = str(row["name"])
-                                    name_to_id[str(row["name"])] = int(row["id"])
+                                    id_to_name[int(player_row["id"])] = str(player_row["name"])
+                                    name_to_id[str(player_row["name"])] = int(player_row["id"])
 
                                 result = apply_roster_change(
                                     roster_df=base_next_roster,
@@ -1050,33 +1047,30 @@ def render(ctx):
                                 if use_guest_add:
                                     if not add_player.get("name"):
                                         raise RosterChangeError("Guest name is required.")
-                                    ok, err = safe_add_player(
+                                    normalized_name = " ".join(str(add_player["name"]).strip().lower().split())
+                                    payload = {
+                                        "club_id": str(ctx.club_id),
+                                        "name": str(add_player["name"]).strip(),
+                                        "normalized_name": normalized_name,
+                                        "rating": float(add_player.get("rating", 3.5)),
+                                    }
+                                    ok, player_row, err = get_or_create_player(
                                         supabase=ctx.supabase,
                                         club_id=str(ctx.club_id),
-                                        name=add_player["name"],
-                                        rating_jupr=float(add_player.get("rating", 3.5)),
+                                        normalized_name=normalized_name,
+                                        payload=payload,
                                     )
                                     if not ok:
                                         raise RosterChangeError(f"Could not add guest: {err}")
-
-                                    fetch = (
-                                        ctx.supabase.table("players")
-                                        .select("id,name,rating")
-                                        .eq("club_id", str(ctx.club_id))
-                                        .eq("name", add_player["name"])
-                                        .execute()
-                                    )
-                                    rows = fetch.data or []
-                                    if not rows:
+                                    if not isinstance(player_row, dict):
                                         raise RosterChangeError("Guest player was created but could not be loaded.")
-                                    row = rows[0]
                                     add_player = {
-                                        "id": int(row["id"]),
-                                        "name": str(row["name"]),
-                                        "rating": float(row.get("rating", 1200.0) or 1200.0),
+                                        "id": int(player_row["id"]),
+                                        "name": str(player_row["name"]),
+                                        "rating": float(player_row.get("rating", 1200.0) or 1200.0),
                                     }
-                                    id_to_name[int(row["id"])] = str(row["name"])
-                                    name_to_id[str(row["name"])] = int(row["id"])
+                                    id_to_name[int(player_row["id"])] = str(player_row["name"])
+                                    name_to_id[str(player_row["name"])] = int(player_row["id"])
 
                                 result = apply_roster_change(
                                     roster_df=base_next_roster,
