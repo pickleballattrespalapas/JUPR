@@ -29,6 +29,10 @@ export type CourtsPayload = {
 const BENCH_ID = "Bench";
 const TARGET_ON_COURT = 4;
 
+function isBenchCourt(courtId: string) {
+  return courtId.trim().toLowerCase() === BENCH_ID.toLowerCase();
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -39,12 +43,98 @@ type Props = {
 };
 
 export default function CourtBoard({ courts, onChange }: Props) {
-  // Ensure Bench exists (so logic never breaks)
+  // Ensure Bench exists and is normalized to a single list.
   const normalizedCourts: Court[] = React.useMemo(() => {
-    const hasBench = courts.some((c) => c.court_id === BENCH_ID);
-    if (hasBench) return courts;
-    return [...courts, { court_id: BENCH_ID, players: [] }];
+    const benchPlayers = courts
+      .filter((c) => isBenchCourt(c.court_id))
+      .flatMap((c) => c.players);
+
+    const playableCourts = courts
+      .filter((c) => !isBenchCourt(c.court_id))
+      .map((c) => ({ ...c, players: [...c.players] }));
+
+    return [...playableCourts, { court_id: BENCH_ID, players: benchPlayers }];
   }, [courts]);
+
+  const renderCourtHeader = (court: Court, isBench: boolean) => {
+    const isWarn = !isBench && court.players.length !== TARGET_ON_COURT;
+
+    return (
+      <div className="cb-court-header">
+        <div className="cb-court-title">{isBench ? BENCH_ID : court.court_id}</div>
+
+        {!isBench ? (
+          <div
+            className={`cb-court-count ${isWarn ? "cb-court-count-warn" : ""}`}
+            title={
+              isWarn
+                ? `Court has ${court.players.length} players (target ${TARGET_ON_COURT}).`
+                : `Court has ${TARGET_ON_COURT} players.`
+            }
+          >
+            {court.players.length}/{TARGET_ON_COURT}
+            {isWarn ? <span className="cb-warn-pill">!</span> : null}
+          </div>
+        ) : (
+          <div className="cb-court-count" title="Bench players will not be scheduled.">
+            {court.players.length} waiting
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderDroppableCourt = (court: Court, isBench: boolean) => (
+    <Droppable droppableId={court.court_id}>
+      {(provided: DroppableProvided, snapshot: DroppableStateSnapshot) => (
+        <div
+          className={`cb-court-body ${snapshot.isDraggingOver ? "cb-court-body-over" : ""}`}
+          ref={provided.innerRef}
+          {...provided.droppableProps}
+        >
+          {court.players.map((p, idx) => (
+            <Draggable draggableId={p.player_id} index={idx} key={p.player_id}>
+              {(dragProvided: DraggableProvided, dragSnapshot: DraggableStateSnapshot) => (
+                <div
+                  className={`cb-card ${dragSnapshot.isDragging ? "cb-card-dragging" : ""}`}
+                  ref={dragProvided.innerRef}
+                  {...dragProvided.draggableProps}
+                  {...dragProvided.dragHandleProps}
+                >
+                  <div className="cb-card-name">{p.name}</div>
+                  <div className="cb-card-meta">
+                    <span className="cb-card-id">{p.player_id}</span>
+                    {typeof p.rating === "number" ? (
+                      <span className="cb-card-rating">{p.rating.toFixed(3)}</span>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </Draggable>
+          ))}
+
+          {provided.placeholder}
+
+          {court.players.length === 0 ? (
+            <div className="cb-empty">{isBench ? "Drop players here" : "Drop players here."}</div>
+          ) : null}
+        </div>
+      )}
+    </Droppable>
+  );
+
+  const renderBench = (benchCourt: Court) => (
+    <div className="cb-court cb-court-bench" key={BENCH_ID}>
+      {renderCourtHeader(benchCourt, true)}
+      {renderDroppableCourt(benchCourt, true)}
+    </div>
+  );
+
+  const playableCourts = normalizedCourts.filter((court) => !isBenchCourt(court.court_id));
+  const benchCourt = normalizedCourts.find((court) => isBenchCourt(court.court_id)) ?? {
+    court_id: BENCH_ID,
+    players: [],
+  };
 
   const onDragEnd = (result: DropResult) => {
     const { source, destination } = result;
@@ -102,75 +192,13 @@ export default function CourtBoard({ courts, onChange }: Props) {
   return (
     <div className="cb-board">
       <DragDropContext onDragEnd={onDragEnd}>
-        {normalizedCourts.map((court) => {
-          const isBench = court.court_id === BENCH_ID;
-          const isWarn = !isBench && court.players.length !== TARGET_ON_COURT;
-
-          return (
-            <div className={`cb-court ${isBench ? "cb-court-bench" : ""}`} key={court.court_id}>
-              <div className="cb-court-header">
-                <div className="cb-court-title">{court.court_id}</div>
-
-                {!isBench ? (
-                  <div
-                    className={`cb-court-count ${isWarn ? "cb-court-count-warn" : ""}`}
-                    title={
-                      isWarn
-                        ? `Court has ${court.players.length} players (target ${TARGET_ON_COURT}).`
-                        : `Court has ${TARGET_ON_COURT} players.`
-                    }
-                  >
-                    {court.players.length}/{TARGET_ON_COURT}
-                    {isWarn ? <span className="cb-warn-pill">!</span> : null}
-                  </div>
-                ) : (
-                  <div className="cb-court-count" title="Bench players will not be scheduled.">
-                    {court.players.length} waiting
-                  </div>
-                )}
-              </div>
-
-              <Droppable droppableId={court.court_id}>
-                {(provided: DroppableProvided, snapshot: DroppableStateSnapshot) => (
-                  <div
-                    className={`cb-court-body ${snapshot.isDraggingOver ? "cb-court-body-over" : ""}`}
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                  >
-                    {court.players.map((p, idx) => (
-                      <Draggable draggableId={p.player_id} index={idx} key={p.player_id}>
-                        {(dragProvided: DraggableProvided, dragSnapshot: DraggableStateSnapshot) => (
-                          <div
-                            className={`cb-card ${dragSnapshot.isDragging ? "cb-card-dragging" : ""}`}
-                            ref={dragProvided.innerRef}
-                            {...dragProvided.draggableProps}
-                            {...dragProvided.dragHandleProps}
-                          >
-                            <div className="cb-card-name">{p.name}</div>
-                            <div className="cb-card-meta">
-                              <span className="cb-card-id">{p.player_id}</span>
-                              {typeof p.rating === "number" ? (
-                                <span className="cb-card-rating">{p.rating.toFixed(3)}</span>
-                              ) : null}
-                            </div>
-                          </div>
-                        )}
-                      </Draggable>
-                    ))}
-
-                    {provided.placeholder}
-
-                    {court.players.length === 0 ? (
-                      <div className="cb-empty">
-                        {isBench ? "Drop players here to sit out." : "Drop players here."}
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </Droppable>
-            </div>
-          );
-        })}
+        {playableCourts.map((court) => (
+          <div className="cb-court" key={court.court_id}>
+            {renderCourtHeader(court, false)}
+            {renderDroppableCourt(court, false)}
+          </div>
+        ))}
+        {renderBench(benchCourt)}
       </DragDropContext>
     </div>
   );
