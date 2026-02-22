@@ -470,6 +470,38 @@ def render(ctx):
             st.session_state["force_data_refresh"] = True
 
         if playoff_games:
+            if st.button("🔄 Recompute Bracket Dependencies", disabled=is_complete):
+                playoff_games_resp = (
+                    supabase.table("tournament_games")
+                    .select("*")
+                    .eq("club_id", str(club_id))
+                    .eq("tournament_id", tournament_id)
+                    .eq("stage", "PLAYOFF")
+                    .execute()
+                )
+                playoff_games = playoff_games_resp.data or []
+
+                series_updates = resolve_series_results(playoff_games)
+                for upd in series_updates:
+                    supabase.table("tournament_games").update(upd).eq("club_id", str(club_id)).eq("id", upd["id"]).execute()
+
+                playoff_games_resp = (
+                    supabase.table("tournament_games")
+                    .select("*")
+                    .eq("club_id", str(club_id))
+                    .eq("tournament_id", tournament_id)
+                    .eq("stage", "PLAYOFF")
+                    .execute()
+                )
+                playoff_games = playoff_games_resp.data or []
+
+                dependency_updates = resolve_playoff_dependencies(playoff_games)
+                for upd in dependency_updates:
+                    supabase.table("tournament_games").update(upd).eq("club_id", str(club_id)).eq("id", upd["id"]).execute()
+
+                st.success("Bracket dependencies recomputed.")
+                st.session_state["force_data_refresh"] = True
+
             _render_playoff_bracket(
                 games=playoff_games,
                 teams_by_id=teams_by_id,
@@ -549,14 +581,16 @@ def _render_playoff_bracket(*, games, teams_by_id, id_to_name, on_save, disabled
 
         with st.form(key=f"playoff_{round_name}"):
             for series_code, series_games in series_groups.items():
+                series_len = max((g.get("series_game_number") or 1) for g in series_games)
                 st.markdown(f"### {series_code}")
                 for game in sorted(series_games, key=lambda x: x.get("series_game_number") or 1):
                     team_a = teams_by_id.get(game.get("team_a_id"), {})
                     team_b = teams_by_id.get(game.get("team_b_id"), {})
                     label_a = _team_label(team_a, id_to_name)
                     label_b = _team_label(team_b, id_to_name)
+                    game_number = game.get("series_game_number") or 1
                     col1, col2, col3, col4 = st.columns([4, 1, 1, 2])
-                    col1.write(f"{game.get('playoff_game_code')}: {label_a} vs {label_b}")
+                    col1.write(f"{game.get('playoff_game_code')} (Game {game_number}/{series_len}): {label_a} vs {label_b}")
                     col2.number_input(
                         "Score A",
                         min_value=0,
