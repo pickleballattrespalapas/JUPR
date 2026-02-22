@@ -49,3 +49,8 @@ def sync_tournament_game_to_match(
         },
         conflict="club_id,tournament_game_id",
     )
+
+
+def cleanup_duplicate_tournament_games(supabase: Any, tournament_id: str) -> Any:
+    """Delete duplicate tournament games for a single tournament via SQL RPC."""
+    return supabase.rpc("dedupe_tournament_games", {"t_id": str(tournament_id)}).execute()
