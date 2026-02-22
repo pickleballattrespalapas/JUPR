@@ -384,7 +384,13 @@ def render(ctx):
                     errs = 0
                     for _, r in edited_new.iterrows():
                         nm = str(r["Name"]).strip()
-                        jupr = float(r["Starting JUPR"])
+                        try:
+                            jupr = float(r["Starting JUPR"])
+                        except (TypeError, ValueError):
+                            errs += 1
+                            st.error(f"Could not add {nm}: invalid Starting JUPR value.")
+                            continue
+
                         ok, err = safe_add_player(
                             supabase=ctx.supabase,
                             club_id=str(ctx.club_id),
