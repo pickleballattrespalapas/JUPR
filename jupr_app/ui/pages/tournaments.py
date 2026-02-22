@@ -296,12 +296,12 @@ def render(ctx):
             _require_club_id_payload(games_payload)
             if getattr(ctx, "DEBUG_MODE", False):
                 print(
-                    "RR upsert conflict target:",
-                    "club_id,tournament_id,stage,rr_round_number,rr_slot_number",
+                    "tournament_games upsert conflict:",
+                    "club_id,tournament_id,stage,game_conflict_key",
                 )
             supabase.table("tournament_games").upsert(
                 games_payload,
-                on_conflict="club_id,tournament_id,stage,rr_round_number,rr_slot_number"
+                on_conflict="club_id,tournament_id,stage,game_conflict_key"
             ).execute()
             sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
@@ -433,9 +433,11 @@ def render(ctx):
                             game["club_id"] = str(club_id)
                         _require_club_id_payload(games_payload)
 
+                        if getattr(ctx, "DEBUG_MODE", False):
+                            print("tournament_games upsert conflict:", "club_id,tournament_id,stage,game_conflict_key")
                         supabase.table("tournament_games").upsert(
                             games_payload,
-                            on_conflict="club_id,tournament_id,stage,playoff_game_code,series_game_number"
+                            on_conflict="club_id,tournament_id,stage,game_conflict_key"
                         ).execute()
 
                         st.success("Playoff bracket regenerated.")
@@ -461,9 +463,11 @@ def render(ctx):
                 # Explicit club_id for tenant isolation (RLS + multi-club safety)
                 game["club_id"] = str(club_id)
             _require_club_id_payload(games_payload)
+            if getattr(ctx, "DEBUG_MODE", False):
+                print("tournament_games upsert conflict:", "club_id,tournament_id,stage,game_conflict_key")
             supabase.table("tournament_games").upsert(
                 games_payload,
-                on_conflict="club_id,tournament_id,stage,playoff_game_code,series_game_number"
+                on_conflict="club_id,tournament_id,stage,game_conflict_key"
             ).execute()
             sb_update(
                 supabase,
