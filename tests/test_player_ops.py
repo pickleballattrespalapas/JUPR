@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from postgrest.exceptions import APIError
 
-from jupr_app.domain.player_ops import safe_add_player
+from jupr_app.domain.player_ops import get_or_create_player, safe_add_player
 
 
 class _Query:
@@ -17,6 +17,13 @@ class _Query:
         self.supabase.last_payload = dict(payload)
         self.supabase.last_on_conflict = on_conflict
         self.supabase.last_returning = returning
+        self.supabase.last_operation = "upsert"
+        return self
+
+    def insert(self, payload, returning=None):
+        self.supabase.last_payload = dict(payload)
+        self.supabase.last_returning = returning
+        self.supabase.last_operation = "insert"
         return self
 
     def select(self, _fields: str):
@@ -30,8 +37,10 @@ class _Query:
         return self
 
     def execute(self):
-        if self.supabase.raise_api_error is not None:
-            raise self.supabase.raise_api_error
+        if self.supabase.raise_api_error is not None and self.supabase.last_operation in {"insert", "upsert"}:
+            err = self.supabase.raise_api_error
+            self.supabase.raise_api_error = None
+            raise err
         if self.supabase.upsert_data is not None:
             data = self.supabase.upsert_data
             self.supabase.upsert_data = None
@@ -51,6 +60,7 @@ class _Supabase:
         self.last_payload = None
         self.last_on_conflict = None
         self.last_returning = None
+        self.last_operation = None
 
     def table(self, name: str):
         return _Query(self, name)
@@ -128,3 +138,76 @@ def test_safe_add_player_converts_unexpected_exception_to_error(caplog):
     assert ok is False
     assert err == "db unavailable"
     assert "safe_add_player failed unexpectedly" in caplog.text
+
+
+def test_get_or_create_player_inserts_and_returns_row():
+    supabase = _Supabase()
+    supabase.upsert_data = [{"id": 7, "name": "Alice Smith"}]
+
+    ok, row, err = get_or_create_player(
+        supabase=supabase,
+        club_id="club-1",
+        normalized_name="alice_smith",
+        payload={"club_id": "club-1", "name": "Alice Smith", "normalized_name": "alice_smith", "active": True, "rating": 1400},
+    )
+
+    assert ok is True
+    assert row == {"id": 7, "name": "Alice Smith"}
+    assert err is None
+    assert supabase.last_operation == "insert"
+    assert supabase.last_returning == "representation"
+
+
+def test_get_or_create_player_duplicate_returns_existing_active_row():
+    supabase = _Supabase()
+    supabase.raise_api_error = APIError(
+        {
+            "code": "23505",
+            "message": "duplicate key value violates unique constraint",
+            "hint": None,
+            "details": None,
+        }
+    )
+    supabase.rows["players"].append(
+        {
+            "id": 99,
+            "club_id": "club-1",
+            "name": "Alice Smith",
+            "normalized_name": "alice_smith",
+            "active": True,
+        }
+    )
+
+    ok, row, err = get_or_create_player(
+        supabase=supabase,
+        club_id="club-1",
+        normalized_name="alice_smith",
+        payload={"club_id": "club-1", "name": "Alice Smith", "normalized_name": "alice_smith", "active": True, "rating": 1400},
+    )
+
+    assert ok is True
+    assert row["id"] == 99
+    assert err == "already_exists"
+
+
+def test_get_or_create_player_non_duplicate_api_error_returns_failure():
+    supabase = _Supabase()
+    supabase.raise_api_error = APIError(
+        {
+            "code": "42501",
+            "message": "permission denied",
+            "hint": None,
+            "details": None,
+        }
+    )
+
+    ok, row, err = get_or_create_player(
+        supabase=supabase,
+        club_id="club-1",
+        normalized_name="alice_smith",
+        payload={"club_id": "club-1", "name": "Alice Smith", "normalized_name": "alice_smith", "active": True, "rating": 1400},
+    )
+
+    assert ok is False
+    assert row is None
+    assert err == "permission denied"

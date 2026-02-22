@@ -4,6 +4,7 @@ import re
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.player_merge import merge_player_into
+from jupr_app.domain.player_ops import get_or_create_player
 from streamlit_app import get_data
 
 def render(ctx):
@@ -47,21 +48,6 @@ def render(ctx):
                 if not normalized_name:
                     st.error("Name must include at least one letter or number.")
                     st.stop()
-                existing = (
-                    supabase.table("players")
-                    .select("id,name")
-                    .eq("club_id", club_id)
-                    .eq("name", name_clean)
-                    .limit(1)
-                    .execute()
-                    .data
-                    or []
-                )
-                if existing:
-                    st.info("Player already exists — opening existing record.")
-                    get_data.clear()
-                    st.session_state["_player_editor_pending_pick"] = name_clean
-                    st.stop()
                 payload = {
                     "club_id": club_id,
                     "name": name_clean,
@@ -69,10 +55,22 @@ def render(ctx):
                     "active": True,
                     "rating": int(round(float(rating) * 400.0)),
                 }
-                supabase.table("players").insert(payload).execute()
-                st.success(f"Player created: {name_clean} (Starting JUPR {float(rating):.1f})")
+                ok, player_row, err = get_or_create_player(
+                    supabase=supabase,
+                    club_id=club_id,
+                    normalized_name=normalized_name,
+                    payload=payload,
+                )
+                if not ok:
+                    st.error(err or "Failed to create player.")
+                    st.stop()
+                resolved_name = str((player_row or {}).get("name") or name_clean)
+                if err == "already_exists":
+                    st.info(f"Player already existed: {resolved_name} — opening existing record.")
+                else:
+                    st.success(f"Player created: {resolved_name} (Starting JUPR {float(rating):.1f})")
                 get_data.clear()
-                st.session_state["_player_editor_pending_pick"] = name_clean
+                st.session_state["_player_editor_pending_pick"] = resolved_name
                 st.session_state["_reset_add_player_form"] = True
                 st.session_state["force_data_refresh"] = True
 
