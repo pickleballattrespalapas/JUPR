@@ -230,13 +230,23 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
     print("DEBUG: ladder_live_roster columns:", list(roster_now.columns))
 
     courts_payload = roster_df_to_courts(roster_now, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
+
+    active_player_ids = {
+        str(int(pid))
+        for pid in pd.to_numeric(roster_now.get("player_id"), errors="coerce").dropna().astype(int).tolist()
+    }
+    bench_ids_seen: set[str] = set()
     for bench_row in list(st.session_state.get("ladder_bench_players", [])):
         pid = bench_row.get("player_id")
         if pid is None:
             continue
+        pid_str = str(int(pid))
+        if pid_str in active_player_ids or pid_str in bench_ids_seen:
+            continue
+        bench_ids_seen.add(pid_str)
         courts_payload[-1]["players"].append(
             {
-                "player_id": str(int(pid)),
+                "player_id": pid_str,
                 "name": str(bench_row.get("name") or f"#{pid}"),
                 "rating": float(bench_row.get("rating", 1200.0)) / 400.0,
             }
