@@ -47,6 +47,7 @@ alter table player_badges
     alter column context_type set default 'overall';
 
 alter table player_badges
+    drop constraint if exists player_badges_unique_context,
     drop constraint if exists player_badges_club_id_player_id_badge_id_context_id_key,
     add constraint player_badges_unique_context unique (club_id, player_id, badge_id, context_type, context_id);
 
