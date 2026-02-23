@@ -14,7 +14,7 @@ import streamlit as st
 from jupr_court_board import court_board
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
-from jupr_app.domain.live_ladder import validate_courts
+from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
 from jupr_app.domain.league_night_roster import (
     RosterChangeError,
     apply_roster_change,
@@ -835,9 +835,19 @@ def render(ctx):
                 submitted = st.form_submit_button("Submit Round & Calculate Movement")
 
             if submitted:
-                st.session_state["_nav_pending"] = "🧾 Record Match"
-                st.query_params["page"] = "record_match"
-                st.rerun()
+                roster_pids = roster_now["player_id"].astype(int).tolist()
+                round_stats = compute_round_stats(all_results, roster_pids)
+                max_court = int(roster_now["court"].astype(int).max()) if not roster_now.empty else 1
+                movement_df = build_movement_preview(roster_now.copy(), round_stats, max_court=max_court)
+
+                if movement_df is None or movement_df.empty:
+                    st.error("Unable to compute movement preview. Check round scores and try again.")
+                    st.stop()
+
+                st.session_state.ladder_movement_preview = movement_df
+                st.session_state.ladder_state = "CONFIRM_MOVEMENT"
+                _rerun()
+                st.stop()
 
         # -------------------------
         # 5) CONFIRM MOVEMENT
