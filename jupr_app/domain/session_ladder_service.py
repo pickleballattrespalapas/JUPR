@@ -13,33 +13,22 @@ from jupr_app.domain.session_ladder_engine import (
     getMovers,
     resolveTies,
 )
+from jupr_app.domain.session_ladder_models import SessionState
 
-SESSION_STATES = [
-    "DRAFT",
-    "ROSTER_OPEN",
-    "SEEDED_LOCKED",
-    "ROUND_1_ACTIVE",
-    "ROUND_1_CLOSED",
-    "ROUND_2_ACTIVE",
-    "ROUND_2_CLOSED",
-    "ROUND_3_ACTIVE",
-    "ROUND_3_CLOSED",
-    "COMPLETED",
-    "PUBLISHED",
-]
+SESSION_STATES = [state.value for state in SessionState]
 
 _VALID_TRANSITIONS = {
-    "DRAFT": {"ROSTER_OPEN"},
-    "ROSTER_OPEN": {"SEEDED_LOCKED"},
-    "SEEDED_LOCKED": {"ROUND_1_ACTIVE"},
-    "ROUND_1_ACTIVE": {"ROUND_1_CLOSED"},
-    "ROUND_1_CLOSED": {"ROUND_2_ACTIVE"},
-    "ROUND_2_ACTIVE": {"ROUND_2_CLOSED"},
-    "ROUND_2_CLOSED": {"ROUND_3_ACTIVE", "COMPLETED"},
-    "ROUND_3_ACTIVE": {"ROUND_3_CLOSED"},
-    "ROUND_3_CLOSED": {"COMPLETED"},
-    "COMPLETED": {"PUBLISHED"},
-    "PUBLISHED": set(),
+    SessionState.DRAFT: {SessionState.ROSTER_OPEN},
+    SessionState.ROSTER_OPEN: {SessionState.SEEDED_LOCKED},
+    SessionState.SEEDED_LOCKED: {SessionState.ROUND_1_ACTIVE},
+    SessionState.ROUND_1_ACTIVE: {SessionState.ROUND_1_CLOSED},
+    SessionState.ROUND_1_CLOSED: {SessionState.ROUND_2_ACTIVE},
+    SessionState.ROUND_2_ACTIVE: {SessionState.ROUND_2_CLOSED},
+    SessionState.ROUND_2_CLOSED: {SessionState.ROUND_3_ACTIVE, SessionState.COMPLETED},
+    SessionState.ROUND_3_ACTIVE: {SessionState.ROUND_3_CLOSED},
+    SessionState.ROUND_3_CLOSED: {SessionState.COMPLETED},
+    SessionState.COMPLETED: {SessionState.PUBLISHED},
+    SessionState.PUBLISHED: set(),
 }
 
 
@@ -51,9 +40,38 @@ class SessionCompleteness:
 
 
 def canTransition(from_state: str, to_state: str) -> bool:
-    src = str(from_state or "").strip().upper()
-    dst = str(to_state or "").strip().upper()
+    src = _parse_session_state(from_state)
+    dst = _parse_session_state(to_state)
+    if src is None or dst is None:
+        return False
     return dst in _VALID_TRANSITIONS.get(src, set())
+
+
+def _parse_session_state(state: str | SessionState | None) -> SessionState | None:
+    if isinstance(state, SessionState):
+        return state
+    normalized = str(state or "").strip().lower()
+    if not normalized:
+        return None
+    normalized = normalized.replace(" ", "_")
+    try:
+        return SessionState(normalized)
+    except ValueError:
+        legacy = {
+            "setup": SessionState.SEEDED_LOCKED,
+            "active": SessionState.ROSTER_OPEN,
+            "cancelled": SessionState.COMPLETED,
+            "archived": SessionState.PUBLISHED,
+        }
+        return legacy.get(normalized)
+
+
+def _round_state(round_number: int, phase: str) -> SessionState:
+    key = f"round_{int(round_number)}_{str(phase).strip().lower()}"
+    try:
+        return SessionState(key)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported round state: {key}") from exc
 
 
 def _fetch_rows(supabase: Any, table: str, **filters: Any) -> list[dict[str, Any]]:
@@ -117,7 +135,7 @@ def createSession(
         "courts_available": int(courts_available),
         "players_per_court": int(players_per_court),
         "rounds_planned": max(2, min(int(rounds_planned), 3)),
-        "state": "DRAFT",
+        "state": SessionState.DRAFT.value,
         "created_by": str(created_by),
         "updated_by": str(created_by),
     }
@@ -209,11 +227,11 @@ def seedCourtsByRating(supabase: Any, *, sessionId: str, seeded_by: str) -> list
 
 
 def lockSeeding(supabase: Any, *, sessionId: str, updated_by: str) -> dict[str, Any]:
-    return _transition_state(supabase, sessionId=sessionId, to_state="SEEDED_LOCKED", updated_by=updated_by)
+    return _transition_state(supabase, sessionId=sessionId, to_state=SessionState.SEEDED_LOCKED, updated_by=updated_by)
 
 
 def startRound(supabase: Any, *, sessionId: str, roundNumber: int, updated_by: str) -> dict[str, Any]:
-    state = f"ROUND_{int(roundNumber)}_ACTIVE"
+    state = _round_state(roundNumber, "active")
     out = _transition_state(supabase, sessionId=sessionId, to_state=state, updated_by=updated_by)
     sb_update(
         supabase,
@@ -237,8 +255,8 @@ def submitGameResult(
     edited_by: str,
 ) -> dict[str, Any]:
     session = _require_session(supabase, sessionId)
-    state = str(session.get("state") or "").upper()
-    if state in {"COMPLETED", "PUBLISHED"}:
+    state = _parse_session_state(session.get("state"))
+    if state in {SessionState.COMPLETED, SessionState.PUBLISHED}:
         raise RuntimeError("Session is locked; game results cannot be edited after completion/publish")
     payload = {
         "club_id": str(session["club_id"]),
@@ -285,7 +303,7 @@ def closeRound(
     if incomplete_courts and not bool(allow_override):
         raise RuntimeError(f"Cannot close round: incomplete courts {incomplete_courts}")
 
-    state = f"ROUND_{int(roundNumber)}_CLOSED"
+    state = _round_state(roundNumber, "closed")
     _transition_state(supabase, sessionId=sessionId, to_state=state, updated_by=updated_by)
 
     ranked_courts: list[list[int]] = []
@@ -413,7 +431,7 @@ def completeSession(supabase: Any, *, sessionId: str, updated_by: str) -> dict[s
     completeness = validateSessionCompleteness(supabase, sessionId)
     if not completeness.ok:
         raise RuntimeError(f"Session incomplete: {completeness.missing}")
-    result = _transition_state(supabase, sessionId=sessionId, to_state="COMPLETED", updated_by=updated_by)
+    result = _transition_state(supabase, sessionId=sessionId, to_state=SessionState.COMPLETED, updated_by=updated_by)
     rating_summary = _apply_session_rating_updates(supabase, session_id=sessionId, updated_by=updated_by)
     result["rating_update_hook_triggered"] = True
     result["rating_update"] = rating_summary
@@ -422,24 +440,57 @@ def completeSession(supabase: Any, *, sessionId: str, updated_by: str) -> dict[s
 
 def publishSession(supabase: Any, *, sessionId: str, updated_by: str) -> dict[str, Any]:
     session = _require_session(supabase, sessionId)
-    if str(session.get("state") or "").upper() != "PUBLISHED":
-        _transition_state(supabase, sessionId=sessionId, to_state="PUBLISHED", updated_by=updated_by)
+    if _is_already_published(session):
+        return _published_response_from_session(session)
+
+    current_state = _parse_session_state(session.get("state"))
+    if current_state is None or not canTransition(current_state, SessionState.PUBLISHED):
+        raise RuntimeError(f"Invalid state transition: {current_state} -> {SessionState.PUBLISHED}")
 
     attendance = _apply_attendance_for_session(supabase, session_id=sessionId, updated_by=updated_by)
     recap = _build_session_recap(supabase, session_id=sessionId)
     leaderboard = _build_ratings_leaderboard(supabase, club_id=str(session.get("club_id") or ""))
-    sb_update(
+    published_at = datetime.now(timezone.utc).isoformat()
+    snapshot = {"recap": recap, "leaderboard": leaderboard, "attendance": attendance}
+    published_rows = sb_update(
         supabase,
         "session_ladder_sessions",
         {
-            "published_at": datetime.now(timezone.utc).isoformat(),
+            "state": SessionState.PUBLISHED.value,
+            "published_at": published_at,
             "recap_json": recap,
             "leaderboard_json": leaderboard,
+            "published_snapshot_json": snapshot,
             "updated_by": str(updated_by),
         },
-        filters={"id": str(sessionId)},
+        filters={"id": str(sessionId), "published_at": None},
+    ).data or []
+
+    if not published_rows:
+        return _published_response_from_session(_require_session(supabase, sessionId))
+
+    return _published_response_from_session(dict(published_rows[0]))
+
+
+def _is_already_published(session: dict[str, Any]) -> bool:
+    return _parse_session_state(session.get("state")) == SessionState.PUBLISHED or bool(session.get("published_at"))
+
+
+def _published_response_from_session(session: dict[str, Any]) -> dict[str, Any]:
+    snapshot = session.get("published_snapshot_json") or {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+
+    recap = snapshot.get("recap") if isinstance(snapshot.get("recap"), dict) else session.get("recap_json") or {}
+    leaderboard = (
+        snapshot.get("leaderboard")
+        if isinstance(snapshot.get("leaderboard"), list)
+        else session.get("leaderboard_json") or []
     )
-    out = _require_session(supabase, sessionId)
+    attendance = snapshot.get("attendance") if isinstance(snapshot.get("attendance"), dict) else {}
+
+    out = dict(session)
+    out["state"] = SessionState.PUBLISHED.value
     out["recap"] = recap
     out["leaderboard"] = leaderboard
     out["attendance"] = attendance
@@ -609,21 +660,29 @@ def _build_ratings_leaderboard(supabase: Any, *, club_id: str) -> list[dict[str,
     ]
 
 
-def _transition_state(supabase: Any, *, sessionId: str, to_state: str, updated_by: str) -> dict[str, Any]:
+def _transition_state(
+    supabase: Any,
+    *,
+    sessionId: str,
+    to_state: str | SessionState,
+    updated_by: str,
+) -> dict[str, Any]:
     session = _require_session(supabase, sessionId)
-    current = str(session.get("state") or "").upper()
-    target = str(to_state).upper()
+    current = _parse_session_state(session.get("state"))
+    target = _parse_session_state(to_state)
+    if target is None:
+        raise RuntimeError(f"Invalid target state: {to_state}")
     if current == target:
         return session
-    if not canTransition(current, target):
+    if current is None or not canTransition(current, target):
         raise RuntimeError(f"Invalid state transition: {current} -> {target}")
 
     sb_update(
         supabase,
         "session_ladder_sessions",
-        {"state": target, "updated_by": str(updated_by)},
+        {"state": target.value, "updated_by": str(updated_by)},
         filters={"id": str(sessionId)},
     )
-    session["state"] = target
+    session["state"] = target.value
     session["updated_by"] = str(updated_by)
     return session

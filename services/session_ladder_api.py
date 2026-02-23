@@ -23,10 +23,11 @@ from jupr_app.domain.session_ladder_service import (
 def post_create_session(*, supabase: Any, auth: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     _require_feature()
     _require_mutation_access(auth)
+    league_key = _resolve_session_league_key(supabase=supabase, club_id=str(auth.get("club_id") or ""), payload=payload)
     session = createSession(
         supabase,
         club_id=str(auth.get("club_id") or ""),
-        league_id=str(payload.get("league_id") or ""),
+        league_id=league_key,
         season_id=payload.get("season_id"),
         session_starts_at=str(payload.get("session_starts_at") or ""),
         courts_available=int(payload.get("courts_available") or 0),
@@ -35,6 +36,29 @@ def post_create_session(*, supabase: Any, auth: dict[str, Any], payload: dict[st
         created_by=str(auth.get("user_id") or auth.get("email") or "api"),
     )
     return {"session": session}
+
+
+def _resolve_session_league_key(*, supabase: Any, club_id: str, payload: dict[str, Any]) -> str:
+    raw_key = payload.get("league_key")
+    if raw_key is None:
+        raw_key = payload.get("league_id")
+    candidate = str(raw_key or "").strip()
+    if not candidate:
+        raise ValueError("league_key (or legacy league_id) is required")
+
+    rows = (
+        supabase.table("leagues_metadata")
+        .select("league_name")
+        .eq("club_id", str(club_id))
+        .execute()
+        .data
+        or []
+    )
+    by_key = {str(r.get("league_name") or "").strip().lower(): str(r.get("league_name") or "").strip() for r in rows}
+    canonical = by_key.get(candidate.lower())
+    if not canonical:
+        raise ValueError(f"Unknown league key for club {club_id}: {candidate}")
+    return canonical
 
 
 def get_session_details(*, supabase: Any, auth: dict[str, Any], session_id: str) -> dict[str, Any]:

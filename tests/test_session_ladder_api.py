@@ -97,6 +97,10 @@ class _Query:
 class _Supabase:
     def __init__(self):
         self.storage: dict[str, list[dict]] = {
+            "leagues_metadata": [
+                {"id": 1, "club_id": "club-1", "league_name": "League One", "is_active": True},
+                {"id": 2, "club_id": "club-1", "league_name": "League Two", "is_active": True},
+            ],
             "players": [
                 {"id": 1, "club_id": "club-1", "name": "A One", "normalized_name": "a one", "rating": 1500, "active": True},
                 {"id": 2, "club_id": "club-1", "name": "B Two", "normalized_name": "b two", "rating": 1400, "active": True},
@@ -132,7 +136,7 @@ def _seed_and_start_round_1(sb: _Supabase, monkeypatch) -> str:
         supabase=sb,
         auth=_auth("manager"),
         payload={
-            "league_id": "league-1",
+            "league_key": "league one",
             "season_id": None,
             "session_starts_at": "2026-09-03T18:00:00Z",
             "courts_available": 2,
@@ -141,7 +145,7 @@ def _seed_and_start_round_1(sb: _Supabase, monkeypatch) -> str:
     )["session"]["id"]
 
     # service expects roster open first
-    sb.storage["session_ladder_sessions"][0]["state"] = "ROSTER_OPEN"
+    sb.storage["session_ladder_sessions"][0]["state"] = "roster_open"
 
     for pid, rating in zip(range(1, 9), [1500, 1400, 1300, 1200, 1100, 1000, 900, 800]):
         api.post_add_roster_entries(
@@ -170,7 +174,7 @@ def test_feature_flag_blocks_all_endpoints(monkeypatch):
             supabase=sb,
             auth=_auth("manager"),
             payload={
-                "league_id": "l",
+                "league_key": "League One",
                 "season_id": None,
                 "session_starts_at": "2026-09-03T18:00:00Z",
                 "courts_available": 1,
@@ -187,10 +191,41 @@ def test_auth_blocks_mutation_for_non_manager_non_admin(monkeypatch):
             supabase=sb,
             auth=_auth("player"),
             payload={
-                "league_id": "l",
+                "league_key": "League One",
                 "season_id": None,
                 "session_starts_at": "2026-09-03T18:00:00Z",
                 "courts_available": 1,
+                "players_per_court": 4,
+            },
+        )
+
+
+def test_create_session_validates_and_canonicalizes_league_key(monkeypatch):
+    sb = _Supabase()
+    monkeypatch.setattr(api, "FEATURE_SESSION_LADDER", True)
+
+    created = api.post_create_session(
+        supabase=sb,
+        auth=_auth("manager"),
+        payload={
+            "league_key": "league one",
+            "season_id": None,
+            "session_starts_at": "2026-09-03T18:00:00Z",
+            "courts_available": 2,
+            "players_per_court": 4,
+        },
+    )
+    assert created["session"]["league_id"] == "League One"
+
+    with pytest.raises(ValueError, match="Unknown league key"):
+        api.post_create_session(
+            supabase=sb,
+            auth=_auth("manager"),
+            payload={
+                "league_key": "Missing League",
+                "season_id": None,
+                "session_starts_at": "2026-09-03T18:00:00Z",
+                "courts_available": 2,
                 "players_per_court": 4,
             },
         )
@@ -300,14 +335,14 @@ def test_complete_and_publish_endpoints(monkeypatch):
             api.post_start_round(supabase=sb, auth=_auth("manager"), session_id=sid, round_number=2)
 
     done = api.post_complete_session(supabase=sb, auth=_auth("manager"), session_id=sid)
-    assert done["session"]["state"] == "COMPLETED"
+    assert done["session"]["state"] == "completed"
     assert done["session"]["rating_update"]["applied"] is False
 
     done_again = api.post_complete_session(supabase=sb, auth=_auth("manager"), session_id=sid)
     assert done_again["session"]["rating_update"]["applied"] is False
 
     pub = api.post_publish_session(supabase=sb, auth=_auth("manager"), session_id=sid)
-    assert pub["session"]["state"] == "PUBLISHED"
+    assert pub["session"]["state"] == "published"
     assert pub["session"].get("recap")
     assert pub["session"].get("leaderboard")
 
