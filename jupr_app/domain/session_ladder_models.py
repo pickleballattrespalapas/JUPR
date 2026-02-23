@@ -3,10 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Literal
 
 
-SessionState = Literal["draft", "setup", "active", "completed", "cancelled", "archived"]
+class SessionState(str, Enum):
+    DRAFT = "draft"
+    ROSTER_OPEN = "roster_open"
+    SEEDED_LOCKED = "seeded_locked"
+    ROUND_1_ACTIVE = "round_1_active"
+    ROUND_1_CLOSED = "round_1_closed"
+    ROUND_2_ACTIVE = "round_2_active"
+    ROUND_2_CLOSED = "round_2_closed"
+    ROUND_3_ACTIVE = "round_3_active"
+    ROUND_3_CLOSED = "round_3_closed"
+    COMPLETED = "completed"
+    PUBLISHED = "published"
+
+
+SESSION_STATE_VALUES = tuple(state.value for state in SessionState)
 RosterStatus = Literal["EXPECTED", "CHECKED_IN", "NO_SHOW", "WALK_IN"]
 CourtPodState = Literal["planned", "in_progress", "complete", "void"]
 

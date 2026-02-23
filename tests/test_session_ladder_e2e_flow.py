@@ -81,6 +81,9 @@ class _Query:
 class _Supabase:
     def __init__(self):
         self.storage = {
+            "leagues_metadata": [
+                {"id": 1, "club_id": "club-1", "league_name": "League One", "is_active": True},
+            ],
             "players": [
                 {"id": 1, "club_id": "club-1", "name": "A", "normalized_name": "a", "rating": 1500, "active": True},
                 {"id": 2, "club_id": "club-1", "name": "B", "normalized_name": "b", "rating": 1400, "active": True},
@@ -114,7 +117,7 @@ def test_e2e_roster_seed_score_close_creates_round2(monkeypatch):
         supabase=sb,
         auth=_auth(),
         payload={
-            "league_id": "league-1",
+            "league_key": "league one",
             "season_id": None,
             "session_starts_at": "2026-09-03T18:00:00Z",
             "courts_available": 2,
@@ -122,7 +125,7 @@ def test_e2e_roster_seed_score_close_creates_round2(monkeypatch):
         },
     )["session"]["id"]
 
-    sb.storage["session_ladder_sessions"][0]["state"] = "ROSTER_OPEN"
+    sb.storage["session_ladder_sessions"][0]["state"] = "roster_open"
 
     for pid, rating in zip(range(1, 9), [1500, 1400, 1300, 1200, 1100, 1000, 900, 800]):
         api.post_add_roster_entries(

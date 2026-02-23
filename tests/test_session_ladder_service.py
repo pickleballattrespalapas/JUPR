@@ -112,7 +112,7 @@ def _seed_basic_session(sb: _Supabase) -> str:
         created_by="admin",
     )
     sid = created["id"]
-    svc._transition_state(sb, sessionId=sid, to_state="ROSTER_OPEN", updated_by="admin")
+    svc._transition_state(sb, sessionId=sid, to_state="roster_open", updated_by="admin")
     for idx, rating in enumerate([1600, 1500, 1400, 1300, 1200, 1100, 1000, 900], start=1):
         svc.updateRosterStatus(
             sb,
@@ -128,10 +128,27 @@ def _seed_basic_session(sb: _Supabase) -> str:
 
 
 def test_can_transition_state_machine_paths():
-    assert svc.canTransition("DRAFT", "ROSTER_OPEN")
-    assert svc.canTransition("ROUND_2_CLOSED", "COMPLETED")
-    assert not svc.canTransition("DRAFT", "ROUND_1_ACTIVE")
-    assert not svc.canTransition("PUBLISHED", "COMPLETED")
+    assert svc.canTransition("draft", "roster_open")
+    assert svc.canTransition("round_2_closed", "completed")
+    assert not svc.canTransition("draft", "round_1_active")
+    assert not svc.canTransition("published", "completed")
+
+
+def test_session_state_values_match_db_allowed_list():
+    db_allowed_states = {
+        "draft",
+        "roster_open",
+        "seeded_locked",
+        "round_1_active",
+        "round_1_closed",
+        "round_2_active",
+        "round_2_closed",
+        "round_3_active",
+        "round_3_closed",
+        "completed",
+        "published",
+    }
+    assert set(svc.SESSION_STATES) == db_allowed_states
 
 
 def test_close_round_is_idempotent_for_next_round_generation():
@@ -263,7 +280,7 @@ def test_complete_and_publish_session_flow():
     svc.closeRound(sb, sessionId=sid, roundNumber=2, updated_by="admin", allow_override=True, override_reason="test override")
 
     completed = svc.completeSession(sb, sessionId=sid, updated_by="admin")
-    assert completed["state"] == "COMPLETED"
+    assert completed["state"] == "completed"
     assert completed["rating_update_hook_triggered"] is True
     assert completed["rating_update"]["applied"] is False
 
@@ -271,13 +288,25 @@ def test_complete_and_publish_session_flow():
     assert completed_again["rating_update"]["applied"] is False
 
     published = svc.publishSession(sb, sessionId=sid, updated_by="admin")
-    assert published["state"] == "PUBLISHED"
+    assert published["state"] == "published"
     assert published.get("recap")
     assert published.get("leaderboard")
+    assert published.get("attendance")
+    assert published.get("published_at")
     assert sb.storage["session_ladder_rating_history"]
+    assert {row["league_name"] for row in sb.storage["league_ratings"]} == {"league-a"}
+
+    first_published_at = published["published_at"]
+    first_recap = published["recap"]
+    first_leaderboard = published["leaderboard"]
+    first_attendance = published["attendance"]
     first_attendance_count = len(sb.storage["session_ladder_attendance"])
 
     published_again = svc.publishSession(sb, sessionId=sid, updated_by="admin")
+    assert published_again["published_at"] == first_published_at
+    assert published_again["recap"] == first_recap
+    assert published_again["leaderboard"] == first_leaderboard
+    assert published_again["attendance"] == first_attendance
     assert len(sb.storage["session_ladder_attendance"]) == first_attendance_count
 
 
@@ -320,7 +349,7 @@ def test_submit_game_result_upsert_idempotent():
 def test_submit_game_result_blocked_when_session_locked():
     sb = _Supabase()
     sid = _seed_basic_session(sb)
-    sb.storage["session_ladder_sessions"][0]["state"] = "PUBLISHED"
+    sb.storage["session_ladder_sessions"][0]["state"] = "published"
     pod = [r for r in sb.storage["session_ladder_court_pods"] if r["round_number"] == 1][0]
     pod_players = [r for r in sb.storage["session_ladder_court_pod_players"] if r["court_pod_id"] == pod["id"]]
     p = [x["player_id"] for x in sorted(pod_players, key=lambda r: r["player_order"])]
@@ -382,4 +411,4 @@ def test_round_close_auto_completes_final_round():
     out2 = svc.closeRound(sb, sessionId=sid, roundNumber=2, updated_by="admin", allow_override=True, override_reason="ok")
     assert out2["auto_completed"] is True
     session = sb.storage["session_ladder_sessions"][0]
-    assert session["state"] == "COMPLETED"
+    assert session["state"] == "completed"

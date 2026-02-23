@@ -20,12 +20,12 @@ Represents a single run-night/session.
 Key columns:
 - `id` (uuid pk)
 - `club_id` (FK to `clubs.id`)
-- `league_id` (text)
+- `league_id` (text, **league key** used for rating partition continuity)
 - `season_id` (nullable text)
 - `session_starts_at`, `session_ends_at`
 - `courts_available`
 - `players_per_court` (check: 4 or 5)
-- `state` (`draft/setup/active/completed/cancelled/archived`)
+- `state` (`draft/roster_open/seeded_locked/round_1_active/round_1_closed/round_2_active/round_2_closed/round_3_active/round_3_closed/completed/published`)
 - audit: `created_by`, `updated_by`, `created_at`, `updated_at`
 
 Indexes:
@@ -128,3 +128,9 @@ This follows existing tenant-club policy patterns while adding manager/admin wri
 - `session_ladder_rating_history` stores per-player session rating deltas (idempotent key: `session_id + player_id`).
 - `session_ladder_attendance` stores per-session attendance facts.
 - `session_ladder_awards_attendance` stores cumulative attendance counts by `(club_id, league_id, season_id, player_id)` for awards eligibility checks.
+
+## League key and rating continuity contract
+
+- Session Ladder stores the **rating partition key** in `session_ladder_sessions.league_id`.
+- This key must match `league_ratings.league_name` exactly for ratings to continue in the same league partition.
+- Session creation resolves/validates this value against `leagues_metadata.league_name` (case-insensitive lookup, canonical stored casing) before the session row is created.
