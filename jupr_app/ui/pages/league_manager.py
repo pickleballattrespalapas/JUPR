@@ -241,7 +241,8 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
         )
 
     round_num = int(st.session_state.get("ladder_round_num", 1))
-    result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}")
+    board_nonce = int(st.session_state.get("ladder_board_nonce", 0))
+    result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}_v{board_nonce}")
     if not (result and isinstance(result, dict) and "courts" in result):
         return
 
@@ -310,6 +311,7 @@ def render(ctx):
     st.session_state.setdefault("ladder_total_rounds", 5)
     st.session_state.setdefault("ladder_roster", [])
     st.session_state.setdefault("ladder_court_sizes", [])
+    st.session_state.setdefault("ladder_board_nonce", 0)
 
     df_players_all = ctx.df_players_all
     df_leagues = ctx.df_leagues
@@ -686,6 +688,7 @@ def render(ctx):
                     )
                     st.session_state.ladder_print_sheet = print_df
 
+                    st.session_state.ladder_board_nonce = int(st.session_state.get("ladder_board_nonce", 0)) + 1
                     st.session_state.ladder_state = "CONFIRM_START"
                     _rerun()
                     return
@@ -1206,6 +1209,7 @@ def render(ctx):
                 st.session_state.pop("ladder_roster_bench_ids", None)
 
                 st.session_state.ladder_round_num = current_r + 1
+                st.session_state.ladder_board_nonce = int(st.session_state.get("ladder_board_nonce", 0)) + 1
                 st.session_state.ladder_state = "CONFIRM_START"
                 st.session_state.pop("current_schedule", None)
                 _rerun()
