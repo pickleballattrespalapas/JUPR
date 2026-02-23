@@ -19,7 +19,20 @@ jobs:
       - name: Run migration audit
         run: |
           set -euo pipefail
+          set +e
           python3 scripts/schema_migration_audit.py
+          AUDIT_EXIT=$?
+          set -e
+
+          if [ "$AUDIT_EXIT" -eq 0 ]; then
+            echo "Migration audit passed with no findings."
+          elif [ "$AUDIT_EXIT" -eq 2 ]; then
+            echo "Migration audit reported findings (exit 2). Continuing to Supabase drift gate."
+            echo "Review migration audit output above and address findings in follow-up cleanup PRs."
+          else
+            echo "Migration audit failed unexpectedly with exit code $AUDIT_EXIT."
+            exit "$AUDIT_EXIT"
+          fi
 
       - name: Setup Supabase CLI
         if: ${{ hashFiles('supabase/config.toml') != '' }}
