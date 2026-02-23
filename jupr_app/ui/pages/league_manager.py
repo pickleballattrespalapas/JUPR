@@ -214,12 +214,15 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
     _ = max_per_row
     roster_now = compress_courts(normalize_slots(roster_df.copy()))
     if roster_now.empty:
-        raise RuntimeError("Court board render aborted: ladder roster is empty.")
+        st.warning("Court board is unavailable because the ladder roster is empty.")
+        return
     if "player_id" not in roster_now.columns:
-        raise RuntimeError("Court board render aborted: roster is missing player_id.")
+        st.error("Court board is unavailable because the roster is missing player_id values.")
+        return
     if roster_now["player_id"].astype(str).duplicated().any():
         dupes = roster_now.loc[roster_now["player_id"].astype(str).duplicated(), "player_id"].astype(str).tolist()
-        raise RuntimeError(f"Court board render aborted: duplicate player_id values in roster: {dupes}")
+        st.error(f"Court board is unavailable because duplicate player IDs were detected: {dupes}")
+        return
 
     print("DEBUG: ladder_live_roster shape:", roster_now.shape)
     print("DEBUG: ladder_live_roster columns:", list(roster_now.columns))
@@ -712,6 +715,29 @@ def render(ctx):
                 st.dataframe(ps, use_container_width=True, hide_index=True)
 
             roster_df = compress_courts(normalize_slots(st.session_state.get("ladder_live_roster", pd.DataFrame()).copy()))
+            if roster_df.empty:
+                roster_seed = list(st.session_state.get("ladder_roster", []))
+                seed_sizes = st.session_state.get("ladder_court_sizes") or []
+                if roster_seed and seed_sizes:
+                    rebuilt_rows = []
+                    seed_idx = 0
+                    for court_num, court_size in enumerate(seed_sizes, start=1):
+                        for slot_num in range(1, int(court_size) + 1):
+                            if seed_idx >= len(roster_seed):
+                                break
+                            seed_player = roster_seed[seed_idx]
+                            rebuilt_rows.append(
+                                {
+                                    "player_id": int(seed_player["id"]),
+                                    "name": str(seed_player["name"]),
+                                    "rating": float(seed_player["rating"]),
+                                    "court": int(court_num),
+                                    "slot": int(slot_num),
+                                }
+                            )
+                            seed_idx += 1
+                    if rebuilt_rows:
+                        roster_df = compress_courts(normalize_slots(pd.DataFrame(rebuilt_rows)))
             st.session_state.ladder_live_roster = roster_df
 
             _render_court_board_grid(roster_df, max_per_row=4)
