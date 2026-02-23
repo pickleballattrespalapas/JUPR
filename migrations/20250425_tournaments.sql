@@ -1,7 +1,0 @@
--- Legacy tournament DDL superseded.
--- Canonical tournament migration chain lives in supabase/migrations:
--- - 20260221_create_tournaments_baseline.sql
--- - 202602210010_tournament_schema_hardening.sql
--- - 202602210020_tournament_rls.sql
--- - 20260221_tournament_tenant_hardening.sql
--- - 20260221_tournament_child_club_guard.sql
