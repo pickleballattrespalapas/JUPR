@@ -5,7 +5,6 @@ from . import match_explorer
 from . import players
 from . import badge_codex
 from . import badge_debug
-from . import match_uploader
 from . import challenge_ladder
 from . import challenge_ladder_admin
 from . import faqs
@@ -24,6 +23,10 @@ from . import weekly_recap_admin
 from . import theme_gallery
 from . import tournaments
 from . import tournament_manager
+from . import division_manager
+from . import tournament_public
+from . import command_center
+from . import record_match
 
 __all__ = [
     "leaderboards",
@@ -31,7 +34,6 @@ __all__ = [
     "players",
     "badge_codex",
     "badge_debug",
-    "match_uploader",
     "challenge_ladder",
     "challenge_ladder_admin",
     "faqs",
@@ -48,4 +50,8 @@ __all__ = [
     "theme_gallery",
     "tournaments",
     "tournament_manager",
+    "division_manager",
+    "tournament_public",
+    "command_center",
+    "record_match",
 ]

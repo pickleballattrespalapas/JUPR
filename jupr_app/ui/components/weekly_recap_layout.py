@@ -12,15 +12,16 @@ from jupr_app.domain.recaps.weekly_recap import (
     build_around_descriptions,
 )
 
-def build_weekly_recap_html(
+def build_recap_html(
     recap: dict,
     *,
+    level: str = "weekly",
     print_view: bool,
     title_override: str | None = None,
 ) -> str:
     week_start = recap.get("week_start")
     week_end = recap.get("week_end")
-    title = title_override or "Tres Palapas Weekly Recap"
+    title = title_override or ("Tres Palapas Weekly Recap" if level == "weekly" else f"Tres Palapas {level.title()} Recap")
     theme = (recap.get("meta") or {}).get("print_theme", "classic")
 
     date_label = ""
@@ -38,6 +39,11 @@ def build_weekly_recap_html(
     around_descriptions = recap.get("around_descriptions") or build_around_descriptions(around)
     challenge_ladder = recap.get("challenge_ladder") or {}
     looking_ahead = recap.get("looking_ahead", []) or []
+
+    featured_past_event = recap.get("featured_past_event") or None
+    member_of_month = recap.get("member_of_month") or None
+    tournaments_in_period = recap.get("tournaments_in_period") or ((recap.get("content_snapshot") or {}).get("tournaments_in_period") or [])
+    upcoming_tournaments = recap.get("upcoming_tournaments") or ((recap.get("content_snapshot") or {}).get("upcoming_tournaments") or [])
 
     league_items = around.get("leagues", []) or []
     rr_items = around.get("round_robins", []) or []
@@ -116,6 +122,13 @@ def build_weekly_recap_html(
             accent_class=looking_ahead_accent,
         )
     looking_section_html = f"<div class='section'>{looking_card_html}</div>" if looking_card_html else ""
+
+    featured_past_section_html = _render_featured_past_event_section(featured_past_event)
+    member_of_month_section_html = _render_member_of_month_section(member_of_month) if level == "monthly" else ""
+    tournaments_section_html = _render_tournaments_section(
+        tournaments_in_period=tournaments_in_period,
+        upcoming_tournaments=upcoming_tournaments,
+    )
 
     print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
     print_view_css = ".no-print { display: none !important; }" if print_view else ""
@@ -352,6 +365,30 @@ def build_weekly_recap_html(
           .event-card.accent-ink {{
             border-left-color: var(--ink, #111827);
           }}
+          .tournament-subheading {{
+            margin: 10px 0 6px;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+          }}
+          .tournament-entry {{
+            border: 1px solid var(--border, #e5e7eb);
+            border-left: 4px solid var(--accent, #111827);
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 8px;
+            background: var(--card, #ffffff);
+          }}
+          .tournament-entry__title {{
+            font-weight: 700;
+            font-size: 14px;
+          }}
+          .tournament-entry__meta {{
+            margin-top: 4px;
+            color: var(--muted, #475569);
+            font-size: 12.5px;
+          }}
           @media (min-width: 820px) {{
             .award-grid {{
               grid-template-columns: 1fr 1fr;
@@ -407,6 +444,10 @@ def build_weekly_recap_html(
             .award-card,
             .event-card,
             .section-card,
+            .tournament-entry,
+            #featured-past-event,
+            #member-of-month,
+            #tournaments,
             .number-card {{
               break-inside: avoid;
               page-break-inside: avoid;
@@ -495,6 +536,9 @@ def build_weekly_recap_html(
               {around_cards_html}
             </div>
           </div>
+          {featured_past_section_html}
+          {member_of_month_section_html}
+          {tournaments_section_html}
           {challenge_ladder_section_html}
           {looking_section_html}
         </div>
@@ -504,10 +548,94 @@ def build_weekly_recap_html(
     return html
 
 
+def build_weekly_recap_html(
+    recap: dict,
+    *,
+    print_view: bool,
+    title_override: str | None = None,
+) -> str:
+    return build_recap_html(recap, level="weekly", print_view=print_view, title_override=title_override)
+
+
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
     html = build_weekly_recap_html(recap, print_view=print_view, title_override=title_override)
     height = 2600 if not print_view else 3000
     components.html(html, height=height, scrolling=True)
+
+
+def _render_featured_past_event_section(featured_past_event: dict | None) -> str:
+    if not isinstance(featured_past_event, dict) or not featured_past_event:
+        return ""
+    title = str(featured_past_event.get("title") or "Featured Past Event").strip()
+    when = str(featured_past_event.get("datetime") or "").strip()
+    where = str(featured_past_event.get("location") or "").strip()
+    bullets = featured_past_event.get("summary_bullets") or []
+    link_url = str(featured_past_event.get("link_url") or "").strip()
+    link_label = str(featured_past_event.get("link_label") or "Learn more").strip()
+
+    details = []
+    if when:
+        details.append(f"<li><strong>Date:</strong> {escape(when)}</li>")
+    if where:
+        details.append(f"<li><strong>Location:</strong> {escape(where)}</li>")
+    for bullet in bullets:
+        text = str(bullet).strip()
+        if text:
+            details.append(f"<li>{escape(text)}</li>")
+    if link_url:
+        details.append(f"<li><a href=\"{escape(link_url)}\">{escape(link_label or 'Learn more')}</a></li>")
+
+    body = f"<ul class='compact'>{''.join(details)}</ul>" if details else ""
+    fallback_body = "<div class='muted-label'>No details provided.</div>"
+    card_html = _render_simple_card(title=title, body_html=body or fallback_body, accent_class="accent-ocean")
+    return f"<div class='section' id='featured-past-event'>{card_html}</div>"
+
+
+def _render_member_of_month_section(member_of_month: dict | None) -> str:
+    if not isinstance(member_of_month, dict) or not member_of_month:
+        return ""
+    name = escape(str(member_of_month.get("name") or member_of_month.get("member_name") or "Member of the Month"))
+    summary = escape(str(member_of_month.get("summary") or ""))
+    body = f"<div class='event-card__desc'>{summary}</div>" if summary else ""
+    fallback_body = "<div class='muted-label'>Member spotlight</div>"
+    card_html = _render_simple_card(title=name, body_html=body or fallback_body, accent_class="accent-sand")
+    return f"<div class='section' id='member-of-month'>{card_html}</div>"
+
+
+def _render_tournament_entry(item: dict, *, include_register: bool) -> str:
+    title = escape(str(item.get("title") or "Tournament").strip())
+    dt = escape(str(item.get("datetime") or "").strip())
+    location = escape(str(item.get("location") or "").strip())
+    reg_url = str(item.get("reg_url") or "").strip()
+    results_link = str(item.get("results_link") or "").strip()
+    meta_parts = [part for part in [dt, location] if part]
+    links = []
+    if include_register and reg_url:
+        links.append(f"<a href=\"{escape(reg_url)}\">Register</a>")
+    if results_link:
+        links.append(f"<a href=\"{escape(results_link)}\">Results</a>")
+    links_html = (" • ".join(links)) if links else ""
+    meta_html = f"<div class='tournament-entry__meta'>{escape(' • '.join(meta_parts))}</div>" if meta_parts else ""
+    if links_html:
+        meta_html += f"<div class='tournament-entry__meta'>{links_html}</div>"
+    return f"<div class='tournament-entry'><div class='tournament-entry__title'>{title}</div>{meta_html}</div>"
+
+
+def _render_tournaments_section(*, tournaments_in_period: list[dict], upcoming_tournaments: list[dict]) -> str:
+    in_period = [item for item in tournaments_in_period if isinstance(item, dict)]
+    upcoming = [item for item in upcoming_tournaments if isinstance(item, dict)]
+    if not in_period and not upcoming:
+        return ""
+
+    in_period_html = "".join(_render_tournament_entry(item, include_register=False) for item in in_period)
+    upcoming_html = "".join(_render_tournament_entry(item, include_register=True) for item in upcoming)
+    body_parts = [
+        "<div class='tournament-subheading'>Tournaments This Period</div>",
+        in_period_html or "<div class='muted-label'>No tournaments in this reporting window.</div>",
+        "<div class='tournament-subheading'>Upcoming Tournaments</div>",
+        upcoming_html or "<div class='muted-label'>No upcoming tournaments in lookahead window.</div>",
+    ]
+    return f"<div class='section' id='tournaments'>{_render_simple_card(title='Tournaments', body_html=''.join(body_parts), accent_class='accent-sunset')}</div>"
 
 
 def _render_award_card(item: dict, *, theme: str) -> str:

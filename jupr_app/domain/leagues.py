@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -300,9 +302,12 @@ def end_league_and_award_top_performers(
             "ended_by": admin_id,
             "end_awards": end_awards,
         }
-        supabase.table("leagues_metadata").update(update_payload).eq("club_id", club_id).eq(
-            "league_name", league_key
-        ).execute()
+        sb_update(
+            supabase,
+            "leagues_metadata",
+            update_payload,
+            filters={"club_id": club_id, "league_name": league_key},
+        )
 
     updated_meta = _apply_league_end_to_meta(
         getattr(ctx, "df_meta", None),

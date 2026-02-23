@@ -2,7 +2,7 @@
 # How to run it:
 #   python scripts/audit_incomplete_badges.py
 #   JUPR_AUDIT_VERBOSE=1 python scripts/audit_incomplete_badges.py
-"""Audit the Badge Codex for incomplete badges (requirements + copy + optional DB rules)."""
+"""Audit the Badge Codex for incomplete badges (requirements + copy + optional V3 DB conditions)."""
 from __future__ import annotations
 
 import os
@@ -76,7 +76,7 @@ def _load_rules_counts() -> tuple[dict[str, int] | None, dict[str, int] | None]:
 
     supabase = make_supabase(supabase_url, supabase_key)
     try:
-        response = supabase.table("badge_rules_v2").select("badge_id,enabled").execute()
+        response = supabase.table("badge_rule_conditions").select("badge_id").execute()
     except Exception:
         return None, None
 
@@ -87,8 +87,7 @@ def _load_rules_counts() -> tuple[dict[str, int] | None, dict[str, int] | None]:
         if not badge_id:
             continue
         totals[badge_id] += 1
-        if row.get("enabled") is True:
-            enabled[badge_id] += 1
+        enabled[badge_id] += 1
     return totals, enabled
 
 
@@ -168,7 +167,7 @@ def main() -> int:
         print(f"Badges checked: {len(rows)}")
         print(f"Incomplete badges: {len(incomplete)}")
         if db_available:
-            print("DB rules check: enabled (badge_rules_v2).")
+            print("DB rules check: enabled (badge_rule_conditions).")
         else:
             print("DB rules check: skipped (SUPABASE_URL/SUPABASE_KEY not set).")
 

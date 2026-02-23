@@ -1,17 +1,19 @@
 import streamlit as st
 import pandas as pd
-import time
 from datetime import datetime, timezone
-from jupr_app.domain.replay_history import replay_history
 
 from postgrest.exceptions import APIError
 
-from jupr_app.domain.ratings import calculate_hybrid_elo
-from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.replay_lock import is_replay_running
+from jupr_app.domain.replay_history import FULL_RESET_LABEL
+from jupr_app.data.sb_write import sb_update
 from jupr_app.ui.layout import page_shell
+
+
+REQUIRED_SCHEMA_VERSION = "rebuild_phase1_alignment"
 
 
 def _get_api_error_code(exc: APIError) -> str | None:
@@ -21,6 +23,20 @@ def _get_api_error_code(exc: APIError) -> str | None:
     if exc.args and isinstance(exc.args[0], dict):
         return exc.args[0].get("code")
     return None
+
+
+def _is_replay_schema_valid(supabase) -> bool:
+    try:
+        response = (
+            supabase.table("schema_version")
+            .select("version")
+            .eq("version", REQUIRED_SCHEMA_VERSION)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return False
+    return bool(response.data)
 
 
 def render(ctx):
@@ -80,16 +96,16 @@ def render(ctx):
     if st.button("Process queued badge evaluations", key="badge_eval_queue_process"):
         with st.spinner("Processing queued badge evaluations..."):
             try:
-                result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
+                result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2, club_id=club_id)
             except APIError as exc:
                 code = _get_api_error_code(exc)
                 if code in {"PGRST205", "42P01"}:
                     st.error(
-                        "Missing table badge_eval_queue; apply migrations/20260705_badge_eval_queue.sql and "
+                        "Missing table badge_eval_queue; apply supabase/migrations/20260705_badge_eval_queue.sql and "
                         "run NOTIFY pgrst, 'reload schema';"
                     )
                     st.code(
-                        "-- Apply migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
+                        "-- Apply supabase/migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
                         language="sql",
                     )
                 else:
@@ -105,33 +121,65 @@ def render(ctx):
     # Replay History
     # -------------------------
     st.subheader("🔄 Recalculate / Replay History")
-    st.caption("This rebuilds snapshots and (optionally) players + league_ratings based on match history order.")
+    st.caption("Replay is dispatched as a UI event and executed at top-of-run.")
+
+    target_reset = st.selectbox(
+        "Replay target",
+        [FULL_RESET_LABEL, "Round Robin", "Kings and Queens"],
+        key="admin_tools_replay_target",
+    )
+
+    def queue_replay():
+        st.session_state["_ui_event"] = {
+            "type": "replay",
+            "target": target_reset,
+        }
+
+    st.button("Replay", on_click=queue_replay, use_container_width=True)
+
+    if _is_replay_schema_valid(supabase):
+        st.caption("Schema check: ready for CLI replay.")
+    else:
+        st.caption("Schema check: migrations required before CLI replay.")
+
+    st.code(
+        f"python -m jupr_app.cli.replay_ratings --club-id {club_id}",
+        language="bash",
+    )
+
+    replay_runs = None
+    try:
+        replay_runs = (
+            supabase.table("replay_runs")
+            .select("started_at,finished_at,status,summary")
+            .eq("club_id", club_id)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        replay_runs = None
+
+    if replay_runs and replay_runs.data:
+        latest = replay_runs.data[0]
+        st.caption("Last replay run (read-only)")
+        st.json(latest)
+
+    replay_lock_info = None
+    try:
+        replay_lock_info = is_replay_running(supabase, club_id)
+    except Exception:
+        replay_lock_info = None
+
+    if replay_lock_info is None:
+        st.caption("Replay lock: not running")
+    else:
+        st.caption("Replay lock: running")
+        st.json({"club_id": replay_lock_info.club_id, "started_at": replay_lock_info.started_at, "status": replay_lock_info.status})
+
+    st.divider()
 
     df_meta = getattr(ctx, "df_meta", pd.DataFrame())
-    league_opts = ["ALL (Full System Reset)"]
-    if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
-        league_opts += sorted(df_meta["league_name"].dropna().astype(str).unique().tolist())
-
-    target_reset = st.selectbox("Replay scope", league_opts)
-
-    if st.button(f"⚠️ Replay History for: {target_reset}"):
-        bar = st.progress(0.0)
-        with st.spinner("Crunching..."):
-            result = replay_history(
-                supabase=supabase,
-                club_id=club_id,
-                df_meta=df_meta,
-                target_reset=str(target_reset),
-                progress_cb=lambda x: bar.progress(float(x)),
-            )
-
-        st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
-        st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
-        st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
-        st.success("Replay complete.")
-        time.sleep(0.6)
-        st.rerun()
-
 
     st.divider()
 
@@ -273,13 +321,16 @@ def render(ctx):
                 st.error(transition.reason or "Transition not allowed.")
             else:
                 try:
-                    supabase.table("badges").update(
+                    sb_update(
+                        supabase,
+                        "badges",
                         {
                             "state": new_state,
                             "state_changed_at": datetime.now(timezone.utc).isoformat(),
                             "state_change_reason": reason.strip(),
-                        }
-                    ).eq("badge_id", badge_id).execute()
+                        },
+                        filters={"badge_id": badge_id},
+                    )
                     st.success(f"Updated {badge_id} → {new_state}.")
                 except Exception as exc:
                     st.error("Failed to update badge state.")

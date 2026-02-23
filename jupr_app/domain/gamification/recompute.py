@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+# SCHEMA STRICT MODE ENABLED
+# All environments must match migrations
+
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -56,6 +61,7 @@ def run_badge_recompute(
     try:
         if ctx is None:
             ctx = _load_ctx(supabase, club_id, match_limit)
+        _require_strict_schema(ctx)
         ctx = _apply_match_filters(ctx, since=since, until=until)
 
         computed = list(
@@ -178,6 +184,14 @@ def _load_ctx(supabase: Any, club_id: str, match_limit: int) -> Any:
     )
 
 
+def _require_strict_schema(ctx: Any) -> None:
+    if getattr(ctx, "schema_degraded", False):
+        raise RuntimeError(
+            "Schema degraded mode is not supported. "
+            f"Apply required migrations: {getattr(ctx, 'schema_degraded_reason', 'unknown reason')}"
+        )
+
+
 def _apply_match_filters(ctx: Any, *, since: str | None, until: str | None) -> Any:
     if not since and not until:
         return ctx
@@ -244,23 +258,29 @@ def _fetch_existing_awards(
 
 
 def _mark_revoked(supabase: Any, row_id: str, revoked_by: str | None, revoke_reason: str) -> None:
-    supabase.table("player_badges").update(
+    sb_update(
+        supabase,
+        "player_badges",
         {
             "revoked_at": _now_iso(),
             "revoked_by": revoked_by,
             "revoke_reason": revoke_reason,
-        }
-    ).eq("id", row_id).execute()
+        },
+        filters={"id": row_id},
+    )
 
 
 def _clear_revocation(supabase: Any, row_id: str) -> None:
-    supabase.table("player_badges").update(
+    sb_update(
+        supabase,
+        "player_badges",
         {
             "revoked_at": None,
             "revoked_by": None,
             "revoke_reason": None,
-        }
-    ).eq("id", row_id).execute()
+        },
+        filters={"id": row_id},
+    )
 
 
 def _compute_rule_version() -> str:
@@ -272,16 +292,16 @@ def _compute_rule_version() -> str:
 
 def _create_eval_run(supabase: Any, created_by: str | None, mode: str, scope: dict[str, Any]) -> str:
     resp = (
-        supabase.table("badge_eval_runs")
-        .insert(
-            {
-                "created_by": created_by,
-                "mode": mode,
-                "scope_json": scope,
-                "status": "queued",
-            }
-        )
-        .execute()
+        sb_insert(
+        supabase,
+        "badge_eval_runs",
+        {
+            "created_by": created_by,
+            "mode": mode,
+            "scope_json": scope,
+            "status": "queued",
+        },
+    )
     )
     data = resp.data or []
     if not data:
@@ -308,7 +328,7 @@ def _update_eval_run(
         payload["summary_json"] = summary
     if error is not None:
         payload["error"] = error
-    supabase.table("badge_eval_runs").update(payload).eq("id", eval_run_id).execute()
+    sb_update(supabase, "badge_eval_runs", payload, filters={"id": eval_run_id})
 
 
 def _now_iso() -> str:

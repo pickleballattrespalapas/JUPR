@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+# Match writes must go through match_pipeline.
+
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.audit_logger import log_event
+from jupr_app.domain.match_pipeline import recalculate_state, update_match
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
     """
@@ -50,27 +54,6 @@ def _normalize_blank_to_none(v: Any) -> Any:
     return v
 
 
-def _safe_insert_audit_event(
-    supabase,
-    payload: Dict[str, Any],
-) -> None:
-    """
-    Best-effort: if the table doesn't exist, do not fail the admin operation.
-    Recommended table shape (optional):
-      admin_audit_events(created_at timestamptz default now(), club_id text, actor text, action_type text, payload_json jsonb)
-    """
-    try:
-        supabase.table("admin_audit_events").insert(
-            {
-                "club_id": payload.get("club_id"),
-                "actor": payload.get("actor"),
-                "action_type": payload.get("action_type", "bulk_match_edit"),
-                "payload_json": payload,
-            }
-        ).execute()
-    except Exception:
-        # Intentionally swallow errors (table may not exist in some deployments)
-        return
 
 
 def apply_bulk_match_edits(
@@ -139,8 +122,6 @@ def apply_bulk_match_edits(
     affected_players: Set[int] = set()
 
     # For audit
-    audit_before: List[Dict[str, Any]] = []
-    audit_after: List[Dict[str, Any]] = []
     applied: List[Dict[str, Any]] = []
 
     warnings: List[str] = []
@@ -209,37 +190,37 @@ def apply_bulk_match_edits(
         if not update:
             continue
 
-        # audit snapshots (only changed fields + id)
-        b_snap = {"id": mid}
-        a_snap = {"id": mid}
-        for k, newv in update.items():
-            b_snap[k] = before.get(k)
-            a_snap[k] = newv
-
-        # Apply update
-        supabase.table("matches").update(update).eq("club_id", club_id).eq("id", mid).execute()
+        # Apply update via pipeline
+        update_match(
+            supabase=supabase,
+            club_id=str(club_id),
+            match_id=int(mid),
+            patch=update,
+            rebuild_state=False,
+        )
 
         updated_ids.append(mid)
         applied.append({"id": mid, **update})
-        audit_before.append(b_snap)
-        audit_after.append(a_snap)
 
     recompute_scope = compute_recompute_scope(patches)
 
+    if updated_ids:
+        recalculate_state(supabase=supabase, club_id=str(club_id))
+
     # Audit event (best effort)
-    _safe_insert_audit_event(
-        supabase,
-        {
+    log_event(
+        supabase=supabase,
+        club_id=str(club_id),
+        actor=actor,
+        action_type="bulk_match_edit",
+        payload={
             "club_id": club_id,
             "actor": actor,
-            "action_type": "bulk_match_edit",
             "source": source,
             "updated_count": len(updated_ids),
             "updated_ids": updated_ids,
             "affected_leagues": sorted(affected_leagues),
             "recompute_scope": recompute_scope,
-            "before": audit_before,
-            "after": audit_after,
             "patches": applied,
             "warnings": warnings,
         },

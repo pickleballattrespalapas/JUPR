@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -99,4 +101,4 @@ def recompute_last_game_at_for_players(
                 if pd.isna(latest):
                     latest = None
         payload = {"last_game_at": latest.isoformat()} if latest is not None else {"last_game_at": None}
-        supabase.table("players").update(payload).eq("club_id", str(club_id)).eq("id", pid).execute()
+        sb_update(supabase, "players", payload, filters={"club_id": str(club_id), "id": pid})

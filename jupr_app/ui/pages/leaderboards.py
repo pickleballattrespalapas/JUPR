@@ -7,6 +7,8 @@ import pandas as pd
 import altair as alt
 
 from jupr_app.domain.awards import build_top_performer_entries
+from jupr_app.ui.helpers import build_badge_story
+from jupr_app.ui.helpers import sanitize_story_text as sanitize_story_text
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
@@ -21,6 +23,20 @@ MAX_STORY_BADGES = 2
 
 def _safe_text(value: object) -> str:
     return html.escape("" if value is None else str(value))
+
+
+def _compute_story_text(
+    row,
+    earned_badges,
+    id_to_name,
+    rival_map,
+    partner_map,
+    admin_logged_in,
+):
+    existing_story = row.get("story_text") or row.get("story_html") or row.get("story")
+    if existing_story:
+        return sanitize_story_text(existing_story), False
+    return sanitize_story_text(build_badge_story(row, earned_badges or [])), False
 
 
 def _delta_color(delta, up_color, flat_color, down_color):

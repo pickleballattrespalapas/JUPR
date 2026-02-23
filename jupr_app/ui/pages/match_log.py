@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 
+# Match writes must go through match_pipeline.
 from jupr_app.domain.dupes import canonical_dup_key
 from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
 from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 from jupr_app.ui.layout import page_shell
-from jupr_app.domain.replay_history import replay_history
+from jupr_app.domain.match_pipeline import delete_matches
 
 
 
@@ -112,15 +113,15 @@ def render(ctx):
                         for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
                             if col in deleted_rows.columns:
                                 deleted_pids.update(deleted_rows[col].dropna().astype(int).tolist())
-                        ctx.supabase.table("matches").delete().eq("club_id", str(ctx.club_id)).in_("id", ids_to_delete).execute()
+                        delete_matches(supabase=ctx.supabase, club_id=str(ctx.club_id), match_ids=ids_to_delete)
                         if deleted_pids:
                             recompute_last_game_at_for_players(
                                 supabase=ctx.supabase,
                                 club_id=str(ctx.club_id),
                                 player_ids=deleted_pids,
                             )
-                        st.success("Deleted duplicates. Now run Admin Tools → Replay History → ALL.")
-                        st.rerun()
+                        st.success("Deleted duplicates. Ratings and standings were recalculated automatically.")
+                        return
 
     st.divider()
 
@@ -320,14 +321,14 @@ def render(ctx):
             df_select["Select"] = True
             st.session_state["bulk_match_df"] = df_select
             st.session_state["bulk_match_editor_version"] += 1
-            st.rerun()
+            return
     with c_clear:
         if st.button("Clear selection", key="bulk_match_clear", disabled=total_count == 0):
             df_clear = st.session_state["bulk_match_df"].copy()
             df_clear["Select"] = False
             st.session_state["bulk_match_df"] = df_clear
             st.session_state["bulk_match_editor_version"] += 1
-            st.rerun()
+            return
     with c_summary:
         st.caption(f"Selected: {selected_count} / {total_count}")
 
@@ -421,46 +422,21 @@ def render(ctx):
                 st.warning("Warnings:\n- " + "\n- ".join(result["warnings"][:10]))
 
             if result["recompute_scope"]["ratings"]:
-                st.warning("Ratings may be impacted. Run **Admin Tools → Replay History → ALL** (or the affected leagues) to fully re-sync ratings/standings.")
+                st.info("Ratings and standings were recalculated automatically after these edits.")
             else:
-                st.info("Week/league views may change immediately. If anything looks off, run **Replay History**.")
+                st.info("Week/league views may change immediately after edits.")
 
             # Reset editor state
             st.session_state["bulk_match_df"] = view.copy(deep=True)
             st.session_state["bulk_match_baseline"] = view.copy(deep=True)
             st.session_state["bulk_match_editor_version"] += 1
-            st.rerun()
+            return
 
         except Exception as exc:
             st.error(f"Unable to apply bulk edits: {exc}")
 
 
-        st.subheader("🔄 Quick Replay (Easy Button)")
-        st.caption("Runs the same Replay History as Admin Tools. Use ALL after moving matches between leagues.")
-    
-        df_meta = getattr(ctx, "df_meta", pd.DataFrame())
-        league_opts = ["ALL (Full System Reset)"]
-        if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
-            league_opts += sorted(df_meta["league_name"].dropna().astype(str).unique().tolist())
-    
-        target_reset_quick = st.selectbox("Replay scope", league_opts, key="match_log_replay_scope")
-        confirm_replay = st.text_input("Type REPLAY to confirm", value="", key="match_log_replay_confirm")
-    
-        if st.button("🔄 Replay Now", type="primary", disabled=(confirm_replay.strip().upper() != "REPLAY"), key="match_log_replay_btn"):
-            bar = st.progress(0.0)
-            with st.spinner("Replaying..."):
-                result = replay_history(
-                    supabase=ctx.supabase,
-                    club_id=str(ctx.club_id),
-                    df_meta=df_meta,
-                    target_reset=str(target_reset_quick),
-                    progress_cb=lambda x: bar.progress(float(x)),
-                )
-            st.success("Replay complete.")
-            st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
-            st.info(f"Matches rewritten: {result['matches_rewritten']}")
-            st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
-            st.rerun()
+    st.info("Replay is a recovery tool, not required for normal edits. Run it only from Admin Tools when recovering from data drift.")
 
     st.divider()
 
@@ -492,12 +468,12 @@ def render(ctx):
             for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
                 if col in to_delete.columns:
                     deleted_pids.update(to_delete[col].dropna().astype(int).tolist())
-            ctx.supabase.table("matches").delete().eq("club_id", str(ctx.club_id)).in_("id", delete_ids).execute()
+            delete_matches(supabase=ctx.supabase, club_id=str(ctx.club_id), match_ids=delete_ids)
             if deleted_pids:
                 recompute_last_game_at_for_players(
                     supabase=ctx.supabase,
                     club_id=str(ctx.club_id),
                     player_ids=deleted_pids,
                 )
-            st.success("Deleted. Run Replay ALL if you want ratings to be consistent.")
-            st.rerun()
+            st.success("Deleted. Ratings and standings were recalculated automatically.")
+            return

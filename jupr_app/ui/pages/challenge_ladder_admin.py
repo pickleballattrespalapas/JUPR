@@ -1,6 +1,8 @@
 # jupr_app/ui/pages/challenge_ladder_admin.py
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Tuple
@@ -8,7 +10,6 @@ from typing import Any, Callable, Dict, Tuple
 import pandas as pd
 import streamlit as st
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
-from jupr_app.domain.match_processing import process_matches
 
 from jupr_app.domain.challenge_ladder import (
     TIER_ORDER,
@@ -133,7 +134,7 @@ def ladder_fetch_settings(supabase, club_id: str) -> Dict[str, Any]:
     if getattr(resp, "data", None):
         return resp.data[0]
 
-    sb_retry(lambda: supabase.table("ladder_settings").insert({"club_id": club_id}).execute())
+    sb_retry(lambda: sb_insert(supabase, "ladder_settings", {"club_id": club_id}))
 
     resp2 = sb_retry(lambda: (
         supabase.table("ladder_settings")
@@ -209,7 +210,7 @@ def ladder_audit(supabase, club_id: str, action_type: str, entity_type: str, ent
         "after": after,
     }
     try:
-        sb_retry(lambda: supabase.table("ladder_audit_log").insert(payload).execute())
+        sb_retry(lambda: sb_insert(supabase, "ladder_audit_log", payload))
     except Exception:
         pass
 
@@ -355,7 +356,7 @@ def render(ctx):
                     "tier_id": str(tier_pick),
                 }
 
-                res = sb_retry(lambda: supabase.table("ladder_challenges").insert(payload).execute())
+                res = sb_retry(lambda: sb_insert(supabase, "ladder_challenges", payload))
                 new_id = int(res.data[0]["id"]) if getattr(res, "data", None) else None
 
                 ladder_audit(supabase, club_id, "challenge_create", "ladder_challenges", str(new_id or ""), None, payload)
@@ -379,7 +380,7 @@ def render(ctx):
                 st.session_state["last_notice_sms"] = notice["sms"]
 
                 st.success(f"Challenge created. ID = {new_id}")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
         # Post-create notice tools (outside form; safe even if no new challenge)
         if st.session_state.get("last_notice_challenge_id"):
@@ -402,16 +403,17 @@ def render(ctx):
                 accept_by = now + timedelta(hours=accept_h)
 
                 sb_retry(lambda: (
-                    supabase.table("ladder_challenges")
-                    .update({"accept_by": accept_by.isoformat()})
-                    .eq("club_id", club_id)
-                    .eq("id", ch_id)
-                    .execute()
+                    sb_update(
+                    supabase,
+                    "ladder_challenges",
+                    {"accept_by": accept_by.isoformat()},
+                    filters={"club_id": club_id, "id": ch_id},
+                )
                 ))
 
                 st.success("48-hour clock started in the app.")
                 time.sleep(0.2)
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
     # -------------------------
     # TAB 3: CHALLENGE DETAIL
@@ -488,18 +490,18 @@ def render(ctx):
                 now = dt_utc_now()
                 play_by = now + timedelta(days=int(settings.get("play_window_days", 7) or 7))
                 upd = {"accepted_at": now.isoformat(), "play_by": play_by.isoformat(), "status": "ACCEPTED_SCHEDULING"}
-                sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", club_id).eq("id", ch_id).execute())
+                sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
                 ladder_audit(supabase, club_id, "challenge_accept", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Accepted.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             if c2.button("🗑 Cancel (Admin)", type="secondary", key=f"cancel_{ch_id}"):
                 before = ch_row.copy()
                 upd = {"status": "CANCELED", "resolution_notes": "Admin canceled", "completed_at": dt_utc_now().isoformat()}
-                sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", club_id).eq("id", ch_id).execute())
+                sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
                 ladder_audit(supabase, club_id, "challenge_cancel", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Canceled.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             with c3:
                 forfeit_by = st.selectbox("Forfeit by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"ff_by_{ch_id}")
@@ -514,7 +516,7 @@ def render(ctx):
                     "winner_id": int(winner),
                     "completed_at": dt_utc_now().isoformat(),
                 }
-                sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", club_id).eq("id", ch_id).execute())
+                sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
 
                 # Optional rank swap RPC (only if you have it deployed)
                 if int(winner) == chal_id:
@@ -525,7 +527,7 @@ def render(ctx):
 
                 ladder_audit(supabase, club_id, "challenge_forfeit", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Forfeit recorded.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             with c4:
                 pass_user = st.selectbox("Pass used by", ["", ladder_nm(chal_id, id_to_name), ladder_nm(def_id, id_to_name)], key=f"pass_by_{ch_id}")
@@ -535,13 +537,13 @@ def render(ctx):
                 now = dt_utc_now()
                 mk = month_key_utc(now)
 
-                sb_retry(lambda: supabase.table("ladder_pass_usage").insert({
+                sb_retry(lambda: sb_insert(supabase, "ladder_pass_usage", {
                     "club_id": club_id,
                     "player_id": int(pu_pid),
                     "month_key": mk,
                     "used_at": now.isoformat(),
                     "challenge_id": ch_id,
-                }).execute())
+                }))
 
                 upd = {
                     "status": "CANCELED",
@@ -550,10 +552,10 @@ def render(ctx):
                     "resolution_notes": "Pass used",
                     "completed_at": now.isoformat(),
                 }
-                sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", club_id).eq("id", ch_id).execute())
+                sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
                 ladder_audit(supabase, club_id, "challenge_pass_used", "ladder_challenges", str(ch_id), before, {**before, **upd})
                 st.success("Pass recorded (challenge closed).")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
             st.divider()
             st.subheader("🏁 Record Match Result (Swing Partner Swap)")
@@ -774,7 +776,7 @@ def render(ctx):
 
                         if edit:
                             st.session_state.pop(draft_key, None)
-                            st.rerun()
+                            st.session_state["force_data_refresh"] = True
 
                         if confirm:
                             before = ch_row.copy()
@@ -787,50 +789,9 @@ def render(ctx):
                             match_b_total_s1 = sum(s1 for s1, _ in match_b_games)
                             match_b_total_s2 = sum(s2 for _, s2 in match_b_games)
 
-                            match_iso = str(draft.get("match_iso"))
-                            match_a = {
-                                "date": match_iso,
-                                "league": "OVERALL",
-                                "match_type": "ChallengeLadder",
-                                "is_popup": True,
-                                "t1_p1": int(chal_id),
-                                "t1_p2": int(p.get("a_chal")),
-                                "t2_p1": int(def_id),
-                                "t2_p2": int(p.get("a_def")),
-                                "s1": int(match_a_total_s1),
-                                "s2": int(match_a_total_s2),
-                                "context_type": "challenge_ladder",
-                                "context_id": int(ch_id),
-                            }
-                            match_b = {
-                                "date": match_iso,
-                                "league": "OVERALL",
-                                "match_type": "ChallengeLadder",
-                                "is_popup": True,
-                                "t1_p1": int(chal_id),
-                                "t1_p2": int(p.get("b_chal")),
-                                "t2_p1": int(def_id),
-                                "t2_p2": int(p.get("b_def")),
-                                "s1": int(match_b_total_s1),
-                                "s2": int(match_b_total_s2),
-                                "context_type": "challenge_ladder",
-                                "context_id": int(ch_id),
-                            }
-
-                            try:
-                                pm_result = process_matches(
-                                    [match_a, match_b],
-                                    supabase=ctx.supabase,
-                                    club_id=str(ctx.club_id),
-                                    name_to_id=ctx.name_to_id,
-                                    df_players_all=ctx.df_players_all,
-                                    df_leagues=ctx.df_leagues,
-                                    df_meta=ctx.df_meta,
-                                    sb_retry=sb_retry,
-                                )
-                            except Exception as e:
-                                st.error(f"Could not process challenge matches: {e}")
-                                st.stop()
+                            st.warning("Challenge result submission moved to the unified Record Match Result wizard.")
+                            st.link_button("Open Record Match Result", "/?page=record_match", use_container_width=True)
+                            st.stop()
 
                             computed_name = challenger_name if computed_side == "challenger" else defender_name
                             final_name = ladder_nm(final_winner_id, id_to_name)
@@ -854,7 +815,7 @@ def render(ctx):
                                 "completed_at": dt_utc_now().isoformat(),
                                 "resolution_notes": summary,
                             }
-                            sb_retry(lambda: supabase.table("ladder_challenges").update(upd).eq("club_id", club_id).eq("id", ch_id).execute())
+                            sb_retry(lambda: sb_update(supabase, "ladder_challenges", upd, filters={"club_id": club_id, "id": ch_id}))
 
                             if int(final_winner_id) == int(chal_id):
                                 try:
@@ -878,11 +839,7 @@ def render(ctx):
                             )
 
                             st.session_state.pop(draft_key, None)
-                            if int(pm_result.get("inserted", 0)) != 2:
-                                st.warning(f"Expected 2 inserted matches; got {pm_result}.")
-                            else:
-                                st.success("Challenge result recorded. 2 matches inserted and OVERALL ratings updated.")
-                            st.rerun()
+                            st.session_state["force_data_refresh"] = True
 
     # -------------------------
     # TAB: ROSTER (full tools)
@@ -1012,12 +969,11 @@ def render(ctx):
             }
 
             if before:
-                sb_retry(lambda: (
-                    supabase.table("ladder_roster")
-                    .update(upd)
-                    .eq("club_id", club_id)
-                    .eq("player_id", pid)
-                    .execute()
+                sb_retry(lambda: sb_update(
+                    supabase,
+                    "ladder_roster",
+                    upd,
+                    filters={"club_id": club_id, "player_id": pid},
                 ))
                 ladder_audit(supabase, club_id, "roster_reactivate_append", "ladder_roster", f"{club_id}:{pid}", before, {**before, **upd})
                 st.success(f"Reactivated '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
@@ -1031,11 +987,11 @@ def render(ctx):
                     "joined_at": now_iso,
                     "left_at": None,
                 }
-                sb_retry(lambda: supabase.table("ladder_roster").insert(ins).execute())
+                sb_retry(lambda: sb_insert(supabase, "ladder_roster", ins))
                 ladder_audit(supabase, club_id, "roster_append", "ladder_roster", f"{club_id}:{pid}", None, ins)
                 st.success(f"Added '{nm}' into {tier_title(tier_for_player)} at rank {next_rank}.")
 
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         st.divider()
 
@@ -1125,11 +1081,12 @@ def render(ctx):
             }
 
             sb_retry(lambda: (
-                supabase.table("ladder_roster")
-                .update(upd)
-                .eq("club_id", club_id)
-                .eq("player_id", pid)
-                .execute()
+                sb_update(
+                supabase,
+                "ladder_roster",
+                upd,
+                filters={"club_id": club_id, "player_id": pid},
+            )
             ))
 
             ladder_audit(
@@ -1165,18 +1122,19 @@ def render(ctx):
                         p2 = int(rr.player_id)
                         if int(rr.rank) != i:
                             sb_retry(lambda p2=p2, i=i: (
-                                supabase.table("ladder_roster")
-                                .update({"rank": int(i), "updated_at": now_iso})
-                                .eq("club_id", club_id)
-                                .eq("player_id", p2)
-                                .execute()
+                                sb_update(
+                                supabase,
+                                "ladder_roster",
+                                {"rank": int(i), "updated_at": now_iso},
+                                filters={"club_id": club_id, "player_id": p2},
+                            )
                             ))
 
             st.success(
                 f"Moved {ladder_nm(pid, ctx.id_to_name)} from {tier_title(cur_tier)} (rank {cur_rank}) "
                 f"to {tier_title(dest_tier)} (rank {next_rank})."
             )
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
 
         # -------------------------
@@ -1201,11 +1159,12 @@ def render(ctx):
             # Soft-clear ONLY this tier (keeps history)
             now_iso = dt_utc_now().isoformat()
             sb_retry(lambda: (
-                supabase.table("ladder_roster")
-                .update({"is_active": False, "left_at": now_iso})
-                .eq("club_id", club_id)
-                .eq("tier_id", str(tier_ctx))
-                .execute()
+                sb_update(
+                supabase,
+                "ladder_roster",
+                {"is_active": False, "left_at": now_iso},
+                filters={"club_id": club_id, "tier_id": str(tier_ctx)},
+            )
             ))
 
             rows = []
@@ -1222,11 +1181,11 @@ def render(ctx):
                 })
 
             # Upsert by (club_id, player_id) so existing rows are reactivated/re-ranked
-            sb_retry(lambda: supabase.table("ladder_roster").upsert(rows, on_conflict="club_id,player_id").execute())
+            sb_retry(lambda: sb_upsert(supabase, "ladder_roster", rows, conflict="club_id,player_id"))
             ladder_audit(supabase, club_id, "roster_replace_tier", "ladder_roster", f"{club_id}:{tier_ctx}", None, {"tier": str(tier_ctx), "count": len(rows)})
 
             st.success(f"Tier roster replaced for {tier_title(tier_ctx)}.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         st.divider()
 
@@ -1353,12 +1312,11 @@ def render(ctx):
                             "rank": int(next_rank),
                             "updated_at": now_iso,
                         }
-                        sb_retry(lambda: (
-                            supabase.table("ladder_roster")
-                            .update(upd)
-                            .eq("club_id", club_id)
-                            .eq("player_id", pid)
-                            .execute()
+                        sb_retry(lambda: sb_update(
+                            supabase,
+                            "ladder_roster",
+                            upd,
+                            filters={"club_id": club_id, "player_id": pid},
                         ))
                         ladder_audit(supabase, club_id, "tier_move_approve", "ladder_roster", f"{club_id}:{pid}", before_row, {**before_row, **upd})
 
@@ -1372,15 +1330,18 @@ def render(ctx):
                         }
                         try:
                             sb_retry(lambda: (
-                                supabase.table("ladder_player_flags")
-                                .upsert({"club_id": club_id, "player_id": pid, **flag_upd}, on_conflict="club_id,player_id")
-                                .execute()
+                                sb_upsert(
+                                supabase,
+                                "ladder_player_flags",
+                                {"club_id": club_id, "player_id": pid, **flag_upd},
+                                conflict="club_id,player_id",
+                            )
                             ))
                         except Exception:
                             pass
 
                         st.success(f"Moved {ladder_nm(pid, ctx.id_to_name)} to {tier_title(dest_tier)} at rank {next_rank}.")
-                        st.rerun()
+                        st.session_state["force_data_refresh"] = True
 
 
     # -------------------------
@@ -1433,10 +1394,10 @@ def render(ctx):
                 "reinstate_required": bool(rein),
                 "reinstate_notes": notes.strip() or None,
             }
-            sb_retry(lambda: supabase.table("ladder_player_flags").upsert(payload, on_conflict="club_id,player_id").execute())
+            sb_retry(lambda: sb_upsert(supabase, "ladder_player_flags", payload, conflict="club_id,player_id"))
             ladder_audit(supabase, club_id, "flags_save", "ladder_player_flags", f"{club_id}:{pid}", before, payload)
             st.success("Saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
     # -------------------------
     # TAB 6: AUDIT

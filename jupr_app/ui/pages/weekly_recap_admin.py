@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -38,7 +40,7 @@ def _get_api_error_code(exc: APIError) -> str | None:
 def _handle_missing_table(exc: APIError) -> bool:
     code = _get_api_error_code(exc)
     if code in {"PGRST205", "42P01"}:
-        st.error("Weekly recaps table not found. Apply migration migrations/20260207_weekly_recaps.sql in Supabase.")
+        st.error("Weekly recaps table not found. Apply migration supabase/migrations/20260207_weekly_recaps.sql in Supabase.")
         return True
     return False
 
@@ -141,7 +143,10 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
 
 @st.cache_data(show_spinner=False)
 def _pdf_for_recap(html: str) -> bytes:
-    from weasyprint import HTML
+    try:
+        from weasyprint import HTML
+    except Exception as exc:  # pragma: no cover - depends on deployment image
+        raise RuntimeError("PDF export unavailable: WeasyPrint is not installed.") from exc
 
     return HTML(string=html).write_pdf()
 
@@ -192,13 +197,13 @@ def render(ctx):
                 "final_json": recap,
             }
             try:
-                supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+                sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
             except APIError as exc:
                 if _handle_missing_table(exc):
                     return
                 raise
             st.success("Draft generated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
     if not row:
         st.info("No draft yet. Generate a draft to begin editing.")
@@ -360,13 +365,13 @@ def render(ctx):
             "final_json": final_json,
         }
         try:
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
         except APIError as exc:
             if _handle_missing_table(exc):
                 return
             raise
         st.success("Draft saved.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     st.markdown("<div class='no-print'>", unsafe_allow_html=True)
     theme_options = {
@@ -394,13 +399,17 @@ def render(ctx):
             st.session_state.pop("weekly_recap_render_mode", None)
     st.subheader("Download PDF")
     html = build_weekly_recap_html(final_json, print_view=True)
-    pdf_bytes = _pdf_for_recap(html)
-    st.download_button(
-        "Download PDF",
-        data=pdf_bytes,
-        file_name=_pdf_filename(final_json),
-        mime="application/pdf",
-    )
+    try:
+        pdf_bytes = _pdf_for_recap(html)
+    except Exception:
+        st.warning("PDF export is unavailable in this environment. Use browser print view as a fallback.")
+    else:
+        st.download_button(
+            "Download PDF",
+            data=pdf_bytes,
+            file_name=_pdf_filename(final_json),
+            mime="application/pdf",
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
     if st.button("Publish"):
@@ -417,13 +426,13 @@ def render(ctx):
             "published_by": "admin",
         }
         try:
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
         except APIError as exc:
             if _handle_missing_table(exc):
                 return
             raise
         st.success("Published.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     if st.button("Unpublish"):
         payload = {
@@ -438,10 +447,10 @@ def render(ctx):
             "published_by": None,
         }
         try:
-            supabase.table("weekly_recaps").upsert(payload, on_conflict="club_id,week_start").execute()
+            sb_upsert(supabase, "weekly_recaps", payload, conflict="club_id,week_start")
         except APIError as exc:
             if _handle_missing_table(exc):
                 return
             raise
         st.success("Unpublished.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True

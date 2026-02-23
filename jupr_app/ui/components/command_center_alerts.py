@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from jupr_app.ui.components.card import Card
+from jupr_app.ui.components.skeleton import render_card_skeleton, render_header_skeleton
+
+
+@dataclass(frozen=True)
+class AlertItem:
+    title: str
+    count: int
+    subtitle: str
+    href: str
+    cta_label: str
+    state: str
+
+
+def _placeholder_alert_items() -> list[AlertItem]:
+    """Temporary placeholder data until live admin metrics are wired."""
+    return [
+        AlertItem(
+            title="Pending Ladder Challenges",
+            count=4,
+            subtitle="Challenges awaiting admin resolution.",
+            href="/?page=record_match",
+            cta_label="Open result wizard",
+            state="warning",
+        ),
+        AlertItem(
+            title="Incomplete Competition Rounds",
+            count=3,
+            subtitle="Active competition rounds still missing final entries.",
+            href="/?page=tournament_manager",
+            cta_label="Review tournaments",
+            state="warning",
+        ),
+        AlertItem(
+            title="Moneyball Events Missing Scores",
+            count=2,
+            subtitle="Moneyball sessions without complete scores.",
+            href="/?page=moneyball",
+            cta_label="Update moneyball",
+            state="danger",
+        ),
+        AlertItem(
+            title="Weekly Recap Not Published",
+            count=1,
+            subtitle="Latest recap is drafted but not yet published.",
+            href="/?page=weekly_recap_admin",
+            cta_label="Publish recap",
+            state="info",
+        ),
+    ]
+
+
+def render_alerts_html(is_loading: bool = False) -> str:
+    if is_loading:
+        return Card(
+            """
+              <div class="cc-alerts-header">
+            """
+            + render_header_skeleton()
+            + """
+              </div>
+              <div class="cc-alert-grid">
+            """
+            + "".join(render_card_skeleton() for _ in range(4))
+            + """
+              </div>
+            """,
+            elevation=2,
+            interactive=False,
+            class_name="cc-alerts",
+            tag="section",
+            attrs='aria-label="Admin alerts" data-alert-count="0"',
+        )
+
+    active_items = [item for item in _placeholder_alert_items() if item.count > 0]
+    total_active_alerts = sum(item.count for item in active_items)
+
+    cards: list[str] = []
+    for item in active_items:
+        cards.append(
+            f"""
+            <article class=\"cc-alert-card cc-alert-{item.state}\">
+              <div class=\"cc-alert-top\">
+                <p class=\"cc-alert-title\">{item.title}</p>
+                <p class=\"cc-alert-count\">{item.count}</p>
+              </div>
+              <p class=\"cc-alert-subtitle\">{item.subtitle}</p>
+              <a class=\"cc-alert-link\" href=\"{item.href}\" target=\"_self\">{item.cta_label} →</a>
+            </article>
+            """.strip()
+        )
+
+    alerts_classes = "cc-alerts"
+    if total_active_alerts == 0:
+        alerts_classes += " cc-alerts--resolved"
+
+    return Card(
+        """
+          <div class="cc-alerts-header">
+            <h3>Alerts</h3>
+            <p>Operational items requiring follow-up.</p>
+          </div>
+          <div class="cc-alert-grid">
+        """
+        + "".join(cards)
+        + """
+          </div>
+        """,
+        elevation=2,
+        interactive=False,
+        class_name=alerts_classes,
+        tag="section",
+        attrs=f'aria-label="Admin alerts" data-alert-count="{total_active_alerts}"',
+    )

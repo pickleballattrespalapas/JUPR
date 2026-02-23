@@ -24,17 +24,6 @@ def render_requirement_inline_html(raw: str | None) -> str:
     return _REQUIREMENT_MARKDOWN.renderInline(text)
 
 
-def qp_get(key: str, default: str = "") -> str:
-    """Streamlit query params can be str or list depending on version."""
-    try:
-        v = st.query_params.get(key, default)
-    except Exception:
-        return default
-    if isinstance(v, list):
-        return v[0] if v else default
-    return str(v) if v is not None else default
-
-
 def _public_base_url() -> str:
     """
     Base URL for share links.

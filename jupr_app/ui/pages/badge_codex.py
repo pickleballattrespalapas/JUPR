@@ -262,7 +262,7 @@ def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_p
     if not cache["loaded_once"] and cache["error"] is None and not cache["loading"]:
         with st.spinner("Loading earners..."):
             _load_more_earners(cache, badge_id, df_player_badges, df_players)
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     if cache["loading"]:
         st.info("Loading earners...")
@@ -273,7 +273,7 @@ def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_p
             cache["error"] = None
             with st.spinner("Loading earners..."):
                 _load_more_earners(cache, badge_id, df_player_badges, df_players)
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
         return
 
     if cache["loaded_once"]:
@@ -290,7 +290,7 @@ def _render_earners_section(badge_id: str, earners_count, df_player_badges, df_p
         if st.button("Load more", key=f"badge_codex_load_more_{badge_id}"):
             with st.spinner("Loading earners..."):
                 _load_more_earners(cache, badge_id, df_player_badges, df_players)
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
 
 def render(ctx) -> None:

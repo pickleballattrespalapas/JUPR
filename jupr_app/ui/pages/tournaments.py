@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
+
 from datetime import datetime, timezone
+from pathlib import Path
+from collections import defaultdict
 
 import pandas as pd
 import streamlit as st
 
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.tournaments.sync import sync_tournament_game_to_match
 from jupr_app.domain.tournaments import (
     build_playoff_games,
     build_round_robin_games,
@@ -14,10 +18,35 @@ from jupr_app.domain.tournaments import (
     compute_podium_from_rr,
     compute_round_robin_standings,
     finalize_game,
+    resolve_series_results,
     resolve_playoff_dependencies,
 )
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
 from jupr_app.ui.layout import page_shell
+
+
+TOURNAMENT_CHARTS = [
+    {
+        "id": "rr-6",
+        "name": "6-team RR",
+        "file": Path(__file__).resolve().parents[1] / "assets" / "tournaments" / "rr-6.csv",
+    }
+]
+
+
+def _rerun() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
+def _require_club_id_payload(payload):
+    # NOTE: non-functional touch to retrigger CI checks.
+    rows = payload if isinstance(payload, list) else [payload]
+    for row in rows:
+        if "club_id" not in row:
+            raise RuntimeError("Missing club_id in tournament write payload.")
 
 
 def render(ctx):
@@ -45,26 +74,41 @@ def render(ctx):
     player_names = sorted(df_players_all["name"].dropna().astype(str).tolist())
 
     st.subheader("Create Tournament")
+    st.caption("Tournament charts")
+    chart_options = {f"{chart['name']} ({chart['id']})": chart for chart in TOURNAMENT_CHARTS}
+    selected_chart_label = st.selectbox("Downloadable chart template", list(chart_options.keys()))
+    selected_chart = chart_options[selected_chart_label]
+    with selected_chart["file"].open("rb") as chart_file:
+        st.download_button(
+            "Download chart CSV",
+            data=chart_file.read(),
+            file_name=selected_chart["file"].name,
+            mime="text/csv",
+            key=f"download_chart_{selected_chart['id']}",
+        )
+
     c1, c2, c3 = st.columns([3, 2, 1])
     with c1:
         tournament_name = st.text_input("Tournament name", key="tourney_create_name")
     with c2:
-        team_count = st.selectbox("Team count", [4, 5, 7, 8], key="tourney_create_team_count")
+        team_count = st.selectbox("Team count", [4, 5, 6, 7, 8], key="tourney_create_team_count")
     with c3:
         if st.button("Create", type="primary"):
             if not tournament_name.strip():
                 st.error("Tournament name is required.")
             else:
-                supabase.table("tournaments").insert(
+                sb_insert(
+                    supabase,
+                    "tournaments",
                     {
                         "club_id": str(club_id),
                         "name": tournament_name.strip(),
                         "status": "DRAFT",
                         "team_count": int(team_count),
-                    }
-                ).execute()
+                    },
+                )
                 st.success("Tournament created.")
-                st.rerun()
+                st.session_state["force_data_refresh"] = True
 
     st.divider()
 
@@ -90,6 +134,7 @@ def render(ctx):
     teams_resp = (
         supabase.table("tournament_teams")
         .select("*")
+        .eq("club_id", str(club_id))
         .eq("tournament_id", tournament_id)
         .order("team_number")
         .execute()
@@ -101,12 +146,30 @@ def render(ctx):
     games_resp = (
         supabase.table("tournament_games")
         .select("*")
+        .eq("club_id", str(club_id))
         .eq("tournament_id", tournament_id)
         .order("rr_round_number", desc=False)
         .order("rr_slot_number", desc=False)
+        .order("id", desc=False)
         .execute()
     )
     games = games_resp.data or []
+    ids = [g["id"] for g in games]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError("Duplicate tournament_game rows detected.")
+
+    seen: set[tuple[object, object, object, object, object]] = set()
+    for g in games:
+        key = (
+            g.get("stage"),
+            g.get("rr_round_number"),
+            g.get("rr_slot_number"),
+            g.get("playoff_game_code"),
+            g.get("series_game_number"),
+        )
+        if key in seen:
+            raise RuntimeError("Duplicate tournament_game invariant violated.")
+        seen.add(key)
 
     rr_games = [g for g in games if g.get("stage") == "ROUND_ROBIN"]
     playoff_games = [g for g in games if g.get("stage") == "PLAYOFF"]
@@ -114,6 +177,7 @@ def render(ctx):
     podium_resp = (
         supabase.table("tournament_podium")
         .select("*")
+        .eq("club_id", str(club_id))
         .eq("tournament_id", tournament_id)
         .order("placement", desc=False)
         .execute()
@@ -127,7 +191,10 @@ def render(ctx):
         _render_podium_read_only(podium_rows, teams_by_id, id_to_name)
     else:
         if st.button("🏁 Complete Tournament"):
-            st.session_state[f"podium_review_open_{tournament_id}"] = True
+            podium_key = f"podium_review_open_{tournament_id}"
+            if not st.session_state.get(podium_key):
+                st.session_state[podium_key] = True
+                _rerun()
         if st.session_state.get(f"podium_review_open_{tournament_id}"):
             _render_podium_review(
                 ctx,
@@ -153,15 +220,15 @@ def render(ctx):
         with c2:
             new_team_count = st.selectbox(
                 "Team count",
-                [4, 5, 7, 8],
-                index=[4, 5, 7, 8].index(team_count_value),
+                [4, 5, 6, 7, 8],
+                index=[4, 5, 6, 7, 8].index(team_count_value),
                 disabled=team_count_locked,
                 key="tourney_team_count_select",
             )
         if not team_count_locked and st.button("Update team count"):
-            supabase.table("tournaments").update({"team_count": int(new_team_count)}).eq("id", tournament_id).execute()
+            sb_update(supabase, "tournaments", {"team_count": int(new_team_count)}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Team count updated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         rows = []
         for num in range(1, int(tournament.get("team_count", 4)) + 1):
@@ -183,6 +250,7 @@ def render(ctx):
         )
 
         if st.button("Save Teams", disabled=is_complete):
+            assert club_id, "club_id must be present for tournament writes"
             selected_ids = []
             for _, row in editor_df.iterrows():
                 p1 = row.get("Player 1")
@@ -205,6 +273,8 @@ def render(ctx):
             for _, row in editor_df.iterrows():
                 payload.append(
                     {
+                        # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                        "club_id": str(club_id),
                         "tournament_id": tournament_id,
                         "team_number": int(row.get("Team")),
                         "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
@@ -212,9 +282,11 @@ def render(ctx):
                     }
                 )
 
-            supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,team_number").execute()
+            _require_club_id_payload(payload)
+
+            sb_upsert(supabase, "tournament_teams", payload, conflict="club_id,tournament_id,team_number")
             st.success("Teams saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
     with tabs[1]:
         st.subheader("Round Robin")
@@ -225,12 +297,25 @@ def render(ctx):
             st.warning("Assign exactly two players to every team to enable schedule generation.")
 
         if st.button("Generate RR Schedule", disabled=bool(rr_games) or not ready_teams or is_complete):
+            assert club_id, "club_id must be present for tournament writes"
             team_ids = {int(num): t["id"] for num, t in teams_by_number.items()}
             games_payload = build_round_robin_games(tournament_id=tournament_id, team_ids_by_number=team_ids)
-            supabase.table("tournament_games").insert(games_payload).execute()
-            supabase.table("tournaments").update({"status": "ROUND_ROBIN"}).eq("id", tournament_id).execute()
+            for game in games_payload:
+                # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                game["club_id"] = str(club_id)
+            _require_club_id_payload(games_payload)
+            if getattr(ctx, "DEBUG_MODE", False):
+                print(
+                    "tournament_games upsert conflict:",
+                    "club_id,tournament_id,stage,game_conflict_key",
+                )
+            supabase.table("tournament_games").upsert(
+                games_payload,
+                on_conflict="club_id,tournament_id,stage,game_conflict_key"
+            ).execute()
+            sb_update(supabase, "tournaments", {"status": "ROUND_ROBIN"}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Round robin schedule generated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         if rr_games:
             with st.expander("Regenerate schedule"):
@@ -240,11 +325,11 @@ def render(ctx):
                     "Regenerate RR Schedule",
                     disabled=confirm.strip().upper() != "RESET" or is_complete,
                 ):
-                    supabase.table("tournament_games").delete().eq("tournament_id", tournament_id).execute()
-                    supabase.table("tournament_teams").update({"seed": None}).eq("tournament_id", tournament_id).execute()
-                    supabase.table("tournaments").update({"status": "DRAFT", "playoff_advance_count": None}).eq("id", tournament_id).execute()
+                    supabase.table("tournament_games").delete().eq("club_id", str(club_id)).eq("tournament_id", tournament_id).execute()
+                    sb_update(supabase, "tournament_teams", {"seed": None}, filters={"club_id": str(club_id), "tournament_id": tournament_id})
+                    sb_update(supabase, "tournaments", {"status": "DRAFT", "playoff_advance_count": None}, filters={"club_id": str(club_id), "id": tournament_id})
                     st.success("Schedule cleared.")
-                    st.rerun()
+                    st.session_state["force_data_refresh"] = True
 
         if rr_games:
             _render_games_table(
@@ -258,7 +343,7 @@ def render(ctx):
                     updates,
                     stage="ROUND_ROBIN",
                 ),
-                key_prefix="rr",
+                stage="ROUND_ROBIN",
                 disabled=is_complete,
             )
 
@@ -284,11 +369,41 @@ def render(ctx):
                     hide_index=True,
                 )
 
+                st.markdown("#### Manual Seeding")
+                for row in standings:
+                    team_id = row["team_id"]
+                    st.number_input(
+                        f"Team {row['team_number']} seed",
+                        min_value=0,
+                        max_value=32,
+                        value=int(row.get("seed") or 0),
+                        key=f"seed_input_{team_id}",
+                        disabled=is_complete,
+                    )
+
+                if st.button("Save Manual Seeds", disabled=is_complete):
+                    for row in standings:
+                        team_id = row["team_id"]
+                        new_seed = int(st.session_state.get(f"seed_input_{team_id}") or 0)
+                        sb_update(
+                            supabase,
+                            "tournament_teams",
+                            {"seed": new_seed if new_seed > 0 else None},
+                            filters={"club_id": str(club_id), "tournament_id": tournament_id, "id": team_id},
+                        )
+                    st.success("Manual seeds updated.")
+                    st.session_state["force_data_refresh"] = True
+
                 if st.button("Update Seeds", disabled=is_complete):
                     for row in standings:
-                        supabase.table("tournament_teams").update({"seed": int(row["seed"])}).eq("id", row["team_id"]).execute()
-                    st.success("Seeds updated.")
-                    st.rerun()
+                        sb_update(
+                            supabase,
+                            "tournament_teams",
+                            {"seed": int(row["seed"])},
+                            filters={"club_id": str(club_id), "tournament_id": tournament_id, "id": row["team_id"]},
+                        )
+                    st.success("Recommended seeds updated.")
+                    st.session_state["force_data_refresh"] = True
 
     with tabs[3]:
         st.subheader("Playoffs")
@@ -306,32 +421,153 @@ def render(ctx):
             disabled=is_complete,
         )
         if st.button("Save advance count", disabled=is_complete):
-            supabase.table("tournaments").update({"playoff_advance_count": int(selected_advance)}).eq("id", tournament_id).execute()
+            sb_update(supabase, "tournaments", {"playoff_advance_count": int(selected_advance)}, filters={"club_id": str(club_id), "id": tournament_id})
             st.success("Advance count saved.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
+
+        best_of = st.selectbox(
+            "Playoff Format",
+            options=[1, 3],
+            format_func=lambda x: "1 Game" if x == 1 else "Best 2 of 3",
+            index=0 if tournament.get("playoff_best_of", 1) == 1 else 1,
+            key="playoff_best_of_select",
+            disabled=is_complete,
+        )
+
+        if st.button("Save format", disabled=is_complete):
+            supabase.table("tournaments").update({"playoff_best_of": int(best_of)}).eq("club_id", str(club_id)).eq("id", tournament_id).execute()
+            st.success("Playoff format saved.")
+            st.session_state["force_data_refresh"] = True
+
+        # --- Regenerate Playoff Bracket ---
+        if playoff_games:
+            if tournament.get("status") == "COMPLETE":
+                st.info("Tournament is complete. Bracket cannot be regenerated.")
+            else:
+                existing_scored = any(
+                    g.get("score_a") is not None or g.get("score_b") is not None
+                    for g in playoff_games
+                )
+
+                if existing_scored:
+                    st.warning("Playoff scores have already been entered. Bracket cannot be regenerated.")
+                else:
+                    existing_playoffs = (
+                        supabase.table("tournament_games")
+                        .select("id")
+                        .eq("club_id", str(club_id))
+                        .eq("tournament_id", tournament_id)
+                        .eq("stage", "PLAYOFF")
+                        .limit(1)
+                        .execute()
+                    )
+                    requires_confirm = bool(existing_playoffs.data)
+                    if requires_confirm:
+                        st.warning("Playoffs already generated. Regenerate will overwrite.")
+                    confirm_regen = st.checkbox(
+                        "I understand this will overwrite the existing playoff bracket",
+                        key=f"confirm_playoff_regen_{tournament_id}",
+                    )
+                    if st.button("Regenerate Playoff Bracket", type="secondary"):
+                        if requires_confirm and not confirm_regen:
+                            st.error("Confirm bracket overwrite before regenerating.")
+                            st.stop()
+                        assert club_id, "club_id must be present for tournament writes"
+                        supabase.table("tournament_games").delete().eq("club_id", str(club_id)).eq("tournament_id", tournament_id).eq("stage", "PLAYOFF").execute()
+
+                        standings = _load_seeded_standings(supabase, str(club_id), tournament_id)
+                        if len(standings) < int(tournament.get("playoff_advance_count") or selected_advance):
+                            st.error("Not enough stored seeds to regenerate the bracket.")
+                            st.stop()
+
+                        games_payload = build_playoff_games(
+                            tournament_id=tournament_id,
+                            advance_count=int(tournament.get("playoff_advance_count") or selected_advance),
+                            standings=standings,
+                            best_of=int(tournament.get("playoff_best_of", 1)),
+                        )
+
+                        for game in games_payload:
+                            # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                            game["club_id"] = str(club_id)
+                        _require_club_id_payload(games_payload)
+
+                        if getattr(ctx, "DEBUG_MODE", False):
+                            print("tournament_games upsert conflict:", "club_id,tournament_id,stage,game_conflict_key")
+                        supabase.table("tournament_games").upsert(
+                            games_payload,
+                            on_conflict="club_id,tournament_id,stage,game_conflict_key"
+                        ).execute()
+
+                        st.success("Playoff bracket regenerated.")
+                        st.session_state["force_data_refresh"] = True
 
         if not playoff_games:
             st.info("No playoff bracket generated yet.")
         if st.button("Generate Playoff Bracket", disabled=bool(playoff_games) or is_complete):
-            standings = compute_round_robin_standings(list(teams_by_id.values()), rr_games)
+            assert club_id, "club_id must be present for tournament writes"
+            standings = _load_seeded_standings(supabase, str(club_id), tournament_id)
             if len(standings) < int(selected_advance):
                 st.error("Not enough seeded teams to generate the bracket.")
                 st.stop()
-            for row in standings:
-                supabase.table("tournament_teams").update({"seed": int(row["seed"])}).eq("id", row["team_id"]).execute()
             games_payload = build_playoff_games(
                 tournament_id=tournament_id,
                 advance_count=int(selected_advance),
                 standings=standings,
+                best_of=int(tournament.get("playoff_best_of", 1)),
             )
-            supabase.table("tournament_games").insert(games_payload).execute()
-            supabase.table("tournaments").update(
-                {"status": "PLAYOFFS", "playoff_advance_count": int(selected_advance)}
-            ).eq("id", tournament_id).execute()
+            for game in games_payload:
+                # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                game["club_id"] = str(club_id)
+            _require_club_id_payload(games_payload)
+            if getattr(ctx, "DEBUG_MODE", False):
+                print("tournament_games upsert conflict:", "club_id,tournament_id,stage,game_conflict_key")
+            supabase.table("tournament_games").upsert(
+                games_payload,
+                on_conflict="club_id,tournament_id,stage,game_conflict_key"
+            ).execute()
+            sb_update(
+                supabase,
+                "tournaments",
+                {"status": "PLAYOFFS", "playoff_advance_count": int(selected_advance)},
+                filters={"club_id": str(club_id), "id": tournament_id},
+            )
             st.success("Playoff bracket generated.")
-            st.rerun()
+            st.session_state["force_data_refresh"] = True
 
         if playoff_games:
+            if st.button("🔄 Recompute Bracket Dependencies", disabled=is_complete):
+                playoff_games_resp = (
+                    supabase.table("tournament_games")
+                    .select("*")
+                    .eq("club_id", str(club_id))
+                    .eq("tournament_id", tournament_id)
+                    .eq("stage", "PLAYOFF")
+                    .execute()
+                )
+                playoff_games = playoff_games_resp.data or []
+
+                series_updates = resolve_series_results(playoff_games)
+                for upd in series_updates:
+                    supabase.table("tournament_games").update(upd).eq("club_id", str(club_id)).eq("id", upd["id"]).execute()
+
+                playoff_games_resp = (
+                    supabase.table("tournament_games")
+                    .select("*")
+                    .eq("club_id", str(club_id))
+                    .eq("tournament_id", tournament_id)
+                    .eq("stage", "PLAYOFF")
+                    .execute()
+                )
+                playoff_games = playoff_games_resp.data or []
+
+                dependency_updates = resolve_playoff_dependencies(playoff_games)
+                for upd in dependency_updates:
+                    supabase.table("tournament_games").update(upd).eq("club_id", str(club_id)).eq("id", upd["id"]).execute()
+
+                st.success("Bracket dependencies recomputed.")
+                st.session_state["force_data_refresh"] = True
+
             _render_playoff_bracket(
                 games=playoff_games,
                 teams_by_id=teams_by_id,
@@ -359,13 +595,30 @@ def _teams_ready(teams_by_number: dict[int, dict], team_count: int) -> bool:
     return True
 
 
-def _render_games_table(*, games, teams_by_id, id_to_name, on_save, key_prefix: str, disabled: bool = False):
+def _load_seeded_standings(supabase, club_id: str, tournament_id: str) -> list[dict]:
+    seeded_resp = (
+        supabase.table("tournament_teams")
+        .select("id, seed")
+        .eq("club_id", club_id)
+        .eq("tournament_id", tournament_id)
+        .not_.is_("seed", "null")
+        .order("seed", desc=False)
+        .execute()
+    )
+
+    standings = []
+    for row in (seeded_resp.data or []):
+        standings.append({"team_id": row["id"], "seed": int(row["seed"])})
+    return standings
+
+
+def _render_games_table(*, games, teams_by_id, id_to_name, on_save, stage: str, disabled: bool = False):
     rounds = sorted({int(g.get("rr_round_number", 0)) for g in games})
     for round_num in rounds:
         st.markdown(f"#### Round {round_num}")
         round_games = [g for g in games if int(g.get("rr_round_number", 0)) == round_num]
         scores = {}
-        with st.form(key=f"{key_prefix}_round_{round_num}"):
+        with st.form(key=f"{_score_key(stage, 'round', str(round_num))}"):
             for game in round_games:
                 team_a = teams_by_id.get(game.get("team_a_id"), {})
                 team_b = teams_by_id.get(game.get("team_b_id"), {})
@@ -379,14 +632,14 @@ def _render_games_table(*, games, teams_by_id, id_to_name, on_save, key_prefix: 
                     "Score A",
                     min_value=0,
                     value=int(game.get("score_a") or 0),
-                    key=f"{key_prefix}_a_{game['id']}",
+                    key=_score_key(stage, "a", game["id"]),
                     disabled=disabled,
                 )
                 col3.number_input(
                     "Score B",
                     min_value=0,
                     value=int(game.get("score_b") or 0),
-                    key=f"{key_prefix}_b_{game['id']}",
+                    key=_score_key(stage, "b", game["id"]),
                     disabled=disabled,
                 )
                 status = "Final" if game.get("finalized_at") else "Open"
@@ -404,30 +657,39 @@ def _render_playoff_bracket(*, games, teams_by_id, id_to_name, on_save, disabled
         if not round_games:
             continue
         st.markdown(f"#### {round_name}")
+
+        series_groups = defaultdict(list)
+        for game in round_games:
+            series_groups[game.get("playoff_game_code")].append(game)
+
         with st.form(key=f"playoff_{round_name}"):
-            for game in round_games:
-                team_a = teams_by_id.get(game.get("team_a_id"), {})
-                team_b = teams_by_id.get(game.get("team_b_id"), {})
-                label_a = _team_label(team_a, id_to_name)
-                label_b = _team_label(team_b, id_to_name)
-                col1, col2, col3, col4 = st.columns([4, 1, 1, 2])
-                col1.write(f"{game.get('playoff_game_code')}: {label_a} vs {label_b}")
-                col2.number_input(
-                    "Score A",
-                    min_value=0,
-                    value=int(game.get("score_a") or 0),
-                    key=f"playoff_a_{game['id']}",
-                    disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
-                )
-                col3.number_input(
-                    "Score B",
-                    min_value=0,
-                    value=int(game.get("score_b") or 0),
-                    key=f"playoff_b_{game['id']}",
-                    disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
-                )
-                status = "Final" if game.get("finalized_at") else "Open"
-                col4.caption(status)
+            for series_code, series_games in series_groups.items():
+                series_len = max((g.get("series_game_number") or 1) for g in series_games)
+                st.markdown(f"### {series_code}")
+                for game in sorted(series_games, key=lambda x: x.get("series_game_number") or 1):
+                    team_a = teams_by_id.get(game.get("team_a_id"), {})
+                    team_b = teams_by_id.get(game.get("team_b_id"), {})
+                    label_a = _team_label(team_a, id_to_name)
+                    label_b = _team_label(team_b, id_to_name)
+                    game_number = game.get("series_game_number") or 1
+                    col1, col2, col3, col4 = st.columns([4, 1, 1, 2])
+                    col1.write(f"{game.get('playoff_game_code')} (Game {game_number}/{series_len}): {label_a} vs {label_b}")
+                    col2.number_input(
+                        "Score A",
+                        min_value=0,
+                        value=int(game.get("score_a") or 0),
+                        key=_score_key("PLAYOFF", "a", game["id"]),
+                        disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
+                    )
+                    col3.number_input(
+                        "Score B",
+                        min_value=0,
+                        value=int(game.get("score_b") or 0),
+                        key=_score_key("PLAYOFF", "b", game["id"]),
+                        disabled=disabled or not game.get("team_a_id") or not game.get("team_b_id"),
+                    )
+                    status = "Final" if game.get("finalized_at") else "Open"
+                    col4.caption(status)
 
             if st.form_submit_button("Save scores", disabled=disabled):
                 on_save({g["id"]: g for g in round_games})
@@ -503,6 +765,7 @@ def _render_podium_review(
                 placements.append({"placement": placement, "team_id": selection})
 
     if st.button("Finalize Tournament", type="primary", disabled=max_places == 0):
+        assert ctx.club_id, "club_id must be present for tournament writes"
         if max_places == 0:
             st.error("No teams available for podium placement.")
             return
@@ -511,19 +774,28 @@ def _render_podium_review(
             return
         try:
             payload = build_podium_payload(tournament_id, placements, source)
-        except ValueError as exc:
+            for row in payload:
+                # Explicit club_id for tenant isolation (RLS + multi-club safety)
+                row["club_id"] = str(ctx.club_id)
+            _require_club_id_payload(payload)
+        except (ValueError, RuntimeError) as exc:
             st.error(str(exc))
             return
         if not payload:
             st.error("Podium placements are required to complete the tournament.")
             return
 
-        upsert_tournament_podium(ctx.supabase, tournament_id, payload)
+        upsert_tournament_podium(ctx.supabase, str(ctx.club_id), tournament_id, payload)
         award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
-        ctx.supabase.table("tournaments").update({"status": "COMPLETE"}).eq("id", tournament_id).execute()
+        ctx.supabase.table("tournaments") \
+            .update({"status": "COMPLETE"}) \
+            .eq("club_id", str(ctx.club_id)) \
+            .eq("id", tournament_id) \
+            .execute()
         st.success("Tournament completed and podium locked.")
         st.session_state.pop(f"podium_review_open_{tournament_id}", None)
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
+        _rerun()
 
 
 def _render_podium_read_only(podium_rows: list[dict], teams_by_id: dict[str, dict], id_to_name: dict) -> None:
@@ -581,70 +853,120 @@ def _team_label(team: dict, id_to_name: dict) -> str:
 
 def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
     supabase = ctx.supabase
+
     if tournament.get("status") == "COMPLETE":
         st.error("Tournament is complete. Scores are locked.")
         return
-    df_players_all = ctx.df_players_all
-    df_leagues = ctx.df_leagues
-    df_meta = ctx.df_meta
-    name_to_id = ctx.name_to_id
 
     updated_any = False
-    for game_id, game in game_map.items():
-        if game.get("finalized_at"):
-            continue
-        score_a = int(st.session_state.get(f"{_score_key(stage, 'a', game_id)}", 0))
-        score_b = int(st.session_state.get(f"{_score_key(stage, 'b', game_id)}", 0))
+
+    for game_id in game_map.keys():
+        score_a = int(st.session_state.get(_score_key(stage, "a", game_id), 0))
+        score_b = int(st.session_state.get(_score_key(stage, "b", game_id), 0))
+        if getattr(ctx, "DEBUG_MODE", False):
+            print("Saving game:", game_id, "Scores:", score_a, score_b)
+
+        fresh_game = (
+            supabase.table("tournament_games")
+            .select("*")
+            .eq("club_id", str(ctx.club_id))
+            .eq("id", game_id)
+            .single()
+            .execute()
+            .data
+        )
 
         if score_a == 0 and score_b == 0:
-            if game.get("score_a") or game.get("score_b"):
-                supabase.table("tournament_games").update({"score_a": None, "score_b": None}).eq("id", game_id).execute()
-                updated_any = True
+            sb_update(
+                supabase,
+                "tournament_games",
+                {
+                    "score_a": None,
+                    "score_b": None,
+                    "winner_team_id": None,
+                    "loser_team_id": None,
+                    "finalized_at": None,
+                },
+                filters={"club_id": str(ctx.club_id), "id": game_id},
+            )
+
+            updated_any = True
             continue
 
-        supabase.table("tournament_games").update({"score_a": score_a, "score_b": score_b}).eq("id", game_id).execute()
-        updated_any = True
+        finalize_payload = finalize_game(
+            {
+                "team_a_id": fresh_game.get("team_a_id"),
+                "team_b_id": fresh_game.get("team_b_id"),
+                "score_a": score_a,
+                "score_b": score_b,
+            }
+        )
 
-        try:
-            finalize_payload = finalize_game({**game, "score_a": score_a, "score_b": score_b})
-        except ValueError:
-            continue
-
-        supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
+        sb_update(
+            supabase,
+            "tournament_games",
+            finalize_payload,
+            filters={"club_id": str(ctx.club_id), "id": game_id},
+        )
 
         match_payload = _build_match_payload(
             tournament,
-            game,
+            fresh_game,
             teams_by_id,
             score_a=score_a,
             score_b=score_b,
         )
-        process_matches(
-            [match_payload],
+
+        sync_tournament_game_to_match(
             supabase=supabase,
             club_id=str(ctx.club_id),
-            name_to_id=name_to_id,
-            df_players_all=df_players_all,
-            df_leagues=df_leagues,
-            df_meta=df_meta,
+            game=fresh_game,
+            match_payload=match_payload,
+            name_to_id=ctx.name_to_id,
+            df_players_all=ctx.df_players_all,
+            df_leagues=ctx.df_leagues,
+            df_meta=ctx.df_meta,
         )
 
+        updated_any = True
+
+    if updated_any:
         if stage == "PLAYOFF":
+            # --- Fetch latest playoff games ---
             playoff_games_resp = (
                 supabase.table("tournament_games")
                 .select("*")
+                .eq("club_id", str(ctx.club_id))
                 .eq("tournament_id", tournament["id"])
                 .eq("stage", "PLAYOFF")
                 .execute()
             )
             playoff_games = playoff_games_resp.data or []
-            updates = resolve_playoff_dependencies(playoff_games)
-            for upd in updates:
-                supabase.table("tournament_games").update(upd).eq("id", upd["id"]).execute()
 
-    if updated_any:
+            # --- First resolve series winners (best-of logic) ---
+            series_updates = resolve_series_results(playoff_games)
+            for upd in series_updates:
+                supabase.table("tournament_games").update(upd).eq("club_id", str(ctx.club_id)).eq("id", upd["id"]).execute()
+
+            # --- Re-fetch after series resolution ---
+            playoff_games_resp = (
+                supabase.table("tournament_games")
+                .select("*")
+                .eq("club_id", str(ctx.club_id))
+                .eq("tournament_id", tournament["id"])
+                .eq("stage", "PLAYOFF")
+                .execute()
+            )
+            playoff_games = playoff_games_resp.data or []
+
+            # --- Then resolve bracket dependencies ---
+            dependency_updates = resolve_playoff_dependencies(playoff_games)
+            for upd in dependency_updates:
+                supabase.table("tournament_games").update(upd).eq("club_id", str(ctx.club_id)).eq("id", upd["id"]).execute()
+
         st.success("Scores saved.")
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
+
 
 
 def _build_match_payload(tournament, game, teams_by_id, *, score_a: int, score_b: int) -> dict:

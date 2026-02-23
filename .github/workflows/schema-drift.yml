@@ -1,0 +1,75 @@
+name: schema-drift
+
+on:
+  pull_request:
+
+jobs:
+  schema-drift:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run migration audit
+        run: |
+          set -euo pipefail
+          set +e
+          python3 scripts/schema_migration_audit.py
+          AUDIT_EXIT=$?
+          set -e
+
+          if [ "$AUDIT_EXIT" -eq 0 ]; then
+            echo "Migration audit passed with no findings."
+          elif [ "$AUDIT_EXIT" -eq 2 ]; then
+            echo "Migration audit reported findings (exit 2). Continuing to Supabase drift gate."
+            echo "Review migration audit output above and address findings in follow-up cleanup PRs."
+          else
+            echo "Migration audit failed unexpectedly with exit code $AUDIT_EXIT."
+            exit "$AUDIT_EXIT"
+          fi
+
+      - name: Setup Supabase CLI
+        if: ${{ hashFiles('supabase/config.toml') != '' }}
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase local stack
+        if: ${{ hashFiles('supabase/config.toml') != '' }}
+        run: |
+          set -euo pipefail
+          supabase start
+
+      - name: Check schema drift with Supabase diff
+        if: ${{ hashFiles('supabase/config.toml') != '' }}
+        run: |
+          set -euo pipefail
+
+          OUT="$(supabase db diff 2>&1 || true)"
+          echo "$OUT"
+
+          if echo "$OUT" | grep -q "No schema changes found"; then
+            echo "OK: no pending schema diff."
+            exit 0
+          fi
+
+          echo ""
+          echo "ERROR: Schema drift detected between local database state and committed migrations."
+          echo "Fix: run 'supabase db diff -f <name>' and commit the generated migration file."
+          exit 1
+
+      - name: Skip Supabase drift gate
+        if: ${{ hashFiles('supabase/config.toml') == '' }}
+        run: echo "No supabase/config.toml detected; skipping Supabase drift steps."
+
+      - name: Stop Supabase local stack
+        if: ${{ always() && hashFiles('supabase/config.toml') != '' }}
+        run: |
+          set +e
+          supabase stop

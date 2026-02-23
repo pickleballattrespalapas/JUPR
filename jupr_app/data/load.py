@@ -5,9 +5,8 @@ from jupr_app.domain.player_activity import add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
-from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
-import re
-from postgrest.exceptions import APIError
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
+from services.match_pipeline import submit_match
 
 
 PLAYER_BADGES_BASE_COLUMNS = [
@@ -33,62 +32,94 @@ PLAYER_BADGES_OPTIONAL_COLUMNS = [
 MERGED_PLAYER_MARKER = "(MERGED into "
 
 
-def _missing_player_badges_columns(exc: APIError) -> set[str]:
-    message = str(exc)
-    missing = {col for col in PLAYER_BADGES_OPTIONAL_COLUMNS if col in message}
-    if missing:
-        return missing
-    matches = re.findall(r"player_badges\\.([a-zA-Z0-9_]+)", message)
-    return {col for col in matches if col in PLAYER_BADGES_OPTIONAL_COLUMNS}
-
-
-def _ensure_player_badges_columns(df: pd.DataFrame) -> pd.DataFrame:
-    defaults = {
-        "awarded_by": "engine",
-        "rule_version": None,
-        "eval_run_id": None,
-        "revoked_at": None,
-        "revoked_by": None,
-        "revoke_reason": None,
-    }
-    for col, default in defaults.items():
-        if col not in df.columns:
-            df[col] = default
-    return df
-
-
-def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, str | None]:
-    schema_degraded = False
-    schema_degraded_reason = None
-    select_cols = ",".join(PLAYER_BADGES_BASE_COLUMNS + PLAYER_BADGES_OPTIONAL_COLUMNS)
-    try:
-        pb_resp = (
-            supabase.table("player_badges")
-            .select(select_cols)
-            .eq("club_id", club_id)
-            .execute()
-        )
-    except APIError as exc:
-        missing = _missing_player_badges_columns(exc)
-        if getattr(exc, "code", None) == "42703" and missing:
-            schema_degraded = True
-            schema_degraded_reason = (
-                "player_badges missing columns "
-                f"{', '.join(sorted(missing))}; apply migrations/20260625_badge_recompute_runs.sql and "
-                "migrations/20260630_player_badges_revocation.sql."
-            )
-            legacy_select = ",".join(PLAYER_BADGES_BASE_COLUMNS)
-            pb_resp = (
-                supabase.table("player_badges")
-                .select(legacy_select)
-                .eq("club_id", club_id)
-                .execute()
-            )
+def _resolve_loader_context(match_row: dict) -> tuple[str, str | None]:
+    context_type = str(match_row.get("context_type") or "").strip().lower()
+    if context_type not in {"league", "ladder", "tournament", "admin"}:
+        if match_row.get("league"):
+            context_type = "league"
+        elif match_row.get("tournament_id"):
+            context_type = "tournament"
         else:
-            raise
+            context_type = "admin"
+
+    context_id = match_row.get("context_id")
+    if context_id is not None and str(context_id).strip() != "":
+        return context_type, str(context_id)
+    if context_type == "league":
+        league = str(match_row.get("league") or "").strip()
+        return context_type, (league or None)
+    if context_type == "tournament":
+        tournament_id = match_row.get("tournament_id")
+        if tournament_id is not None and str(tournament_id).strip() != "":
+            return context_type, str(tournament_id)
+    return context_type, None
+
+
+def _loader_idempotency_key(club_id: str, match_row: dict) -> str:
+    return build_match_idempotency_key_v1(
+        {
+            "club_id": str(club_id),
+            "date": str(match_row.get("date") or match_row.get("created_at") or ""),
+            "context_type": str(match_row.get("context_type") or ""),
+            "context_id": str(match_row.get("context_id") or ""),
+            "competition_id": str(match_row.get("competition_id") or ""),
+            "division_id": str(match_row.get("division_id") or ""),
+            "tournament_id": str(match_row.get("tournament_id") or ""),
+            "tournament_game_id": str(match_row.get("tournament_game_id") or ""),
+            "match_type": str(match_row.get("match_type") or ""),
+            "match_format": str(match_row.get("match_format") or ""),
+            "best_of": int(match_row.get("best_of") or 0),
+            "t1_p1": int(match_row.get("t1_p1") or 0),
+            "t1_p2": int(match_row.get("t1_p2") or 0),
+            "t2_p1": int(match_row.get("t2_p1") or 0),
+            "t2_p2": int(match_row.get("t2_p2") or 0),
+            "score_t1": int(match_row.get("score_t1") or 0),
+            "score_t2": int(match_row.get("score_t2") or 0),
+            "score_json": match_row.get("score_json"),
+            "games": match_row.get("games"),
+        }
+    )
+
+
+def submit_matches_from_loader(supabase, club_id: str, matches: list[dict], chunk_size: int = 500) -> int:
+    _ = supabase
+    club_id = str(club_id)
+    submitted = 0
+
+    for chunk_index, start in enumerate(range(0, len(matches), max(1, int(chunk_size))), start=1):
+        chunk = matches[start : start + max(1, int(chunk_size))]
+        try:
+            for row in chunk:
+                match_row = dict(row)
+                context_type, context_id = _resolve_loader_context(match_row)
+                idempotency_key = _loader_idempotency_key(club_id, match_row)
+                match_row["idempotency_key"] = idempotency_key
+                match_row["club_id"] = club_id
+
+                submit_match(
+                    club_id=club_id,
+                    context_type=context_type,
+                    context_id=context_id,
+                    match_payload=match_row,
+                    idempotency_key=idempotency_key,
+                )
+                submitted += 1
+        except Exception as exc:
+            raise RuntimeError(f"Failed loader matches submit chunk {chunk_index}: {exc}") from exc
+
+    return submitted
+
+
+def _fetch_player_badges(supabase, club_id: str) -> pd.DataFrame:
+    select_cols = ",".join(PLAYER_BADGES_BASE_COLUMNS + PLAYER_BADGES_OPTIONAL_COLUMNS)
+    pb_resp = (
+        supabase.table("player_badges")
+        .select(select_cols)
+        .eq("club_id", club_id)
+        .execute()
+    )
     df_player_badges = pd.DataFrame(pb_resp.data or [])
-    df_player_badges = _ensure_player_badges_columns(df_player_badges)
-    return df_player_badges, schema_degraded, schema_degraded_reason
+    return df_player_badges
 
 
 def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
@@ -114,15 +145,14 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
     club_id = str(club_id)
-    ensure_badge_schema_preflight(supabase)
+    # Preflight runs once at app startup in main(); do not duplicate here.
+    schema_degraded, schema_degraded_reason = False, None
 
     max_retries = 3
     last_err = None
 
     for attempt in range(max_retries):
         try:
-            schema_degraded = False
-            schema_degraded_reason = None
             # Players
             p_resp = (
                 supabase.table("players")
@@ -174,35 +204,20 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_meta = pd.DataFrame(meta_resp.data or [])
 
             # Badges (global definitions)
-            try:
-                # Support older badge schema variants that lack state-related columns.
-                badges_resp = (
-                    supabase.table("badges")
-                    .select(
-                        "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                        "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
-                    )
-                    .execute()
+            badges_resp = (
+                supabase.table("badges")
+                .select(
+                    "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                    "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
                 )
-            except APIError as exc:
-                message = str(exc)
-                if getattr(exc, "code", None) == "42703" or "badges.state does not exist" in message:
-                    badges_resp = (
-                        supabase.table("badges")
-                        .select(
-                            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                            "tier,icon_key,scope,created_at"
-                        )
-                        .execute()
-                    )
-                else:
-                    raise
+                .execute()
+            )
             df_badges = pd.DataFrame(badges_resp.data or [])
             if not df_badges.empty and "badge_id" in df_badges.columns:
                 if "state" not in df_badges.columns:
-                    df_badges["state"] = "live"
+                    raise RuntimeError("Schema mismatch: badges.state missing.")
                 if "eval_triggers" not in df_badges.columns:
-                    df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
+                    raise RuntimeError("Schema mismatch: badges.eval_triggers missing.")
                 requirements_map = load_requirements_map()
                 df_badges["requirements"] = (
                     df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")
@@ -222,7 +237,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 )
 
             # Player badges (club-scoped)
-            df_player_badges, schema_degraded, schema_degraded_reason = _fetch_player_badges(
+            df_player_badges = _fetch_player_badges(
                 supabase,
                 club_id,
             )

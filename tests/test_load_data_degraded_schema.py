@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import pandas as pd
+import pytest
 from postgrest.exceptions import APIError
 
 from jupr_app.data.load import load_data
@@ -61,35 +61,10 @@ class _FakeSupabase:
         return _FakeTableQuery(self, name)
 
 
-def test_load_data_degrades_player_badges_schema(monkeypatch):
+def test_load_data_fails_on_missing_player_badges_columns(monkeypatch):
     monkeypatch.setenv("JUPR_SKIP_BADGE_SCHEMA_PREFLIGHT", "1")
     supabase = _FakeSupabase()
 
-    (
-        df_players_all,
-        df_players_active,
-        df_leagues,
-        df_matches,
-        df_meta,
-        df_badges,
-        df_player_badges,
-        name_to_id,
-        id_to_name,
-        schema_degraded,
-        schema_degraded_reason,
-    ) = load_data(supabase, "club123", match_limit=5)
+    with pytest.raises(APIError):
+        load_data(supabase, "club123", match_limit=5)
 
-    assert schema_degraded is True
-    assert schema_degraded_reason is not None
-    assert "migrations/20260625_badge_recompute_runs.sql" in schema_degraded_reason
-    assert "migrations/20260630_player_badges_revocation.sql" in schema_degraded_reason
-    assert isinstance(df_player_badges, pd.DataFrame)
-    for col in [
-        "awarded_by",
-        "rule_version",
-        "eval_run_id",
-        "revoked_at",
-        "revoked_by",
-        "revoke_reason",
-    ]:
-        assert col in df_player_badges.columns

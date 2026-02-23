@@ -1,3 +1,4 @@
+from jupr_app.data.sb_write import sb_insert, sb_update, sb_upsert
 from typing import Any
 
 
@@ -33,7 +34,7 @@ def upsert_or_get_active_event(
         "event_type": event_type,
         "is_active": True,
     }
-    inserted = supabase.table("events").insert(payload).execute()
+    inserted = sb_insert(supabase, "events", payload)
     if not inserted.data:
         raise RuntimeError("Failed to insert event record.")
     return str(inserted.data[0]["id"])

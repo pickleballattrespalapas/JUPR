@@ -3,7 +3,7 @@ import pandas as pd
 import math
 import altair as alt
 
-from jupr_app.ui.helpers import qp_get
+from jupr_app.ui.url import qp_get
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR, MIN_WIN_DELTA_ELO, CAP_LOSER_GAIN_ELO
 from jupr_app.ui.layout import page_shell

@@ -9,7 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.schedule import get_match_schedule
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.idempotency import build_match_idempotency_key_v1
+from jupr_app.domain.match_pipeline import ingest_and_process_match
 from jupr_app.data.load import load_data
 from jupr_app.ui.layout import page_shell
 
@@ -389,7 +390,7 @@ def render(ctx):
         st.session_state["mb_saved"] = False
         st.session_state["mb_event_id"] = str(uuid4())
         st.session_state["mb_event_signature"] = current_sig
-        st.rerun()
+        st.session_state["force_data_refresh"] = True
 
     if "mb_schedule_df" not in st.session_state:
         return
@@ -498,33 +499,41 @@ def render(ctx):
             if scored_valid.empty:
                 st.warning("No valid scored matches to save.")
             else:
-                payload = []
-                for _, row in scored_valid.iterrows():
-                    payload.append(
-                        {
-                            "t1_p1": int(row["t1_p1"]),
-                            "t1_p2": int(row["t1_p2"]),
-                            "t2_p1": int(row["t2_p1"]),
-                            "t2_p2": int(row["t2_p2"]),
-                            "s1": int(row["S1"]),
-                            "s2": int(row["S2"]),
-                            "date": datetime.now(),
-                            "league": str(st.session_state["mb_league_name_to_store"]),
-                            "match_type": str(st.session_state["mb_match_type"]),
-                            "week_tag": str(st.session_state["mb_week_tag"]),
-                            "is_popup": False,
-                        }
+                for idx, row in enumerate(scored_valid.itertuples(index=False), start=1):
+                    match_date = datetime.now().isoformat()
+                    payload = {
+                        "t1_p1": int(row.t1_p1),
+                        "t1_p2": int(row.t1_p2),
+                        "t2_p1": int(row.t2_p1),
+                        "t2_p2": int(row.t2_p2),
+                        "score_t1": int(row.S1),
+                        "score_t2": int(row.S2),
+                        "date": match_date,
+                        "league": str(st.session_state["mb_league_name_to_store"]),
+                        "match_type": str(st.session_state["mb_match_type"]),
+                        "week_tag": str(st.session_state["mb_week_tag"]),
+                        "context_type": "moneyball",
+                        "idempotency_key": build_match_idempotency_key_v1(
+                            {
+                                "club_id": str(club_id),
+                                "date": match_date,
+                                "context_type": "moneyball",
+                                "context_id": str(st.session_state.get("mb_event_id") or ""),
+                                "competition_id": str(st.session_state.get("mb_event_id") or ""),
+                                "match_type": str(st.session_state["mb_match_type"]),
+                                "t1_p1": int(row.t1_p1),
+                                "t1_p2": int(row.t1_p2),
+                                "t2_p1": int(row.t2_p1),
+                                "t2_p2": int(row.t2_p2),
+                                "score_t1": int(row.S1),
+                                "score_t2": int(row.S2),
+                            }
+                        ),
+                    }
+                    ingest_and_process_match(
+                        payload=payload,
+                        ctx={"supabase": supabase, "club_id": club_id},
                     )
-
-                process_matches(
-                    payload,
-                    supabase=supabase,
-                    club_id=club_id,
-                    name_to_id=name_to_id,
-                    df_players_all=df_players_all,
-                    df_leagues=df_leagues,
-                    df_meta=df_meta,
-                )
                 st.session_state["mb_saved"] = True
                 st.session_state["mb_event_id"] = st.session_state.get("mb_event_id") or str(uuid4())
                 load_data(supabase, club_id, match_limit=5000)

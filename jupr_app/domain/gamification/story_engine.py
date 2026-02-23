@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pandas as pd
 
+from jupr_app.data.sb_write import sb_upsert
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant, render_template
 
@@ -25,10 +26,12 @@ def ensure_player_stories(ctx, facts: pd.DataFrame, awards) -> None:
         rows = compute_story_cards(ctx, facts, awards)
         if not rows:
             return
-        supabase.table("player_stories").upsert(
+        sb_upsert(
+            supabase,
+            "player_stories",
             rows,
-            on_conflict="club_id,player_id,story_type,context_id",
-        ).execute()
+            conflict="club_id,player_id,story_type,context_id",
+        )
         _trim_story_feed(supabase, club_id, {row["player_id"] for row in rows})
     except Exception:
         logger.exception("ensure_player_stories failed")

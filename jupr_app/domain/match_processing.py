@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from jupr_app.data.sb_write import sb_update, sb_upsert
+
+import uuid
+from datetime import datetime
 from typing import Any, Callable
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
@@ -14,10 +17,32 @@ from jupr_app.domain.player_activity import (
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 
 
+class NonCanonicalMatchWrite(RuntimeError):
+    """Raised when `process_matches` receives non-persisted match payloads."""
+
+
+class UnknownPlayerId(RuntimeError):
+    """Raised when a persisted match references a player id not present in players."""
+
+    def __init__(self, match_id: int | None, player_id: int):
+        self.match_id = match_id
+        self.player_id = int(player_id)
+        super().__init__(f"Unknown player id {self.player_id} for match_id={self.match_id}")
+
+
+class MissingMatchDatetime(ValueError):
+    """Raised when match processing receives rows without deterministic datetimes."""
+
+    def __init__(self, match_id: int | None):
+        self.match_id = match_id
+        super().__init__(f"Missing match datetime for match_id={self.match_id}")
+
+
 def process_matches(
     match_list: list[dict[str, Any]],
     *,
-    supabase,
+    supabase_admin=None,
+    supabase=None,
     club_id: str,
     name_to_id: dict[str, int],
     df_players_all,
@@ -31,12 +56,18 @@ def process_matches(
     """
     - Applies overall rating updates to players table
     - Applies league rating updates to league_ratings table (skips PopUp)
-    - Inserts match rows with snapshot start/end ratings for each player in that match
+    - Recomputes projections for persisted match rows with snapshot start/end ratings
 
     match_list rows may contain player ids (int) or names (str). Supported score keys:
       - s1/s2 (preferred; used by live ladder + uploader)
       - score_t1/score_t2 (legacy)
     """
+
+    if supabase_admin is None:
+        supabase_admin = supabase
+
+    if not hasattr(supabase_admin, "postgrest"):
+        raise RuntimeError("process_matches requires service_role Supabase client")
 
     # Default retry wrapper: just run the callable
     if sb_retry is None:
@@ -48,11 +79,47 @@ def process_matches(
     island_updates: dict[tuple[int, str], dict[str, Any]] = {}  # (pid, league) -> {"r","start","w","l","mp"}
     last_game_updates: dict[int, datetime] = {}
     affected_players: set[int] = set()
-    match_payloads: list[dict[str, Any]] = []
+    known_player_ids = {int(pid) for pid in df_players_all.get("id", []) if str(pid).strip() != ""}
 
     skipped_incomplete = 0
     skipped_empty = 0
     has_non_popup_match = False
+    allowed_context_types = {"league", "ladder", "tournament", "round_robin", "moneyball", "admin"}
+
+    def resolve_context_type(match_row: dict[str, Any], league_name: str) -> str:
+        raw_context_type = str(match_row.get("context_type", "") or "").strip().lower()
+        if raw_context_type in allowed_context_types:
+            return raw_context_type
+        if match_row.get("tournament_id") or match_row.get("tournament_game_id"):
+            return "tournament"
+        if league_name:
+            return "league"
+        return "admin"
+
+    def parse_uuid(value: Any) -> str | None:
+        if value is None:
+            return None
+
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+
+        try:
+            return str(uuid.UUID(normalized))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    def resolve_context_id(match_row: dict[str, Any], context_type: str, league_name: str) -> str | None:
+        raw_context_id = match_row.get("context_id")
+        parsed_context_id = parse_uuid(raw_context_id)
+        if parsed_context_id:
+            return parsed_context_id
+        if context_type == "tournament":
+            tournament_id = match_row.get("tournament_id")
+            parsed_tournament_id = parse_uuid(tournament_id)
+            if parsed_tournament_id:
+                return parsed_tournament_id
+        return None
 
     def get_k(league_name: str) -> int:
         if df_meta is None or getattr(df_meta, "empty", True):
@@ -165,6 +232,11 @@ def process_matches(
     # Main match loop
     # -------------------------
     for m in match_list:
+        if int(m.get("id") or 0) <= 0:
+            raise NonCanonicalMatchWrite(
+                "process_matches requires persisted matches with numeric IDs; canonical writes must go through record_match/submit_match first"
+            )
+
         p1 = as_pid(m.get("t1_p1"))
         p2 = as_pid(m.get("t1_p2"))
         p3 = as_pid(m.get("t2_p1"))
@@ -175,6 +247,10 @@ def process_matches(
             continue
 
         p1, p2, p3, p4 = int(p1), int(p2), int(p3), int(p4)
+        match_id = int(m.get("id") or 0)
+        for pid in (p1, p2, p3, p4):
+            if int(pid) not in known_player_ids:
+                raise UnknownPlayerId(match_id=match_id, player_id=int(pid))
 
         s1 = int(m.get("s1", m.get("score_t1", 0) or 0) or 0)
         s2 = int(m.get("s2", m.get("score_t2", 0) or 0) or 0)
@@ -192,7 +268,7 @@ def process_matches(
         dt_val = m.get("date", None)
         match_dt = coerce_utc_datetime(dt_val)
         if match_dt is None:
-            match_dt = datetime.now(timezone.utc)
+            raise MissingMatchDatetime(match_id=match_id)
         dt_val = match_dt.isoformat()
 
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
@@ -246,6 +322,7 @@ def process_matches(
 
         db_matches.append(
             {
+                "id": int(m.get("id") or 0),
                 "club_id": club_id,
                 "date": dt_val,
                 "league": league_name,
@@ -272,25 +349,33 @@ def process_matches(
                 "tournament_game_id": m.get("tournament_game_id"),
             }
         )
-        match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})
 
-    # -------------------------
-    # Write match rows
-    # -------------------------
+    queued_badge_events: list[dict[str, Any]] = []
     if db_matches:
         CHUNK_M = 300
         for i in range(0, len(db_matches), CHUNK_M):
             chunk = db_matches[i : i + CHUNK_M]
-            sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
-
-        if supabase is not None and has_non_popup_match:
-            enqueue_badge_eval(
-                supabase,
-                club_id=str(club_id),
-                event_type="match_recorded",
-                player_ids=sorted(affected_players),
-                payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
-            )
+            for match_row in chunk:
+                context_type = resolve_context_type(match_row, str(match_row.get("league") or "").strip())
+                context_id = resolve_context_id(match_row, context_type, str(match_row.get("league") or "").strip())
+                queued_badge_events.append({
+                    "context_id": str(context_id or "overall"),
+                    "match_id": str(match_row.get("id")),
+                    "player_ids": [int(match_row["t1_p1"]), int(match_row["t1_p2"]), int(match_row["t2_p1"]), int(match_row["t2_p2"])],
+                    "payload": {
+                        "match_id": str(match_row.get("id")),
+                        "score_t1": int(match_row["score_t1"]),
+                        "score_t2": int(match_row["score_t2"]),
+                        "t1_p1": int(match_row["t1_p1"]),
+                        "t1_p2": int(match_row["t1_p2"]),
+                        "t2_p1": int(match_row["t2_p1"]),
+                        "t2_p2": int(match_row["t2_p2"]),
+                        "t1_p1_r": float(match_row["t1_p1_r"]),
+                        "t1_p2_r": float(match_row["t1_p2_r"]),
+                        "t2_p1_r": float(match_row["t2_p1_r"]),
+                        "t2_p2_r": float(match_row["t2_p2_r"]),
+                    },
+                })
 
     # -------------------------
     # Update overall player rows
@@ -305,10 +390,15 @@ def process_matches(
         }
         if activity_update:
             payload.update(activity_update)
-        res = supabase.table("players").update(payload).eq("club_id", club_id).eq("id", pid).execute()
+        res = sb_update(
+            supabase_admin,
+            "players",
+            payload,
+            filters={"club_id": club_id, "id": pid},
+            derived_from_match_history=True,
+        )
         if not res.data:
-            payload_ins = {"club_id": club_id, "id": pid, **payload}
-            supabase.table("players").insert(payload_ins).execute()
+            raise UnknownPlayerId(match_id=None, player_id=pid)
 
     for pid, stats in overall_updates.items():
         row = {
@@ -327,7 +417,7 @@ def process_matches(
         sb_retry(lambda row=row, activity_update=activity_update: update_player_row(row, activity_update))
 
     # -------------------------
-    # Update league ratings
+    # Update league ratings (atomic upsert)
     # -------------------------
     if island_updates:
         for (pid, league_name), stats in island_updates.items():
@@ -339,39 +429,33 @@ def process_matches(
                 "wins": int(stats["w"]),
                 "losses": int(stats["l"]),
                 "matches_played": int(stats["mp"]),
+                "starting_rating": float(stats.get("start", 1200.0)),
+                "is_active": True,
+                "inactive_at": None,
             }
 
-            existing = sb_retry(lambda pid=pid, league_name=league_name: (
-                supabase.table("league_ratings")
-                .select("id,wins,losses,matches_played,starting_rating")
-                .eq("club_id", club_id)
-                .eq("player_id", int(pid))
-                .eq("league_name", str(league_name))
-                .limit(1)
-                .execute()
+            sb_retry(lambda payload=payload: sb_upsert(
+                supabase_admin,
+                "league_ratings",
+                payload,
+                conflict="club_id,player_id,league_name",
+                derived_from_match_history=True,
             ))
 
-            if existing.data:
-                cur = existing.data[0]
-                payload["wins"] += int(cur.get("wins", 0) or 0)
-                payload["losses"] += int(cur.get("losses", 0) or 0)
-                payload["matches_played"] += int(cur.get("matches_played", 0) or 0)
-                payload["is_active"] = True
-                payload["inactive_at"] = None
-
-                if cur.get("starting_rating") is not None:
-                    payload["starting_rating"] = float(cur["starting_rating"])
-                else:
-                    payload["starting_rating"] = float(stats.get("start", 1200.0))
-
-                sb_retry(lambda payload=payload, rid=int(cur["id"]): (
-                    supabase.table("league_ratings").update(payload).eq("id", rid).execute()
-                ))
-            else:
-                payload["starting_rating"] = float(stats.get("start", 1200.0))
-                payload["is_active"] = True
-                payload["inactive_at"] = None
-                sb_retry(lambda payload=payload: supabase.table("league_ratings").insert(payload).execute())
+    # -------------------------
+    # Enqueue per-match badge jobs (facts are updated in badge_worker)
+    # -------------------------
+    if supabase_admin is not None and queued_badge_events and has_non_popup_match:
+        for event in queued_badge_events:
+            enqueue_badge_eval(
+                supabase_admin,
+                club_id=str(club_id),
+                event_type="match_recorded",
+                player_ids=event["player_ids"],
+                context_id=event["context_id"],
+                match_id=event["match_id"],
+                payload=event["payload"],
+            )
 
     return {
         "inserted": len(db_matches),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from jupr_app.data.sb_write import sb_upsert
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 
 
@@ -34,16 +35,25 @@ def fetch_tournament_podium(supabase: Any, tournament_id: str) -> list[dict[str,
 
 def upsert_tournament_podium(
     supabase: Any,
+    club_id: str,
     tournament_id: str,
     payload: list[dict[str, Any]],
 ) -> None:
     if supabase is None or not tournament_id or not payload:
         return
+    assert club_id, "club_id must be present for tournament writes"
+    for row in payload:
+        if "club_id" not in row:
+            # Explicit club_id for tenant isolation (RLS + multi-club safety)
+            row["club_id"] = str(club_id)
+
     try:
-        supabase.table("tournament_podium").upsert(
+        sb_upsert(
+            supabase,
+            "tournament_podium",
             payload,
-            on_conflict="tournament_id,placement",
-        ).execute()
+            conflict="club_id,tournament_id,placement",
+        )
     except Exception:
         logger.exception("Failed to upsert tournament podium", extra={"tournament_id": tournament_id})
 
