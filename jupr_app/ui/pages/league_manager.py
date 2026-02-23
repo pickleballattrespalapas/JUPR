@@ -212,6 +212,17 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(["court", "slot"]).reset_index(drop=True)
 
 
+def _effective_next_roster(base_roster_df: pd.DataFrame, override_roster_df: object | None) -> pd.DataFrame:
+    if override_roster_df is None:
+        return base_roster_df
+    if hasattr(override_roster_df, "empty"):
+        return override_roster_df if not override_roster_df.empty else base_roster_df
+    try:
+        return override_roster_df if len(override_roster_df) > 0 else base_roster_df
+    except Exception:
+        return override_roster_df
+
+
 def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> None:
     _ = max_per_row
     roster_now = compress_courts(normalize_slots(roster_df.copy()))
@@ -1042,6 +1053,10 @@ def render(ctx):
             base_next_roster = base_next_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
             base_next_roster["slot"] = base_next_roster.groupby("court").cumcount() + 1
             base_next_roster = base_next_roster[["player_id", "name", "rating", "court", "slot"]].copy()
+            working_next_roster = _effective_next_roster(
+                base_roster_df=base_next_roster,
+                override_roster_df=st.session_state.get("ladder_next_roster_override"),
+            )
 
             if st.session_state.get("ladder_next_roster_override") is not None:
                 st.info("Roster changes queued for the next round.")
@@ -1120,14 +1135,14 @@ def render(ctx):
 
                     with tabs_rc[0]:
                         st.markdown("Replace player (active roster):")
-                        active_names = movement_df["name"].astype(str).tolist()
+                        active_names = working_next_roster["name"].astype(str).tolist()
                         active_map = {
                             str(r["name"]): {
                                 "id": int(r["player_id"]),
                                 "name": str(r["name"]),
                                 "rating": float(r.get("rating", 1200.0)),
                             }
-                            for _, r in movement_df.iterrows()
+                            for _, r in working_next_roster.iterrows()
                         }
                         replaced_name = st.selectbox("Replace player", active_names, key="ladder_sub_out")
                         replace_info = active_map.get(replaced_name, {})
@@ -1184,7 +1199,7 @@ def render(ctx):
                                     name_to_id[str(player_row["name"])] = int(player_row["id"])
 
                                 result = apply_roster_change(
-                                    roster_df=base_next_roster,
+                                    roster_df=working_next_roster,
                                     change_type="substitute",
                                     replaced_player_id=int(replace_info.get("id")),
                                     new_player=sub_player,
@@ -1259,7 +1274,7 @@ def render(ctx):
                                     name_to_id[str(player_row["name"])] = int(player_row["id"])
 
                                 result = apply_roster_change(
-                                    roster_df=base_next_roster,
+                                    roster_df=working_next_roster,
                                     change_type="add",
                                     new_player=add_player,
                                     court_sizes=st.session_state.get("ladder_court_sizes"),
@@ -1297,17 +1312,10 @@ def render(ctx):
                     _rerun()
                     return
 
-                override = st.session_state.get("ladder_next_roster_override")
-                if override is None:
-                    new_roster = base_next_roster
-                else:
-                    if hasattr(override, "empty"):
-                        new_roster = override if not override.empty else base_next_roster
-                    else:
-                        try:
-                            new_roster = override if len(override) > 0 else base_next_roster
-                        except Exception:
-                            new_roster = override
+                new_roster = _effective_next_roster(
+                    base_roster_df=base_next_roster,
+                    override_roster_df=st.session_state.get("ladder_next_roster_override"),
+                )
                 new_court_sizes = st.session_state.get("ladder_next_court_sizes") or [
                     int(x) for x in new_roster["court"].value_counts().sort_index().tolist()
                 ]
