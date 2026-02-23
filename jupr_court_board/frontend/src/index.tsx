@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { Streamlit, withStreamlitConnection, ComponentProps } from "streamlit-component-lib";
 import CourtBoard, { Court } from "./CourtBoard";
-import "./styles.css";
+import styles from "./styles.css?inline";
 
 type Props = ComponentProps & {
   args: {
@@ -18,6 +18,14 @@ function App({ args }: Props) {
   };
 
   useEffect(() => {
+    const styleId = "jupr-court-board-inline-styles";
+    if (!document.getElementById(styleId)) {
+      const tag = document.createElement("style");
+      tag.id = styleId;
+      tag.textContent = styles;
+      document.head.appendChild(tag);
+    }
+
     Streamlit.setFrameHeight(720);
   }, []);
 
