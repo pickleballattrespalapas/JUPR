@@ -22,7 +22,6 @@ DROP_TABLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# FIX: allow optional ONLY
 ALTER_TABLE_RE = re.compile(
     r"\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?P<table>(?:[\w\"]+\.)?[\w\"]+)",
     re.IGNORECASE,
