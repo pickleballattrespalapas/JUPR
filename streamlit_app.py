@@ -84,7 +84,7 @@ def render_admin_sidebar_nav(*, current_label: str, admin_logged_in: bool) -> st
         ("Results", ["🧾 Record Match", "📊 League Results", "🎯 Match Explorer", "📝 Match Log", "🗞️ Weekly Recap", "🗞️ Weekly Recap Admin"]),
         ("Players", ["🔍 Player Search", "👥 Player Editor", "🖨️ League Night Printout"]),
         ("Recognition", ["🏆 Leaderboards", "📼 Badge Codex", "🧪 Badge Debug"]),
-        ("Administration", ["🏟️ League Manager", "🛠️ Challenge Ladder Admin", "⚙️ Admin Tools", "📘 Admin Guide", "🎨 Theme QA", "❓ FAQs"]),
+        ("Administration", ["🏟️ League Manager", "🗂️ Session Console", "🛠️ Challenge Ladder Admin", "⚙️ Admin Tools", "📘 Admin Guide", "🎨 Theme QA", "❓ FAQs"]),
     ]
 
     for section_name, labels in taxonomy:
@@ -512,6 +512,7 @@ def main():
             weekly_recap_admin,
             admin_dashboard,
             record_match,
+            session_console,
         )
 
         PAGES = {
@@ -541,6 +542,7 @@ def main():
             "🏆 Tournament Bracket": tournament_public,
             "🗞️ Weekly Recap": weekly_recap,
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
+            "🗂️ Session Console": session_console,
         }
 
         PAGE_KEY_TO_LABEL = {
@@ -573,6 +575,7 @@ def main():
             "tournament_public": "🏆 Tournament Bracket",
             "weekly_recap": "🗞️ Weekly Recap",
             "weekly_recap_admin": "🗞️ Weekly Recap Admin",
+            "session_console": "🗂️ Session Console",
         }
         LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
 
@@ -594,6 +597,7 @@ def main():
             "🏆 Division Manager",
             "🧪 Badge Debug",
             "🗞️ Weekly Recap Admin",
+            "🗂️ Session Console",
         }
 
         all_labels = list(PAGES.keys())
@@ -621,6 +625,8 @@ def main():
         
             tournament_match = re.fullmatch(r"tournament/([^/]+)", deep_route)
             route_match = re.fullmatch(r"tournament/([^/]+)/division/([^/]+)", deep_route)
+            session_match = re.fullmatch(r"sessions/([^/]+)", deep_route)
+            session_court_match = re.fullmatch(r"sessions/([^/]+)/rounds/(\d+)/courts/([^/]+)", deep_route)
         
             if tournament_match:
                 if PUBLIC_MODE:
@@ -632,6 +638,9 @@ def main():
                     st.query_params["tournament_id"] = route_match.group(1)
                     st.query_params["division_id"] = route_match.group(2)
                 deep_label = "🏆 Tournament Bracket" if PUBLIC_MODE else "🏆 Division Manager"
+
+            if session_match or session_court_match:
+                deep_label = "🗂️ Session Console"
         
             if PUBLIC_MODE and deep_label in ADMIN_ONLY_LABELS:
                 deep_label = ""

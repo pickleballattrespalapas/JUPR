@@ -27,6 +27,7 @@ from . import division_manager
 from . import tournament_public
 from . import command_center
 from . import record_match
+from . import session_console
 
 __all__ = [
     "leaderboards",
@@ -54,4 +55,5 @@ __all__ = [
     "tournament_public",
     "command_center",
     "record_match",
+    "session_console",
 ]

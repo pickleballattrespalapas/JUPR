@@ -14,7 +14,9 @@ import streamlit as st
 from jupr_court_board import court_board
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.config import FEATURE_SESSION_LADDER, SESSION_LADDER_MIN_AWARD_SESSIONS
 from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
+from jupr_app.domain.session_ladder_engine import computeCourtStandings, resolveTies
 from jupr_app.domain.league_night_roster import (
     RosterChangeError,
     apply_roster_change,
@@ -318,6 +320,105 @@ def render(ctx):
     df_meta = ctx.df_meta
     print("DEBUG: admin_logged_in:", bool(getattr(ctx, "admin_logged_in", False)))
     print("DEBUG: public_mode:", bool(getattr(ctx, "public_mode", False)))
+
+    if FEATURE_SESSION_LADDER:
+        st.subheader("Session Ladder Dashboard")
+        sessions = (
+            ctx.supabase.table("session_ladder_sessions")
+            .select("*")
+            .eq("club_id", str(ctx.club_id))
+            .execute()
+            .data
+            or []
+        )
+        if sessions:
+            latest = sorted(sessions, key=lambda r: str(r.get("session_starts_at") or ""), reverse=True)[0]
+            state = str(latest.get("state") or "DRAFT")
+            sid = str(latest.get("id") or "")
+            roster = (
+                ctx.supabase.table("session_ladder_roster_entries")
+                .select("*")
+                .eq("session_id", sid)
+                .execute()
+                .data
+                or []
+            )
+            ratings = latest.get("leaderboard_json") or []
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Players", len(roster))
+            c2.metric("Session state", state)
+            c3.metric("Ratings shown", len(ratings))
+            standings_rows = 0
+            pods = (
+                ctx.supabase.table("session_ladder_court_pods")
+                .select("*")
+                .eq("session_id", sid)
+                .execute()
+                .data
+                or []
+            )
+            if pods:
+                final_round = max(int(p.get("round_number") or 0) for p in pods)
+                by_player: dict[int, dict] = {}
+                final_round_pods = [p for p in pods if int(p.get("round_number") or 0) == final_round]
+                for pod in final_round_pods:
+                    players = (
+                        ctx.supabase.table("session_ladder_court_pod_players")
+                        .select("*")
+                        .eq("court_pod_id", str(pod.get("id") or ""))
+                        .execute()
+                        .data
+                        or []
+                    )
+                    games = (
+                        ctx.supabase.table("session_ladder_games")
+                        .select("*")
+                        .eq("court_pod_id", str(pod.get("id") or ""))
+                        .execute()
+                        .data
+                        or []
+                    )
+                    player_ids = [int(r.get("player_id") or 0) for r in sorted(players, key=lambda x: int(x.get("player_order") or 0))]
+                    norm_games = [
+                        {
+                            "teamA": list(g.get("team_a_player_ids") or []),
+                            "teamB": list(g.get("team_b_player_ids") or []),
+                            "scoreA": g.get("score_a"),
+                            "scoreB": g.get("score_b"),
+                        }
+                        for g in games
+                        if g.get("score_a") is not None and g.get("score_b") is not None
+                    ]
+                    standings = resolveTies(computeCourtStandings(norm_games, player_ids), norm_games)
+                    for row in standings:
+                        pid = int(row.get("player_id") or 0)
+                        cur = by_player.setdefault(pid, {"player_id": pid, "wins": 0, "losses": 0, "pf": 0, "pa": 0, "pd": 0})
+                        cur["wins"] += int(row.get("wins") or 0)
+                        cur["losses"] += int(row.get("losses") or 0)
+                        cur["pf"] += int(row.get("pf") or 0)
+                        cur["pa"] += int(row.get("pa") or 0)
+                        cur["pd"] += int(row.get("pd") or 0)
+                standings_rows = len(by_player)
+                if by_player:
+                    standings_df = pd.DataFrame(list(by_player.values())).sort_values(["wins", "pd", "pf"], ascending=[False, False, False])
+                    st.dataframe(standings_df.head(20), use_container_width=True, hide_index=True)
+            c4.metric("Standings rows", standings_rows)
+            eligible = 0
+            progress = (
+                ctx.supabase.table("session_ladder_awards_attendance")
+                .select("*")
+                .eq("club_id", str(ctx.club_id))
+                .execute()
+                .data
+                or []
+            )
+            eligible = len([r for r in progress if int(r.get("sessions_attended") or 0) >= int(SESSION_LADDER_MIN_AWARD_SESSIONS)])
+            c5.metric(f"Awards eligible (≥{SESSION_LADDER_MIN_AWARD_SESSIONS})", eligible)
+            st.caption(f"Latest session: {sid}")
+            if ratings:
+                st.dataframe(ratings, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No Session Ladder sessions yet.")
     print("DEBUG: df_leagues shape:", df_leagues.shape if isinstance(df_leagues, pd.DataFrame) else None)
     print("DEBUG: df_leagues columns:", list(df_leagues.columns) if isinstance(df_leagues, pd.DataFrame) else None)
     id_to_name = ctx.id_to_name
