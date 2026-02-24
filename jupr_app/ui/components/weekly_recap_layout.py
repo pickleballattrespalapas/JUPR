@@ -193,5 +193,24 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
 
 def _render_event_block(name: str, highlights: list[dict]) -> str:
     safe = [h for h in (highlights or []) if isinstance(h, dict)]
-    items = "".join(f"<li>{h.get('display','')}</li>" for h in safe if str(h.get("display","")).strip() != "")
+    items = ""
+    for highlight in safe:
+        category_players = [p for p in (highlight.get("players", []) or []) if isinstance(p, dict)]
+        label = str(highlight.get("label", "")).strip()
+        if category_players:
+            player_items = "".join(
+                f"<li>{player.get('display','')}</li>"
+                for player in category_players
+                if str(player.get("display", "")).strip() != ""
+            )
+            if player_items:
+                heading = f"<strong>{label}</strong>: " if label else ""
+                items += f"<li>{heading}<ul class='compact'>{player_items}</ul></li>"
+            continue
+
+        # Backward compatibility for older recap payloads.
+        display = str(highlight.get("display", "")).strip()
+        if display:
+            items += f"<li>{display}</li>"
+
     return f"<div class='event-block'><div class='event-name'>{name}</div><ul class='compact'>{items}</ul></div>"
