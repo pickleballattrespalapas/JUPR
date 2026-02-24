@@ -166,7 +166,7 @@ def _seed_and_start_round_1(sb: _Supabase, monkeypatch) -> str:
     return sid
 
 
-def test_feature_flag_blocks_all_endpoints(monkeypatch):
+def test_feature_flag_blocks_non_admin_endpoints(monkeypatch):
     sb = _Supabase()
     monkeypatch.setattr(api, "FEATURE_SESSION_LADDER", False)
     with pytest.raises(RuntimeError, match="feature.sessionLadder disabled"):
@@ -181,6 +181,23 @@ def test_feature_flag_blocks_all_endpoints(monkeypatch):
                 "players_per_court": 4,
             },
         )
+
+
+def test_feature_flag_allows_elevated_admin_preview_access(monkeypatch):
+    sb = _Supabase()
+    monkeypatch.setattr(api, "FEATURE_SESSION_LADDER", False)
+    created = api.post_create_session(
+        supabase=sb,
+        auth={**_auth("manager"), "admin_logged_in": True},
+        payload={
+            "league_key": "League One",
+            "season_id": None,
+            "session_starts_at": "2026-09-03T18:00:00Z",
+            "courts_available": 1,
+            "players_per_court": 4,
+        },
+    )
+    assert created["session"]["id"]
 
 
 def test_auth_blocks_mutation_for_non_manager_non_admin(monkeypatch):
