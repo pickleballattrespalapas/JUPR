@@ -976,13 +976,65 @@ def render(ctx):
                     int(row["player_id"]): int(row["Proposed Court"])
                     for _, row in movement_df.iterrows()
                 }
-                st.session_state.live_ladder["ordered_player_ids"] = sorted(
-                    current_order,
-                    key=lambda pid: (
-                        proposed_court_by_pid.get(int(pid), 9999),
-                        current_order.index(int(pid)),
-                    ),
-                )
+                players_per_court = st.session_state.live_ladder["players_per_court"]
+                current_order = st.session_state.live_ladder["ordered_player_ids"]
+                
+                # Build court blocks from index math
+                courts = [
+                    current_order[i:i+players_per_court]
+                    for i in range(0, len(current_order), players_per_court)
+                ]
+                
+                # Build stats lookup
+                stats_lookup = {
+                    int(row["player_id"]): (
+                        int(row["Round Wins"]),
+                        int(row["Round Diff"]),
+                        int(row["Round Pts"]),
+                    )
+                    for _, row in movement_df.iterrows()
+                }
+                
+                # Sort each court internally
+                sorted_courts = []
+                for court in courts:
+                    sorted_court = sorted(
+                        court,
+                        key=lambda pid: stats_lookup.get(pid, (0,0,0)),
+                        reverse=True
+                    )
+                    sorted_courts.append(sorted_court)
+                
+                # Apply movement
+                next_courts = [[] for _ in sorted_courts]
+                
+                for i, court in enumerate(sorted_courts):
+                    if not court:
+                        continue
+                
+                    top = court[0]
+                    bottom = court[-1]
+                    middle = court[1:-1]
+                
+                    # Promote top
+                    if i > 0:
+                        next_courts[i-1].append(top)
+                    else:
+                        next_courts[i].append(top)
+                
+                    # Keep middle
+                    next_courts[i].extend(middle)
+                
+                    # Demote bottom
+                    if i < len(sorted_courts) - 1:
+                        next_courts[i+1].insert(0, bottom)
+                    else:
+                        next_courts[i].append(bottom)
+                
+                # Flatten
+                next_ordered_ids = [pid for court in next_courts for pid in court]
+                
+                st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
 
                 st.session_state.ladder_movement_preview = movement_df
                 st.session_state.ladder_state = "CONFIRM_MOVEMENT"
