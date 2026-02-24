@@ -19,34 +19,75 @@ class SpotlightCandidate:
     band: str | None = None
 
 
-def get_week_bounds(week_start: date, tz_name: str) -> tuple[datetime, datetime]:
+def normalize_date_range(start_date: date, end_date: date) -> tuple[date, date]:
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date")
+    return start_date, end_date
+
+
+def get_date_range_bounds(start_date: date, end_date: date, tz_name: str) -> tuple[datetime, datetime]:
+    start_date, end_date = normalize_date_range(start_date, end_date)
     tz = ZoneInfo(tz_name)
-    start_local = datetime.combine(week_start, time.min).replace(tzinfo=tz)
-    end_local = start_local + timedelta(days=7) - timedelta(microseconds=1)
+    start_local = datetime.combine(start_date, time.min).replace(tzinfo=tz)
+    end_local = datetime.combine(end_date, time.max).replace(tzinfo=tz)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-def compute_weekly_recap(ctx, week_start: date, *, tz_name: str = "America/Mazatlan") -> dict:
-    recap, _ = _compute_weekly_recap_payload(ctx, week_start, tz_name=tz_name)
+def get_week_bounds(week_start: date, tz_name: str) -> tuple[datetime, datetime]:
+    week_end = week_start + timedelta(days=6)
+    return get_date_range_bounds(week_start, week_end, tz_name)
+
+
+def compute_weekly_recap(
+    ctx,
+    week_start: date | None = None,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    tz_name: str = "America/Mazatlan",
+) -> dict:
+    start_date, end_date = _resolve_range_inputs(week_start, start_date, end_date)
+    recap, _ = _compute_weekly_recap_payload(ctx, start_date, end_date, tz_name=tz_name)
     return recap
 
 
-def get_spotlight_candidates(ctx, week_start: date, *, tz_name: str = "America/Mazatlan") -> dict[str, list[dict]]:
-    _, candidates = _compute_weekly_recap_payload(ctx, week_start, tz_name=tz_name)
+def get_spotlight_candidates(
+    ctx,
+    week_start: date | None = None,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    tz_name: str = "America/Mazatlan",
+) -> dict[str, list[dict]]:
+    start_date, end_date = _resolve_range_inputs(week_start, start_date, end_date)
+    _, candidates = _compute_weekly_recap_payload(ctx, start_date, end_date, tz_name=tz_name)
     return {
         key: [candidate.__dict__ for candidate in items]
         for key, items in candidates.items()
     }
 
 
-def _compute_weekly_recap_payload(ctx, week_start: date, *, tz_name: str) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
+def _resolve_range_inputs(
+    week_start: date | None,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[date, date]:
+    if start_date is not None and end_date is not None:
+        return normalize_date_range(start_date, end_date)
+    if week_start is None:
+        raise ValueError("Either week_start or both start_date and end_date are required")
+    return normalize_date_range(week_start, week_start + timedelta(days=6))
+
+
+def _compute_weekly_recap_payload(ctx, start_date: date, end_date: date, *, tz_name: str) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
     club_id = str(ctx.club_id)
     supabase = getattr(ctx, "supabase", None)
     df_matches = getattr(ctx, "df_matches", pd.DataFrame())
     id_to_name = getattr(ctx, "id_to_name", {}) or {}
     df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
 
-    start_dt_utc, end_dt_utc = get_week_bounds(week_start, tz_name)
+    start_date, end_date = normalize_date_range(start_date, end_date)
+    start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
     df_week = _load_week_matches(df_matches, supabase, club_id, start_dt_utc, end_dt_utc)
     df_week = _filter_week_matches(df_week)
 
@@ -70,11 +111,10 @@ def _compute_weekly_recap_payload(ctx, week_start: date, *, tz_name: str) -> tup
         supabase,
     )
 
-    week_end = week_start + timedelta(days=6)
     recap = {
         "club_id": club_id,
-        "week_start": week_start.isoformat(),
-        "week_end": week_end.isoformat(),
+        "week_start": start_date.isoformat(),
+        "week_end": end_date.isoformat(),
         "numbers": numbers,
         "spotlight": [item.__dict__ for item in spotlight],
         "around_club": around_club,

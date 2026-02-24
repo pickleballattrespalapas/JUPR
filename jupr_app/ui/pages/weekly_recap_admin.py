@@ -13,9 +13,12 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.ui.url import qp_get
 
 
-def _get_default_week_start(tz_name: str) -> date:
+def _get_default_date_range(tz_name: str) -> tuple[date, date]:
     today = datetime.now(ZoneInfo(tz_name)).date()
-    return today - timedelta(days=today.weekday())
+    current_week_start = today - timedelta(days=today.weekday())
+    start_date = current_week_start - timedelta(days=7)
+    end_date = current_week_start - timedelta(days=1)
+    return start_date, end_date
 
 
 def _get_api_error_code(exc: APIError) -> str | None:
@@ -35,12 +38,13 @@ def _handle_missing_table(exc: APIError) -> bool:
     return False
 
 
-def _load_weekly_row(supabase, club_id: str, week_start: date) -> dict | None:
+def _load_weekly_row(supabase, club_id: str, start_date: date, end_date: date) -> dict | None:
     response = (
         supabase.table("weekly_recaps")
         .select("*")
         .eq("club_id", club_id)
-        .eq("week_start", week_start.isoformat())
+        .eq("week_start", start_date.isoformat())
+        .eq("week_end", end_date.isoformat())
         .execute()
     )
     if response.data:
@@ -91,10 +95,16 @@ def render(ctx):
     club_id = str(ctx.club_id)
     tz_name = "America/Mazatlan"
 
-    week_start = st.date_input("Week start (Monday)", value=_get_default_week_start(tz_name))
+    default_start, default_end = _get_default_date_range(tz_name)
+    start_date = st.date_input("Start date", value=default_start)
+    end_date = st.date_input("End date", value=default_end)
+
+    date_range_valid = bool(start_date and end_date and end_date >= start_date)
+    if end_date < start_date:
+        st.error("End date must be on or after start date.")
 
     try:
-        row = _load_weekly_row(supabase, club_id, week_start)
+        row = _load_weekly_row(supabase, club_id, start_date, end_date)
     except APIError as exc:
         if _handle_missing_table(exc):
             return
@@ -103,12 +113,12 @@ def render(ctx):
 
     st.write(f"Status: **{status}**")
 
-    if st.button("Generate Draft"):
+    if st.button("Generate Draft", disabled=not date_range_valid):
         with st.spinner("Generating weekly recap..."):
-            recap = compute_weekly_recap(ctx, week_start, tz_name=tz_name)
+            recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, tz_name=tz_name)
             payload = {
                 "club_id": club_id,
-                "week_start": week_start.isoformat(),
+                "week_start": start_date.isoformat(),
                 "week_end": recap.get("week_end"),
                 "status": "draft",
                 "generated_json": recap,
@@ -130,7 +140,7 @@ def render(ctx):
 
     generated_json = row.get("generated_json") or {}
     edits_json = row.get("edits_json") or {}
-    candidates = get_spotlight_candidates(ctx, week_start, tz_name=tz_name)
+    candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, tz_name=tz_name)
 
     st.subheader("Edit Draft")
 
@@ -180,7 +190,7 @@ def render(ctx):
         final_json = _apply_edits(generated_json, edits_json, candidates)
         payload = {
             "club_id": club_id,
-            "week_start": week_start.isoformat(),
+            "week_start": start_date.isoformat(),
             "week_end": generated_json.get("week_end"),
             "status": "draft",
             "generated_json": generated_json,
@@ -208,7 +218,7 @@ def render(ctx):
         final_json = _apply_edits(generated_json, edits_json, candidates)
         payload = {
             "club_id": club_id,
-            "week_start": week_start.isoformat(),
+            "week_start": start_date.isoformat(),
             "week_end": generated_json.get("week_end"),
             "status": "published",
             "generated_json": generated_json,
@@ -229,7 +239,7 @@ def render(ctx):
     if st.button("Unpublish"):
         payload = {
             "club_id": club_id,
-            "week_start": week_start.isoformat(),
+            "week_start": start_date.isoformat(),
             "week_end": generated_json.get("week_end"),
             "status": "draft",
             "generated_json": generated_json,
