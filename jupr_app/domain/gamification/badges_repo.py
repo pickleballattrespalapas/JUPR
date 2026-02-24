@@ -9,7 +9,7 @@ import re
 from typing import Any, Iterable
 from uuid import uuid4
 
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant, render_template
 from postgrest.exceptions import APIError
 

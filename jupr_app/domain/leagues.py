@@ -14,7 +14,7 @@ from jupr_app.domain.gamification.top_performer_awards import (
     _build_league_standings,
     _min_games_for_league,
 )
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 
 

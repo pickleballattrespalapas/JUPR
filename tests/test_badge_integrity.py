@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from jupr_app.domain.gamification.badge_integrity import dedupe_player_badges_rows
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 
 

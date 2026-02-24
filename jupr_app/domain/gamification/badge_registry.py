@@ -5,7 +5,7 @@ from typing import Callable, Iterable
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_schema import BadgeDefinitionSchema, load_badge_definitions
-from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
+from jupr_app.domain.contracts.badges import BadgeCandidate, BadgeEvaluationContext
 from jupr_app.domain.gamification.evaluators import (
     evaluate_above_expectations,
     evaluate_battle_tested,

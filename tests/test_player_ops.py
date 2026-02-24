@@ -26,6 +26,15 @@ class _Query:
         self.supabase.last_operation = "insert"
         return self
 
+    def update(self, payload):
+        self.supabase.last_payload = dict(payload)
+        self.supabase.last_operation = "update"
+        return self
+
+    def delete(self):
+        self.supabase.last_operation = "delete"
+        return self
+
     def select(self, _fields: str):
         return self
 

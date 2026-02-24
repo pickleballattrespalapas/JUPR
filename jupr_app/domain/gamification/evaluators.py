@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from jupr_app.domain.awards import compute_top_performer_awards
-from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
+from jupr_app.domain.contracts.badges import BadgeCandidate, BadgeEvaluationContext
 from jupr_app.domain.gamification.match_facts import build_player_match_facts
 from jupr_app.domain.gamification.participation import compute_lifetime_games
 from jupr_app.domain.gamification.top_performer_awards import (

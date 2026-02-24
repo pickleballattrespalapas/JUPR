@@ -8,6 +8,21 @@ class _Query:
     def upsert(self, payload, on_conflict=None, returning=None):
         self.sink["payload"] = payload
         self.sink["on_conflict"] = on_conflict
+        self.sink["op"] = "upsert"
+        return self
+
+    def insert(self, payload, returning=None):
+        self.sink["payload"] = payload
+        self.sink["op"] = "insert"
+        return self
+
+    def update(self, payload):
+        self.sink["payload"] = payload
+        self.sink["op"] = "update"
+        return self
+
+    def delete(self):
+        self.sink["op"] = "delete"
         return self
 
     def execute(self):

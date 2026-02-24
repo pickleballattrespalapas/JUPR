@@ -48,6 +48,10 @@ class _Query:
         self._payload = dict(payload)
         return self
 
+    def delete(self):
+        self._op = "delete"
+        return self
+
     def execute(self):
         rows = self.db.setdefault(self.table, [])
 
@@ -90,6 +94,11 @@ class _Query:
                     rows[i] = {**row, **(self._payload or {})}
                     upd.append(dict(rows[i]))
             return SimpleNamespace(data=upd)
+
+        if self._op == "delete":
+            deleted = [dict(r) for r in rows if match(r)]
+            self.db[self.table] = [dict(r) for r in rows if not match(r)]
+            return SimpleNamespace(data=deleted)
 
         raise RuntimeError("unsupported op")
 

@@ -605,13 +605,37 @@ def resolve_series_results(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not deciding_game:
             continue
 
-        opponent_ids = {
-            game.get("team_a_id") for game in ordered_games if game.get("team_a_id")
-        } | {
-            game.get("team_b_id") for game in ordered_games if game.get("team_b_id")
-        }
-        opponent_ids.discard(winning_team_id)
-        loser_id = next(iter(opponent_ids), None)
+        loser_id = None
+        deciding_team_a = deciding_game.get("team_a_id")
+        deciding_team_b = deciding_game.get("team_b_id")
+        if deciding_team_a and deciding_team_b:
+            if deciding_team_a == winning_team_id:
+                loser_id = deciding_team_b
+            elif deciding_team_b == winning_team_id:
+                loser_id = deciding_team_a
+
+        if loser_id is None:
+            for team_id in wins:
+                if str(team_id) != str(winning_team_id):
+                    loser_id = team_id
+                    break
+
+        if loser_id is None:
+            participants_in_order: list[Any] = []
+            seen_participants: set[str] = set()
+            for game in ordered_games:
+                for participant in (game.get("team_a_id"), game.get("team_b_id")):
+                    participant_key = str(participant or "").strip()
+                    if not participant_key or participant_key in seen_participants:
+                        continue
+                    seen_participants.add(participant_key)
+                    participants_in_order.append(participant)
+
+            winning_team_key = str(winning_team_id)
+            for participant_id in participants_in_order:
+                if str(participant_id) != winning_team_key:
+                    loser_id = participant_id
+                    break
 
         updates.append(
             {

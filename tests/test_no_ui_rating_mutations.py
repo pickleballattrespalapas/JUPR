@@ -6,6 +6,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_SUFFIXES = {
     "domain/match_processing.py",
     "domain/replay_history.py",
+    # Session ladder applies ratings from canonical session game history.
+    "domain/session_ladder_service.py",
+    # Player merge reassigns historical rating records during account consolidation.
+    "domain/player_merge.py",
 }
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist"}
 

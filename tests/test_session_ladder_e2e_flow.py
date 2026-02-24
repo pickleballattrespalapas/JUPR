@@ -41,6 +41,10 @@ class _Query:
         self._payload = dict(payload)
         return self
 
+    def delete(self):
+        self._op = "delete"
+        return self
+
     def execute(self):
         rows = self.db.setdefault(self.table, [])
 
