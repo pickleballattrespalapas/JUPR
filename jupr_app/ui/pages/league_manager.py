@@ -1016,15 +1016,6 @@ def render(ctx):
                     st.error("Unable to compute movement preview. Check round scores and try again.")
                     st.stop()
 
-                current_order = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
-                next_ordered_ids = compute_next_order_from_movement(
-                    current_order=current_order,
-                    movement_df=movement_df,
-                    players_per_court=st.session_state.live_ladder["players_per_court"],
-                )
-
-                st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
-
                 st.session_state.ladder_movement_preview = movement_df
                 st.session_state.ladder_state = "CONFIRM_MOVEMENT"
                 _rerun()
@@ -1037,6 +1028,21 @@ def render(ctx):
             st.markdown("#### Round Results & Movement")
 
             movement_df = st.session_state.get("ladder_movement_preview", pd.DataFrame())
+            if not st.session_state.get("movement_applied", False):
+                current_order = [
+                    int(pid)
+                    for pid in st.session_state.live_ladder.get("ordered_player_ids", [])
+                ]
+
+                next_ordered_ids = compute_next_order_from_movement(
+                    current_order=current_order,
+                    movement_df=movement_df,
+                    players_per_court=st.session_state.live_ladder.get("players_per_court", 4),
+                )
+
+                st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
+                st.session_state.movement_applied = True
+
             if movement_df is None or movement_df.empty:
                 st.error("No movement preview found.")
                 st.session_state.ladder_state = "PLAY_ROUND"
@@ -1224,6 +1230,7 @@ def render(ctx):
                     return
 
                 st.session_state.ladder_round_num = current_r + 1
+                st.session_state.pop("movement_applied", None)
                 st.session_state.ladder_state = "CONFIRM_START"
                 st.session_state.pop("current_schedule", None)
                 _rerun()
