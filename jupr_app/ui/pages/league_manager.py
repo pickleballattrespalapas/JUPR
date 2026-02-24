@@ -929,7 +929,8 @@ def render(ctx):
                                 result = apply_roster_change(
                                     roster_df=base_next_roster,
                                     change_type="substitute",
-                                    replaced_player_id=int(replace_info.get("id")),
+                                    pid = replace_info.get("id") or replace_info.get("player_id")
+                                    replaced_player_id = int(pid) if pid is not None else None
                                     new_player=sub_player,
                                     court_sizes=st.session_state.get("ladder_court_sizes"),
                                     roster_locked=False,
