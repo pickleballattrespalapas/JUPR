@@ -225,6 +225,13 @@ def _ordered_ids_from_roster(roster_df: pd.DataFrame) -> list[int]:
     return ordered["player_id"].astype(int).tolist()
 
 
+def _roster_by_seed_strategy(roster: list[dict], strategy: str) -> list[dict]:
+    normalized = [dict(player) for player in (roster or [])]
+    if strategy == "rating":
+        return sorted(normalized, key=lambda x: float(x.get("rating", 1200.0)), reverse=True)
+    return normalized
+
+
 def _roster_from_live_ladder(roster_df: pd.DataFrame) -> pd.DataFrame:
     ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
     players_per_court = int(st.session_state.live_ladder.get("players_per_court", 4) or 4)
@@ -280,14 +287,31 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
         for _, row in roster_now.iterrows()
     }
 
-    display_list = [f"{i + 1}. {player_lookup[pid]['name']}" for i, pid in enumerate(ordered_ids)]
+    c_apply, c_tools = st.columns([1, 2])
+    display_list = [f"{player_lookup[pid]['name']} (#{pid})" for pid in ordered_ids]
     display_to_pid = {label: ordered_ids[idx] for idx, label in enumerate(display_list)}
     new_display_order = sort_items(display_list, key="live_ladder_sort")
+    pending_id_order = ordered_ids
     if isinstance(new_display_order, list) and len(new_display_order) == len(display_list):
-        new_id_order = [display_to_pid[item] for item in new_display_order if item in display_to_pid]
-        if len(new_id_order) == len(ordered_ids):
-            st.session_state.live_ladder["ordered_player_ids"] = new_id_order
-            ordered_ids = new_id_order
+        candidate = [display_to_pid[item] for item in new_display_order if item in display_to_pid]
+        if len(candidate) == len(ordered_ids):
+            pending_id_order = candidate
+
+    with c_apply:
+        if st.button("Save ladder order", key="live_ladder_save_order"):
+            st.session_state.live_ladder["ordered_player_ids"] = pending_id_order
+            ordered_ids = pending_id_order
+            st.success("Ladder order saved.")
+    with c_tools:
+        if st.button("Sort current ladder by rating", key="live_ladder_sort_rating"):
+            ordered_ids = sorted(
+                ordered_ids,
+                key=lambda pid: float(player_lookup.get(pid, {}).get("rating", 1200.0)),
+                reverse=True,
+            )
+            st.session_state.live_ladder["ordered_player_ids"] = ordered_ids
+
+    ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", ordered_ids)]
 
     players_per_court = int(st.session_state.live_ladder.get("players_per_court", 4) or 4)
     courts = [ordered_ids[i : i + players_per_court] for i in range(0, len(ordered_ids), players_per_court)]
@@ -523,6 +547,7 @@ def render(ctx):
                 st.session_state.ladder_temp_new = new_ps
                 st.session_state.ladder_state = "REVIEW_ROSTER"
                 st.session_state.ladder_round_num = 1
+                st.session_state.setdefault("ladder_seed_strategy", "manual")
                 _rerun()
                 return
 
@@ -537,6 +562,14 @@ def render(ctx):
                 return
 
             st.markdown("#### Step 2: Confirm Roster")
+            seed_strategy = st.radio(
+                "Roster seed order",
+                options=["manual", "rating"],
+                format_func=lambda x: "Use uploaded order" if x == "manual" else "Sort by rating (high to low)",
+                index=0 if st.session_state.get("ladder_seed_strategy", "manual") == "manual" else 1,
+                key="ladder_seed_strategy",
+                horizontal=True,
+            )
 
             new_names = st.session_state.get("ladder_temp_new", [])
             # Re-check DB for "missing" names (cache/name_to_id may be stale)
@@ -699,11 +732,7 @@ def render(ctx):
                     st.session_state.ladder_temp_new = []
 
                     # Promote to real roster and advance
-                    st.session_state.ladder_roster = sorted(
-                        base_roster,
-                        key=lambda x: float(x.get("rating", 1200.0)),
-                        reverse=True,
-                    )
+                    st.session_state.ladder_roster = _roster_by_seed_strategy(base_roster, seed_strategy)
                     st.session_state.ladder_state = "CONFIG_COURTS"
 
                     # Optional: refresh global cached data so other pages see them immediately
@@ -716,10 +745,9 @@ def render(ctx):
 
             st.success("All players found.")
             if st.button("Proceed to Court Setup"):
-                st.session_state.ladder_roster = sorted(
+                st.session_state.ladder_roster = _roster_by_seed_strategy(
                     st.session_state.get("ladder_temp_roster", []),
-                    key=lambda x: float(x.get("rating", 1200.0)),
-                    reverse=True,
+                    seed_strategy,
                 )
                 st.session_state.ladder_state = "CONFIG_COURTS"
                 st.session_state.pop("current_schedule", None)
