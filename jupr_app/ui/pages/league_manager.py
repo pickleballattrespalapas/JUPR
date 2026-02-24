@@ -223,7 +223,14 @@ def _effective_next_roster(base_roster_df: pd.DataFrame, override_roster_df: obj
         return override_roster_df
 
 
-def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> None:
+def _render_court_board_grid(
+    roster_df: pd.DataFrame,
+    max_per_row: int = 4,
+    *,
+    board_phase: str = "confirm_start",
+    roster_session_key: str = "ladder_live_roster",
+    bench_session_key: str = "ladder_bench_players",
+) -> None:
     _ = max_per_row
     roster_now = compress_courts(normalize_slots(roster_df.copy()))
     if roster_now.empty:
@@ -237,9 +244,6 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
         st.error(f"Court board is unavailable because duplicate player IDs were detected: {dupes}")
         return
 
-    print("DEBUG: ladder_live_roster shape:", roster_now.shape)
-    print("DEBUG: ladder_live_roster columns:", list(roster_now.columns))
-
     courts_payload = roster_df_to_courts(roster_now, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
 
     active_player_ids = {
@@ -247,7 +251,7 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
         for pid in pd.to_numeric(roster_now.get("player_id"), errors="coerce").dropna().astype(int).tolist()
     }
     bench_ids_seen: set[str] = set()
-    for bench_row in list(st.session_state.get("ladder_bench_players", [])):
+    for bench_row in list(st.session_state.get(bench_session_key, [])):
         pid = bench_row.get("player_id")
         if pid is None:
             continue
@@ -265,7 +269,7 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
 
     round_num = int(st.session_state.get("ladder_round_num", 1))
     board_nonce = int(st.session_state.get("ladder_board_nonce", 0))
-    result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}_v{board_nonce}")
+    result = court_board(courts_payload, key=f"court_board_{board_phase}_r{round_num}_v{board_nonce}")
     if not (result and isinstance(result, dict) and "courts" in result):
         return
 
@@ -280,7 +284,7 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
             "name": str(row.get("name") or f"#{pid}"),
             "rating": float(row.get("rating", 1200.0)),
         }
-    for row in list(st.session_state.get("ladder_bench_players", [])):
+    for row in list(st.session_state.get(bench_session_key, [])):
         pid = row.get("player_id")
         if pid is None:
             continue
@@ -310,12 +314,12 @@ def _render_court_board_grid(roster_df: pd.DataFrame, max_per_row: int = 4) -> N
             )
 
     new_roster = compress_courts(normalize_slots(new_roster.copy()))
-    old_bench = list(st.session_state.get("ladder_bench_players", []))
+    old_bench = list(st.session_state.get(bench_session_key, []))
     if new_roster.equals(roster_now) and new_bench == old_bench:
         return
 
-    st.session_state.ladder_live_roster = new_roster
-    st.session_state["ladder_bench_players"] = new_bench
+    st.session_state[roster_session_key] = new_roster
+    st.session_state[bench_session_key] = new_bench
     st.session_state.pop("current_schedule", None)
     st.rerun()
 
@@ -1058,6 +1062,20 @@ def render(ctx):
                 override_roster_df=st.session_state.get("ladder_next_roster_override"),
             )
 
+            st.markdown("#### Court Board (Next Round)")
+            st.caption("Use drag-and-drop to finalize courts for the upcoming round before you start it.")
+            _render_court_board_grid(
+                working_next_roster,
+                max_per_row=4,
+                board_phase="between_rounds",
+                roster_session_key="ladder_next_roster_override",
+                bench_session_key="ladder_next_bench_players",
+            )
+            working_next_roster = _effective_next_roster(
+                base_roster_df=base_next_roster,
+                override_roster_df=st.session_state.get("ladder_next_roster_override"),
+            )
+
             if st.session_state.get("ladder_next_roster_override") is not None:
                 st.info("Roster changes queued for the next round.")
                 st.dataframe(
@@ -1324,6 +1342,7 @@ def render(ctx):
                 st.session_state.ladder_court_sizes = new_court_sizes
                 st.session_state.pop("ladder_next_roster_override", None)
                 st.session_state.pop("ladder_next_court_sizes", None)
+                st.session_state.pop("ladder_next_bench_players", None)
                 st.session_state.pop("ladder_roster_change_note", None)
                 st.session_state.pop("ladder_roster_bench_ids", None)
 
