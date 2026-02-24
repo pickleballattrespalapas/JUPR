@@ -857,7 +857,10 @@ def render(ctx):
                     with tabs_rc[0]:
                         st.markdown("Replace player (active roster):")
                         st.write("DEBUG preview_df columns:", preview_df.columns.tolist())
-                        active_names = preview_df["name"].astype(str).tolist()
+                        if "name" in preview_df.columns:
+                            active_names = preview_df["name"].astype(str).tolist()
+                        else:
+                            active_names = []
                         active_map = {
                             str(r["name"]): {
                                 "id": int(r["player_id"]),
