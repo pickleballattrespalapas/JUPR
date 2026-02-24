@@ -247,6 +247,71 @@ def _move_in_list(ids: list[int], pid: int, new_index_0: int) -> list[int]:
     return ids
 
 
+def compute_next_order_from_movement(
+    current_order: list[int], movement_df: pd.DataFrame, players_per_court: int
+) -> list[int]:
+    """
+    current_order: list[int]
+    movement_df: DataFrame from build_movement_preview
+    players_per_court: int
+    returns next_ordered_ids: list[int]
+    """
+    # Build stats lookup
+    stats_lookup = {
+        int(row["player_id"]): (
+            int(row["Round Wins"]),
+            int(row["Round Diff"]),
+            int(row["Round Pts"]),
+        )
+        for _, row in movement_df.iterrows()
+    }
+
+    # Split current order into court blocks
+    courts = [
+        current_order[i : i + players_per_court]
+        for i in range(0, len(current_order), players_per_court)
+    ]
+
+    # Sort each court internally by performance
+    sorted_courts = []
+    for court in courts:
+        sorted_court = sorted(
+            court,
+            key=lambda pid: stats_lookup.get(int(pid), (0, 0, 0)),
+            reverse=True,
+        )
+        sorted_courts.append(sorted_court)
+
+    # Apply movement
+    next_courts = [[] for _ in sorted_courts]
+
+    for i, court in enumerate(sorted_courts):
+        if not court:
+            continue
+
+        top = court[0]
+        bottom = court[-1]
+        middle = court[1:-1]
+
+        # Promote top
+        if i > 0:
+            next_courts[i - 1].append(top)
+        else:
+            next_courts[i].append(top)
+
+        # Keep middle
+        next_courts[i].extend(middle)
+
+        # Demote bottom
+        if i < len(sorted_courts) - 1:
+            next_courts[i + 1].insert(0, bottom)
+        else:
+            next_courts[i].append(bottom)
+
+    # Flatten
+    return [pid for court in next_courts for pid in court]
+
+
 def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
     roster_now = roster_df.copy()
     if roster_now.empty:
@@ -972,68 +1037,12 @@ def render(ctx):
                     st.stop()
 
                 current_order = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
-                proposed_court_by_pid = {
-                    int(row["player_id"]): int(row["Proposed Court"])
-                    for _, row in movement_df.iterrows()
-                }
-                players_per_court = st.session_state.live_ladder["players_per_court"]
-                current_order = st.session_state.live_ladder["ordered_player_ids"]
-                
-                # Build court blocks from index math
-                courts = [
-                    current_order[i:i+players_per_court]
-                    for i in range(0, len(current_order), players_per_court)
-                ]
-                
-                # Build stats lookup
-                stats_lookup = {
-                    int(row["player_id"]): (
-                        int(row["Round Wins"]),
-                        int(row["Round Diff"]),
-                        int(row["Round Pts"]),
-                    )
-                    for _, row in movement_df.iterrows()
-                }
-                
-                # Sort each court internally
-                sorted_courts = []
-                for court in courts:
-                    sorted_court = sorted(
-                        court,
-                        key=lambda pid: stats_lookup.get(pid, (0,0,0)),
-                        reverse=True
-                    )
-                    sorted_courts.append(sorted_court)
-                
-                # Apply movement
-                next_courts = [[] for _ in sorted_courts]
-                
-                for i, court in enumerate(sorted_courts):
-                    if not court:
-                        continue
-                
-                    top = court[0]
-                    bottom = court[-1]
-                    middle = court[1:-1]
-                
-                    # Promote top
-                    if i > 0:
-                        next_courts[i-1].append(top)
-                    else:
-                        next_courts[i].append(top)
-                
-                    # Keep middle
-                    next_courts[i].extend(middle)
-                
-                    # Demote bottom
-                    if i < len(sorted_courts) - 1:
-                        next_courts[i+1].insert(0, bottom)
-                    else:
-                        next_courts[i].append(bottom)
-                
-                # Flatten
-                next_ordered_ids = [pid for court in next_courts for pid in court]
-                
+                next_ordered_ids = compute_next_order_from_movement(
+                    current_order=current_order,
+                    movement_df=movement_df,
+                    players_per_court=st.session_state.live_ladder["players_per_court"],
+                )
+
                 st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
 
                 st.session_state.ladder_movement_preview = movement_df
@@ -1089,12 +1098,8 @@ def render(ctx):
             total_r = int(st.session_state.get("ladder_total_rounds", 1))
             btn_label = "Start Next Round" if current_r < total_r else "🏁 Finish League Night"
 
-            current_order = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
-            proposed_court_by_pid = {int(row["player_id"]): int(row["Proposed Court"]) for _, row in editor_df.iterrows()}
-            next_ordered_ids = sorted(current_order, key=lambda pid: (proposed_court_by_pid.get(int(pid), 9999), current_order.index(int(pid))))
             if st.button("Apply Proposed Court Overrides", key="ladder_apply_proposed_order"):
-                st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
-                _rerun()
+                st.info("Proposed Court is informational only. Use move controls below to adjust order manually.")
 
             st.markdown("#### Ladder Order (Next Round)")
             st.caption("Finalize the next round with move controls in the global list.")
