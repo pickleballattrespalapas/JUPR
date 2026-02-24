@@ -251,41 +251,22 @@ def compute_next_order_from_movement(
     current_order: list[int], movement_df: pd.DataFrame, players_per_court: int
 ) -> list[int]:
     """
-    current_order: list[int]
-    movement_df: DataFrame from build_movement_preview
-    players_per_court: int
-    returns next_ordered_ids: list[int]
+    Uses the existing sorted order in movement_df (already sorted by
+    court + performance metrics).
     """
-    # Build stats lookup
-    stats_lookup = {
-        int(row["player_id"]): (
-            int(row["Round Wins"]),
-            int(row["Round Diff"]),
-            int(row["Round Pts"]),
-        )
-        for _, row in movement_df.iterrows()
-    }
+    _ = (current_order, players_per_court)
 
-    # Split current order into court blocks
-    courts = [
-        current_order[i : i + players_per_court]
-        for i in range(0, len(current_order), players_per_court)
-    ]
+    # Group players by current court using movement_df order
+    courts = []
+    for c_num in sorted(movement_df["court"].astype(int).unique()):
+        court_players = movement_df[movement_df["court"].astype(int) == int(c_num)][
+            "player_id"
+        ].astype(int).tolist()
+        courts.append(court_players)
 
-    # Sort each court internally by performance
-    sorted_courts = []
-    for court in courts:
-        sorted_court = sorted(
-            court,
-            key=lambda pid: stats_lookup.get(int(pid), (0, 0, 0)),
-            reverse=True,
-        )
-        sorted_courts.append(sorted_court)
+    next_courts = [[] for _ in courts]
 
-    # Apply movement
-    next_courts = [[] for _ in sorted_courts]
-
-    for i, court in enumerate(sorted_courts):
+    for i, court in enumerate(courts):
         if not court:
             continue
 
@@ -299,16 +280,15 @@ def compute_next_order_from_movement(
         else:
             next_courts[i].append(top)
 
-        # Keep middle
+        # Keep middle in same order
         next_courts[i].extend(middle)
 
         # Demote bottom
-        if i < len(sorted_courts) - 1:
+        if i < len(courts) - 1:
             next_courts[i + 1].insert(0, bottom)
         else:
             next_courts[i].append(bottom)
 
-    # Flatten
     return [pid for court in next_courts for pid in court]
 
 
