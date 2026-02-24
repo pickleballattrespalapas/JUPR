@@ -5,6 +5,7 @@ from jupr_app.data.sb_write import sb_insert, sb_update
 
 import json
 import logging
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 from jupr_app.domain.player_ops import get_or_create_player
 from jupr_app.domain.ratings import jupr_to_elo
@@ -14,7 +15,12 @@ import streamlit as st
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.config import FEATURE_SESSION_LADDER, SESSION_LADDER_MIN_AWARD_SESSIONS
-from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
+from jupr_app.domain.live_ladder import (
+    build_movement_preview,
+    compute_next_order_from_movement,
+    compute_round_stats,
+    validate_courts,
+)
 from jupr_app.domain.session_ladder_engine import computeCourtStandings, resolveTies
 from jupr_app.domain.league_night_roster import RosterChangeError, roster_change_availability, suggest_court_sizes
 from jupr_app.domain.leagues import (
@@ -28,13 +34,55 @@ from jupr_app.ui.layout import page_shell
 
 
 logger = logging.getLogger(__name__)
+_LEAGUE_MANAGER_NAV_LABEL = "🏟️ League Manager"
 
 
-def _rerun() -> None:
+def _lm_rerun() -> None:
     if hasattr(st, "rerun"):
         st.rerun()
     else:
         st.experimental_rerun()
+
+
+def _lm_clear_schedule_cache() -> None:
+    for key in ("current_schedule", "current_schedule_round", "current_schedule_sig"):
+        st.session_state.pop(key, None)
+
+
+def _lm_clear_round_cache() -> None:
+    for key in ("ladder_movement_preview", "movement_applied", "movement_applied_round"):
+        st.session_state.pop(key, None)
+
+
+def _lm_schedule_sig(round_num: int, ordered_player_ids: list[int], roster_ids: list[int], court_sizes: list[int]) -> str:
+    payload = {
+        "round": int(round_num),
+        "order": [int(pid) for pid in (ordered_player_ids or [])],
+        "roster": [int(pid) for pid in (roster_ids or [])],
+        "court_sizes": [int(size) for size in (court_sizes or [])],
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _lm_pin_nav_target() -> None:
+    st.session_state["_nav_target"] = _LEAGUE_MANAGER_NAV_LABEL
+    st.session_state.pop("_nav_pending", None)
+
+
+def _lm_transition(state: str, clear_schedule: bool = False, clear_round: bool = False, **updates) -> None:
+    st.session_state["ladder_state"] = state
+    for k, v in updates.items():
+        st.session_state[k] = v
+    if clear_schedule:
+        _lm_clear_schedule_cache()
+    if clear_round:
+        _lm_clear_round_cache()
+    _lm_pin_nav_target()
+    _lm_rerun()
+
+
+def _rerun() -> None:
+    _lm_rerun()
 
 
 def _utc_iso_now() -> str:
@@ -206,6 +254,11 @@ def _roster_by_seed_strategy(roster: list[dict], strategy: str) -> list[dict]:
 
 def _roster_from_live_ladder(df_players_all: pd.DataFrame) -> pd.DataFrame:
     ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
+    court_sizes = [
+        int(size)
+        for size in st.session_state.live_ladder.get("court_sizes", [])
+        if str(size).strip() and int(size) > 0
+    ]
     players_per_court = int(st.session_state.live_ladder.get("players_per_court", 4) or 4)
     if not ordered_ids:
         return pd.DataFrame(columns=["player_id", "name", "rating", "court", "slot"])
@@ -219,20 +272,37 @@ def _roster_from_live_ladder(df_players_all: pd.DataFrame) -> pd.DataFrame:
         for _, row in all_players.iterrows()
         if pd.notna(row.get("id"))
     }
+
+    courts: list[list[int]] = []
+    if court_sizes:
+        start = 0
+        for size in court_sizes:
+            if start >= len(ordered_ids):
+                break
+            courts.append(ordered_ids[start : start + int(size)])
+            start += int(size)
+        if start < len(ordered_ids):
+            courts.append(ordered_ids[start:])
+    else:
+        ppc = max(1, players_per_court)
+        courts = [ordered_ids[i : i + ppc] for i in range(0, len(ordered_ids), ppc)]
+
     rows: list[dict] = []
-    for idx, pid in enumerate(ordered_ids):
-        player = player_lookup.get(pid)
-        if not player:
-            continue
-        rows.append(
-            {
-                "player_id": int(pid),
-                "name": str(player["name"]),
-                "rating": float(player["rating"]),
-                "court": int(idx // players_per_court) + 1,
-                "slot": int(idx % players_per_court) + 1,
-            }
-        )
+    for court_num, court in enumerate(courts, start=1):
+        for slot_num, pid in enumerate(court, start=1):
+            player = player_lookup.get(int(pid))
+            if not player:
+                continue
+            rows.append(
+                {
+                    "player_id": int(pid),
+                    "name": str(player["name"]),
+                    "rating": float(player["rating"]),
+                    "court": int(court_num),
+                    "slot": int(slot_num),
+                }
+            )
+
     return pd.DataFrame(rows)
 
 
@@ -245,51 +315,6 @@ def _move_in_list(ids: list[int], pid: int, new_index_0: int) -> list[int]:
     new_index_0 = max(0, min(new_index_0, len(ids)))
     ids.insert(new_index_0, pid)
     return ids
-
-
-def compute_next_order_from_movement(
-    current_order: list[int], movement_df: pd.DataFrame, players_per_court: int
-) -> list[int]:
-    """
-    Uses the existing sorted order in movement_df (already sorted by
-    court + performance metrics).
-    """
-    _ = (current_order, players_per_court)
-
-    # Group players by current court using movement_df order
-    courts = []
-    for c_num in sorted(movement_df["court"].astype(int).unique()):
-        court_players = movement_df[movement_df["court"].astype(int) == int(c_num)][
-            "player_id"
-        ].astype(int).tolist()
-        courts.append(court_players)
-
-    next_courts = [[] for _ in courts]
-
-    for i, court in enumerate(courts):
-        if not court:
-            continue
-
-        top = court[0]
-        bottom = court[-1]
-        middle = court[1:-1]
-
-        # Promote top
-        if i > 0:
-            next_courts[i - 1].append(top)
-        else:
-            next_courts[i].append(top)
-
-        # Keep middle in same order
-        next_courts[i].extend(middle)
-
-        # Demote bottom
-        if i < len(courts) - 1:
-            next_courts[i + 1].insert(0, bottom)
-        else:
-            next_courts[i].append(bottom)
-
-    return [pid for court in next_courts for pid in court]
 
 
 def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
@@ -347,7 +372,9 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
                 selected_pid,
                 int(new_position) - 1,
             )
-            st.rerun()
+            _lm_clear_schedule_cache()
+            _lm_pin_nav_target()
+            _lm_rerun()
 
     with col2:
         if st.button("▲ Move Up", key="ladder_move_up"):
@@ -357,7 +384,9 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
                 selected_pid,
                 idx - 1,
             )
-            st.rerun()
+            _lm_clear_schedule_cache()
+            _lm_pin_nav_target()
+            _lm_rerun()
 
         if st.button("▼ Move Down", key="ladder_move_down"):
             idx = ordered_ids.index(selected_pid)
@@ -366,7 +395,9 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
                 selected_pid,
                 idx + 1,
             )
-            st.rerun()
+            _lm_clear_schedule_cache()
+            _lm_pin_nav_target()
+            _lm_rerun()
 
         if st.button("⬆ Move To Top", key="ladder_move_top"):
             st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
@@ -374,7 +405,9 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
                 selected_pid,
                 0,
             )
-            st.rerun()
+            _lm_clear_schedule_cache()
+            _lm_pin_nav_target()
+            _lm_rerun()
 
         if st.button("⬇ Move To Bottom", key="ladder_move_bottom"):
             st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
@@ -382,12 +415,24 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
                 selected_pid,
                 len(ordered_ids) - 1,
             )
-            st.rerun()
+            _lm_clear_schedule_cache()
+            _lm_pin_nav_target()
+            _lm_rerun()
 
     ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", ordered_ids)]
 
-    players_per_court = int(st.session_state.live_ladder.get("players_per_court", 4) or 4)
-    courts = [ordered_ids[i : i + players_per_court] for i in range(0, len(ordered_ids), players_per_court)]
+    court_sizes = [int(size) for size in st.session_state.live_ladder.get("court_sizes", []) if int(size) > 0]
+    if court_sizes:
+        courts = []
+        start = 0
+        for size in court_sizes:
+            courts.append(ordered_ids[start:start + int(size)])
+            start += int(size)
+        if start < len(ordered_ids):
+            courts.append(ordered_ids[start:])
+    else:
+        players_per_court = int(st.session_state.live_ladder.get("players_per_court", 4) or 4)
+        courts = [ordered_ids[i : i + players_per_court] for i in range(0, len(ordered_ids), players_per_court)]
     for idx, court in enumerate(courts):
         st.subheader(f"Court {idx + 1}")
         for pid in court:
@@ -414,7 +459,9 @@ def render(ctx):
         st.session_state.live_ladder = {
             "ordered_player_ids": [],
             "players_per_court": 4,
+            "court_sizes": [],
         }
+    st.session_state.live_ladder.setdefault("court_sizes", [])
 
     df_players_all = ctx.df_players_all
     df_leagues = ctx.df_leagues
@@ -615,12 +662,15 @@ def render(ctx):
                     else:
                         new_ps.append(n)
 
-                st.session_state.ladder_review_roster = roster_data
-                st.session_state.ladder_review_new = new_ps
-                st.session_state.ladder_state = "REVIEW_ROSTER"
-                st.session_state.ladder_round_num = 1
-                st.session_state.setdefault("ladder_seed_strategy", "manual")
-                _rerun()
+                _lm_transition(
+                    "REVIEW_ROSTER",
+                    clear_schedule=True,
+                    clear_round=True,
+                    ladder_review_roster=roster_data,
+                    ladder_review_new=new_ps,
+                    ladder_round_num=1,
+                    ladder_seed_strategy=st.session_state.get("ladder_seed_strategy", "manual"),
+                )
                 return
 
         # -------------------------
@@ -629,8 +679,7 @@ def render(ctx):
         if st.session_state.get("ladder_state") == "REVIEW_ROSTER":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit league/week/rounds/roster)"):
-                st.session_state.ladder_state = "SETUP"
-                _rerun()
+                _lm_transition("SETUP")
                 return
 
             st.markdown("#### Step 2: Confirm Roster")
@@ -805,9 +854,8 @@ def render(ctx):
 
                     # Promote to real roster and advance
                     st.session_state.ladder_roster = _roster_by_seed_strategy(base_roster, seed_strategy)
-                    st.session_state.ladder_state = "CONFIG_COURTS"
-
-                    # Optional: refresh global cached data so other pages see them immediately
+                    st.cache_data.clear()
+                    _lm_transition("CONFIG_COURTS", clear_schedule=True, clear_round=True)
                     return
 
                 # Keep this to prevent falling through while new players exist
@@ -821,10 +869,7 @@ def render(ctx):
                     st.session_state.get("ladder_review_roster", []),
                     seed_strategy,
                 )
-                st.session_state.ladder_state = "CONFIG_COURTS"
-                st.session_state.pop("current_schedule", None)
-                st.session_state.pop("current_schedule_round", None)
-                _rerun()
+                _lm_transition("CONFIG_COURTS", clear_schedule=True, clear_round=True)
                 return
 
 
@@ -834,8 +879,7 @@ def render(ctx):
         if st.session_state.get("ladder_state") == "CONFIG_COURTS":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit roster)"):
-                st.session_state.ladder_state = "REVIEW_ROSTER"
-                _rerun()
+                _lm_transition("REVIEW_ROSTER")
                 return
 
             st.markdown("#### Step 3: Configure Courts")
@@ -882,6 +926,7 @@ def render(ctx):
                     final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
 
                     st.session_state.ladder_court_sizes = list(map(int, court_sizes))
+                    st.session_state.live_ladder["court_sizes"] = list(map(int, court_sizes))
                     st.session_state.live_ladder["ordered_player_ids"] = final_roster["player_id"].astype(int).tolist()
                     st.session_state.live_ladder["players_per_court"] = int(court_sizes[0]) if court_sizes else 4
 
@@ -894,8 +939,7 @@ def render(ctx):
                     )
                     st.session_state.ladder_print_sheet = print_df
 
-                    st.session_state.ladder_state = "CONFIRM_START"
-                    _rerun()
+                    _lm_transition("CONFIRM_START", clear_schedule=True, clear_round=True)
                     return
 
         # -------------------------
@@ -904,7 +948,7 @@ def render(ctx):
         if st.session_state.get("ladder_state") == "CONFIRM_START":
             c_back, _ = st.columns([1, 5])
             if c_back.button("⬅️ Back (edit courts)"):
-                st.session_state.ladder_state = "CONFIG_COURTS"
+                _lm_transition("CONFIG_COURTS")
                 return
 
             st.markdown("#### Step 4: Global Ladder Preview")
@@ -943,10 +987,7 @@ def render(ctx):
             start_label = "✅ Start Event (Round 1)" if round_num == 1 else f"✅ Start Round {round_num} / {total_r}"
 
             if st.button(start_label, disabled=not can_start, key=f"start_round_btn_{round_num}"):
-                st.session_state.ladder_state = "PLAY_ROUND"
-                st.session_state.pop("current_schedule", None)
-                st.session_state.pop("current_schedule_round", None)
-                _rerun()
+                _lm_transition("PLAY_ROUND", clear_schedule=True)
                 return
 
         # -------------------------
@@ -963,8 +1004,16 @@ def render(ctx):
             st.caption("Use one deterministic ordering for the full ladder.")
             _render_live_ladder_sortable(roster_now)
 
-            # Build schedule once per round unless roster changed
-            if ("current_schedule" not in st.session_state) or (st.session_state.get("current_schedule_round") != current_r):
+            ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
+            roster_ids = roster_now["player_id"].astype(int).tolist() if not roster_now.empty else []
+            court_sizes = [int(size) for size in st.session_state.live_ladder.get("court_sizes", []) if int(size) > 0]
+            schedule_sig = _lm_schedule_sig(current_r, ordered_ids, roster_ids, court_sizes)
+
+            if (
+                ("current_schedule" not in st.session_state)
+                or (st.session_state.get("current_schedule_round") != current_r)
+                or (st.session_state.get("current_schedule_sig") != schedule_sig)
+            ):
                 schedule = []
                 for c_num in sorted(roster_now["court"].astype(int).unique().tolist()):
                     court_df = roster_now[roster_now["court"].astype(int) == int(c_num)].sort_values("slot")
@@ -974,6 +1023,7 @@ def render(ctx):
                     schedule.append({"c": int(c_num), "matches": matches})
                 st.session_state.current_schedule = schedule
                 st.session_state.current_schedule_round = current_r
+                st.session_state.current_schedule_sig = schedule_sig
 
             all_results = []
             with st.form("round_score_form"):
@@ -1017,8 +1067,7 @@ def render(ctx):
                     st.stop()
 
                 st.session_state.ladder_movement_preview = movement_df
-                st.session_state.ladder_state = "CONFIRM_MOVEMENT"
-                _rerun()
+                _lm_transition("CONFIRM_MOVEMENT")
                 st.stop()
 
         # -------------------------
@@ -1028,7 +1077,9 @@ def render(ctx):
             st.markdown("#### Round Results & Movement")
 
             movement_df = st.session_state.get("ladder_movement_preview", pd.DataFrame())
-            if not st.session_state.get("movement_applied", False):
+            movement_applied_round = st.session_state.get("movement_applied_round")
+            current_movement_round = int(st.session_state.get("ladder_round_num", 1))
+            if movement_applied_round != current_movement_round:
                 current_order = [
                     int(pid)
                     for pid in st.session_state.live_ladder.get("ordered_player_ids", [])
@@ -1037,16 +1088,17 @@ def render(ctx):
                 next_ordered_ids = compute_next_order_from_movement(
                     current_order=current_order,
                     movement_df=movement_df,
-                    players_per_court=st.session_state.live_ladder.get("players_per_court", 4),
+                    players_per_court=st.session_state.live_ladder.get("court_sizes") or st.session_state.live_ladder.get("players_per_court", 4),
                 )
 
                 st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
-                st.session_state.movement_applied = True
+                st.session_state["movement_applied_round"] = current_movement_round
+                _lm_transition("CONFIRM_MOVEMENT", clear_schedule=True)
+                return
 
             if movement_df is None or movement_df.empty:
                 st.error("No movement preview found.")
-                st.session_state.ladder_state = "PLAY_ROUND"
-                _rerun()
+                _lm_transition("PLAY_ROUND")
                 return
 
             # Display per court
@@ -1175,6 +1227,7 @@ def render(ctx):
                                 st.session_state.live_ladder["ordered_player_ids"] = ordered_ids
                                 st.session_state.ladder_show_roster_change_dialog = False
                                 st.success("Substitution queued for next round.")
+                                _lm_transition("CONFIRM_MOVEMENT", clear_schedule=True)
                                 return
                             except (RosterChangeError, KeyError) as exc:
                                 st.error(str(exc))
@@ -1203,6 +1256,7 @@ def render(ctx):
                                 st.session_state.live_ladder["ordered_player_ids"] = ordered_ids
                                 st.session_state.ladder_show_roster_change_dialog = False
                                 st.success("Player added for next round.")
+                                _lm_transition("CONFIRM_MOVEMENT", clear_schedule=True)
                                 return
                             except (RosterChangeError, KeyError) as exc:
                                 st.error(str(exc))
@@ -1218,22 +1272,19 @@ def render(ctx):
                         "ladder_movement_preview",
                         "current_schedule",
                         "current_schedule_round",
+                        "current_schedule_sig",
                         "ladder_review_roster",
                         "ladder_review_new",
                         "ladder_roster",
                         "ladder_print_sheet",
+                        "movement_applied_round",
                     ]:
                         st.session_state.pop(k, None)
-                    st.session_state.live_ladder = {"ordered_player_ids": [], "players_per_court": 4}
-                    st.session_state.ladder_state = "SETUP"
-                    _rerun()
+                    st.session_state.live_ladder = {"ordered_player_ids": [], "players_per_court": 4, "court_sizes": []}
+                    _lm_transition("SETUP", clear_schedule=True, clear_round=True)
                     return
 
-                st.session_state.ladder_round_num = current_r + 1
-                st.session_state.pop("movement_applied", None)
-                st.session_state.ladder_state = "CONFIRM_START"
-                st.session_state.pop("current_schedule", None)
-                _rerun()
+                _lm_transition("CONFIRM_START", clear_schedule=True, clear_round=True, ladder_round_num=current_r + 1)
                 return
 
     # ============================================================
