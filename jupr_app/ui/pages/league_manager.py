@@ -894,19 +894,25 @@ def render(ctx):
                             if not confirm_sub:
                                 st.error("Please confirm the roster change before applying.")
                                 st.stop()
+                        
                             try:
+                                # -------------------------------------------------------
+                                # 1. If using guest substitute, create the player first
+                                # -------------------------------------------------------
                                 if use_guest_sub:
                                     if not sub_player.get("name"):
                                         raise RosterChangeError("Guest name is required.")
+                        
                                     ok, err = safe_add_player(
                                         supabase=ctx.supabase,
                                         club_id=str(ctx.club_id),
                                         name=sub_player["name"],
                                         rating_jupr=float(sub_player.get("rating", 3.5)),
                                     )
+                        
                                     if not ok:
                                         raise RosterChangeError(f"Could not add guest: {err}")
-
+                        
                                     fetch = (
                                         ctx.supabase.table("players")
                                         .select("id,name,rating")
@@ -914,37 +920,61 @@ def render(ctx):
                                         .eq("name", sub_player["name"])
                                         .execute()
                                     )
+                        
                                     rows = fetch.data or []
                                     if not rows:
-                                        raise RosterChangeError("Guest player was created but could not be loaded.")
+                                        raise RosterChangeError(
+                                            "Guest player was created but could not be loaded."
+                                        )
+                        
                                     row = rows[0]
+                        
                                     sub_player = {
                                         "id": int(row["id"]),
                                         "name": str(row["name"]),
                                         "rating": float(row.get("rating", 1200.0) or 1200.0),
                                     }
+                        
                                     id_to_name[int(row["id"])] = str(row["name"])
                                     name_to_id[str(row["name"])] = int(row["id"])
-
-                                    pid = replace_info.get("id") or replace_info.get("player_id")
-                                    replaced_player_id = int(pid) if pid is not None else None
-                                    
-                                    result = apply_roster_change(
-                                        roster_df=base_next_roster,
-                                        change_type="substitute",
-                                        replaced_player_id=replaced_player_id,
-                                        new_player=sub_player,
-                                        court_sizes=st.session_state.get("ladder_court_sizes"),
-                                        roster_locked=False,
-                                    )
-                                if "result" in locals() and result is not None:
-                                    st.session_state.ladder_next_roster_override = result.roster_df
+                        
+                                # -------------------------------------------------------
+                                # 2. Resolve replaced player id (compatible with old/new schema)
+                                # -------------------------------------------------------
+                                pid = replace_info.get("id") or replace_info.get("player_id")
+                        
+                                if pid is None:
+                                    raise RosterChangeError("No player selected to replace.")
+                        
+                                replaced_player_id = int(pid)
+                        
+                                # -------------------------------------------------------
+                                # 3. Apply roster change (always executed)
+                                # -------------------------------------------------------
+                                result = apply_roster_change(
+                                    roster_df=base_next_roster,
+                                    change_type="substitute",
+                                    replaced_player_id=replaced_player_id,
+                                    new_player=sub_player,
+                                    court_sizes=st.session_state.get("ladder_court_sizes"),
+                                    roster_locked=False,
+                                )
+                        
+                                if result is None:
+                                    raise RosterChangeError("Roster change could not be applied.")
+                        
+                                # -------------------------------------------------------
+                                # 4. Persist to session state
+                                # -------------------------------------------------------
+                                st.session_state.ladder_next_roster_override = result.roster_df
                                 st.session_state.ladder_next_court_sizes = result.court_sizes
                                 st.session_state.ladder_roster_change_note = result.note
                                 st.session_state.ladder_roster_bench_ids = result.bench_ids
                                 st.session_state.ladder_show_roster_change_dialog = False
+                        
                                 st.success("Substitution queued for next round.")
                                 st.rerun()
+                        
                             except RosterChangeError as exc:
                                 st.error(str(exc))
 
