@@ -21,7 +21,7 @@ from jupr_app.domain.session_ladder_service import (
 
 
 def post_create_session(*, supabase: Any, auth: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     league_key = _resolve_session_league_key(supabase=supabase, club_id=str(auth.get("club_id") or ""), payload=payload)
     session = createSession(
@@ -62,7 +62,7 @@ def _resolve_session_league_key(*, supabase: Any, club_id: str, payload: dict[st
 
 
 def get_session_details(*, supabase: Any, auth: dict[str, Any], session_id: str) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_read_access(auth)
 
     session = _single(supabase.table("session_ladder_sessions").select("*").eq("id", str(session_id)).execute().data)
@@ -124,7 +124,7 @@ def get_session_details(*, supabase: Any, auth: dict[str, Any], session_id: str)
 
 
 def post_add_roster_entries(*, supabase: Any, auth: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     session_id = str(payload.get("session_id") or "")
     mode = str(payload.get("mode") or "manual_existing").strip().lower()
@@ -176,26 +176,26 @@ def post_add_roster_entries(*, supabase: Any, auth: dict[str, Any], payload: dic
 
 
 def post_seed_courts_by_rating(*, supabase: Any, auth: dict[str, Any], session_id: str) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     pods = seedCourtsByRating(supabase, sessionId=str(session_id), seeded_by=str(auth.get("user_id") or "api"))
     return {"session_id": str(session_id), "pods": pods}
 
 
 def post_lock_seeding(*, supabase: Any, auth: dict[str, Any], session_id: str) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     return {"session": lockSeeding(supabase, sessionId=str(session_id), updated_by=str(auth.get("user_id") or "api"))}
 
 
 def post_start_round(*, supabase: Any, auth: dict[str, Any], session_id: str, round_number: int) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     return {"session": startRound(supabase, sessionId=str(session_id), roundNumber=int(round_number), updated_by=str(auth.get("user_id") or "api"))}
 
 
 def post_submit_game_result(*, supabase: Any, auth: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     game = submitGameResult(
         supabase,
@@ -221,7 +221,7 @@ def post_close_round(
     allow_override: bool = False,
     override_reason: str | None = None,
 ) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     result = closeRound(
         supabase,
@@ -238,13 +238,13 @@ def post_close_round(
 
 
 def post_complete_session(*, supabase: Any, auth: dict[str, Any], session_id: str) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     return {"session": completeSession(supabase, sessionId=str(session_id), updated_by=str(auth.get("user_id") or "api"))}
 
 
 def post_publish_session(*, supabase: Any, auth: dict[str, Any], session_id: str) -> dict[str, Any]:
-    _require_feature()
+    _require_feature(auth)
     _require_mutation_access(auth)
     return {"session": publishSession(supabase, sessionId=str(session_id), updated_by=str(auth.get("user_id") or "api"))}
 
@@ -313,9 +313,16 @@ def _single(rows: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     return dict(rows[0])
 
 
-def _require_feature() -> None:
-    if not bool(FEATURE_SESSION_LADDER):
-        raise RuntimeError("feature.sessionLadder disabled")
+def _require_feature(auth: dict[str, Any] | None = None) -> None:
+    # Normal feature flag enabled
+    if bool(FEATURE_SESSION_LADDER):
+        return
+
+    # Allow preview access for elevated admin sessions only
+    if auth and bool(auth.get("admin_logged_in")):
+        return
+
+    raise RuntimeError("feature.sessionLadder disabled")
 
 
 def _assert_club_scope(auth: dict[str, Any], row_club_id: str) -> None:

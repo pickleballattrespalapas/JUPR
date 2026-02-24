@@ -559,7 +559,7 @@ def render(ctx):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell("🗂️ Session Console", "Session Ladder shell: routing, stepper, data load, resume pointer", mode_label=mode_label)
 
-    if not bool(FEATURE_SESSION_LADDER):
+    if not bool(FEATURE_SESSION_LADDER) and not bool(getattr(ctx, "admin_logged_in", False)):
         st.info("Session Ladder is disabled by feature flag.")
         return
 
