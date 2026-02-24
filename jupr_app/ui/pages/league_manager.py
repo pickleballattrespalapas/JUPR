@@ -939,14 +939,14 @@ def render(ctx):
                                     )
                                 if "result" in locals() and result is not None:
                                     st.session_state.ladder_next_roster_override = result.roster_df
-                                    st.session_state.ladder_next_court_sizes = result.court_sizes
-                                    st.session_state.ladder_roster_change_note = result.note
-                                    st.session_state.ladder_roster_bench_ids = result.bench_ids
-                                    st.session_state.ladder_show_roster_change_dialog = False
-                                    st.success("Substitution queued for next round.")
-                                    st.rerun()
-                                except RosterChangeError as exc:
-                                    st.error(str(exc))
+                                st.session_state.ladder_next_court_sizes = result.court_sizes
+                                st.session_state.ladder_roster_change_note = result.note
+                                st.session_state.ladder_roster_bench_ids = result.bench_ids
+                                st.session_state.ladder_show_roster_change_dialog = False
+                                st.success("Substitution queued for next round.")
+                                st.rerun()
+                            except RosterChangeError as exc:
+                                st.error(str(exc))
 
                     with tabs_rc[1]:
                         st.markdown("Add player (late arrival):")
