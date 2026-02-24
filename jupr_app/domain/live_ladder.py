@@ -90,6 +90,101 @@ def compute_round_stats(
     return stats
 
 
+
+def split_order_into_courts(
+    ordered_player_ids: List[int],
+    court_sizes: Optional[List[int]] = None,
+    players_per_court: Optional[int] = None,
+) -> List[List[int]]:
+    ordered_ids = [int(pid) for pid in (ordered_player_ids or [])]
+    if not ordered_ids:
+        return []
+
+    sizes = [int(size) for size in (court_sizes or []) if int(size) > 0]
+    if sizes:
+        courts: List[List[int]] = []
+        start = 0
+        for size in sizes:
+            courts.append(ordered_ids[start:start + int(size)])
+            start += int(size)
+        if start < len(ordered_ids):
+            courts.append(ordered_ids[start:])
+        return [court for court in courts if court]
+
+    ppc = int(players_per_court or 4)
+    if ppc <= 0:
+        ppc = 4
+    return [ordered_ids[i:i + ppc] for i in range(0, len(ordered_ids), ppc)]
+
+
+def compute_next_order_from_movement(
+    current_order: List[int],
+    movement_df: pd.DataFrame,
+    players_per_court,
+) -> List[int]:
+    if movement_df is None or movement_df.empty:
+        return [int(pid) for pid in (current_order or [])]
+
+    current_ids = [int(pid) for pid in (current_order or [])]
+    arg3 = players_per_court
+    court_sizes: Optional[List[int]] = None
+    per_court: Optional[int] = None
+    if isinstance(arg3, (list, tuple)):
+        court_sizes = [int(size) for size in arg3 if int(size) > 0]
+    elif arg3 is not None:
+        per_court = int(arg3)
+
+    baseline_courts = split_order_into_courts(current_ids, court_sizes=court_sizes, players_per_court=per_court)
+    target_sizes = [len(court) for court in baseline_courts if court]
+
+    courts: List[List[int]] = []
+    for c_num in sorted(movement_df["court"].astype(int).unique()):
+        court_players = (
+            movement_df[movement_df["court"].astype(int) == int(c_num)]["player_id"]
+            .astype(int)
+            .tolist()
+        )
+        courts.append(court_players)
+
+    next_courts: List[List[int]] = [[] for _ in courts]
+    for i, court in enumerate(courts):
+        if not court:
+            continue
+        top = court[0]
+        bottom = court[-1]
+        middle = court[1:-1]
+
+        if i > 0:
+            next_courts[i - 1].append(top)
+        else:
+            next_courts[i].append(top)
+
+        next_courts[i].extend(middle)
+
+        if i < len(courts) - 1:
+            next_courts[i + 1].insert(0, bottom)
+        else:
+            next_courts[i].append(bottom)
+
+    flattened = [pid for court in next_courts for pid in court]
+    if not flattened:
+        return current_ids
+
+    present = set(flattened)
+    flattened.extend([pid for pid in current_ids if pid not in present])
+
+    if target_sizes:
+        shaped: List[List[int]] = []
+        start = 0
+        for size in target_sizes:
+            shaped.append(flattened[start:start + int(size)])
+            start += int(size)
+        if start < len(flattened):
+            shaped.append(flattened[start:])
+        return [pid for court in shaped for pid in court if court]
+
+    return flattened
+
 def build_movement_preview(
     roster_df: pd.DataFrame,
     round_stats: Dict[int, Dict[str, int]],
