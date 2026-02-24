@@ -272,12 +272,7 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
     if not st.session_state.live_ladder.get("ordered_player_ids"):
         st.session_state.live_ladder["ordered_player_ids"] = _ordered_ids_from_roster(roster_now)
 
-    roster_ids = roster_now.sort_values(["court", "slot"])["player_id"].astype(int).tolist()
-    roster_ids_set = set(roster_ids)
-    ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", []) if int(pid) in roster_ids_set]
-    missing_ids = [pid for pid in roster_ids if pid not in set(ordered_ids)]
-    ordered_ids.extend(missing_ids)
-    st.session_state.live_ladder["ordered_player_ids"] = ordered_ids
+    ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
 
     player_lookup = {
         int(row["player_id"]): {
@@ -288,15 +283,15 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
     }
 
     c_apply, c_tools = st.columns([1, 2])
-    display_list = [f"{player_lookup[pid]['name']} (#{pid})" for pid in ordered_ids]
-    display_to_pid = {label: ordered_ids[idx] for idx, label in enumerate(display_list)}
+    display_ids = [pid for pid in ordered_ids if pid in player_lookup]
+    display_list = [f"{player_lookup[pid]['name']} (#{pid})" for pid in display_ids]
+    display_to_pid = {label: display_ids[idx] for idx, label in enumerate(display_list)}
     new_display_order = sort_items(display_list, key="live_ladder_sort")
-    pending_id_order = ordered_ids
+    pending_id_order = display_ids
     if isinstance(new_display_order, list) and len(new_display_order) == len(display_list):
         candidate = [display_to_pid[item] for item in new_display_order if item in display_to_pid]
-        if len(candidate) == len(ordered_ids):
+        if len(candidate) == len(display_ids):
             pending_id_order = candidate
-            st.session_state.live_ladder["ordered_player_ids"] = pending_id_order
 
     with c_apply:
         if st.button("Save ladder order", key="live_ladder_save_order"):
@@ -306,7 +301,7 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
     with c_tools:
         if st.button("Sort current ladder by rating", key="live_ladder_sort_rating"):
             ordered_ids = sorted(
-                ordered_ids,
+                display_ids,
                 key=lambda pid: float(player_lookup.get(pid, {}).get("rating", 1200.0)),
                 reverse=True,
             )
@@ -338,7 +333,6 @@ def render(ctx):
     st.session_state.setdefault("ladder_total_rounds", 5)
     st.session_state.setdefault("ladder_roster", [])
     st.session_state.setdefault("ladder_court_sizes", [])
-    st.session_state.setdefault("ladder_board_nonce", 0)
     if "live_ladder" not in st.session_state:
         st.session_state.live_ladder = {
             "ordered_player_ids": [],
@@ -824,7 +818,6 @@ def render(ctx):
                     )
                     st.session_state.ladder_print_sheet = print_df
 
-                    st.session_state.ladder_board_nonce = int(st.session_state.get("ladder_board_nonce", 0)) + 1
                     st.session_state.ladder_state = "CONFIRM_START"
                     _rerun()
                     return
@@ -855,31 +848,9 @@ def render(ctx):
 
             roster_df = compress_courts(normalize_slots(st.session_state.get("ladder_live_roster", pd.DataFrame()).copy()))
             if roster_df.empty:
-                roster_seed = list(st.session_state.get("ladder_roster", []))
-                seed_sizes = st.session_state.get("ladder_court_sizes") or []
-                if roster_seed and seed_sizes:
-                    rebuilt_rows = []
-                    seed_idx = 0
-                    for court_num, court_size in enumerate(seed_sizes, start=1):
-                        for slot_num in range(1, int(court_size) + 1):
-                            if seed_idx >= len(roster_seed):
-                                break
-                            seed_player = roster_seed[seed_idx]
-                            rebuilt_rows.append(
-                                {
-                                    "player_id": int(seed_player["id"]),
-                                    "name": str(seed_player["name"]),
-                                    "rating": float(seed_player["rating"]),
-                                    "court": int(court_num),
-                                    "slot": int(slot_num),
-                                }
-                            )
-                            seed_idx += 1
-                    if rebuilt_rows:
-                        roster_df = compress_courts(normalize_slots(pd.DataFrame(rebuilt_rows)))
+                st.error("Live ladder roster is unavailable. Return to court setup and preview assignments again.")
+                st.stop()
             st.session_state.ladder_live_roster = roster_df
-            if not st.session_state.live_ladder.get("ordered_player_ids"):
-                st.session_state.live_ladder["ordered_player_ids"] = _ordered_ids_from_roster(roster_df)
             st.session_state.ladder_live_roster = _render_live_ladder_sortable(roster_df)
             roster_df = st.session_state.ladder_live_roster.copy()
 
@@ -1037,14 +1008,9 @@ def render(ctx):
                 override_roster_df=st.session_state.get("ladder_next_roster_override"),
             )
 
-            proposed_order = (
-                editor_df.sort_values(["Proposed Court", "rating"], ascending=[True, False])["player_id"].astype(int).tolist()
-            )
-            st.session_state.live_ladder["ordered_player_ids"] = proposed_order
-
             st.markdown("#### Ladder Order (Next Round)")
             st.caption("Finalize the next round by dragging players in the global list.")
-            next_round_roster = _render_live_ladder_sortable(base_next_roster)
+            next_round_roster = _render_live_ladder_sortable(working_next_roster)
             st.session_state.ladder_next_roster_override = next_round_roster.copy()
             working_next_roster = _effective_next_roster(
                 base_roster_df=base_next_roster,
@@ -1310,20 +1276,23 @@ def render(ctx):
                     base_roster_df=base_next_roster,
                     override_roster_df=st.session_state.get("ladder_next_roster_override"),
                 )
+                proposed_order = (
+                    new_roster.sort_values(["court", "rating"], ascending=[True, False])["player_id"].astype(int).tolist()
+                )
+                st.session_state.live_ladder["ordered_player_ids"] = proposed_order
+                new_roster = _roster_from_live_ladder(new_roster)
                 new_court_sizes = st.session_state.get("ladder_next_court_sizes") or [
                     int(x) for x in new_roster["court"].value_counts().sort_index().tolist()
                 ]
 
                 st.session_state.ladder_live_roster = new_roster.copy()
                 st.session_state.ladder_court_sizes = new_court_sizes
-                st.session_state.live_ladder["ordered_player_ids"] = _ordered_ids_from_roster(new_roster)
                 st.session_state.pop("ladder_next_roster_override", None)
                 st.session_state.pop("ladder_next_court_sizes", None)
                 st.session_state.pop("ladder_roster_change_note", None)
                 st.session_state.pop("ladder_roster_bench_ids", None)
 
                 st.session_state.ladder_round_num = current_r + 1
-                st.session_state.ladder_board_nonce = int(st.session_state.get("ladder_board_nonce", 0)) + 1
                 st.session_state.ladder_state = "CONFIRM_START"
                 st.session_state.pop("current_schedule", None)
                 _rerun()
