@@ -21,6 +21,12 @@ from jupr_app.domain.live_ladder import (
     compute_round_stats,
     validate_courts,
 )
+from jupr_app.domain.live_ladder_store import (
+    get_or_create_session,
+    load_resume_payload,
+    update_session_snapshot,
+    upsert_round_submission,
+)
 from jupr_app.domain.session_ladder_engine import computeCourtStandings, resolveTies
 from jupr_app.domain.league_night_roster import RosterChangeError, roster_change_availability, suggest_court_sizes
 from jupr_app.domain.leagues import (
@@ -453,6 +459,7 @@ def render(ctx):
     st.session_state.setdefault("ladder_state", "SETUP")
     st.session_state.setdefault("ladder_round_num", 1)
     st.session_state.setdefault("ladder_total_rounds", 5)
+    st.session_state.setdefault("lm_session_id", None)
     st.session_state.setdefault("ladder_roster", [])
     st.session_state.setdefault("ladder_court_sizes", [])
     if "live_ladder" not in st.session_state:
@@ -640,6 +647,47 @@ def render(ctx):
                 step=1,
                 key="ladder_total_rounds_input",
             )
+
+            with st.expander("Resume active session", expanded=False):
+                active_sessions = (
+                    ctx.supabase.table("live_ladder_sessions")
+                    .select("id,league_name,week,created_at,state,ladder_round_num,total_rounds")
+                    .eq("club_id", str(ctx.club_id))
+                    .eq("active", True)
+                    .order("created_at", desc=True)
+                    .limit(5)
+                    .execute()
+                    .data
+                    or []
+                )
+                if not active_sessions:
+                    st.caption("No active sessions to resume.")
+                else:
+                    options = {
+                        f"{row.get('league_name','?')} / {row.get('week','?')} · R{int(row.get('ladder_round_num') or 1)}/{int(row.get('total_rounds') or 1)} · {str(row.get('state') or 'SETUP')} · {str(row.get('created_at') or '')}": row
+                        for row in active_sessions
+                    }
+                    selected_label = st.selectbox("Active session", list(options.keys()), key="ladder_resume_session")
+                    if st.button("Resume Selected Session", key="ladder_resume_btn"):
+                        selected = options[selected_label]
+                        payload = load_resume_payload(ctx, str(selected.get("id")))
+                        st.session_state["lm_session_id"] = payload.get("session_id")
+                        st.session_state["ladder_round_num"] = int(payload.get("ladder_round_num") or 1)
+                        st.session_state["ladder_total_rounds"] = int(payload.get("ladder_total_rounds") or 1)
+                        st.session_state["saved_ladder_lg"] = str(selected.get("league_name") or "")
+                        st.session_state["saved_ladder_wk"] = str(selected.get("week") or "")
+                        st.session_state.live_ladder = payload.get("live_ladder") or {
+                            "ordered_player_ids": [],
+                            "players_per_court": 4,
+                            "court_sizes": [],
+                        }
+                        if payload.get("ladder_movement_preview"):
+                            st.session_state["ladder_movement_preview"] = pd.DataFrame(payload.get("ladder_movement_preview") or [])
+                        if payload.get("movement_applied_round") is not None:
+                            st.session_state["movement_applied_round"] = int(payload.get("movement_applied_round") or 0)
+                        _lm_transition(str(payload.get("ladder_state") or "SETUP"), clear_schedule=True, clear_round=False)
+                        return
+
             raw = st.text_area("Paste Player List (one per line)", height=150, key="ladder_raw_input")
 
             if st.button("Analyze & Seed"):
@@ -930,6 +978,20 @@ def render(ctx):
                     st.session_state.live_ladder["ordered_player_ids"] = final_roster["player_id"].astype(int).tolist()
                     st.session_state.live_ladder["players_per_court"] = int(court_sizes[0]) if court_sizes else 4
 
+                    session_row = get_or_create_session(
+                        ctx,
+                        club_id=str(ctx.club_id),
+                        league_name=str(st.session_state.get("saved_ladder_lg") or st.session_state.get("ladder_lg") or "Default"),
+                        week=str(st.session_state.get("saved_ladder_wk") or st.session_state.get("ladder_wk") or "Week 1"),
+                        total_rounds=int(st.session_state.get("ladder_total_rounds", 1)),
+                        ladder_round_num=int(st.session_state.get("ladder_round_num", 1)),
+                        state="CONFIRM_START",
+                        players_per_court=int(st.session_state.live_ladder.get("players_per_court", 4) or 4),
+                        court_sizes=list(map(int, court_sizes)),
+                        ordered_player_ids=final_roster["player_id"].astype(int).tolist(),
+                    )
+                    st.session_state["lm_session_id"] = str(session_row.get("id"))
+
                     # Printable sheet
                     print_df = final_roster.copy()
                     print_df["JUPR"] = (print_df["rating"].astype(float) / 400.0).round(3)
@@ -1067,6 +1129,57 @@ def render(ctx):
                     st.stop()
 
                 st.session_state.ladder_movement_preview = movement_df
+                current_order = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
+                next_ordered_ids = compute_next_order_from_movement(
+                    current_order=current_order,
+                    movement_df=movement_df,
+                    players_per_court=st.session_state.live_ladder.get("court_sizes") or st.session_state.live_ladder.get("players_per_court", 4),
+                )
+                st.session_state.live_ladder["ordered_player_ids"] = next_ordered_ids
+                st.session_state["movement_applied_round"] = current_r
+
+                lm_session_id = st.session_state.get("lm_session_id")
+                if not lm_session_id:
+                    session_row = get_or_create_session(
+                        ctx,
+                        club_id=str(ctx.club_id),
+                        league_name=str(st.session_state.get("saved_ladder_lg") or st.session_state.get("ladder_lg") or "Default"),
+                        week=str(st.session_state.get("saved_ladder_wk") or st.session_state.get("ladder_wk") or "Week 1"),
+                        total_rounds=int(st.session_state.get("ladder_total_rounds", 1)),
+                        ladder_round_num=int(st.session_state.get("ladder_round_num", 1)),
+                        state="CONFIRM_MOVEMENT",
+                        players_per_court=int(st.session_state.live_ladder.get("players_per_court", 4) or 4),
+                        court_sizes=[int(size) for size in st.session_state.live_ladder.get("court_sizes", [])],
+                        ordered_player_ids=current_order,
+                    )
+                    lm_session_id = str(session_row.get("id"))
+                    st.session_state["lm_session_id"] = lm_session_id
+
+                upsert_round_submission(
+                    ctx,
+                    session_id=str(lm_session_id),
+                    round_num=int(current_r),
+                    status="SUBMITTED",
+                    schedule_sig=st.session_state.get("current_schedule_sig"),
+                    schedule_json=st.session_state.get("current_schedule", []),
+                    results_json=all_results,
+                    round_stats_json=round_stats,
+                    movement_preview_json=movement_df,
+                    ordered_ids_before=current_order,
+                    ordered_ids_after=next_ordered_ids,
+                    court_sizes=[int(size) for size in st.session_state.live_ladder.get("court_sizes", [])],
+                    roster_ids=roster_pids,
+                )
+                update_session_snapshot(
+                    ctx,
+                    str(lm_session_id),
+                    state="CONFIRM_MOVEMENT",
+                    ladder_round_num=int(current_r),
+                    total_rounds=int(total_r),
+                    ordered_player_ids=next_ordered_ids,
+                    court_sizes=[int(size) for size in st.session_state.live_ladder.get("court_sizes", [])],
+                    players_per_court=int(st.session_state.live_ladder.get("players_per_court", 4) or 4),
+                )
                 _lm_transition("CONFIRM_MOVEMENT")
                 st.stop()
 
@@ -1265,6 +1378,16 @@ def render(ctx):
 
             if st.button(btn_label):
                 if current_r >= total_r:
+                    if st.session_state.get("lm_session_id"):
+                        update_session_snapshot(
+                            ctx,
+                            str(st.session_state.get("lm_session_id")),
+                            state="COMPLETED",
+                            active=False,
+                            ladder_round_num=int(current_r),
+                            ordered_player_ids=[int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])],
+                            court_sizes=[int(size) for size in st.session_state.live_ladder.get("court_sizes", [])],
+                        )
                     st.success("League Night Complete! All matches saved.")
                     for k in [
                         "ladder_round_num",
@@ -1280,9 +1403,22 @@ def render(ctx):
                         "movement_applied_round",
                     ]:
                         st.session_state.pop(k, None)
+                    st.session_state.pop("lm_session_id", None)
                     st.session_state.live_ladder = {"ordered_player_ids": [], "players_per_court": 4, "court_sizes": []}
                     _lm_transition("SETUP", clear_schedule=True, clear_round=True)
                     return
+
+                if st.session_state.get("lm_session_id"):
+                    update_session_snapshot(
+                        ctx,
+                        str(st.session_state.get("lm_session_id")),
+                        ladder_round_num=int(current_r + 1),
+                        state="CONFIRM_START",
+                        ordered_player_ids=[int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])],
+                        court_sizes=[int(size) for size in st.session_state.live_ladder.get("court_sizes", [])],
+                        players_per_court=int(st.session_state.live_ladder.get("players_per_court", 4) or 4),
+                        active=True,
+                    )
 
                 _lm_transition("CONFIRM_START", clear_schedule=True, clear_round=True, ladder_round_num=current_r + 1)
                 return
