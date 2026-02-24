@@ -926,15 +926,17 @@ def render(ctx):
                                     id_to_name[int(row["id"])] = str(row["name"])
                                     name_to_id[str(row["name"])] = int(row["id"])
 
-                                result = apply_roster_change(
-                                    roster_df=base_next_roster,
-                                    change_type="substitute",
                                     pid = replace_info.get("id") or replace_info.get("player_id")
                                     replaced_player_id = int(pid) if pid is not None else None
-                                    new_player=sub_player,
-                                    court_sizes=st.session_state.get("ladder_court_sizes"),
-                                    roster_locked=False,
-                                )
+                                    
+                                    result = apply_roster_change(
+                                        roster_df=base_next_roster,
+                                        change_type="substitute",
+                                        replaced_player_id=replaced_player_id,
+                                        new_player=sub_player,
+                                        court_sizes=st.session_state.get("ladder_court_sizes"),
+                                        roster_locked=False,
+                                    )
                                 st.session_state.ladder_next_roster_override = result.roster_df
                                 st.session_state.ladder_next_court_sizes = result.court_sizes
                                 st.session_state.ladder_roster_change_note = result.note
