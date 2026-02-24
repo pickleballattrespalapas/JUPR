@@ -11,7 +11,6 @@ from jupr_app.domain.ratings import jupr_to_elo
 
 import pandas as pd
 import streamlit as st
-from streamlit_sortable import sort_items
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.config import FEATURE_SESSION_LADDER, SESSION_LADDER_MIN_AWARD_SESSIONS
@@ -263,6 +262,17 @@ def _roster_from_live_ladder(roster_df: pd.DataFrame) -> pd.DataFrame:
     return compress_courts(normalize_slots(pd.DataFrame(rows)))
 
 
+def _move_in_list(ids: list[int], pid: int, new_index_0: int) -> list[int]:
+    ids = list(ids)
+    if pid not in ids:
+        return ids
+    old_index = ids.index(pid)
+    ids.pop(old_index)
+    new_index_0 = max(0, min(new_index_0, len(ids)))
+    ids.insert(new_index_0, pid)
+    return ids
+
+
 def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
     roster_now = compress_courts(normalize_slots(roster_df.copy()))
     if roster_now.empty:
@@ -273,6 +283,10 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
         st.session_state.live_ladder["ordered_player_ids"] = _ordered_ids_from_roster(roster_now)
 
     ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
+    roster_ids = [int(pid) for pid in roster_now["player_id"].astype(int).tolist()]
+    ordered_ids = [pid for pid in ordered_ids if pid in roster_ids]
+    ordered_ids.extend(pid for pid in roster_ids if pid not in ordered_ids)
+    st.session_state.live_ladder["ordered_player_ids"] = ordered_ids
 
     player_lookup = {
         int(row["player_id"]): {
@@ -282,30 +296,78 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
         for _, row in roster_now.iterrows()
     }
 
-    c_apply, c_tools = st.columns([1, 2])
-    display_ids = [pid for pid in ordered_ids if pid in player_lookup]
-    display_list = [f"{player_lookup[pid]['name']} (#{pid})" for pid in display_ids]
-    display_to_pid = {label: display_ids[idx] for idx, label in enumerate(display_list)}
-    new_display_order = sort_items(display_list, key="live_ladder_sort")
-    pending_id_order = display_ids
-    if isinstance(new_display_order, list) and len(new_display_order) == len(display_list):
-        candidate = [display_to_pid[item] for item in new_display_order if item in display_to_pid]
-        if len(candidate) == len(display_ids):
-            pending_id_order = candidate
+    rows = []
+    for idx, pid in enumerate(ordered_ids):
+        rows.append(
+            {
+                "Pos": idx + 1,
+                "Player": player_lookup.get(pid, {}).get("name", f"#{pid}"),
+                "ID": pid,
+                "Rating": player_lookup.get(pid, {}).get("rating", 1200.0),
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    with c_apply:
-        if st.button("Save ladder order", key="live_ladder_save_order"):
-            st.session_state.live_ladder["ordered_player_ids"] = pending_id_order
-            ordered_ids = pending_id_order
-            st.success("Ladder order saved.")
-    with c_tools:
-        if st.button("Sort current ladder by rating", key="live_ladder_sort_rating"):
-            ordered_ids = sorted(
-                display_ids,
-                key=lambda pid: float(player_lookup.get(pid, {}).get("rating", 1200.0)),
-                reverse=True,
+    col1, col2 = st.columns(2)
+    with col1:
+        selected_label = st.selectbox(
+            "Select player to move",
+            options=[f"{player_lookup.get(pid, {}).get('name', f'#{pid}')} (#{pid})" for pid in ordered_ids],
+            key="ladder_move_select",
+        )
+        selected_pid = int(selected_label.split("#")[-1].replace(")", ""))
+
+        new_position = st.number_input(
+            "Move to position",
+            min_value=1,
+            max_value=len(ordered_ids),
+            step=1,
+            value=1,
+            key="ladder_move_position",
+        )
+
+        if st.button("Apply Move", key="ladder_move_apply"):
+            st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
+                ordered_ids,
+                selected_pid,
+                int(new_position) - 1,
             )
-            st.session_state.live_ladder["ordered_player_ids"] = ordered_ids
+            st.rerun()
+
+    with col2:
+        if st.button("▲ Move Up", key="ladder_move_up"):
+            idx = ordered_ids.index(selected_pid)
+            st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
+                ordered_ids,
+                selected_pid,
+                idx - 1,
+            )
+            st.rerun()
+
+        if st.button("▼ Move Down", key="ladder_move_down"):
+            idx = ordered_ids.index(selected_pid)
+            st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
+                ordered_ids,
+                selected_pid,
+                idx + 1,
+            )
+            st.rerun()
+
+        if st.button("⬆ Move To Top", key="ladder_move_top"):
+            st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
+                ordered_ids,
+                selected_pid,
+                0,
+            )
+            st.rerun()
+
+        if st.button("⬇ Move To Bottom", key="ladder_move_bottom"):
+            st.session_state.live_ladder["ordered_player_ids"] = _move_in_list(
+                ordered_ids,
+                selected_pid,
+                len(ordered_ids) - 1,
+            )
+            st.rerun()
 
     ordered_ids = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", ordered_ids)]
 
@@ -1009,7 +1071,7 @@ def render(ctx):
             )
 
             st.markdown("#### Ladder Order (Next Round)")
-            st.caption("Finalize the next round by dragging players in the global list.")
+            st.caption("Finalize the next round with move controls in the global list.")
             next_round_roster = _render_live_ladder_sortable(working_next_roster)
             st.session_state.ladder_next_roster_override = next_round_roster.copy()
             working_next_roster = _effective_next_roster(
@@ -1276,9 +1338,10 @@ def render(ctx):
                     base_roster_df=base_next_roster,
                     override_roster_df=st.session_state.get("ladder_next_roster_override"),
                 )
-                proposed_order = (
-                    new_roster.sort_values(["court", "rating"], ascending=[True, False])["player_id"].astype(int).tolist()
-                )
+                current_order = [int(pid) for pid in st.session_state.live_ladder.get("ordered_player_ids", [])]
+                available_ids = new_roster["player_id"].astype(int).tolist()
+                proposed_order = [pid for pid in current_order if pid in available_ids]
+                proposed_order.extend(pid for pid in available_ids if pid not in proposed_order)
                 st.session_state.live_ladder["ordered_player_ids"] = proposed_order
                 new_roster = _roster_from_live_ladder(new_roster)
                 new_court_sizes = st.session_state.get("ladder_next_court_sizes") or [
