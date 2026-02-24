@@ -296,6 +296,7 @@ def _render_live_ladder_sortable(roster_df: pd.DataFrame) -> pd.DataFrame:
         candidate = [display_to_pid[item] for item in new_display_order if item in display_to_pid]
         if len(candidate) == len(ordered_ids):
             pending_id_order = candidate
+            st.session_state.live_ladder["ordered_player_ids"] = pending_id_order
 
     with c_apply:
         if st.button("Save ladder order", key="live_ladder_save_order"):
@@ -807,7 +808,6 @@ def render(ctx):
                         current_idx += int(size)
 
                     final_roster = pd.DataFrame(final_assignments)
-                    final_roster = final_roster.sort_values(["court", "rating"], ascending=[True, False]).copy()
                     final_roster["slot"] = final_roster.groupby("court").cumcount() + 1
 
                     st.session_state.ladder_live_roster = final_roster[["player_id", "name", "rating", "court", "slot"]].copy()
