@@ -24,7 +24,7 @@ from jupr_app.ui.url import qp_get
 CLUB_ID = "tres_palapas"
 
 # Public base URL used for share links + link buttons (Streamlit Cloud)
-PUBLIC_BASE_URL = "https://8lkemld946rmtwwptk2gcs.streamlit.app"
+PUBLIC_BASE_URL = "https://juprtrespalapas.streamlit.app"
 
 
 # -------------------------
