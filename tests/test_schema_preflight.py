@@ -31,6 +31,10 @@ class _FakeRpcQuery:
                 )
             if not self.supabase.rpc_invariants_ok:
                 raise APIError({"code": "P0001", "message": "missing required unique indexes"})
+        if self.name == "get_public_table_columns":
+            table_name = str((self.supabase.last_rpc_payload or {}).get("p_table") or "")
+            columns = sorted(self.supabase.tables.get(table_name, set()))
+            return _FakeResponse([{"column_name": col} for col in columns])
         return _FakeResponse([])
 
 
@@ -94,12 +98,14 @@ class _FakeSupabase:
         self.rpc_error_message = rpc_error_message
         self.pg_indexes_rows = pg_indexes_rows or []
         self.last_rpc_payload = None
+        self.rpc_calls: list[tuple[str, dict]] = []
 
     def table(self, name: str):
         return _FakeTableQuery(self, name)
 
     def rpc(self, name: str, payload: dict):
         self.last_rpc_payload = payload
+        self.rpc_calls.append((name, payload))
         return _FakeRpcQuery(self, name)
 
 
@@ -205,10 +211,10 @@ def test_preflight_calls_assert_invariants_with_named_payload():
     )
 
     assert ensure_badge_schema_preflight(supabase) is True
-    assert supabase.last_rpc_payload == {"payload": {}}
+    assert ("assert_app_invariants", {"payload": {}}) in supabase.rpc_calls
 
 
-def test_preflight_uses_index_fallback_when_rpc_is_missing_and_indexes_exist(monkeypatch):
+def test_preflight_raises_when_rpc_is_unavailable_even_if_indexes_exist(monkeypatch):
     monkeypatch.delenv("JUPR_SKIP_BADGE_SCHEMA_PREFLIGHT", raising=False)
     supabase = _FakeSupabase(
         {
@@ -242,7 +248,10 @@ def test_preflight_uses_index_fallback_when_rpc_is_missing_and_indexes_exist(mon
         ],
     )
 
-    assert ensure_badge_schema_preflight(supabase) is True
+    with pytest.raises(RuntimeError) as excinfo:
+        ensure_badge_schema_preflight(supabase)
+    assert "while executing assert_app_invariants" in str(excinfo.value)
+    assert "PGRST202" in str(excinfo.value)
 
 
 def test_preflight_raises_when_rpc_is_missing_and_indexes_are_missing(monkeypatch):

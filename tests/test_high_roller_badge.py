@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from jupr_app.domain.gamification.badge_types import BadgeEvaluationContext
+from jupr_app.domain.contracts.badges import BadgeEvaluationContext
 from jupr_app.domain.gamification.evaluators import evaluate_high_roller
 
 

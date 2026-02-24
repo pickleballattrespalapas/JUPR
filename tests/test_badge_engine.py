@@ -4,7 +4,7 @@ import pandas as pd
 
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badge_registry import active_badge_ids, registry
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.copy_pack import load_copy_pack
 from jupr_app.domain.gamification.ensure_badges import ensure_badges

@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_registry import registry
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.evaluators import build_evaluation_context
 from jupr_app.domain.match_filters import MatchFilterAudit, MatchFilterAuditStep, apply_match_filters_with_audit
 

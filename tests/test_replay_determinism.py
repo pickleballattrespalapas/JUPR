@@ -46,9 +46,15 @@ class _TableQuery:
         self._payload = dict(payload)
         return self
 
+    def upsert(self, payload: dict, on_conflict: str | None = None):
+        _ = on_conflict
+        self._mode = "upsert"
+        self._payload = dict(payload)
+        return self
+
     def execute(self):
         rows = self.supabase.storage.setdefault(self.table, [])
-        if self._mode == "insert":
+        if self._mode in {"insert", "upsert"}:
             if self.table == "replay_lock":
                 club_id = str(self._payload.get("club_id"))
                 if any(str(r.get("club_id")) == club_id for r in rows):

@@ -7,7 +7,7 @@ from typing import Any
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_registry import is_badge_active, registry
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.evaluators import build_evaluation_context
 
 

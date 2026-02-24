@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
+from jupr_app.domain.contracts.badges import BadgeCandidate
 from jupr_app.domain.gamification.badges_repo import ensure_player_badges_contract, upsert_player_badges
 
 

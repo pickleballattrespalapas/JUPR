@@ -31,6 +31,12 @@ class _Query:
         self._payload = dict(payload)
         return self
 
+    def upsert(self, payload: dict, on_conflict: str | None = None):
+        _ = on_conflict
+        self._mode = "upsert"
+        self._payload = dict(payload)
+        return self
+
     def update(self, payload: dict):
         self._mode = "update"
         self._payload = dict(payload)
@@ -43,7 +49,7 @@ class _Query:
     def execute(self):
         rows = self.supabase.tables.setdefault(self.table, [])
 
-        if self._mode == "insert":
+        if self._mode in {"insert", "upsert"}:
             rows.append(dict(self._payload or {}))
             return SimpleNamespace(data=[dict(self._payload or {})])
 

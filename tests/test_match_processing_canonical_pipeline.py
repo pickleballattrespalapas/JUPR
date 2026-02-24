@@ -15,8 +15,12 @@ class _Query:
         self.table_name = table_name
         self.filters: list[tuple[str, str, object]] = []
         self._order: list[tuple[str, bool]] = []
+        self._write_mode = "select"
+        self._write_payload: dict | None = None
+        self._on_conflict: str | None = None
 
     def select(self, _fields: str):
+        self._write_mode = "select"
         return self
 
     def eq(self, column: str, value):
@@ -34,13 +38,63 @@ class _Query:
     def limit(self, _n: int):
         return self
 
+    def insert(self, payload: dict):
+        self._write_mode = "insert"
+        self._write_payload = dict(payload)
+        return self
+
+    def update(self, payload: dict):
+        self._write_mode = "update"
+        self._write_payload = dict(payload)
+        return self
+
+    def upsert(self, payload: dict, on_conflict: str | None = None):
+        self._write_mode = "upsert"
+        self._write_payload = dict(payload)
+        self._on_conflict = on_conflict
+        return self
+
+    def delete(self):
+        self._write_mode = "delete"
+        return self
+
     def execute(self):
-        rows = [dict(r) for r in self.storage.get(self.table_name, [])]
+        table_rows = self.storage.setdefault(self.table_name, [])
+        rows = [dict(r) for r in table_rows]
         for op, col, val in self.filters:
             if op == "eq":
                 rows = [r for r in rows if str(r.get(col)) == str(val)]
             elif op == "in":
                 rows = [r for r in rows if r.get(col) in val]
+
+        if self._write_mode == "insert":
+            payload = dict(self._write_payload or {})
+            table_rows.append(payload)
+            return SimpleNamespace(data=[payload])
+
+        if self._write_mode == "update":
+            updated = []
+            for idx, row in enumerate(table_rows):
+                if all(str(row.get(col)) == str(val) for op, col, val in self.filters if op == "eq"):
+                    table_rows[idx] = {**row, **(self._write_payload or {})}
+                    updated.append(dict(table_rows[idx]))
+            return SimpleNamespace(data=updated)
+
+        if self._write_mode == "upsert":
+            payload = dict(self._write_payload or {})
+            keys = [k.strip() for k in str(self._on_conflict or "").split(",") if k.strip()]
+            for idx, row in enumerate(table_rows):
+                if keys and all(row.get(k) == payload.get(k) for k in keys):
+                    table_rows[idx] = {**row, **payload}
+                    return SimpleNamespace(data=[dict(table_rows[idx])])
+            table_rows.append(payload)
+            return SimpleNamespace(data=[payload])
+
+        if self._write_mode == "delete":
+            removed = [dict(r) for r in table_rows if all(str(r.get(col)) == str(val) for op, col, val in self.filters if op == "eq")]
+            self.storage[self.table_name] = [dict(r) for r in table_rows if not all(str(r.get(col)) == str(val) for op, col, val in self.filters if op == "eq")]
+            return SimpleNamespace(data=removed)
+
         for col, desc in self._order:
             rows = sorted(rows, key=lambda r, c=col: r.get(c), reverse=desc)
         return SimpleNamespace(data=rows)

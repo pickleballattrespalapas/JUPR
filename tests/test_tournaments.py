@@ -236,6 +236,45 @@ def test_best_of_three_series_winner():
     assert len(updates) > 0
 
 
+def test_resolve_series_results_infers_loser_when_winner_known():
+    games = [
+        {
+            "id": "g1",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "series_game_number": 1,
+            "team_a_id": "t1",
+            "team_b_id": "t2",
+            "winner_team_id": "t1",
+        },
+        {
+            "id": "g2",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "series_game_number": 2,
+            "team_a_id": "t1",
+            "team_b_id": "t2",
+            "winner_team_id": "t1",
+        },
+        {
+            "id": "g3",
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P1",
+            "series_game_number": 3,
+            "team_a_id": "t1",
+            "team_b_id": "t2",
+            "winner_team_id": None,
+        },
+    ]
+
+    updates = resolve_series_results(games)
+
+    assert len(updates) == 1
+    assert updates[0]["id"] == "g2"
+    assert updates[0]["winner_team_id"] == "t1"
+    assert updates[0]["loser_team_id"] == "t2"
+
+
 def test_resolve_playoff_dependencies():
     games = [
         {

@@ -172,7 +172,7 @@ def _require_match_datetime(payload: Mapping[str, Any]) -> str:
 def _require_idempotency_key(payload: Mapping[str, Any]) -> str:
     key = str(payload.get("idempotency_key") or "").strip()
     if not key:
-        raise RuntimeError("All match writes require idempotency_key.")
+        raise ValueError("idempotency_key is required")
     return key
 
 
@@ -349,7 +349,7 @@ def record_match(*, supabase: Any, club_id: str, match_payload: Mapping[str, Any
     scoped_club_id = _require_club_id(club_id)
     _require_match_datetime(match_payload)
     if match_payload.get("idempotency_key") is None:
-        raise RuntimeError("All match writes require idempotency_key.")
+        raise ValueError("idempotency_key is required")
     scoped_idempotency_key = _require_idempotency_key(match_payload)
 
     existing_match = _find_existing_match_by_idempotency_key(
