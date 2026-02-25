@@ -7,13 +7,15 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 
-DEFAULT_MAX_FEATURED = 3
+DEFAULT_MAX_FEATURED = 1
 RECAP_CATEGORY_CONFIG = {
     "TOP_PERFORMER": {
         "label": "Top Performer",
+        "max_featured": 1,
     },
     "BIGGEST_JUMP": {
         "label": "Biggest Jump",
+        "max_featured": 1,
     },
 }
 
@@ -712,37 +714,31 @@ def _event_highlights(
     if not stats:
         return []
 
-    def top_performer_players() -> list[dict]:
-        ranked = sorted(
-            stats.items(),
-            key=lambda item: (item[1].get("wins", 0), item[1].get("games", 0)),
-            reverse=True,
-        )
-        players = []
-        for pid, entry in ranked:
-            name = id_to_name.get(pid, f"#{pid}")
-            wins = int(entry.get("wins", 0))
-            losses = int(entry.get("losses", 0))
-            display = f"{name} — {wins}-{losses}" if not short_labels else f"{name} {wins}-{losses}"
-            players.append({"id": pid, "name": name, "display": display})
-        return players
-
-    def biggest_jump_players() -> list[dict]:
-        ranked = sorted(stats.items(), key=lambda item: item[1].get("delta_jupr", 0), reverse=True)
-        players = []
-        for pid, entry in ranked:
-            delta = float(entry.get("delta_jupr", 0))
-            if delta <= 0:
-                continue
-            name = id_to_name.get(pid, f"#{pid}")
-            display = f"{name} — +{delta:.2f}" if short_labels else f"{name} — +{delta:.2f} JUPR"
-            players.append({"id": pid, "name": name, "display": display})
-        return players
-
-    category_players = {
-        "TOP_PERFORMER": top_performer_players(),
-        "BIGGEST_JUMP": biggest_jump_players(),
+    ranked_by_category: dict[str, list[dict]] = {
+        "TOP_PERFORMER": [],
+        "BIGGEST_JUMP": [],
     }
+
+    ranked_top = sorted(
+        stats.items(),
+        key=lambda item: (item[1].get("wins", 0), item[1].get("games", 0)),
+        reverse=True,
+    )
+    for pid, entry in ranked_top:
+        name = id_to_name.get(pid, f"#{pid}")
+        wins = int(entry.get("wins", 0))
+        losses = int(entry.get("losses", 0))
+        display = f"{name} {wins}-{losses}" if short_labels else f"{name} — {wins}-{losses}"
+        ranked_by_category["TOP_PERFORMER"].append({"id": pid, "name": name, "display": display})
+
+    ranked_jump = sorted(stats.items(), key=lambda item: item[1].get("delta_jupr", 0), reverse=True)
+    for pid, entry in ranked_jump:
+        delta = float(entry.get("delta_jupr", 0))
+        if delta <= 0:
+            continue
+        name = id_to_name.get(pid, f"#{pid}")
+        display = f"{name} — +{delta:.2f}" if short_labels else f"{name} — +{delta:.2f} JUPR"
+        ranked_by_category["BIGGEST_JUMP"].append({"id": pid, "name": name, "display": display})
 
     category_order = ["BIGGEST_JUMP", "TOP_PERFORMER"] if prefer_jump else ["TOP_PERFORMER", "BIGGEST_JUMP"]
     highlights: list[dict] = []
@@ -750,19 +746,12 @@ def _event_highlights(
         if len(highlights) >= count:
             break
         config = RECAP_CATEGORY_CONFIG.get(key, {})
-        label_default = "Top Performer" if key == "TOP_PERFORMER" else "Biggest Jump"
-        short_label_default = "Top" if key == "TOP_PERFORMER" else "Jump"
-        max_featured = int(config.get("max_featured", DEFAULT_MAX_FEATURED))
-        players = category_players.get(key, [])[:max(0, max_featured)]
+        label = config.get("label") or ("Top Performer" if key == "TOP_PERFORMER" else "Biggest Jump")
+        max_featured = max(0, int(config.get("max_featured", DEFAULT_MAX_FEATURED)))
+        players = ranked_by_category.get(key, [])[:max_featured]
         if not players:
             continue
-        highlights.append(
-            {
-                "key": key,
-                "label": short_label_default if short_labels else config.get("label", label_default),
-                "players": players,
-            }
-        )
+        highlights.append({"key": key, "label": label if not short_labels else label, "players": players})
 
     return highlights
 
