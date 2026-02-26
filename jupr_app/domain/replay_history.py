@@ -167,10 +167,24 @@ def replay_history(
     players_updated = False
     if str(target_reset).strip() == FULL_RESET_LABEL:
         players_updated = True
-        for pid, s in p_map.items():
-            supabase.table("players").update(
-                {"rating": s["r"], "wins": s["w"], "losses": s["l"], "matches_played": s["mp"]}
-            ).eq("club_id", club_id).eq("id", int(pid)).execute()
+   
+        player_updates = []
+           for pid, s in p_map.items():
+               player_updates.append({
+                   "id": int(pid),
+                  "club_id": club_id,
+                   "rating": float(s["r"]),
+                   "wins": int(s["w"]),
+                   "losses": int(s["l"]),
+                   "matches_played": int(s["mp"]),
+               })
+      
+           for i in range(0, len(player_updates), 500):
+               batch = player_updates[i:i+500]
+               supabase.table("players").upsert(
+                   batch,
+                   on_conflict="id"
+               ).execute()
 
     # Rebuild league_ratings
     if str(target_reset).strip() != FULL_RESET_LABEL:
