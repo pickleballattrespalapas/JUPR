@@ -20,6 +20,20 @@ class SpotlightCandidate:
 
 
 MAX_FEATURED_PER_CATEGORY = 3
+DEFAULT_SPOTLIGHT_DESCRIPTIONS = {
+    "TOP_PERFORMER_WEEK": "Best overall performance in the selected date range.",
+    "BIGGEST_JUMP_WEEK": "Largest positive JUPR rating movement.",
+    "GIANT_SLAYER_WEEK": "Biggest upset by JUPR gap.",
+    "GRIND_WEEK": "Most total matches played.",
+    "PERFECT_RUN": "Undefeated performance.",
+}
+SPOTLIGHT_DEFAULT_ORDER = [
+    "TOP_PERFORMER_WEEK",
+    "BIGGEST_JUMP_WEEK",
+    "GIANT_SLAYER_WEEK",
+    "GRIND_WEEK",
+    "PERFECT_RUN",
+]
 RECAP_CATEGORY_CONFIG = {
     "TOP_PERFORMER": {"label": "Top Performer", "max_featured": MAX_FEATURED_PER_CATEGORY},
     "BIGGEST_JUMP": {"label": "Biggest Jump", "max_featured": MAX_FEATURED_PER_CATEGORY},
@@ -139,7 +153,7 @@ def _compute_weekly_recap_payload(
         "numbers": numbers,
         "top_performers": _build_top_performers(stats, id_to_name),
         "category_sections": _build_category_sections(stats, id_to_name),
-        "spotlight": [item.__dict__ for item in spotlight],
+        "spotlight": spotlight,
         "around_club": around_club,
         "looking_ahead": ["", "", ""],
         "meta": {
@@ -605,55 +619,47 @@ def _build_spotlight_candidates(
             )
 
     candidates["TOP_PERFORMER_WEEK"].sort(
-        key=lambda x: (x.value_json.get("wins", 0) - x.value_json.get("losses", 0), x.value_json.get("avg_opponent_rating", 0)),
-        reverse=True,
+        key=lambda x: (
+            -(x.value_json.get("wins", 0) - x.value_json.get("losses", 0)),
+            -x.value_json.get("avg_opponent_rating", 0),
+            min(x.player_ids) if x.player_ids else 0,
+        )
     )
-    candidates["BIGGEST_JUMP_WEEK"].sort(key=lambda x: x.value_json.get("delta_jupr", 0), reverse=True)
-    candidates["GRIND_WEEK"].sort(key=lambda x: x.value_json.get("games", 0), reverse=True)
-    candidates["PERFECT_RUN"].sort(key=lambda x: (x.value_json.get("wins", 0), x.value_json.get("games", 0)), reverse=True)
-    candidates["GIANT_SLAYER_WEEK"].sort(key=lambda x: x.value_json.get("gap_jupr", 0), reverse=True)
+    candidates["BIGGEST_JUMP_WEEK"].sort(
+        key=lambda x: (-x.value_json.get("delta_jupr", 0), -x.value_json.get("games", 0), min(x.player_ids) if x.player_ids else 0)
+    )
+    candidates["GRIND_WEEK"].sort(
+        key=lambda x: (-x.value_json.get("games", 0), -x.value_json.get("wins", 0), min(x.player_ids) if x.player_ids else 0)
+    )
+    candidates["PERFECT_RUN"].sort(
+        key=lambda x: (-x.value_json.get("wins", 0), -x.value_json.get("games", 0), min(x.player_ids) if x.player_ids else 0)
+    )
+    candidates["GIANT_SLAYER_WEEK"].sort(
+        key=lambda x: (-x.value_json.get("gap_jupr", 0), -x.value_json.get("gap_elo", 0), min(x.player_ids) if x.player_ids else 0)
+    )
 
     return candidates
 
 
-def _select_spotlight_items(candidates: dict[str, list[SpotlightCandidate]]) -> list[SpotlightCandidate]:
-    selected: list[SpotlightCandidate] = []
-    used_events: set[tuple[str, str]] = set()
-    bands: set[str] = set()
+def _select_spotlight_items(candidates: dict[str, list[SpotlightCandidate]]) -> list[dict]:
+    selected: list[dict] = []
 
-    order = [
-        "TOP_PERFORMER_WEEK",
-        "BIGGEST_JUMP_WEEK",
-        "GIANT_SLAYER_WEEK",
-        "GRIND_WEEK",
-        "PERFECT_RUN",
-    ]
-
-    for key in order:
-        if key not in candidates or not candidates[key]:
+    for order, key in enumerate(SPOTLIGHT_DEFAULT_ORDER, start=1):
+        options = candidates.get(key, [])
+        featured = options[:MAX_FEATURED_PER_CATEGORY]
+        if not featured:
             continue
-        missing_band = None
-        if bands == {"top"}:
-            missing_band = "bottom"
-        elif bands == {"bottom"}:
-            missing_band = "top"
-
-        options = candidates[key]
-        filtered = [c for c in options if c.event_key is None or c.event_key not in used_events]
-        if filtered:
-            options = filtered
-        if missing_band:
-            banded = [c for c in options if c.band == missing_band]
-            if banded:
-                options = banded
-        choice = options[0]
-        selected.append(choice)
-        if choice.event_key is not None:
-            used_events.add(choice.event_key)
-        if choice.band:
-            bands.add(choice.band)
-        if len(selected) >= 6:
-            break
+        selected.append(
+            {
+                "key": key,
+                "label": featured[0].label,
+                "players": [item.display for item in featured],
+                "candidate_ids": [item.candidate_id for item in featured],
+                "description": DEFAULT_SPOTLIGHT_DESCRIPTIONS.get(key, ""),
+                "order": order,
+                "include": True,
+            }
+        )
 
     return selected
 

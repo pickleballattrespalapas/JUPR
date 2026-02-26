@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 from postgrest.exceptions import APIError
 
-from jupr_app.domain.recaps.weekly_recap import compute_weekly_recap, get_spotlight_candidates
+from jupr_app.domain.recaps.weekly_recap import (
+    DEFAULT_SPOTLIGHT_DESCRIPTIONS,
+    SPOTLIGHT_DEFAULT_ORDER,
+    compute_weekly_recap,
+    get_spotlight_candidates,
+)
 from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.url import qp_get
@@ -49,6 +54,39 @@ def _load_weekly_row(supabase, club_id: str, start_date: date, end_date: date) -
     return None
 
 
+def _default_award(award_key: str, order: int) -> dict:
+    return {
+        "players": [],
+        "description": DEFAULT_SPOTLIGHT_DESCRIPTIONS.get(award_key, ""),
+        "order": order,
+        "include": True,
+    }
+
+
+def _normalize_overrides(overrides: dict, generated_spotlight: list[dict]) -> dict[str, dict]:
+    normalized = {key: _default_award(key, idx + 1) for idx, key in enumerate(SPOTLIGHT_DEFAULT_ORDER)}
+    for idx, item in enumerate(generated_spotlight or []):
+        key = item.get("key")
+        if key not in normalized:
+            continue
+        normalized[key] = {
+            "players": list(item.get("candidate_ids") or item.get("players") or []),
+            "description": item.get("description") or DEFAULT_SPOTLIGHT_DESCRIPTIONS.get(key, ""),
+            "order": int(item.get("order") or (idx + 1)),
+            "include": bool(item.get("include", True)),
+        }
+
+    for key, value in (overrides or {}).items():
+        if key not in normalized or not isinstance(value, dict):
+            continue
+        normalized[key]["players"] = list(value.get("players") or normalized[key]["players"])
+        normalized[key]["description"] = value.get("description", normalized[key]["description"])
+        normalized[key]["order"] = int(value.get("order") or normalized[key]["order"])
+        normalized[key]["include"] = bool(value.get("include", normalized[key]["include"]))
+
+    return normalized
+
+
 def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, list[dict]]) -> dict:
     recap = deepcopy(generated_json or {})
     if not recap:
@@ -58,22 +96,43 @@ def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, l
     if looking_ahead:
         recap["looking_ahead"] = looking_ahead
 
-    spotlight = recap.get("spotlight", []) or []
-    spotlight_by_key = {item.get("key"): item for item in spotlight}
-    overrides = edits_json.get("spotlight_overrides", {})
-    for key, candidate_id in overrides.items():
-        options = {item.get("candidate_id"): item for item in candidates.get(key, [])}
-        selected = options.get(candidate_id)
-        if selected:
-            spotlight_by_key[key] = selected
+    candidate_maps = {
+        key: {item.get("candidate_id"): item for item in items if isinstance(item, dict)}
+        for key, items in (candidates or {}).items()
+    }
 
-    dropped = set(edits_json.get("spotlight_drop", []))
-    updated = [item for key, item in spotlight_by_key.items() if key not in dropped]
+    generated_spotlight = recap.get("spotlight", []) or []
+    overrides = _normalize_overrides(edits_json.get("spotlight_overrides", {}), generated_spotlight)
 
-    order_map = edits_json.get("spotlight_order", {})
-    if order_map:
-        updated.sort(key=lambda item: order_map.get(item.get("key"), 999))
+    updated = []
+    for key, config in overrides.items():
+        if not config.get("include", True):
+            continue
 
+        selected_ids = list(config.get("players") or [])[:3]
+        selected_options = [candidate_maps.get(key, {}).get(candidate_id) for candidate_id in selected_ids]
+        selected_options = [item for item in selected_options if item]
+
+        if not selected_options:
+            fallback = (candidates.get(key) or [])[:3]
+            selected_options = [item for item in fallback if isinstance(item, dict)]
+
+        if not selected_options:
+            continue
+
+        updated.append(
+            {
+                "key": key,
+                "label": selected_options[0].get("label", key),
+                "players": [item.get("display", "") for item in selected_options if item.get("display")],
+                "candidate_ids": [item.get("candidate_id") for item in selected_options if item.get("candidate_id")],
+                "description": config.get("description") or DEFAULT_SPOTLIGHT_DESCRIPTIONS.get(key, ""),
+                "order": int(config.get("order", 999)),
+                "include": True,
+            }
+        )
+
+    updated.sort(key=lambda item: int(item.get("order", 999)))
     recap["spotlight"] = updated
     return recap
 
@@ -156,40 +215,51 @@ def render(ctx):
 
     edits_json["looking_ahead"] = looking_inputs
 
-    spotlight = generated_json.get("spotlight", [])
-    spotlight_keys = [item.get("key") for item in spotlight if item.get("key")]
-
     st.markdown("**Spotlight Reel Overrides**")
-    overrides = edits_json.get("spotlight_overrides", {})
-    order_map = edits_json.get("spotlight_order", {})
-    drop_list = set(edits_json.get("spotlight_drop", []))
+    overrides = _normalize_overrides(edits_json.get("spotlight_overrides", {}), generated_json.get("spotlight", []))
 
-    for idx, key in enumerate(spotlight_keys):
-        options = candidates.get(key, [])
+    for idx, key in enumerate(SPOTLIGHT_DEFAULT_ORDER):
+        options = candidates.get(key, []) or []
         if not options:
             continue
+
         label = options[0].get("label", key)
-        option_labels = {item.get("candidate_id"): item.get("display", "") for item in options}
-        current = overrides.get(key)
-        if current not in option_labels:
-            current = options[0].get("candidate_id")
-        selection = st.selectbox(
-            f"{label} candidate",
+        option_labels = {item.get("candidate_id"): item.get("display", "") for item in options if item.get("candidate_id")}
+        selected_default = [candidate_id for candidate_id in overrides[key].get("players", []) if candidate_id in option_labels]
+        if not selected_default:
+            selected_default = list(option_labels.keys())[:1]
+
+        st.markdown(f"**{label}**")
+        selected_players = st.multiselect(
+            label,
             options=list(option_labels.keys()),
+            default=selected_default[:3],
+            max_selections=3,
             format_func=lambda opt: option_labels.get(opt, opt),
-            index=list(option_labels.keys()).index(current) if current in option_labels else 0,
+            key=f"{key}_players",
         )
-        overrides[key] = selection
-        order_map[key] = st.number_input(f"Order for {label}", min_value=1, max_value=10, value=int(order_map.get(key, idx + 1)))
-        include = st.checkbox(f"Include {label}", value=key not in drop_list)
-        if not include:
-            drop_list.add(key)
-        else:
-            drop_list.discard(key)
+        description = st.text_area(
+            "Description / Explainer",
+            value=overrides[key].get("description") or DEFAULT_SPOTLIGHT_DESCRIPTIONS.get(key, ""),
+            key=f"{key}_description",
+        )
+        order = st.number_input(
+            f"Order for {label}",
+            min_value=1,
+            max_value=10,
+            value=int(overrides[key].get("order", idx + 1)),
+            key=f"{key}_order",
+        )
+        include = st.checkbox(f"Include {label}", value=bool(overrides[key].get("include", True)), key=f"{key}_include")
+
+        overrides[key] = {
+            "players": selected_players,
+            "description": description,
+            "order": int(order),
+            "include": include,
+        }
 
     edits_json["spotlight_overrides"] = overrides
-    edits_json["spotlight_order"] = order_map
-    edits_json["spotlight_drop"] = list(drop_list)
 
     if st.button("Save Draft"):
         final_json = _apply_edits(generated_json, edits_json, candidates)

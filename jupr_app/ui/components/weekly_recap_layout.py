@@ -4,10 +4,94 @@ from datetime import datetime
 
 import streamlit as st
 
+ACCENT_CLASS_BY_KEY = {
+    "TOP_PERFORMER_WEEK": "baja-accent-top",
+    "BIGGEST_JUMP_WEEK": "baja-accent-jump",
+    "GIANT_SLAYER_WEEK": "baja-accent-slayer",
+    "GRIND_WEEK": "baja-accent-grind",
+    "PERFECT_RUN": "baja-accent-perfect",
+}
+
+
+def _inject_baja_styles(print_view: bool) -> None:
+    print_view_css = ".no-print { display: none !important; }" if print_view else ""
+    st.markdown(
+        """
+<style>
+  """ + print_view_css + """
+  .weekly-recap {
+    font-family: 'Inter', sans-serif;
+    color: black;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px 20px 24px;
+    border: 1px solid gainsboro;
+    border-radius: 12px;
+    background: white;
+  }
+  .weekly-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 2px solid black;
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+  }
+  .weekly-title { font-size: 28px; font-weight: 700; }
+  .weekly-range { font-size: 14px; font-weight: 600; color: dimgray; }
+  .numbers-strip {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .number-card { background: whitesmoke; padding: 10px 8px; border-radius: 10px; text-align: center; }
+  .number-value { font-size: 20px; font-weight: 700; }
+  .number-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: gray; }
+  .section { margin-top: 14px; }
+  .baja-card {
+    border-radius: 18px;
+    padding: 20px;
+    margin-bottom: 18px;
+    background: linear-gradient(135deg, linen, antiquewhite);
+    box-shadow: 0 6px 18px lightgray;
+  }
+  .baja-accent-top { border-left: 6px solid darkorange; }
+  .baja-accent-jump { border-left: 6px solid teal; }
+  .baja-accent-slayer { border-left: 6px solid rebeccapurple; }
+  .baja-accent-grind { border-left: 6px solid black; }
+  .baja-accent-perfect { border-left: 6px solid orchid; }
+  .baja-title { font-weight: 700; font-size: 1.1rem; margin-bottom: 6px; }
+  .baja-desc { font-size: 0.9rem; color: dimgrey; margin-bottom: 8px; }
+  .baja-player { margin-left: 10px; }
+  @media print {
+    body { margin: 0; }
+    .weekly-recap { border: none; margin: 0; padding: 0.4in 0.5in; box-shadow: none; }
+    .no-print { display: none !important; }
+  }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_award_card(title: str, players: list[str], description: str, accent_class: str) -> None:
+    player_lines = "".join(f"<div class='baja-player'>• {player}</div>" for player in (players or []))
+    st.markdown(
+        f"""
+<div class="baja-card {accent_class}">
+  <div class="baja-title">{title}</div>
+  <div class="baja-desc">{description}</div>
+  {player_lines}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
-    week_start = recap.get("week_start")
-    week_end = recap.get("week_end")
+    week_start = recap.get("week_start") or recap.get("start_date")
+    week_end = recap.get("week_end") or recap.get("end_date")
     title = title_override or "Tres Palapas Weekly Recap"
 
     date_label = ""
@@ -20,178 +104,63 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
             date_label = f"{week_start} – {week_end}"
 
     numbers = recap.get("numbers", {})
-    spotlight = recap.get("spotlight", [])
+    spotlight = recap.get("spotlight", []) or []
     around = recap.get("around_club", {})
-    looking_ahead = recap.get("looking_ahead", []) or []
+    looking_ahead = [str(item).strip() for item in (recap.get("looking_ahead", []) or []) if str(item).strip()]
 
-    league_items = around.get("leagues", []) or []
-    rr_items = around.get("round_robins", []) or []
+    _inject_baja_styles(print_view)
 
-    spotlight_html = "".join(
-        f"<li><strong>{(item or {}).get('label','')}</strong>: {(item or {}).get('display','')}</li>"
-        for item in (spotlight or [])
-        if isinstance(item, dict)
-    )
-    leagues_html = "".join(
-        _render_event_block((item or {}).get("league_name", "League"), (item or {}).get("highlights", []))
-        for item in (league_items or [])
-        if isinstance(item, dict)
-    )
-    rr_html = "".join(
-        _render_event_block((item or {}).get("event_name", "Pop-Up Event"), (item or {}).get("highlights", []))
-        for item in (rr_items or [])
-        if isinstance(item, dict)
-    )
-    looking_ahead_html = "".join(
-        f"<li>{item}</li>" for item in (looking_ahead or [])
-        if str(item).strip() != ""
+    st.markdown(
+        f"""
+<div class="weekly-recap">
+  <div class="weekly-header">
+    <div class="weekly-title">{title}</div>
+    <div class="weekly-range">{date_label}</div>
+  </div>
+  <div class="numbers-strip">
+    <div class="number-card"><div class="number-value">{numbers.get('matches', 0)}</div><div class="number-label">Matches</div></div>
+    <div class="number-card"><div class="number-value">{numbers.get('players', 0)}</div><div class="number-label">Players</div></div>
+    <div class="number-card"><div class="number-value">{numbers.get('leagues', 0)}</div><div class="number-label">Leagues</div></div>
+    <div class="number-card"><div class="number-value">{numbers.get('round_robins', 0)}</div><div class="number-label">Pop-Ups</div></div>
+    <div class="number-card"><div class="number-value">{numbers.get('new_faces', 0)}</div><div class="number-label">New Faces</div></div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
     )
 
-    print_mode_notice = "<!-- PRINT MODE -->" if print_view else ""
-    print_view_css = ".no-print { display: none !important; }" if print_view else ""
+    st.markdown("### Spotlight Reel")
+    col1, col2 = st.columns(2)
+    for idx, item in enumerate(sorted(spotlight, key=lambda award: int(award.get("order", 999)))):
+        if not item.get("include", True):
+            continue
+        target_col = col1 if idx % 2 == 0 else col2
+        with target_col:
+            render_award_card(
+                item.get("label", "Award"),
+                item.get("players", []) or [],
+                item.get("description", ""),
+                ACCENT_CLASS_BY_KEY.get(item.get("key"), "baja-accent-top"),
+            )
 
-    html = f"""
-    <style>
-      {print_view_css}
-      .weekly-recap {{
-        font-family: 'Inter', sans-serif;
-        color: #111827;
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 16px 20px 24px;
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        background: #ffffff;
-      }}
-      .weekly-header {{
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        border-bottom: 2px solid #111827;
-        padding-bottom: 8px;
-        margin-bottom: 12px;
-      }}
-      .weekly-title {{
-        font-size: 28px;
-        font-weight: 700;
-      }}
-      .weekly-range {{
-        font-size: 14px;
-        font-weight: 600;
-        color: #374151;
-      }}
-      .numbers-strip {{
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 8px;
-        margin-bottom: 16px;
-      }}
-      .number-card {{
-        background: #f3f4f6;
-        padding: 10px 8px;
-        border-radius: 10px;
-        text-align: center;
-      }}
-      .number-value {{
-        font-size: 20px;
-        font-weight: 700;
-      }}
-      .number-label {{
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: #6b7280;
-      }}
-      .section {{
-        margin-top: 14px;
-      }}
-      .section h3 {{
-        font-size: 18px;
-        margin: 0 0 6px;
-      }}
-      .subsection h4 {{
-        font-size: 14px;
-        margin: 8px 0 4px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #6b7280;
-      }}
-      .event-block {{
-        margin-bottom: 6px;
-      }}
-      .event-name {{
-        font-weight: 600;
-        font-size: 13px;
-      }}
-      ul.compact {{
-        margin: 4px 0 6px 18px;
-        padding: 0;
-      }}
-      ul.compact li {{
-        margin-bottom: 3px;
-        font-size: 13px;
-      }}
-      .looking-ahead li {{
-        font-size: 13px;
-      }}
-      @media print {{
-        body {{
-          margin: 0;
-        }}
-        .weekly-recap {{
-          border: none;
-          margin: 0;
-          padding: 0.4in 0.5in;
-          box-shadow: none;
-        }}
-        .no-print {{
-          display: none !important;
-        }}
-      }}
-    </style>
-    {print_mode_notice}
-    <div class=\"weekly-recap\">
-      <div class=\"weekly-header\">
-        <div class=\"weekly-title\">{title}</div>
-        <div class=\"weekly-range\">{date_label}</div>
-      </div>
-      <div class=\"numbers-strip\">
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('matches', 0)}</div><div class=\"number-label\">Matches</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('players', 0)}</div><div class=\"number-label\">Players</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('leagues', 0)}</div><div class=\"number-label\">Leagues</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('round_robins', 0)}</div><div class=\"number-label\">Pop-Ups</div></div>
-        <div class=\"number-card\"><div class=\"number-value\">{numbers.get('new_faces', 0)}</div><div class=\"number-label\">New Faces</div></div>
-      </div>
-      <div class=\"section\">
-        <h3>Spotlight Reel</h3>
-        <ul class=\"compact\">
-          {spotlight_html}
-        </ul>
-      </div>
-      <div class=\"section\">
-        <h3>Around the Club</h3>
-        <div class=\"subsection\">
-          <h4>Leagues</h4>
-          {leagues_html}
-        </div>
-        <div class=\"subsection\">
-          <h4>Round Robins</h4>
-          {rr_html}
-        </div>
-      </div>
-      <div class=\"section\">
-        <h3>Looking Ahead</h3>
-        <ul class=\"compact looking-ahead\">
-          {looking_ahead_html}
-        </ul>
-      </div>
-    </div>
-    """
+    st.markdown("### Around the Club")
+    st.markdown("#### Leagues")
+    for item in around.get("leagues", []) or []:
+        st.markdown(f"**{item.get('league_name', 'League')}**")
+        for highlight in item.get("highlights", []) or []:
+            display = (highlight or {}).get("display", "")
+            if str(display).strip():
+                st.markdown(f"• {display}")
 
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown("#### Round Robins")
+    for item in around.get("round_robins", []) or []:
+        st.markdown(f"**{item.get('event_name', 'Pop-Up Event')}**")
+        for highlight in item.get("highlights", []) or []:
+            display = (highlight or {}).get("display", "")
+            if str(display).strip():
+                st.markdown(f"• {display}")
 
-
-def _render_event_block(name: str, highlights: list[dict]) -> str:
-    safe = [h for h in (highlights or []) if isinstance(h, dict)]
-    items = "".join(f"<li>{h.get('display','')}</li>" for h in safe if str(h.get("display","")).strip() != "")
-    return f"<div class='event-block'><div class='event-name'>{name}</div><ul class='compact'>{items}</ul></div>"
+    if looking_ahead:
+        st.markdown("### Looking Ahead")
+        for item in looking_ahead:
+            st.markdown(f"• {item}")
