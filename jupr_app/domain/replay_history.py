@@ -209,8 +209,12 @@ def replay_history(
 
     # Rewrite match snapshots
     total = max(1, len(matches_to_update))
-    for i, u in enumerate(matches_to_update):
-        supabase.table("matches").update(u).eq("club_id", club_id).eq("id", int(u["id"])).execute()
+    for i in range(0, len(matches_to_update), 500):
+       batch = matches_to_update[i:i+500]
+       supabase.table("matches").upsert(
+           batch,
+           on_conflict="id"
+       ).execute()
         if progress_cb is not None:
             try:
                 progress_cb((i + 1) / total)
