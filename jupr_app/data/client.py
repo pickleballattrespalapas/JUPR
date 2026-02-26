@@ -1,14 +1,16 @@
-from supabase import create_client
-
-def make_supabase(url: str, key: str):
-    return create_client(url, key)
 import httpx
-
+from supabase import create_client
 from supabase.lib.client_options import ClientOptions
 
-def get_supabase_client():
+
+def make_supabase(url: str, key: str):
+    """
+    Centralized Supabase client factory.
+    Disables HTTP/2 to stabilize long-running admin jobs (replay).
+    """
+
     http_client = httpx.Client(
-        http2=False,  # 🔥 critical for replay stability
+        http2=False,  # critical for replay stability
         timeout=httpx.Timeout(60.0, connect=10.0),
         limits=httpx.Limits(
             max_connections=5,
@@ -23,7 +25,7 @@ def get_supabase_client():
     )
 
     return create_client(
-        SUPABASE_URL,
-        SUPABASE_KEY,
+        url,
+        key,
         options=options,
     )
