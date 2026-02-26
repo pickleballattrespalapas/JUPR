@@ -145,38 +145,12 @@ def _compute_weekly_recap_payload(
         supabase,
     )
 
-    completed = _load_completed_tournaments(
+    tournaments_section = _build_tournament_section(
         supabase,
         club_id,
         start_dt_utc,
         end_dt_utc,
     )
-    tournament_cards = []
-    for t in completed:
-        podium_rows = _load_tournament_podium(supabase, t["id"])
-        if not podium_rows:
-            continue
-
-        ordered = sorted(
-            podium_rows,
-            key=lambda r: int(r.get("placement", 999))
-        )
-
-        display_rows = [
-            row.get("display_name", "")
-            for row in ordered
-            if row.get("display_name")
-        ]
-
-        if not display_rows:
-            continue
-
-        tournament_cards.append(
-            {
-                "title": t.get("name", "Tournament"),
-                "podium": display_rows,
-            }
-        )
 
     recap = {
         "club_id": club_id,
@@ -188,7 +162,7 @@ def _compute_weekly_recap_payload(
         "category_sections": _build_category_sections(stats, id_to_name),
         "spotlight": spotlight,
         "around_club": around_club,
-        "tournaments": tournament_cards,
+        "tournaments": tournaments_section,
         "looking_ahead": ["", "", ""],
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -257,41 +231,29 @@ def _load_matches(
     return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
 
 
-def _load_completed_tournaments(supabase, club_id, start_dt_utc, end_dt_utc):
+def _build_tournament_section(supabase, club_id, start_dt, end_dt) -> list[dict]:
     if supabase is None:
         return []
 
-    # Step 1: Find tournament_ids from canonical match history in the recap date range
     response = (
         supabase.table("matches")
-        .select("*")
+        .select("tournament_id")
         .eq("club_id", club_id)
         .eq("context_type", "TOURNAMENT")
-        .gte("date", start_dt_utc.isoformat())
-        .lte("date", end_dt_utc.isoformat())
+        .gte("date", start_dt.isoformat())
+        .lte("date", end_dt.isoformat())
         .execute()
     )
 
-    df_tournaments = pd.DataFrame(response.data or [])
-    if not df_tournaments.empty:
-        df_tournaments = df_tournaments[
-            (df_tournaments.get("score_t1", 0) + df_tournaments.get("score_t2", 0)) > 0
-        ]
-
-    games = df_tournaments.to_dict("records")
-    if not games:
-        return []
-
     tournament_ids = list({
         row.get("tournament_id")
-        for row in games
+        for row in (response.data or [])
         if row.get("tournament_id")
     })
 
     if not tournament_ids:
         return []
 
-    # Step 2: Load only completed tournaments from those IDs
     response = (
         supabase.table("tournaments")
         .select("id,name,status")
@@ -301,7 +263,44 @@ def _load_completed_tournaments(supabase, club_id, start_dt_utc, end_dt_utc):
         .execute()
     )
 
-    return response.data or []
+    tournaments = response.data or []
+    if not tournaments:
+        return []
+
+    tournament_section: list[dict] = []
+    for tournament in tournaments:
+        tournament_id = tournament.get("id")
+        if not tournament_id:
+            continue
+
+        podium_rows = _load_tournament_podium(supabase, tournament_id)
+        if not podium_rows:
+            continue
+
+        podium = [
+            {
+                "placement": int(row.get("placement", 0) or 0),
+                "display_name": str(row.get("display_name", "") or "").strip(),
+            }
+            for row in sorted(
+                podium_rows,
+                key=lambda row: int(row.get("placement", 999) or 999),
+            )
+            if str(row.get("display_name", "") or "").strip()
+        ]
+
+        if not podium:
+            continue
+
+        tournament_section.append(
+            {
+                "tournament_id": tournament_id,
+                "tournament_name": str(tournament.get("name") or "Tournament"),
+                "podium": podium,
+            }
+        )
+
+    return tournament_section
 
 
 def _load_tournament_podium(supabase, tournament_id: str) -> list[dict]:
@@ -403,6 +402,8 @@ def _safe_float(value, default: float | None = None) -> float | None:
 
 
 def _resolve_event_key(match: dict) -> tuple[str, str] | None:
+    if str(match.get("context_type", "") or "").strip().upper() == "TOURNAMENT":
+        return None
     league = str(match.get("league", "") or "").strip()
     match_type = str(match.get("match_type", "") or "").strip()
     week_tag = str(match.get("week_tag", "") or "").strip()
