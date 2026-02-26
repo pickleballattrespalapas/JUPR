@@ -234,11 +234,11 @@ def replay_history(
 
     if str(target_reset).strip() == FULL_RESET_LABEL:
         players_updated = True
-
+   
         for pid, s in p_map.items():
             if pid not in valid_player_ids:
-                continue  # never recreate missing players
-
+                continue  # never recreate deleted/merged players
+   
             supabase.table("players").update(
                 {
                     "rating": float(s["r"]),
