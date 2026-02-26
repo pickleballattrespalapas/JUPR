@@ -62,7 +62,11 @@ def _inject_baja_styles(print_view: bool) -> None:
     padding: 20px;
     margin-bottom: 20px;
     box-shadow: 0 8px 22px rgba(0,0,0,0.08);
-    color: var(--text-color);
+    color: #000;
+  }
+
+  .baja-card * {
+    color: #000;
   }
 
   .baja-top {
@@ -117,7 +121,11 @@ def _inject_baja_styles(print_view: bool) -> None:
     padding: 28px;
     margin-bottom: 24px;
     box-shadow: 0 10px 26px rgba(0,0,0,0.1);
-    color: var(--text-color);
+    color: #000;
+  }
+
+  .baja-podium * {
+    color: #000;
   }
 
   .podium-grid {
