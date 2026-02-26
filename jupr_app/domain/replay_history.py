@@ -21,22 +21,24 @@ def replay_history(
     """
     Replays match history in chronological order and:
 
-      - rewrites match snapshot columns (for target league, or all on FULL reset)
-      - rebuilds league_ratings (for target league, or all on FULL reset)
-      - updates players table ONLY when doing FULL reset
+      - rewrites match snapshot columns (RPC bulk UPDATE)
+      - rebuilds league_ratings (delete + insert)
+      - updates players table ONLY when doing FULL reset (RPC bulk UPDATE)
 
-    Players are UPDATED only (never inserted). (We enforce this by filtering to valid_player_ids.)
+    No per-row .execute() loops for writes.
+    No upsert() for partial updates (avoids NOT NULL failures like matches.league).
     """
-
     import random
     import time
 
     import httpx
 
-    # Tune these if needed
-    READ_PAGE_SIZE = 1000   # matches pagination size
-    WRITE_BATCH_SIZE = 250  # upsert/insert batch size
+    READ_PAGE_SIZE = 1000
+    WRITE_BATCH_SIZE = 500
     RETRIES = 5
+
+    RPC_MATCH_SNAPSHOTS = "bulk_update_match_snapshots"
+    RPC_PLAYERS_STATS = "bulk_update_players_stats"
 
     # ------------------------------
     # Helpers
@@ -54,9 +56,6 @@ def replay_history(
         return [rows[i : i + size] for i in range(0, len(rows), size)]
 
     def _retry(fn, *, label: str = ""):
-        """
-        Retry only transient transport failures. If it keeps failing, raise.
-        """
         for attempt in range(RETRIES):
             try:
                 return fn()
@@ -69,48 +68,7 @@ def replay_history(
             ):
                 if attempt == RETRIES - 1:
                     raise
-                # exponential backoff + jitter
                 time.sleep(0.35 * (2**attempt) + random.random() * 0.15)
-
-    def _execute(fn, *, label: str = ""):
-        # convenience wrapper to keep call sites short
-        return _retry(fn, label=label)
-
-    # Returning="minimal" is supported by Supabase insert/upsert/delete APIs (docs),
-    # but to be extra-safe across versions we fall back if a TypeError occurs.
-    def _delete_minimal(builder_fn, *, label: str):
-        def _do():
-            return builder_fn(returning="minimal").execute()
-
-        try:
-            return _execute(_do, label=label)
-        except TypeError:
-            return _execute(lambda: builder_fn().execute(), label=label)
-
-    def _insert_minimal(table: str, rows: list[dict[str, Any]], *, label: str):
-        def _do():
-            return supabase.table(table).insert(rows, returning="minimal").execute()
-
-        try:
-            return _execute(_do, label=label)
-        except TypeError:
-            return _execute(lambda: supabase.table(table).insert(rows).execute(), label=label)
-
-    def _upsert_minimal(table: str, rows: list[dict[str, Any]], *, on_conflict: str, label: str):
-        def _do():
-            return (
-                supabase.table(table)
-                .upsert(rows, on_conflict=on_conflict, returning="minimal")
-                .execute()
-            )
-
-        try:
-            return _execute(_do, label=label)
-        except TypeError:
-            return _execute(
-                lambda: supabase.table(table).upsert(rows, on_conflict=on_conflict).execute(),
-                label=label,
-            )
 
     # ------------------------------
     # Reset mode
@@ -120,13 +78,12 @@ def replay_history(
     target_league_norm = _norm_league(target_reset_raw)
 
     # ---------------------------------------------------------
-    # Load players (select only what we need)
+    # Load players (only what we need)
     # ---------------------------------------------------------
-    players_cols = "id, starting_rating, rating"
-    players_resp = _execute(
+    players_resp = _retry(
         lambda: (
             supabase.table("players")
-            .select(players_cols)
+            .select("id,starting_rating,rating")
             .eq("club_id", club_id)
             .execute()
         ),
@@ -136,16 +93,19 @@ def replay_history(
 
     valid_player_ids: set[int] = set()
     start_base_by_pid: dict[int, float] = {}
+
     for p in all_players:
         try:
             pid = int(p["id"])
         except Exception:
             continue
+
         valid_player_ids.add(pid)
 
         base = p.get("starting_rating")
         if base is None:
             base = p.get("rating", 1200.0)
+
         try:
             start_base_by_pid[pid] = float(base or 1200.0)
         except Exception:
@@ -175,9 +135,11 @@ def replay_history(
             pid = int(p["id"])
         except Exception:
             continue
+
         base = p.get("starting_rating")
         if base is None:
             base = p.get("rating", 1200.0)
+
         try:
             p_map[pid] = {"r": float(base or 1200.0), "w": 0, "l": 0, "mp": 0}
         except Exception:
@@ -191,7 +153,6 @@ def replay_history(
         ensure_player(int(pid))
         return float(p_map[int(pid)]["r"])
 
-    # league-specific state: (player_id, league_name) -> state
     island_map: Dict[tuple[int, str], Dict[str, Any]] = {}
 
     def gir(pid: int, lg: str, *, seed_rating: Optional[float] = None) -> float:
@@ -206,9 +167,13 @@ def replay_history(
         return float(island_map[key]["r"])
 
     # ---------------------------------------------------------
-    # Iterate matches via pagination (select only what we need)
+    # Read matches with pagination
     # ---------------------------------------------------------
-    match_cols = "id, date, league, match_type, t1_p1, t1_p2, t2_p1, t2_p2, score_t1, score_t2"
+    match_cols = (
+        "id,date,league,match_type,"
+        "t1_p1,t1_p2,t2_p1,t2_p2,"
+        "score_t1,score_t2"
+    )
 
     matches_to_update: list[dict[str, Any]] = []
     skipped_incomplete_scope = 0
@@ -217,9 +182,9 @@ def replay_history(
     offset = 0
     while True:
         start = offset
-        end = offset + READ_PAGE_SIZE - 1  # inclusive
+        end = offset + READ_PAGE_SIZE - 1
 
-        page_resp = _execute(
+        page_resp = _retry(
             lambda s=start, e=end: (
                 supabase.table("matches")
                 .select(match_cols)
@@ -229,7 +194,7 @@ def replay_history(
                 .range(s, e)
                 .execute()
             ),
-            label=f"select_matches_range_{start}_{end}",
+            label=f"select_matches_{start}_{end}",
         )
 
         page = page_resp.data or []
@@ -238,21 +203,11 @@ def replay_history(
 
         matches_scanned_total += len(page)
 
-        # ---------------------------------------------------------
-        # Replay Loop (computation only)
-        #
-        # We ALWAYS replay all matches for overall state so overall snapshots
-        # for the target league are correct even on league-only reset.
-        # ---------------------------------------------------------
         for m in page:
             lg = _norm_league(m.get("league", "") or "")
             in_scope = full_reset or (lg == target_league_norm)
 
-            p1 = m.get("t1_p1")
-            p2 = m.get("t1_p2")
-            p3 = m.get("t2_p1")
-            p4 = m.get("t2_p2")
-
+            p1, p2, p3, p4 = m.get("t1_p1"), m.get("t1_p2"), m.get("t2_p1"), m.get("t2_p2")
             if None in (p1, p2, p3, p4):
                 if in_scope:
                     skipped_incomplete_scope += 1
@@ -268,10 +223,9 @@ def replay_history(
             s1 = int(m.get("score_t1", 0) or 0)
             s2 = int(m.get("score_t2", 0) or 0)
 
-            # pre-match overall ratings
             sr1, sr2, sr3, sr4 = gr(p1), gr(p2), gr(p3), gr(p4)
 
-            # (optional) league-specific deltas only when in scope & not PopUp
+            # league-specific only if in_scope and not PopUp
             do_league = (str(m.get("match_type", "")) != "PopUp") and in_scope
             if do_league:
                 ir1 = gir(p1, lg, seed_rating=sr1)
@@ -289,7 +243,6 @@ def replay_history(
             else:
                 di1 = di2 = 0.0
 
-            # overall delta
             do1, do2 = calculate_hybrid_elo(
                 (sr1 + sr2) / 2,
                 (sr3 + sr4) / 2,
@@ -300,7 +253,7 @@ def replay_history(
 
             win = s1 > s2
 
-            # update overall state
+            # overall updates
             for pid, delta, won_flag in [
                 (p1, do1, win),
                 (p2, do1, win),
@@ -315,7 +268,7 @@ def replay_history(
                 else:
                     p_map[pid]["l"] += 1
 
-            # update league-specific state
+            # league updates
             if do_league:
                 for pid, delta, won_flag in [
                     (p1, di1, win),
@@ -323,7 +276,7 @@ def replay_history(
                     (p3, di2, not win),
                     (p4, di2, not win),
                 ]:
-                    key = (int(pid), lg)  # lg already normalized
+                    key = (int(pid), lg)
                     if key not in island_map:
                         island_map[key] = {"r": float(gr(pid)), "w": 0, "l": 0, "mp": 0}
 
@@ -334,13 +287,10 @@ def replay_history(
                     else:
                         island_map[key]["l"] += 1
 
-            # post-match overall ratings
             er1, er2, er3, er4 = gr(p1), gr(p2), gr(p3), gr(p4)
 
-            # only write match snapshots for target league (or all on full reset)
             if in_scope:
                 stored_elo_delta = abs(do1) if win else abs(do2)
-
                 matches_to_update.append(
                     {
                         "id": int(m["id"]),
@@ -365,7 +315,7 @@ def replay_history(
     new_rows: list[dict[str, Any]] = []
     for (pid, lg), s in island_map.items():
         if pid not in valid_player_ids:
-            continue  # never recreate deleted/merged players
+            continue
 
         start_base = float(start_base_by_pid.get(int(pid), 1200.0))
         new_rows.append(
@@ -382,11 +332,11 @@ def replay_history(
         )
 
     # ---------------------------------------------------------
-    # Writes (BATCHED)
+    # Writes
     # ---------------------------------------------------------
     players_updated = False
 
-    # 1) Update players (FULL reset only) — batched upsert
+    # 1) FULL reset: update players via RPC bulk UPDATE
     if full_reset:
         players_updated = True
 
@@ -406,38 +356,66 @@ def replay_history(
             )
 
         for batch in _chunk(player_updates, WRITE_BATCH_SIZE):
-            _upsert_minimal("players", batch, on_conflict="id", label="upsert_players")
+            _retry(
+                lambda b=batch: supabase.rpc(RPC_PLAYERS_STATS, {"rows": b}).execute(),
+                label="rpc_bulk_update_players_stats",
+            )
 
-    # 2) Rebuild league_ratings (delete then insert)
+    # 2) league_ratings: delete then insert (insert is fine because rows are complete)
     if not full_reset:
-        # delete target league
-        _delete_minimal(
-            lambda **kwargs: (
-                supabase.table("league_ratings")
-                .delete(**kwargs)
+        # delete both raw and normalized league names if they differ
+        if target_reset_raw and target_reset_raw != target_league_norm:
+            _retry(
+                lambda: supabase.table("league_ratings")
+                .delete(returning="minimal")
                 .eq("club_id", club_id)
-                .eq("league_name", target_league_norm)
-            ),
-            label="delete_league_ratings_target",
+                .eq("league_name", target_reset_raw)
+                .execute(),
+                label="delete_league_ratings_raw",
+            )
+
+        _retry(
+            lambda: supabase.table("league_ratings")
+            .delete(returning="minimal")
+            .eq("club_id", club_id)
+            .eq("league_name", target_league_norm)
+            .execute(),
+            label="delete_league_ratings_norm",
         )
     else:
-        # delete all club rows
-        _delete_minimal(
-            lambda **kwargs: supabase.table("league_ratings").delete(**kwargs).eq("club_id", club_id),
+        _retry(
+            lambda: supabase.table("league_ratings")
+            .delete(returning="minimal")
+            .eq("club_id", club_id)
+            .execute(),
             label="delete_league_ratings_all",
         )
 
     for batch in _chunk(new_rows, WRITE_BATCH_SIZE):
-        _insert_minimal("league_ratings", batch, label="insert_league_ratings")
+        _retry(
+            lambda b=batch: supabase.table("league_ratings")
+            .insert(b, returning="minimal")
+            .execute(),
+            label="insert_league_ratings",
+        )
 
-    # 3) Rewrite match snapshots (batched upsert ONCE)
+    # 3) match snapshots: update via RPC bulk UPDATE (never touches league)
     total = max(1, len(matches_to_update))
     rewritten = 0
+    updated_rows_total = 0
 
     for batch in _chunk(matches_to_update, WRITE_BATCH_SIZE):
-        _upsert_minimal("matches", batch, on_conflict="id", label="upsert_matches")
-        rewritten += len(batch)
+        resp = _retry(
+            lambda b=batch: supabase.rpc(RPC_MATCH_SNAPSHOTS, {"rows": b}).execute(),
+            label="rpc_bulk_update_match_snapshots",
+        )
+        # RPC returns integer in resp.data (usually). Be defensive.
+        try:
+            updated_rows_total += int(resp.data or 0)
+        except Exception:
+            pass
 
+        rewritten += len(batch)
         if progress_cb:
             try:
                 progress_cb(rewritten / total)
@@ -449,6 +427,7 @@ def replay_history(
         "players_updated": players_updated,
         "skipped_incomplete": int(skipped_incomplete_scope),
         "matches_rewritten": int(len(matches_to_update)),
+        "matches_snapshots_updated_rows": int(updated_rows_total),
         "league_ratings_rows": int(len(new_rows)),
         "matches_scanned_total": int(matches_scanned_total),
     }
