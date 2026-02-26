@@ -127,10 +127,16 @@ def get_supabase():
     admin_password = "..."  # your chosen admin login password
     admin_session_secret = "..."  # used to sign short-lived admin sessions
     """
-    url = st.secrets.get("SUPABASE_URL")
+    url = (
+        st.secrets.get("SUPABASE_URL")
+        or get_secret(["supabase", "url"])
+    )
+    
     key = (
         st.secrets.get("SUPABASE_ANON_KEY")
         or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+        or get_secret(["supabase", "anon_key"])
+        or get_secret(["supabase", "service_role_key"])
     )
 
     if not url or not key:
