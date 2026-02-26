@@ -10,7 +10,7 @@ def make_supabase(url: str, key: str):
     """
 
     http_client = httpx.Client(
-        http2=False,  # critical for replay stability
+        http2=False,
         timeout=httpx.Timeout(60.0, connect=10.0),
         limits=httpx.Limits(
             max_connections=5,
@@ -23,8 +23,9 @@ def make_supabase(url: str, key: str):
         storage_client_timeout=60,
     )
 
-    return create_client(
-        url,
-        key,
-        options=options,
-    )
+    client = create_client(url, key, options=options)
+
+    # 🔥 Inject custom httpx client into underlying Postgrest client
+    client.postgrest._session = http_client
+
+    return client
