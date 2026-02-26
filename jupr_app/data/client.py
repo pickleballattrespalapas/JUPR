@@ -1,6 +1,5 @@
 import httpx
-from supabase import create_client
-from supabase.lib.client_options import ClientOptions
+from supabase import create_client, ClientOptions
 
 
 def make_supabase(url: str, key: str):
@@ -25,7 +24,7 @@ def make_supabase(url: str, key: str):
 
     client = create_client(url, key, options=options)
 
-    # 🔥 Inject custom httpx client into underlying Postgrest client
+    # Override underlying session for HTTP/2 control
     client.postgrest._session = http_client
 
     return client
