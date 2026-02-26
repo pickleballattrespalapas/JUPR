@@ -5,11 +5,11 @@ from datetime import datetime
 import streamlit as st
 
 ACCENT_CLASS_BY_KEY = {
-    "TOP_PERFORMER_WEEK": "baja-accent-top",
-    "BIGGEST_JUMP_WEEK": "baja-accent-jump",
-    "GIANT_SLAYER_WEEK": "baja-accent-slayer",
-    "GRIND_WEEK": "baja-accent-grind",
-    "PERFECT_RUN": "baja-accent-perfect",
+    "TOP_PERFORMER_WEEK": "baja-top",
+    "BIGGEST_JUMP_WEEK": "baja-jump",
+    "GIANT_SLAYER_WEEK": "baja-slayer",
+    "GRIND_WEEK": "baja-grind",
+    "PERFECT_RUN": "baja-perfect",
 }
 
 
@@ -52,15 +52,81 @@ def _inject_baja_styles(print_view: bool) -> None:
   .baja-card {
     border-radius: 18px;
     padding: 20px;
-    margin-bottom: 18px;
-    background: linear-gradient(135deg, linen, antiquewhite);
-    box-shadow: 0 6px 18px lightgray;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.08);
   }
-  .baja-accent-top { border-left: 6px solid darkorange; }
-  .baja-accent-jump { border-left: 6px solid teal; }
-  .baja-accent-slayer { border-left: 6px solid rebeccapurple; }
-  .baja-accent-grind { border-left: 6px solid black; }
-  .baja-accent-perfect { border-left: 6px solid orchid; }
+
+  .baja-top {
+    background: linear-gradient(135deg, #FFF3E6, #FFE0C2);
+    border-left: 6px solid #FF7A00;
+  }
+
+  .baja-jump {
+    background: linear-gradient(135deg, #E6FAF7, #C8F3EE);
+    border-left: 6px solid #00B3A4;
+  }
+
+  .baja-slayer {
+    background: linear-gradient(135deg, #F3E8FF, #E3D4FF);
+    border-left: 6px solid #7E57C2;
+  }
+
+  .baja-grind {
+    background: linear-gradient(135deg, #F1F1F1, #E2E2E2);
+    border-left: 6px solid #444444;
+  }
+
+  .baja-perfect {
+    background: linear-gradient(135deg, #FFF0F5, #FFD6E8);
+    border-left: 6px solid #D63384;
+  }
+
+  .baja-league {
+    background: linear-gradient(135deg, #EAF4FF, #D4E8FF);
+    border-left: 6px solid #1976D2;
+  }
+
+  .baja-roundrobin {
+    background: linear-gradient(135deg, #E8FFF4, #D2F7E7);
+    border-left: 6px solid #1B9E77;
+  }
+
+  .baja-pop {
+    background: linear-gradient(135deg, #FFFBE6, #FFF1B8);
+    border-left: 6px solid #C48F00;
+  }
+
+  .baja-tournament {
+    background: linear-gradient(135deg, #FFF4E6, #FFE8CC);
+    border-left: 6px solid #E67700;
+  }
+
+  .podium-1 {
+    font-weight: 700;
+    color: #E67700;
+  }
+
+  .podium-2 {
+    font-weight: 600;
+    color: #666;
+  }
+
+  .podium-3 {
+    font-weight: 600;
+    color: #8C6239;
+  }
+
+  .section-title {
+    font-weight: 700;
+    font-size: 1.15rem;
+    margin-bottom: 10px;
+  }
+
+  .section-subtitle {
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
   .baja-title { font-weight: 700; font-size: 1.1rem; margin-bottom: 6px; }
   .baja-desc { font-size: 0.9rem; color: dimgrey; margin-bottom: 8px; }
   .baja-player { margin-left: 10px; }
@@ -83,6 +149,43 @@ def render_award_card(title: str, players: list[str], description: str, accent_c
   <div class="baja-title">{title}</div>
   <div class="baja-desc">{description}</div>
   {player_lines}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_card(title: str, rows: list[str], css_class: str) -> None:
+    content = "".join(f"<div>• {row}</div>" for row in rows)
+    st.markdown(
+        f"""
+<div class="baja-card {css_class}">
+  <div class="section-title">{title}</div>
+  {content}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_tournament_podium(title: str, podium_rows: list[str]) -> None:
+    first = podium_rows[0] if len(podium_rows) > 0 else None
+    second = podium_rows[1] if len(podium_rows) > 1 else None
+    third = podium_rows[2] if len(podium_rows) > 2 else None
+
+    medal_rows = ""
+    if first:
+        medal_rows += f"<div class='podium-1'>🥇 {first}</div>"
+    if second:
+        medal_rows += f"<div class='podium-2'>🥈 {second}</div>"
+    if third:
+        medal_rows += f"<div class='podium-3'>🥉 {third}</div>"
+
+    st.markdown(
+        f"""
+<div class="baja-card baja-tournament">
+  <div class="section-title">{title}</div>
+  {medal_rows}
 </div>
 """,
         unsafe_allow_html=True,
@@ -140,25 +243,54 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
                 item.get("label", "Award"),
                 item.get("players", []) or [],
                 item.get("description", ""),
-                ACCENT_CLASS_BY_KEY.get(item.get("key"), "baja-accent-top"),
+                ACCENT_CLASS_BY_KEY.get(item.get("key"), "baja-top"),
             )
 
     st.markdown("### Around the Club")
-    st.markdown("#### Leagues")
-    for item in around.get("leagues", []) or []:
-        st.markdown(f"**{item.get('league_name', 'League')}**")
-        for highlight in item.get("highlights", []) or []:
-            display = (highlight or {}).get("display", "")
-            if str(display).strip():
-                st.markdown(f"• {display}")
+    around_cards: list[tuple[str, list[str], str, bool]] = []
 
-    st.markdown("#### Round Robins")
+    for item in around.get("leagues", []) or []:
+        title_text = str(item.get("league_name", "League"))
+        rows = [
+            str((highlight or {}).get("display", "")).strip()
+            for highlight in item.get("highlights", []) or []
+            if str((highlight or {}).get("display", "")).strip()
+        ]
+        if not rows:
+            continue
+        lower_title = title_text.lower()
+        if "tournament" in lower_title:
+            around_cards.append((title_text, rows, "baja-tournament", True))
+        elif "pop" in lower_title:
+            around_cards.append((title_text, rows, "baja-pop", False))
+        else:
+            around_cards.append((title_text, rows, "baja-league", False))
+
     for item in around.get("round_robins", []) or []:
-        st.markdown(f"**{item.get('event_name', 'Pop-Up Event')}**")
-        for highlight in item.get("highlights", []) or []:
-            display = (highlight or {}).get("display", "")
-            if str(display).strip():
-                st.markdown(f"• {display}")
+        title_text = str(item.get("event_name", "Pop-Up Event"))
+        rows = [
+            str((highlight or {}).get("display", "")).strip()
+            for highlight in item.get("highlights", []) or []
+            if str((highlight or {}).get("display", "")).strip()
+        ]
+        if not rows:
+            continue
+        lower_title = title_text.lower()
+        if "tournament" in lower_title:
+            around_cards.append((title_text, rows, "baja-tournament", True))
+        elif "pop" in lower_title:
+            around_cards.append((title_text, rows, "baja-pop", False))
+        else:
+            around_cards.append((title_text, rows, "baja-roundrobin", False))
+
+    around_col1, around_col2 = st.columns(2)
+    for idx, (title_text, rows, css_class, is_tournament) in enumerate(around_cards):
+        target_col = around_col1 if idx % 2 == 0 else around_col2
+        with target_col:
+            if is_tournament:
+                render_tournament_podium(title_text, rows)
+            else:
+                render_section_card(title_text, rows, css_class)
 
     if looking_ahead:
         st.markdown("### Looking Ahead")
