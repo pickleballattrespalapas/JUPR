@@ -7,17 +7,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 
-DEFAULT_MAX_FEATURED = 3
-RECAP_CATEGORY_CONFIG = {
-    "TOP_PERFORMER": {
-        "label": "Top Performer",
-    },
-    "BIGGEST_JUMP": {
-        "label": "Biggest Jump",
-    },
-}
-
-
 @dataclass
 class SpotlightCandidate:
     candidate_id: str
@@ -712,59 +701,42 @@ def _event_highlights(
     if not stats:
         return []
 
-    def top_performer_players() -> list[dict]:
-        ranked = sorted(
-            stats.items(),
-            key=lambda item: (item[1].get("wins", 0), item[1].get("games", 0)),
-            reverse=True,
-        )
-        players = []
-        for pid, entry in ranked:
-            name = id_to_name.get(pid, f"#{pid}")
-            wins = int(entry.get("wins", 0))
-            losses = int(entry.get("losses", 0))
-            display = f"{name} — {wins}-{losses}" if not short_labels else f"{name} {wins}-{losses}"
-            players.append({"id": pid, "name": name, "display": display})
-        return players
+    def top_performer():
+        best = max(stats.items(), key=lambda item: (item[1].get("wins", 0), item[1].get("games", 0)))
+        pid, entry = best
+        name = id_to_name.get(pid, f"#{pid}")
+        wins = int(entry.get("wins", 0))
+        losses = int(entry.get("losses", 0))
+        label = "Top" if short_labels else "Top Performer"
+        display = f"{name} — {wins}-{losses}" if not short_labels else f"{name} {wins}-{losses}"
+        return {"key": "TOP_PERFORMER", "label": label, "display": display, "player_ids": [pid]}
 
-    def biggest_jump_players() -> list[dict]:
-        ranked = sorted(stats.items(), key=lambda item: item[1].get("delta_jupr", 0), reverse=True)
-        players = []
-        for pid, entry in ranked:
-            delta = float(entry.get("delta_jupr", 0))
-            if delta <= 0:
-                continue
-            name = id_to_name.get(pid, f"#{pid}")
-            display = f"{name} — +{delta:.2f}" if short_labels else f"{name} — +{delta:.2f} JUPR"
-            players.append({"id": pid, "name": name, "display": display})
-        return players
+    def biggest_jump():
+        best = max(stats.items(), key=lambda item: item[1].get("delta_jupr", 0))
+        pid, entry = best
+        delta = float(entry.get("delta_jupr", 0))
+        if delta <= 0:
+            return None
+        name = id_to_name.get(pid, f"#{pid}")
+        label = "Jump" if short_labels else "Biggest Jump"
+        display = f"{name} — +{delta:.2f}" if short_labels else f"{name} — +{delta:.2f} JUPR"
+        return {"key": "BIGGEST_JUMP", "label": label, "display": display, "player_ids": [pid]}
 
-    category_players = {
-        "TOP_PERFORMER": top_performer_players(),
-        "BIGGEST_JUMP": biggest_jump_players(),
-    }
-
-    category_order = ["BIGGEST_JUMP", "TOP_PERFORMER"] if prefer_jump else ["TOP_PERFORMER", "BIGGEST_JUMP"]
-    highlights: list[dict] = []
-    for key in category_order:
-        if len(highlights) >= count:
-            break
-        config = RECAP_CATEGORY_CONFIG.get(key, {})
-        label_default = "Top Performer" if key == "TOP_PERFORMER" else "Biggest Jump"
-        short_label_default = "Top" if key == "TOP_PERFORMER" else "Jump"
-        max_featured = int(config.get("max_featured", DEFAULT_MAX_FEATURED))
-        players = category_players.get(key, [])[:max(0, max_featured)]
-        if not players:
-            continue
-        highlights.append(
-            {
-                "key": key,
-                "label": short_label_default if short_labels else config.get("label", label_default),
-                "players": players,
-            }
-        )
-
-    return highlights
+    highlights = []
+    jump = biggest_jump()
+    top = top_performer()
+    if prefer_jump and jump is not None and (jump["display"]):
+        highlights.append(jump)
+    else:
+        highlights.append(top)
+    if count > 1:
+        if prefer_jump:
+            if top["key"] != highlights[0]["key"]:
+                highlights.append(top)
+        else:
+            if jump is not None:
+                highlights.append(jump)
+    return highlights[:count]
 
 
 def _fetch_rr_event_names(supabase, rr_events: list[str]) -> dict[str, str]:
