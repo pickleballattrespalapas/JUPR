@@ -89,6 +89,9 @@ def _handle_missing_table(exc: APIError) -> bool:
 
 
 def render(ctx):
+    supabase = ctx.supabase
+    club_id = ctx.club_id
+
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🗞️ Tres Palapas Weekly Recap", "Club-wide weekly recap.", mode_label=mode_label)
 
@@ -96,9 +99,6 @@ def render(ctx):
 
     if print_mode:
         st.markdown("<style>header{visibility:hidden;} footer{visibility:hidden;} </style>", unsafe_allow_html=True)
-
-    supabase = ctx.supabase
-    club_id = str(ctx.club_id)
 
     try:
         response = (
@@ -141,11 +141,16 @@ def render(ctx):
         st.download_button(
             "Download Weekly Recap PDF",
             data=pdf_bytes,
-            file_name=f"weekly_recap_{selected_row.get('week_start')}.pdf",
+            file_name=f"weekly_recap_{selected_row.get('week_start') or 'recap'}.pdf",
             mime="application/pdf",
         )
 
-    if (not print_mode) and (not bool(ctx.public_mode)):
+    if (
+        (not print_mode)
+        and (not bool(ctx.public_mode))
+        and supabase
+        and club_id
+    ):
         try:
             draft_check = (
                 supabase.table("weekly_recaps")
