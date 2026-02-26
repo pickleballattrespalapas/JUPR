@@ -162,29 +162,28 @@ def replay_history(
                 "t2_p2_r_end": float(er4),
             }
         )
-
-    # Update players (only on full reset)
+       
     players_updated = False
     if str(target_reset).strip() == FULL_RESET_LABEL:
         players_updated = True
-   
+
         player_updates = []
-           for pid, s in p_map.items():
-               player_updates.append({
-                   "id": int(pid),
-                  "club_id": club_id,
-                   "rating": float(s["r"]),
-                   "wins": int(s["w"]),
-                   "losses": int(s["l"]),
-                   "matches_played": int(s["mp"]),
-               })
-      
-           for i in range(0, len(player_updates), 500):
-               batch = player_updates[i:i+500]
-               supabase.table("players").upsert(
-                   batch,
-                   on_conflict="id"
-               ).execute()
+        for pid, s in p_map.items():
+            player_updates.append({
+                "id": int(pid),
+                "club_id": club_id,
+                "rating": float(s["r"]),
+                "wins": int(s["w"]),
+                "losses": int(s["l"]),
+                "matches_played": int(s["mp"]),
+            })
+
+        for i in range(0, len(player_updates), 200):
+            batch = player_updates[i:i+200]
+            supabase.table("players").upsert(
+                batch,
+                on_conflict="id"
+            ).execute()
 
     # Rebuild league_ratings
     if str(target_reset).strip() != FULL_RESET_LABEL:
