@@ -145,18 +145,35 @@ def _compute_weekly_recap_payload(
         supabase,
     )
 
-    completed = _load_completed_tournaments(supabase, club_id, start_dt_utc, end_dt_utc)
+    completed = _load_completed_tournaments(
+        supabase,
+        club_id,
+        start_dt_utc,
+        end_dt_utc,
+    )
     tournament_cards = []
-    for tournament in completed:
-        podium_rows = _load_tournament_podium(supabase, tournament["id"])
+    for t in completed:
+        podium_rows = _load_tournament_podium(supabase, t["id"])
         if not podium_rows:
             continue
 
-        ordered = sorted(podium_rows, key=lambda row: int(row.get("placement", 999)))
-        display_rows = [row.get("display_name", "") for row in ordered]
+        ordered = sorted(
+            podium_rows,
+            key=lambda r: int(r.get("placement", 999))
+        )
+
+        display_rows = [
+            row.get("display_name", "")
+            for row in ordered
+            if row.get("display_name")
+        ]
+
+        if not display_rows:
+            continue
+
         tournament_cards.append(
             {
-                "title": tournament.get("name", "Tournament"),
+                "title": t.get("name", "Tournament"),
                 "podium": display_rows,
             }
         )
@@ -262,19 +279,43 @@ def _load_matches(
     return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
 
 
-def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_dt: datetime) -> list[dict]:
+def _load_completed_tournaments(supabase, club_id, start_dt_utc, end_dt_utc):
     if supabase is None:
         return []
 
-    response = (
-        supabase.table("tournaments")
-        .select("id,name,start_date,status")
+    # Step 1: Find tournament_ids that had games within the recap date range
+    game_response = (
+        supabase.table("tournament_games")
+        .select("tournament_id,date")
         .eq("club_id", club_id)
-        .eq("status", "COMPLETE")
-        .gte("start_date", start_dt.date().isoformat())
-        .lte("start_date", end_dt.date().isoformat())
+        .gte("date", start_dt_utc.isoformat())
+        .lte("date", end_dt_utc.isoformat())
         .execute()
     )
+
+    games = game_response.data or []
+    if not games:
+        return []
+
+    tournament_ids = list({
+        row.get("tournament_id")
+        for row in games
+        if row.get("tournament_id")
+    })
+
+    if not tournament_ids:
+        return []
+
+    # Step 2: Load only completed tournaments from those IDs
+    response = (
+        supabase.table("tournaments")
+        .select("id,name,status")
+        .eq("club_id", club_id)
+        .in_("id", tournament_ids)
+        .eq("status", "COMPLETE")
+        .execute()
+    )
+
     return response.data or []
 
 

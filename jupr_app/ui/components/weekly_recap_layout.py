@@ -312,9 +312,10 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
 
     if tournaments:
         st.markdown("### Tournaments")
-        tournament_col1, tournament_col2 = st.columns(2)
+        col1, col2 = st.columns(2)
+
         for idx, item in enumerate(tournaments):
-            target_col = tournament_col1 if idx % 2 == 0 else tournament_col2
+            target_col = col1 if idx % 2 == 0 else col2
             with target_col:
                 render_tournament_podium(
                     item.get("title", "Tournament"),
