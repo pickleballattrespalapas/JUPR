@@ -19,15 +19,23 @@ def _inject_baja_styles(print_view: bool) -> None:
         """
 <style>
   """ + print_view_css + """
+  .weekly-recap-container,
+  .weekly-recap-container h1,
+  .weekly-recap-container h2,
+  .weekly-recap-container h3,
+  .weekly-recap-container p,
+  .weekly-recap-container li,
+  .weekly-recap-container div {
+    color: var(--text-color);
+  }
   .weekly-recap {
     font-family: 'Inter', sans-serif;
-    color: black;
     max-width: 900px;
     margin: 0 auto;
     padding: 16px 20px 24px;
     border: 1px solid gainsboro;
     border-radius: 12px;
-    background: white;
+    background: var(--background-color);
   }
   .weekly-header {
     display: flex;
@@ -38,22 +46,23 @@ def _inject_baja_styles(print_view: bool) -> None:
     margin-bottom: 12px;
   }
   .weekly-title { font-size: 28px; font-weight: 700; }
-  .weekly-range { font-size: 14px; font-weight: 600; color: dimgray; }
+  .weekly-range { font-size: 14px; font-weight: 600; color: inherit; }
   .numbers-strip {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 8px;
     margin-bottom: 16px;
   }
-  .number-card { background: whitesmoke; padding: 10px 8px; border-radius: 10px; text-align: center; }
+  .number-card { background: var(--secondary-background-color); padding: 10px 8px; border-radius: 10px; text-align: center; }
   .number-value { font-size: 20px; font-weight: 700; }
-  .number-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: gray; }
+  .number-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: inherit; }
   .section { margin-top: 14px; }
   .baja-card {
     border-radius: 18px;
     padding: 20px;
     margin-bottom: 20px;
     box-shadow: 0 8px 22px rgba(0,0,0,0.08);
+    color: var(--text-color);
   }
 
   .baja-top {
@@ -108,6 +117,7 @@ def _inject_baja_styles(print_view: bool) -> None:
     padding: 28px;
     margin-bottom: 24px;
     box-shadow: 0 10px 26px rgba(0,0,0,0.1);
+    color: var(--text-color);
   }
 
   .podium-grid {
@@ -125,19 +135,19 @@ def _inject_baja_styles(print_view: bool) -> None:
   .podium-1 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #7A5600;
+    color: inherit;
   }
 
   .podium-2 {
     font-size: 1rem;
     font-weight: 600;
-    color: #5D5D5D;
+    color: inherit;
   }
 
   .podium-3 {
     font-size: 1rem;
     font-weight: 600;
-    color: #78512A;
+    color: inherit;
   }
 
   .podium-label {
@@ -159,7 +169,7 @@ def _inject_baja_styles(print_view: bool) -> None:
   }
 
   .baja-title { font-weight: 700; font-size: 1.1rem; margin-bottom: 6px; }
-  .baja-desc { font-size: 0.9rem; color: dimgrey; margin-bottom: 8px; }
+  .baja-desc { font-size: 0.9rem; color: inherit; margin-bottom: 8px; }
   .baja-player { margin-left: 10px; }
   @media print {
     body { margin: 0; }
@@ -176,7 +186,7 @@ def render_award_card(title: str, players: list[str], description: str, accent_c
     player_lines = "".join(f"<div class='baja-player'>• {player}</div>" for player in (players or []))
     st.markdown(
         f"""
-<div class="baja-card {accent_class}">
+<div class="weekly-recap-container baja-card {accent_class}">
   <div class="baja-title">{title}</div>
   <div class="baja-desc">{description}</div>
   {player_lines}
@@ -190,7 +200,7 @@ def render_section_card(title: str, rows: list[str], css_class: str) -> None:
     content = "".join(f"<div>• {row}</div>" for row in rows)
     st.markdown(
         f"""
-<div class="baja-card {css_class}">
+<div class="weekly-recap-container baja-card {css_class}">
   <div class="section-title">{title}</div>
   {content}
 </div>
@@ -232,7 +242,7 @@ def render_tournament_podium(tournament: dict) -> None:
 
     st.markdown(
         f"""
-<div class="baja-podium">
+<div class="weekly-recap-container baja-podium">
   <div class="section-title">🏆 {title}</div>
   {render_podium_layout(podium_rows)}
 </div>
@@ -265,7 +275,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
 
     st.markdown(
         f"""
-<div class="weekly-recap">
+<div class="weekly-recap-container weekly-recap">
   <div class="weekly-header">
     <div class="weekly-title">{title}</div>
     <div class="weekly-range">{date_label}</div>
