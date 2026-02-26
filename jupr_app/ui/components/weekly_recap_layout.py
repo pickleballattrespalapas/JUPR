@@ -102,39 +102,42 @@ def _inject_baja_styles(print_view: bool) -> None:
   }
 
   .baja-podium {
-    background: linear-gradient(135deg, #FFF6E6, #FFE5CC);
-    border-left: 6px solid #E67700;
-    border-radius: 20px;
-    padding: 24px;
+    background: linear-gradient(135deg, #FFE7A3, #FFD166);
+    border: 2px solid #E0A100;
+    border-radius: 14px;
+    padding: 28px;
     margin-bottom: 24px;
     box-shadow: 0 10px 26px rgba(0,0,0,0.1);
   }
 
   .podium-grid {
     display: flex;
-    justify-content: space-between;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 20px;
     margin-top: 15px;
   }
 
   .podium-col {
-    flex: 1;
     text-align: center;
   }
 
   .podium-1 {
-    font-size: 1.1rem;
+    font-size: 1.25rem;
     font-weight: 700;
-    color: #E67700;
+    color: #7A5600;
   }
 
   .podium-2 {
+    font-size: 1rem;
     font-weight: 600;
-    color: #666;
+    color: #5D5D5D;
   }
 
   .podium-3 {
+    font-size: 1rem;
     font-weight: 600;
-    color: #8C6239;
+    color: #78512A;
   }
 
   .podium-label {
@@ -196,29 +199,42 @@ def render_section_card(title: str, rows: list[str], css_class: str) -> None:
     )
 
 
-def render_tournament_podium(title: str, podium_rows: list[str]) -> None:
-    first = podium_rows[0] if len(podium_rows) > 0 else ""
-    second = podium_rows[1] if len(podium_rows) > 1 else ""
-    third = podium_rows[2] if len(podium_rows) > 2 else ""
+def render_podium_layout(podium_rows: list[dict]) -> str:
+    podium_by_place = {
+        int(item.get("placement", 0) or 0): str(item.get("display_name", "") or "")
+        for item in podium_rows
+    }
+    first = podium_by_place.get(1, "")
+    second = podium_by_place.get(2, "")
+    third = podium_by_place.get(3, "")
+
+    return f"""
+<div class="podium-grid">
+  <div class="podium-col">
+    <div class="podium-label">2nd</div>
+    <div class="podium-2">🥈 {second}</div>
+  </div>
+  <div class="podium-col">
+    <div class="podium-label">1st</div>
+    <div class="podium-1">🥇 {first}</div>
+  </div>
+  <div class="podium-col">
+    <div class="podium-label">3rd</div>
+    <div class="podium-3">🥉 {third}</div>
+  </div>
+</div>
+"""
+
+
+def render_tournament_podium(tournament: dict) -> None:
+    title = str(tournament.get("tournament_name") or "Tournament")
+    podium_rows = tournament.get("podium", []) or []
 
     st.markdown(
         f"""
 <div class="baja-podium">
   <div class="section-title">🏆 {title}</div>
-  <div class="podium-grid">
-    <div class="podium-col">
-      <div class="podium-label">1st</div>
-      <div class="podium-1">🥇 {first}</div>
-    </div>
-    <div class="podium-col">
-      <div class="podium-label">2nd</div>
-      <div class="podium-2">🥈 {second}</div>
-    </div>
-    <div class="podium-col">
-      <div class="podium-label">3rd</div>
-      <div class="podium-3">🥉 {third}</div>
-    </div>
-  </div>
+  {render_podium_layout(podium_rows)}
 </div>
 """,
         unsafe_allow_html=True,
@@ -310,24 +326,17 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         else:
             around_sections.append((title_text, rows, "baja-roundrobin"))
 
-    if tournaments:
-        st.markdown("### Tournaments")
-        col1, col2 = st.columns(2)
-
-        for idx, item in enumerate(tournaments):
-            target_col = col1 if idx % 2 == 0 else col2
-            with target_col:
-                render_tournament_podium(
-                    item.get("title", "Tournament"),
-                    item.get("podium", []),
-                )
-
     st.markdown("### Around the Club")
     around_col1, around_col2 = st.columns(2)
     for idx, (title_text, rows, css_class) in enumerate(around_sections):
         target_col = around_col1 if idx % 2 == 0 else around_col2
         with target_col:
             render_section_card(title_text, rows, css_class)
+
+    if tournaments:
+        st.markdown("### Tournaments")
+        for tournament in tournaments:
+            render_tournament_podium(tournament)
 
     if looking_ahead:
         st.markdown("### Looking Ahead")

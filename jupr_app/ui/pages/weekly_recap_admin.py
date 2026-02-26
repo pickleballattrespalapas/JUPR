@@ -13,10 +13,23 @@ from jupr_app.domain.recaps.weekly_recap import (
     compute_weekly_recap,
     get_spotlight_candidates,
 )
-from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
+from jupr_app.ui.components.weekly_recap_layout import render_podium_layout, render_weekly_recap
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.url import qp_get
 
+
+
+
+def render_tournament_podium(tournament: dict) -> None:
+    st.subheader(str(tournament.get("tournament_name") or "Tournament"))
+    st.markdown(render_podium_layout(tournament.get("podium", []) or []), unsafe_allow_html=True)
+
+
+def _render_tournament_section(recap: dict) -> None:
+    if recap.get("tournaments"):
+        st.header("🏆 Tournaments")
+        for tournament in recap["tournaments"]:
+            render_tournament_podium(tournament)
 
 def _get_default_date_range(tz_name: str) -> tuple[date, date]:
     today = datetime.now(ZoneInfo(tz_name)).date()
