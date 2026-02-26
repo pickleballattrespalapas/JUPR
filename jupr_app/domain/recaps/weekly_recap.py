@@ -254,13 +254,34 @@ def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> p
     return df
 
 
-def _filter_by_date_bounds(df: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
+def _filter_by_date_bounds(
+    df: pd.DataFrame,
+    start_date: date,
+    end_date: date
+) -> pd.DataFrame:
     if df.empty:
         return df
-    date_values = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
-    dates = date_values.dt.date
-    mask = dates.apply(lambda d: isinstance(d, date) and _within_bounds(d, start_date, end_date))
-    return df.loc[mask.fillna(False)].copy()
+
+    if "date" not in df.columns:
+        return df.iloc[0:0]
+
+    # Convert to pandas datetime safely
+    date_values = pd.to_datetime(df["date"], utc=True, errors="coerce")
+
+    # Drop invalid timestamps (NaT)
+    valid_mask = date_values.notna()
+
+    # Convert to pure Python date
+    date_only = date_values.dt.date
+
+    # Vectorized comparison (safe)
+    in_range_mask = (
+        valid_mask
+        & (date_only >= start_date)
+        & (date_only <= end_date)
+    )
+
+    return df.loc[in_range_mask].copy()
 
 
 def _build_rating_map(df_players_all: pd.DataFrame | None) -> dict[int, float]:
