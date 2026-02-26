@@ -19,7 +19,6 @@ def make_supabase(url: str, key: str):
     )
 
     options = ClientOptions(
-        httpx_client=http_client,
         postgrest_client_timeout=60,
         storage_client_timeout=60,
     )
