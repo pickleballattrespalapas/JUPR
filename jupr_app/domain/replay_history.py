@@ -4,8 +4,9 @@ from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
 import unicodedata
-from jupr_app.domain.ratings import calculate_hybrid_elo
+
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.domain.ratings import calculate_hybrid_elo
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
 
@@ -81,10 +82,10 @@ def replay_history(
             island_map[key] = {"r": float(p_map[int(pid)]["r"]), "w": 0, "l": 0, "mp": 0}
         return float(island_map[key]["r"])
 
-    matches_to_update = []
+    matches_to_update: list[dict[str, Any]] = []
     skipped_incomplete = 0
 
-    # Replay loop
+    # Replay loop (compute results in memory)
     for m in all_matches:
         lg = str(m.get("league", "") or "")
         lg = unicodedata.normalize("NFKC", lg)
@@ -151,6 +152,7 @@ def replay_history(
         matches_to_update.append(
             {
                 "id": int(m["id"]),
+                "club_id": club_id,
                 "elo_delta": float(stored_elo_delta),
                 "t1_p1_r": float(sr1),
                 "t1_p2_r": float(sr2),
@@ -162,28 +164,31 @@ def replay_history(
                 "t2_p2_r_end": float(er4),
             }
         )
-       
-       players_updated = False
-       if str(target_reset).strip() == FULL_RESET_LABEL:
-           players_updated = True
-   
-           player_updates = []
-           for pid, s in p_map.items():
-               player_updates.append({
-                   "id": int(pid),
-                   "club_id": club_id,
-                   "rating": float(s["r"]),
-                   "wins": int(s["w"]),
-                   "losses": int(s["l"]),
-                   "matches_played": int(s["mp"]),
-               })
-   
-           for i in range(0, len(player_updates), 200):
-               batch = player_updates[i:i+200]
-               supabase.table("players").upsert(
-                   batch,
-                   on_conflict="id"
-               ).execute()
+
+    # Update players (only on full reset) — BATCHED
+    players_updated = False
+    if str(target_reset).strip() == FULL_RESET_LABEL:
+        players_updated = True
+
+        player_updates: list[dict[str, Any]] = []
+        for pid, s in p_map.items():
+            player_updates.append(
+                {
+                    "id": int(pid),
+                    "club_id": club_id,
+                    "rating": float(s["r"]),
+                    "wins": int(s["w"]),
+                    "losses": int(s["l"]),
+                    "matches_played": int(s["mp"]),
+                }
+            )
+
+        for i in range(0, len(player_updates), 200):
+            batch = player_updates[i : i + 200]
+            supabase.table("players").upsert(
+                batch,
+                on_conflict="id",  # if PK is (club_id,id) change to "club_id,id"
+            ).execute()
 
     # Rebuild league_ratings
     if str(target_reset).strip() != FULL_RESET_LABEL:
@@ -191,7 +196,7 @@ def replay_history(
     else:
         supabase.table("league_ratings").delete().eq("club_id", club_id).execute()
 
-    new_rows = []
+    new_rows: list[dict[str, Any]] = []
     for (pid, lg), s in island_map.items():
         if str(target_reset).strip() == FULL_RESET_LABEL or str(lg).strip() == str(target_reset).strip():
             # starting_rating: use players.starting_rating if present
@@ -220,17 +225,20 @@ def replay_history(
     for i in range(0, len(new_rows), 1000):
         supabase.table("league_ratings").insert(new_rows[i : i + 1000]).execute()
 
-    # Rewrite match snapshots
+    # Rewrite match snapshots — BATCHED UPSERT
     total = max(1, len(matches_to_update))
+    rewritten = 0
     for i in range(0, len(matches_to_update), 500):
-       batch = matches_to_update[i:i+500]
-       supabase.table("matches").upsert(
-           batch,
-           on_conflict="id"
-       ).execute()
+        batch = matches_to_update[i : i + 500]
+        supabase.table("matches").upsert(
+            batch,
+            on_conflict="id",  # if PK is (club_id,id) change to "club_id,id"
+        ).execute()
+
+        rewritten += len(batch)
         if progress_cb is not None:
             try:
-                progress_cb((i + 1) / total)
+                progress_cb(rewritten / total)
             except Exception:
                 pass
 
