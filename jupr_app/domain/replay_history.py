@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
-
+import unicodedata
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 
@@ -86,12 +86,10 @@ def replay_history(
 
     # Replay loop
     for m in all_matches:
-       import unicodedata
-   
-           lg = str(m.get("league", "") or "")
-           lg = unicodedata.normalize("NFKC", lg)
-           lg = lg.replace("’", "'")
-           lg = " ".join(lg.split())
+        lg = str(m.get("league", "") or "")
+        lg = unicodedata.normalize("NFKC", lg)
+        lg = lg.replace("’", "'")
+        lg = " ".join(lg.split())
 
         if str(target_reset).strip() != FULL_RESET_LABEL and lg != str(target_reset).strip():
             continue
