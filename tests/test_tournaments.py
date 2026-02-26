@@ -161,3 +161,16 @@ def test_resolve_playoff_dependencies():
     assert updates_by_id["g3"]["team_a_id"] == "t4"
     assert updates_by_id["g3"]["score_a"] is None
     assert updates_by_id["g3"]["finalized_at"] is None
+
+
+def test_round_robin_schedule_6_from_csv():
+    team_ids = {idx: f"t{idx}" for idx in range(1, 7)}
+    games = build_round_robin_games(tournament_id="tour6", team_ids_by_number=team_ids)
+
+    assert len(games) == 15
+    assert games[0]["rr_round_number"] == 1
+    assert games[0]["team_a_id"] == "t1"
+    assert games[0]["team_b_id"] == "t6"
+    assert games[-1]["rr_round_number"] == 5
+    assert games[-1]["team_a_id"] == "t4"
+    assert games[-1]["team_b_id"] == "t5"
