@@ -225,14 +225,6 @@ def render_tournament_podium(title: str, podium_rows: list[str]) -> None:
     )
 
 
-def is_tournament(title: str) -> bool:
-    normalized_title = title.lower()
-    return any(
-        keyword in normalized_title
-        for keyword in ["tournament", "sweethearts", "open", "championship", "classic", "cup"]
-    )
-
-
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
     week_start = recap.get("week_start") or recap.get("start_date")
     week_end = recap.get("week_end") or recap.get("end_date")
@@ -250,6 +242,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     numbers = recap.get("numbers", {})
     spotlight = recap.get("spotlight", []) or []
     around = recap.get("around_club", {})
+    tournaments = recap.get("tournaments", []) or []
     looking_ahead = [str(item).strip() for item in (recap.get("looking_ahead", []) or []) if str(item).strip()]
 
     _inject_baja_styles(print_view)
@@ -287,7 +280,6 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
                 ACCENT_CLASS_BY_KEY.get(item.get("key"), "baja-top"),
             )
 
-    tournament_sections: list[tuple[str, list[str]]] = []
     around_sections: list[tuple[str, list[str], str]] = []
 
     for item in around.get("leagues", []) or []:
@@ -299,9 +291,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         ]
         if not rows:
             continue
-        if is_tournament(title_text):
-            tournament_sections.append((title_text, rows))
-        elif "pop" in title_text.lower():
+        if "pop" in title_text.lower():
             around_sections.append((title_text, rows, "baja-pop"))
         else:
             around_sections.append((title_text, rows, "baja-league"))
@@ -315,19 +305,21 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         ]
         if not rows:
             continue
-        if is_tournament(title_text):
-            tournament_sections.append((title_text, rows))
-        elif "pop" in title_text.lower():
+        if "pop" in title_text.lower():
             around_sections.append((title_text, rows, "baja-pop"))
         else:
             around_sections.append((title_text, rows, "baja-roundrobin"))
 
-    st.markdown("### Tournaments")
-    tournament_col1, tournament_col2 = st.columns(2)
-    for idx, (title_text, rows) in enumerate(tournament_sections):
-        target_col = tournament_col1 if idx % 2 == 0 else tournament_col2
-        with target_col:
-            render_tournament_podium(title_text, rows)
+    if tournaments:
+        st.markdown("### Tournaments")
+        tournament_col1, tournament_col2 = st.columns(2)
+        for idx, item in enumerate(tournaments):
+            target_col = tournament_col1 if idx % 2 == 0 else tournament_col2
+            with target_col:
+                render_tournament_podium(
+                    item.get("title", "Tournament"),
+                    item.get("podium", []),
+                )
 
     st.markdown("### Around the Club")
     around_col1, around_col2 = st.columns(2)

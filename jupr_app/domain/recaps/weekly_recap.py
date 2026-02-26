@@ -145,6 +145,22 @@ def _compute_weekly_recap_payload(
         supabase,
     )
 
+    completed = _load_completed_tournaments(supabase, club_id, start_dt_utc, end_dt_utc)
+    tournament_cards = []
+    for tournament in completed:
+        podium_rows = _load_tournament_podium(supabase, tournament["id"])
+        if not podium_rows:
+            continue
+
+        ordered = sorted(podium_rows, key=lambda row: int(row.get("placement", 999)))
+        display_rows = [row.get("display_name", "") for row in ordered]
+        tournament_cards.append(
+            {
+                "title": tournament.get("name", "Tournament"),
+                "podium": display_rows,
+            }
+        )
+
     recap = {
         "club_id": club_id,
         "start_date": start_date.isoformat(),
@@ -155,6 +171,7 @@ def _compute_weekly_recap_payload(
         "category_sections": _build_category_sections(stats, id_to_name),
         "spotlight": spotlight,
         "around_club": around_club,
+        "tournaments": tournament_cards,
         "looking_ahead": ["", "", ""],
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -243,6 +260,36 @@ def _load_matches(
             frames.append(table_df)
 
     return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
+
+
+def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_dt: datetime) -> list[dict]:
+    if supabase is None:
+        return []
+
+    response = (
+        supabase.table("tournaments")
+        .select("id,name,start_date,status")
+        .eq("club_id", club_id)
+        .eq("status", "COMPLETE")
+        .gte("start_date", start_dt.date().isoformat())
+        .lte("start_date", end_dt.date().isoformat())
+        .execute()
+    )
+    return response.data or []
+
+
+def _load_tournament_podium(supabase, tournament_id: str) -> list[dict]:
+    if supabase is None:
+        return []
+
+    response = (
+        supabase.table("tournament_podium")
+        .select("placement,display_name")
+        .eq("tournament_id", tournament_id)
+        .order("placement")
+        .execute()
+    )
+    return response.data or []
 
 
 def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> pd.DataFrame:
