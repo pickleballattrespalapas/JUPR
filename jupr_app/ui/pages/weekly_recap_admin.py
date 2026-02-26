@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -15,10 +15,7 @@ from jupr_app.ui.url import qp_get
 
 def _get_default_date_range(tz_name: str) -> tuple[date, date]:
     today = datetime.now(ZoneInfo(tz_name)).date()
-    current_week_start = today - timedelta(days=today.weekday())
-    start_date = current_week_start - timedelta(days=7)
-    end_date = current_week_start - timedelta(days=1)
-    return start_date, end_date
+    return today, today
 
 
 def _get_api_error_code(exc: APIError) -> str | None:
@@ -96,12 +93,20 @@ def render(ctx):
     tz_name = "America/Mazatlan"
 
     default_start, default_end = _get_default_date_range(tz_name)
-    start_date = st.date_input("Start date", value=default_start)
-    end_date = st.date_input("End date", value=default_end)
+    start_date = st.date_input("Start Date", value=default_start)
+    end_date = st.date_input("End Date", value=default_end)
 
     date_range_valid = bool(start_date and end_date and end_date >= start_date)
     if end_date < start_date:
         st.error("End date must be on or after start date.")
+        date_range_valid = False
+    day_span = (end_date - start_date).days + 1
+    if day_span <= 0:
+        st.error("Date range cannot be empty.")
+        date_range_valid = False
+    if day_span > 60:
+        st.error("Date range cannot exceed 60 days.")
+        date_range_valid = False
 
     try:
         row = _load_weekly_row(supabase, club_id, start_date, end_date)
@@ -115,11 +120,11 @@ def render(ctx):
 
     if st.button("Generate Draft", disabled=not date_range_valid):
         with st.spinner("Generating weekly recap..."):
-            recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, tz_name=tz_name)
+            recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
             payload = {
                 "club_id": club_id,
                 "week_start": start_date.isoformat(),
-                "week_end": recap.get("week_end"),
+                "week_end": recap.get("end_date"),
                 "status": "draft",
                 "generated_json": recap,
                 "edits_json": {},
@@ -140,7 +145,7 @@ def render(ctx):
 
     generated_json = row.get("generated_json") or {}
     edits_json = row.get("edits_json") or {}
-    candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, tz_name=tz_name)
+    candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
 
     st.subheader("Edit Draft")
 
@@ -191,7 +196,7 @@ def render(ctx):
         payload = {
             "club_id": club_id,
             "week_start": start_date.isoformat(),
-            "week_end": generated_json.get("week_end"),
+            "week_end": generated_json.get("end_date"),
             "status": "draft",
             "generated_json": generated_json,
             "edits_json": edits_json,
@@ -219,7 +224,7 @@ def render(ctx):
         payload = {
             "club_id": club_id,
             "week_start": start_date.isoformat(),
-            "week_end": generated_json.get("week_end"),
+            "week_end": generated_json.get("end_date"),
             "status": "published",
             "generated_json": generated_json,
             "edits_json": edits_json,
@@ -240,7 +245,7 @@ def render(ctx):
         payload = {
             "club_id": club_id,
             "week_start": start_date.isoformat(),
-            "week_end": generated_json.get("week_end"),
+            "week_end": generated_json.get("end_date"),
             "status": "draft",
             "generated_json": generated_json,
             "edits_json": edits_json,

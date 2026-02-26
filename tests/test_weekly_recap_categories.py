@@ -63,3 +63,15 @@ def test_event_highlights_handles_empty_categories_without_errors():
     assert len(highlights) == 1
     assert highlights[0]["key"] == "TOP_PERFORMER"
     assert highlights[0]["players"]
+
+
+def test_event_highlights_tie_breaks_by_player_id_for_stability():
+    stats = {
+        10: _stats_row(4, 8, 0.12, losses=4),
+        5: _stats_row(4, 8, 0.12, losses=4),
+        12: _stats_row(4, 8, 0.12, losses=4),
+    }
+
+    highlights = weekly_recap._event_highlights(stats, {5: "E", 10: "J", 12: "L"}, count=1, short_labels=False, prefer_jump=False)
+
+    assert [player["id"] for player in highlights[0]["players"]] == [5, 10, 12]

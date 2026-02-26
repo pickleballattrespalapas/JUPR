@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -19,6 +19,13 @@ class SpotlightCandidate:
     band: str | None = None
 
 
+MAX_FEATURED_PER_CATEGORY = 3
+RECAP_CATEGORY_CONFIG = {
+    "TOP_PERFORMER": {"label": "Top Performer", "max_featured": MAX_FEATURED_PER_CATEGORY},
+    "BIGGEST_JUMP": {"label": "Biggest Jump", "max_featured": MAX_FEATURED_PER_CATEGORY},
+}
+
+
 def normalize_date_range(start_date: date, end_date: date) -> tuple[date, date]:
     if end_date < start_date:
         raise ValueError("end_date must be on or after start_date")
@@ -33,53 +40,57 @@ def get_date_range_bounds(start_date: date, end_date: date, tz_name: str) -> tup
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-def get_week_bounds(week_start: date, tz_name: str) -> tuple[datetime, datetime]:
-    week_end = week_start + timedelta(days=6)
-    return get_date_range_bounds(week_start, week_end, tz_name)
-
-
 def compute_weekly_recap(
     ctx,
-    week_start: date | None = None,
+    start_date: date,
+    end_date: date,
     *,
-    start_date: date | None = None,
-    end_date: date | None = None,
+    include_tournaments: bool = True,
     tz_name: str = "America/Mazatlan",
 ) -> dict:
-    start_date, end_date = _resolve_range_inputs(week_start, start_date, end_date)
-    recap, _ = _compute_weekly_recap_payload(ctx, start_date, end_date, tz_name=tz_name)
+    recap, _ = _compute_weekly_recap_payload(
+        ctx,
+        start_date,
+        end_date,
+        include_tournaments=include_tournaments,
+        tz_name=tz_name,
+    )
     return recap
 
 
 def get_spotlight_candidates(
     ctx,
-    week_start: date | None = None,
+    start_date: date,
+    end_date: date,
     *,
-    start_date: date | None = None,
-    end_date: date | None = None,
+    include_tournaments: bool = True,
     tz_name: str = "America/Mazatlan",
 ) -> dict[str, list[dict]]:
-    start_date, end_date = _resolve_range_inputs(week_start, start_date, end_date)
-    _, candidates = _compute_weekly_recap_payload(ctx, start_date, end_date, tz_name=tz_name)
+    _, candidates = _compute_weekly_recap_payload(
+        ctx,
+        start_date,
+        end_date,
+        include_tournaments=include_tournaments,
+        tz_name=tz_name,
+    )
     return {
         key: [candidate.__dict__ for candidate in items]
         for key, items in candidates.items()
     }
 
 
-def _resolve_range_inputs(
-    week_start: date | None,
-    start_date: date | None,
-    end_date: date | None,
-) -> tuple[date, date]:
-    if start_date is not None and end_date is not None:
-        return normalize_date_range(start_date, end_date)
-    if week_start is None:
-        raise ValueError("Either week_start or both start_date and end_date are required")
-    return normalize_date_range(week_start, week_start + timedelta(days=6))
+def _within_bounds(match_date: date, start_date: date, end_date: date) -> bool:
+    return start_date <= match_date <= end_date
 
 
-def _compute_weekly_recap_payload(ctx, start_date: date, end_date: date, *, tz_name: str) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
+def _compute_weekly_recap_payload(
+    ctx,
+    start_date: date,
+    end_date: date,
+    *,
+    include_tournaments: bool,
+    tz_name: str,
+) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
     club_id = str(ctx.club_id)
     supabase = getattr(ctx, "supabase", None)
     df_matches = getattr(ctx, "df_matches", pd.DataFrame())
@@ -88,8 +99,17 @@ def _compute_weekly_recap_payload(ctx, start_date: date, end_date: date, *, tz_n
 
     start_date, end_date = normalize_date_range(start_date, end_date)
     start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
-    df_week = _load_week_matches(df_matches, supabase, club_id, start_dt_utc, end_dt_utc)
-    df_week = _filter_week_matches(df_week)
+    df_week = _load_matches(
+        df_matches,
+        supabase,
+        club_id,
+        start_date,
+        end_date,
+        start_dt_utc,
+        end_dt_utc,
+        include_tournaments=include_tournaments,
+    )
+    df_week = _filter_matches(df_week, include_tournaments=include_tournaments)
 
     rating_map = _build_rating_map(df_players_all)
 
@@ -113,9 +133,12 @@ def _compute_weekly_recap_payload(ctx, start_date: date, end_date: date, *, tz_n
 
     recap = {
         "club_id": club_id,
-        "week_start": start_date.isoformat(),
-        "week_end": end_date.isoformat(),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "display_range": f"{start_date.isoformat()} – {end_date.isoformat()}",
         "numbers": numbers,
+        "top_performers": _build_top_performers(stats, id_to_name),
+        "category_sections": _build_category_sections(stats, id_to_name),
         "spotlight": [item.__dict__ for item in spotlight],
         "around_club": around_club,
         "looking_ahead": ["", "", ""],
@@ -127,22 +150,27 @@ def _compute_weekly_recap_payload(ctx, start_date: date, end_date: date, *, tz_n
     return recap, spotlight_candidates
 
 
-def _load_week_matches(
+def _load_matches(
     df_matches: pd.DataFrame | None,
     supabase,
     club_id: str,
+    start_date: date,
+    end_date: date,
     start_dt: datetime,
     end_dt: datetime,
+    *,
+    include_tournaments: bool,
 ) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
     if df_matches is not None and not df_matches.empty:
         df_local = df_matches.copy()
         df_local["date_dt"] = pd.to_datetime(df_local.get("date", None), utc=True, errors="coerce")
-        in_range = df_local[(df_local["date_dt"] >= start_dt) & (df_local["date_dt"] <= end_dt)].copy()
+        in_range = _filter_by_date_bounds(df_local, start_date, end_date)
         if not in_range.empty:
-            return in_range
+            frames.append(in_range)
 
     if supabase is None:
-        return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
     select_cols = [
         "id",
@@ -176,27 +204,63 @@ def _load_week_matches(
         .lte("date", end_dt.isoformat())
         .execute()
     )
-    return pd.DataFrame(response.data or [])
+    frames.append(pd.DataFrame(response.data or []))
+
+    if include_tournaments:
+        for table_name in ("tournament_games", "playoff_matches"):
+            try:
+                table_response = (
+                    supabase.table(table_name)
+                    .select(
+                        "id,date,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r,t1_p1_r_end,t1_p2_r_end,t2_p1_r_end,t2_p2_r_end"
+                    )
+                    .eq("club_id", club_id)
+                    .gte("date", start_dt.isoformat())
+                    .lte("date", end_dt.isoformat())
+                    .execute()
+                )
+            except Exception:
+                continue
+            table_df = pd.DataFrame(table_response.data or [])
+            if table_df.empty:
+                continue
+            table_df["match_type"] = "Tournament"
+            table_df["context_type"] = "TOURNAMENT"
+            frames.append(table_df)
+
+    return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
 
 
-def _filter_week_matches(df_matches: pd.DataFrame) -> pd.DataFrame:
+def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> pd.DataFrame:
     if df_matches is None or df_matches.empty:
         return pd.DataFrame()
     df = df_matches.copy()
     df["score_t1"] = pd.to_numeric(df.get("score_t1", 0), errors="coerce").fillna(0).astype(int)
     df["score_t2"] = pd.to_numeric(df.get("score_t2", 0), errors="coerce").fillna(0).astype(int)
     df = df[(df["score_t1"] + df["score_t2"]) > 0].copy()
-    if "context_type" in df.columns:
+    if not include_tournaments and "context_type" in df.columns:
         df = df[df["context_type"].fillna("").astype(str).str.upper() != "TOURNAMENT"].copy()
-    if "tournament_id" in df.columns:
+    if not include_tournaments and "tournament_id" in df.columns:
         df = df[df["tournament_id"].isna()].copy()
-    if "match_type" in df.columns:
+    if not include_tournaments and "match_type" in df.columns:
         df = df[df["match_type"].fillna("").astype(str) != "Tournament"].copy()
     df["league"] = df.get("league", "").fillna("").astype(str).str.strip()
     df["match_type"] = df.get("match_type", "").fillna("").astype(str).str.strip()
-    df["week_tag"] = df.get("week_tag", "").fillna("").astype(str).str.strip()
+    if "week_tag" in df.columns:
+        df["week_tag"] = df["week_tag"].fillna("").astype(str).str.strip()
+    else:
+        df["week_tag"] = ""
     df["date_dt"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
     return df
+
+
+def _filter_by_date_bounds(df: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
+    if df.empty:
+        return df
+    date_values = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
+    dates = date_values.dt.date
+    mask = dates.apply(lambda d: isinstance(d, date) and _within_bounds(d, start_date, end_date))
+    return df.loc[mask.fillna(False)].copy()
 
 
 def _build_rating_map(df_players_all: pd.DataFrame | None) -> dict[int, float]:
@@ -691,6 +755,45 @@ def _build_around_club(
     return {"leagues": league_items, "round_robins": rr_items}
 
 
+def _stable_ranked_players(
+    stats: dict[int, dict],
+    *,
+    primary_metric: str,
+    tie_break_metric: str,
+    descending: bool = True,
+) -> list[tuple[int, dict]]:
+    direction = -1 if descending else 1
+    return sorted(
+        stats.items(),
+        key=lambda item: (
+            direction * float(item[1].get(primary_metric, 0) or 0),
+            direction * float(item[1].get(tie_break_metric, 0) or 0),
+            int(item[0]),
+        ),
+    )
+
+
+def _build_top_performers(stats: dict[int, dict], id_to_name: dict[int, str]) -> list[dict]:
+    ranked = _stable_ranked_players(stats, primary_metric="wins", tie_break_metric="games")
+    return [
+        {
+            "player_id": pid,
+            "player_name": id_to_name.get(pid, f"#{pid}"),
+            "wins": int(entry.get("wins", 0)),
+            "losses": int(entry.get("losses", 0)),
+            "games": int(entry.get("games", 0)),
+        }
+        for pid, entry in ranked[:MAX_FEATURED_PER_CATEGORY]
+    ]
+
+
+def _build_category_sections(stats: dict[int, dict], id_to_name: dict[int, str]) -> dict[str, list[dict]]:
+    return {
+        "top_performer": _event_highlights(stats, id_to_name, count=1, short_labels=False, prefer_jump=False),
+        "biggest_jump": _event_highlights(stats, id_to_name, count=1, short_labels=False, prefer_jump=True),
+    }
+
+
 def _event_highlights(
     stats: dict[int, dict],
     id_to_name: dict[int, str],
@@ -701,42 +804,51 @@ def _event_highlights(
     if not stats:
         return []
 
-    def top_performer():
-        best = max(stats.items(), key=lambda item: (item[1].get("wins", 0), item[1].get("games", 0)))
-        pid, entry = best
-        name = id_to_name.get(pid, f"#{pid}")
-        wins = int(entry.get("wins", 0))
-        losses = int(entry.get("losses", 0))
-        label = "Top" if short_labels else "Top Performer"
-        display = f"{name} — {wins}-{losses}" if not short_labels else f"{name} {wins}-{losses}"
-        return {"key": "TOP_PERFORMER", "label": label, "display": display, "player_ids": [pid]}
+    def _players_payload(ranked: list[tuple[int, dict]], limit: int) -> list[dict]:
+        return [
+            {
+                "id": pid,
+                "name": id_to_name.get(pid, f"#{pid}"),
+                "wins": int(entry.get("wins", 0)),
+                "losses": int(entry.get("losses", 0)),
+                "games": int(entry.get("games", 0)),
+                "delta_jupr": float(entry.get("delta_jupr", 0) or 0),
+            }
+            for pid, entry in ranked[:limit]
+        ]
 
-    def biggest_jump():
-        best = max(stats.items(), key=lambda item: item[1].get("delta_jupr", 0))
-        pid, entry = best
-        delta = float(entry.get("delta_jupr", 0))
-        if delta <= 0:
-            return None
-        name = id_to_name.get(pid, f"#{pid}")
-        label = "Jump" if short_labels else "Biggest Jump"
-        display = f"{name} — +{delta:.2f}" if short_labels else f"{name} — +{delta:.2f} JUPR"
-        return {"key": "BIGGEST_JUMP", "label": label, "display": display, "player_ids": [pid]}
+    categories: list[dict] = []
+    top_cfg = RECAP_CATEGORY_CONFIG.get("TOP_PERFORMER", {})
+    top_ranked = _stable_ranked_players(stats, primary_metric="wins", tie_break_metric="games")
+    top_players = _players_payload(top_ranked, int(top_cfg.get("max_featured", MAX_FEATURED_PER_CATEGORY)))
+    if top_players:
+        categories.append(
+            {
+                "key": "TOP_PERFORMER",
+                "label": "Top" if short_labels else top_cfg.get("label", "Top Performer"),
+                "players": top_players,
+                "player_ids": [p["id"] for p in top_players],
+                "display": ", ".join(f"{p['name']} {p['wins']}-{p['losses']}" for p in top_players),
+            }
+        )
 
-    highlights = []
-    jump = biggest_jump()
-    top = top_performer()
-    if prefer_jump and jump is not None and (jump["display"]):
-        highlights.append(jump)
-    else:
-        highlights.append(top)
-    if count > 1:
-        if prefer_jump:
-            if top["key"] != highlights[0]["key"]:
-                highlights.append(top)
-        else:
-            if jump is not None:
-                highlights.append(jump)
-    return highlights[:count]
+    jump_cfg = RECAP_CATEGORY_CONFIG.get("BIGGEST_JUMP", {})
+    jump_ranked = [row for row in _stable_ranked_players(stats, primary_metric="delta_jupr", tie_break_metric="games") if float(row[1].get("delta_jupr", 0) or 0) > 0]
+    jump_players = _players_payload(jump_ranked, int(jump_cfg.get("max_featured", MAX_FEATURED_PER_CATEGORY)))
+    if jump_players:
+        categories.append(
+            {
+                "key": "BIGGEST_JUMP",
+                "label": "Jump" if short_labels else jump_cfg.get("label", "Biggest Jump"),
+                "players": jump_players,
+                "player_ids": [p["id"] for p in jump_players],
+                "display": ", ".join(f"{p['name']} +{p['delta_jupr']:.2f}" for p in jump_players),
+            }
+        )
+
+    if prefer_jump:
+        categories.sort(key=lambda item: 0 if item["key"] == "BIGGEST_JUMP" else 1)
+    return categories[:count]
 
 
 def _fetch_rr_event_names(supabase, rr_events: list[str]) -> dict[str, str]:
