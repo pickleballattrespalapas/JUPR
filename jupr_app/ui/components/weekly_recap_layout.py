@@ -101,7 +101,28 @@ def _inject_baja_styles(print_view: bool) -> None:
     border-left: 6px solid #E67700;
   }
 
+  .baja-podium {
+    background: linear-gradient(135deg, #FFF6E6, #FFE5CC);
+    border-left: 6px solid #E67700;
+    border-radius: 20px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.1);
+  }
+
+  .podium-grid {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 15px;
+  }
+
+  .podium-col {
+    flex: 1;
+    text-align: center;
+  }
+
   .podium-1 {
+    font-size: 1.1rem;
     font-weight: 700;
     color: #E67700;
   }
@@ -114,6 +135,13 @@ def _inject_baja_styles(print_view: bool) -> None:
   .podium-3 {
     font-weight: 600;
     color: #8C6239;
+  }
+
+  .podium-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    opacity: 0.7;
+    margin-bottom: 4px;
   }
 
   .section-title {
@@ -169,26 +197,39 @@ def render_section_card(title: str, rows: list[str], css_class: str) -> None:
 
 
 def render_tournament_podium(title: str, podium_rows: list[str]) -> None:
-    first = podium_rows[0] if len(podium_rows) > 0 else None
-    second = podium_rows[1] if len(podium_rows) > 1 else None
-    third = podium_rows[2] if len(podium_rows) > 2 else None
-
-    medal_rows = ""
-    if first:
-        medal_rows += f"<div class='podium-1'>🥇 {first}</div>"
-    if second:
-        medal_rows += f"<div class='podium-2'>🥈 {second}</div>"
-    if third:
-        medal_rows += f"<div class='podium-3'>🥉 {third}</div>"
+    first = podium_rows[0] if len(podium_rows) > 0 else ""
+    second = podium_rows[1] if len(podium_rows) > 1 else ""
+    third = podium_rows[2] if len(podium_rows) > 2 else ""
 
     st.markdown(
         f"""
-<div class="baja-card baja-tournament">
-  <div class="section-title">{title}</div>
-  {medal_rows}
+<div class="baja-podium">
+  <div class="section-title">🏆 {title}</div>
+  <div class="podium-grid">
+    <div class="podium-col">
+      <div class="podium-label">1st</div>
+      <div class="podium-1">🥇 {first}</div>
+    </div>
+    <div class="podium-col">
+      <div class="podium-label">2nd</div>
+      <div class="podium-2">🥈 {second}</div>
+    </div>
+    <div class="podium-col">
+      <div class="podium-label">3rd</div>
+      <div class="podium-3">🥉 {third}</div>
+    </div>
+  </div>
 </div>
 """,
         unsafe_allow_html=True,
+    )
+
+
+def is_tournament(title: str) -> bool:
+    normalized_title = title.lower()
+    return any(
+        keyword in normalized_title
+        for keyword in ["tournament", "sweethearts", "open", "championship", "classic", "cup"]
     )
 
 
@@ -246,8 +287,8 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
                 ACCENT_CLASS_BY_KEY.get(item.get("key"), "baja-top"),
             )
 
-    st.markdown("### Around the Club")
-    around_cards: list[tuple[str, list[str], str, bool]] = []
+    tournament_sections: list[tuple[str, list[str]]] = []
+    around_sections: list[tuple[str, list[str], str]] = []
 
     for item in around.get("leagues", []) or []:
         title_text = str(item.get("league_name", "League"))
@@ -258,13 +299,12 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         ]
         if not rows:
             continue
-        lower_title = title_text.lower()
-        if "tournament" in lower_title:
-            around_cards.append((title_text, rows, "baja-tournament", True))
-        elif "pop" in lower_title:
-            around_cards.append((title_text, rows, "baja-pop", False))
+        if is_tournament(title_text):
+            tournament_sections.append((title_text, rows))
+        elif "pop" in title_text.lower():
+            around_sections.append((title_text, rows, "baja-pop"))
         else:
-            around_cards.append((title_text, rows, "baja-league", False))
+            around_sections.append((title_text, rows, "baja-league"))
 
     for item in around.get("round_robins", []) or []:
         title_text = str(item.get("event_name", "Pop-Up Event"))
@@ -275,22 +315,26 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         ]
         if not rows:
             continue
-        lower_title = title_text.lower()
-        if "tournament" in lower_title:
-            around_cards.append((title_text, rows, "baja-tournament", True))
-        elif "pop" in lower_title:
-            around_cards.append((title_text, rows, "baja-pop", False))
+        if is_tournament(title_text):
+            tournament_sections.append((title_text, rows))
+        elif "pop" in title_text.lower():
+            around_sections.append((title_text, rows, "baja-pop"))
         else:
-            around_cards.append((title_text, rows, "baja-roundrobin", False))
+            around_sections.append((title_text, rows, "baja-roundrobin"))
 
+    st.markdown("### Tournaments")
+    tournament_col1, tournament_col2 = st.columns(2)
+    for idx, (title_text, rows) in enumerate(tournament_sections):
+        target_col = tournament_col1 if idx % 2 == 0 else tournament_col2
+        with target_col:
+            render_tournament_podium(title_text, rows)
+
+    st.markdown("### Around the Club")
     around_col1, around_col2 = st.columns(2)
-    for idx, (title_text, rows, css_class, is_tournament) in enumerate(around_cards):
+    for idx, (title_text, rows, css_class) in enumerate(around_sections):
         target_col = around_col1 if idx % 2 == 0 else around_col2
         with target_col:
-            if is_tournament:
-                render_tournament_podium(title_text, rows)
-            else:
-                render_section_card(title_text, rows, css_class)
+            render_section_card(title_text, rows, css_class)
 
     if looking_ahead:
         st.markdown("### Looking Ahead")
