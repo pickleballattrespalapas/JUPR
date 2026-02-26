@@ -308,15 +308,15 @@ def replay_history(
                 "t2_p1_r_end": row["t2_p1_r_end"],
                 "t2_p2_r_end": row["t2_p2_r_end"],
             }
-       ).eq("club_id", club_id).eq("id", row["id"]).execute()
+        ).eq("club_id", club_id).eq("id", row["id"]).execute()
    
-       rewritten += 1
+        rewritten += 1
    
-       if progress_cb:
-           try:
-               progress_cb(rewritten / total)
-           except Exception:
-               pass
+        if progress_cb:
+            try:
+                progress_cb(rewritten / total)
+            except Exception:
+                pass
 
     # ---------------------------------------------------------
     # Rewrite match snapshots (BATCHED)
