@@ -19,7 +19,14 @@ def _build_recap_pdf(recap: dict, week_start: str, week_end: str) -> bytes:
         "",
         "Highlights",
     ]
-    for item in recap.get("highlights", [])[:5]:
+    highlights = [str(item).strip() for item in (recap.get("highlights", []) or []) if str(item).strip()]
+    if not highlights:
+        for item in (recap.get("spotlight", []) or []):
+            players = [str(player).strip() for player in (item.get("players", []) or []) if str(player).strip()]
+            if players:
+                highlights.append(f"{item.get('label', 'Award')}: {', '.join(players)}")
+
+    for item in highlights[:5]:
         text = str(item).strip()
         if text:
             lines.append(f"- {text}")
