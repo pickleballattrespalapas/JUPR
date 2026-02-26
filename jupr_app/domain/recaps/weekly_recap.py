@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from jupr_app.data.sb_safe import safe_execute
+
 
 @dataclass
 class SpotlightCandidate:
@@ -220,13 +222,12 @@ def _load_matches(
         "tournament_id",
         "tournament_game_id",
     ]
-    response = (
+    response = safe_execute(
         supabase.table("matches")
         .select(",".join(select_cols))
         .eq("club_id", club_id)
         .gte("date", start_dt.isoformat())
         .lte("date", end_dt.isoformat())
-        .execute()
     )
     frames.append(pd.DataFrame(response.data or []))
 
@@ -239,13 +240,12 @@ def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_
     if supabase is None:
         return []
 
-    response = (
+    response = safe_execute(
         supabase.table("matches")
         .select("tournament_id,tournament_game_id,context_type,match_type,week_tag,league,score_t1,score_t2")
         .eq("club_id", club_id)
         .gte("date", start_dt.isoformat())
         .lte("date", end_dt.isoformat())
-        .execute()
     )
 
     tournament_ids: list[str] = []
@@ -263,13 +263,12 @@ def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_
     if not unique_ids:
         return []
 
-    tournaments_response = (
+    tournaments_response = safe_execute(
         supabase.table("tournaments")
         .select("id,name,status")
         .eq("club_id", club_id)
         .in_("id", unique_ids)
         .eq("status", "COMPLETE")
-        .execute()
     )
     tournaments = tournaments_response.data or []
     order = {t_id: idx for idx, t_id in enumerate(unique_ids)}
@@ -283,13 +282,46 @@ def _build_tournament_section(supabase, club_id, start_dt, end_dt, *, id_to_name
     if not tournaments:
         return []
 
+    tournament_ids = [str(tournament.get("id")) for tournament in tournaments if tournament.get("id")]
+    if not tournament_ids:
+        return []
+
+    podium_response = safe_execute(
+        supabase.table("tournament_podium")
+        .select("tournament_id,placement,team_id")
+        .in_("tournament_id", tournament_ids)
+    )
+    podium_rows = podium_response.data or []
+
+    podium_rows_by_tournament: dict[str, list[dict]] = {}
+    all_team_ids: list[object] = []
+    for row in podium_rows:
+        tournament_id = row.get("tournament_id")
+        if tournament_id is None:
+            continue
+        tournament_key = str(tournament_id)
+        podium_rows_by_tournament.setdefault(tournament_key, []).append(row)
+        team_id = row.get("team_id")
+        if team_id is not None:
+            all_team_ids.append(team_id)
+
+    teams_by_id = _load_tournament_teams(supabase, all_team_ids)
+
     tournament_section: list[dict] = []
     for tournament in tournaments:
         tournament_id = tournament.get("id")
         if not tournament_id:
             continue
 
-        podium = _load_tournament_podium(supabase, tournament_id, id_to_name=id_to_name)
+        tournament_key = str(tournament_id)
+        tournament_podium_rows = podium_rows_by_tournament.get(tournament_key, [])
+        podium = _load_tournament_podium(
+            supabase,
+            tournament_key,
+            id_to_name=id_to_name,
+            podium_rows=tournament_podium_rows,
+            teams_by_id=teams_by_id,
+        )
 
         tournament_section.append(
             {
@@ -302,22 +334,30 @@ def _build_tournament_section(supabase, club_id, start_dt, end_dt, *, id_to_name
     return tournament_section
 
 
-def _load_tournament_podium(supabase, tournament_id: str, *, id_to_name: dict[int, str] | None = None) -> list[dict]:
-    if supabase is None:
-        return []
+def _load_tournament_podium(
+    supabase,
+    tournament_id: str,
+    *,
+    id_to_name: dict[int, str] | None = None,
+    podium_rows: list[dict] | None = None,
+    teams_by_id: dict[object, dict] | None = None,
+) -> list[dict]:
+    if podium_rows is None:
+        if supabase is None:
+            return []
+        response = safe_execute(
+            supabase.table("tournament_podium")
+            .select("placement,team_id")
+            .eq("tournament_id", tournament_id)
+        )
+        podium_rows = response.data or []
 
-    response = (
-        supabase.table("tournament_podium")
-        .select("placement,team_id")
-        .eq("tournament_id", tournament_id)
-        .execute()
-    )
-    podium_rows = response.data or []
     if not podium_rows:
         return []
 
-    team_ids = [row.get("team_id") for row in podium_rows if row.get("team_id") is not None]
-    teams_by_id = _load_tournament_teams(supabase, team_ids)
+    if teams_by_id is None:
+        team_ids = [row.get("team_id") for row in podium_rows if row.get("team_id") is not None]
+        teams_by_id = _load_tournament_teams(supabase, team_ids)
 
     return [
         {
@@ -334,11 +374,10 @@ def _load_tournament_teams(supabase, team_ids: list[object]) -> dict[object, dic
     if not unique_ids:
         return {}
 
-    teams_response = (
+    teams_response = safe_execute(
         supabase.table("tournament_teams")
         .select("id,team_number,player1_id,player2_id")
         .in_("id", unique_ids)
-        .execute()
     )
     teams = teams_response.data or []
     if not teams:
@@ -369,11 +408,10 @@ def _load_player_names(supabase, player_ids: list[int]) -> dict[int, str]:
     unique_ids = [player_id for player_id in dict.fromkeys(player_ids) if player_id is not None]
     if not unique_ids:
         return {}
-    players_response = (
+    players_response = safe_execute(
         supabase.table("players")
         .select("id,name")
         .in_("id", unique_ids)
-        .execute()
     )
     return {
         _safe_int(row.get("id")): str(row.get("name") or "").strip() or "Unknown"
@@ -897,12 +935,11 @@ def _compute_new_faces(
             f"t2_p2.in.({ids_str})",
         ]
     )
-    response = (
+    response = safe_execute(
         supabase.table("matches")
         .select("date,t1_p1,t1_p2,t2_p1,t2_p2")
         .eq("club_id", club_id)
         .or_(or_filter)
-        .execute()
     )
     df = pd.DataFrame(response.data or [])
     if df.empty:
@@ -1074,5 +1111,5 @@ def _fetch_rr_event_names(supabase, rr_events: list[str]) -> dict[str, str]:
     ids = [eid for eid in rr_events if eid and not eid.startswith("POPUP")]
     if not ids:
         return {}
-    response = supabase.table("events").select("id,name").in_("id", ids).execute()
+    response = safe_execute(supabase.table("events").select("id,name").in_("id", ids))
     return {row["id"]: row.get("name") or "Pop-Up Event" for row in (response.data or [])}
