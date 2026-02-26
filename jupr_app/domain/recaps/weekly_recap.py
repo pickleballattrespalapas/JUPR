@@ -241,7 +241,7 @@ def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_
 
     response = (
         supabase.table("matches")
-        .select("tournament_id,context_type,match_type,week_tag,league,score_t1,score_t2")
+        .select("tournament_id,tournament_game_id,context_type,match_type,week_tag,league,score_t1,score_t2")
         .eq("club_id", club_id)
         .gte("date", start_dt.isoformat())
         .lte("date", end_dt.isoformat())
