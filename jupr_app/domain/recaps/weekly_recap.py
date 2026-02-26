@@ -254,28 +254,6 @@ def _load_matches(
     )
     frames.append(pd.DataFrame(response.data or []))
 
-    if include_tournaments:
-        for table_name in ("tournament_games", "playoff_matches"):
-            try:
-                table_response = (
-                    supabase.table(table_name)
-                    .select(
-                        "id,date,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,t1_p1_r,t1_p2_r,t2_p1_r,t2_p2_r,t1_p1_r_end,t1_p2_r_end,t2_p1_r_end,t2_p2_r_end"
-                    )
-                    .eq("club_id", club_id)
-                    .gte("date", start_dt.isoformat())
-                    .lte("date", end_dt.isoformat())
-                    .execute()
-                )
-            except Exception:
-                continue
-            table_df = pd.DataFrame(table_response.data or [])
-            if table_df.empty:
-                continue
-            table_df["match_type"] = "Tournament"
-            table_df["context_type"] = "TOURNAMENT"
-            frames.append(table_df)
-
     return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
 
 
@@ -283,17 +261,24 @@ def _load_completed_tournaments(supabase, club_id, start_dt_utc, end_dt_utc):
     if supabase is None:
         return []
 
-    # Step 1: Find tournament_ids that had games within the recap date range
-    game_response = (
-        supabase.table("tournament_games")
-        .select("tournament_id,date")
+    # Step 1: Find tournament_ids from canonical match history in the recap date range
+    response = (
+        supabase.table("matches")
+        .select("*")
         .eq("club_id", club_id)
+        .eq("context_type", "TOURNAMENT")
         .gte("date", start_dt_utc.isoformat())
         .lte("date", end_dt_utc.isoformat())
         .execute()
     )
 
-    games = game_response.data or []
+    df_tournaments = pd.DataFrame(response.data or [])
+    if not df_tournaments.empty:
+        df_tournaments = df_tournaments[
+            (df_tournaments.get("score_t1", 0) + df_tournaments.get("score_t2", 0)) > 0
+        ]
+
+    games = df_tournaments.to_dict("records")
     if not games:
         return []
 
