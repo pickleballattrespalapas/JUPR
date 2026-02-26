@@ -323,7 +323,7 @@ def _load_tournament_podium(supabase, tournament_id: str, *, id_to_name: dict[in
         {
             "placement": _normalize_podium_placement(row.get("placement")),
             "team_id": row.get("team_id"),
-            "display_name": _format_team_display_name(teams_by_id.get(row.get("team_id")), id_to_name=id_to_name),
+            "display_name": _format_team_display_name(teams_by_id.get(str(row.get("team_id"))), id_to_name=id_to_name),
         }
         for row in sorted(podium_rows, key=lambda item: _normalize_podium_placement(item.get("placement")) or 999)
     ]
@@ -355,7 +355,7 @@ def _load_tournament_teams(supabase, team_ids: list[object]) -> dict[object, dic
 
     id_to_name = _load_player_names(supabase, player_ids)
     return {
-        team.get("id"): {
+        str(team.get("id")): {
             **team,
             "player1_name": id_to_name.get(_safe_int(team.get("player1_id")), "Unknown"),
             "player2_name": id_to_name.get(_safe_int(team.get("player2_id")), "Unknown"),
