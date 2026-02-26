@@ -127,31 +127,17 @@ def get_supabase():
     admin_password = "..."  # your chosen admin login password
     admin_session_secret = "..."  # used to sign short-lived admin sessions
     """
-    url = get_secret(["supabase", "url"], "")
-    key = get_secret(["supabase", "anon_key"], "") or get_secret(["supabase", "key"], "")
+    url = st.secrets.get("SUPABASE_URL")
+    key = (
+        st.secrets.get("SUPABASE_ANON_KEY")
+        or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+    )
 
     if not url or not key:
-        st.error("Supabase secrets are missing or misnamed.")
-        st.code(
-            "[supabase]\n"
-            'url = "https://YOUR_PROJECT_REF.supabase.co"\n'
-            'anon_key = "YOUR_SUPABASE_ANON_KEY"  # or use key = "…"\n'
-            'admin_password = "YOUR_ADMIN_PASSWORD"\n'
-            'admin_session_secret = "YOUR_ADMIN_SESSION_SECRET"\n'
-        )
-
-        # Debug keys only (no values) - Mapping-safe (no .get usage)
-        try:
-            st.write("Secrets keys:", list(st.secrets.keys()))
-            sb = get_secret(["supabase"], default={})
-            if isinstance(sb, Mapping):
-                st.write("Supabase keys:", list(sb.keys()))
-        except Exception:
-            pass
-
+        st.error("Supabase credentials missing.")
         st.stop()
 
-    return make_supabase(str(url), str(key))
+    return make_supabase(url, key)
 
 
 @st.cache_data(ttl=30)
