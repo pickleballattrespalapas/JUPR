@@ -292,10 +292,31 @@ def replay_history(
                 }
             )
 
-    for i in range(0, len(new_rows), 1000):
-        supabase.table("league_ratings").insert(
-            new_rows[i : i + 1000]
-        ).execute()
+    total = max(1, len(matches_to_update))
+    rewritten = 0
+   
+    for row in matches_to_update:
+        supabase.table("matches").update(
+            {
+                "elo_delta": row["elo_delta"],
+                "t1_p1_r": row["t1_p1_r"],
+                "t1_p2_r": row["t1_p2_r"],
+                "t2_p1_r": row["t2_p1_r"],
+                "t2_p2_r": row["t2_p2_r"],
+                "t1_p1_r_end": row["t1_p1_r_end"],
+                "t1_p2_r_end": row["t1_p2_r_end"],
+                "t2_p1_r_end": row["t2_p1_r_end"],
+                "t2_p2_r_end": row["t2_p2_r_end"],
+            }
+       ).eq("club_id", club_id).eq("id", row["id"]).execute()
+   
+       rewritten += 1
+   
+       if progress_cb:
+           try:
+               progress_cb(rewritten / total)
+           except Exception:
+               pass
 
     # ---------------------------------------------------------
     # Rewrite match snapshots (BATCHED)
