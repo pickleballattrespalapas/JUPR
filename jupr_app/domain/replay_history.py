@@ -86,7 +86,12 @@ def replay_history(
 
     # Replay loop
     for m in all_matches:
-        lg = str(m.get("league", "") or "").strip()
+        import unicodedata
+
+            lg = str(m.get("league", "") or "")
+            lg = unicodedata.normalize("NFKC", lg)
+            lg = lg.replace("’", "'")
+            lg = " ".join(lg.split())
 
         if str(target_reset).strip() != FULL_RESET_LABEL and lg != str(target_reset).strip():
             continue
