@@ -8,6 +8,7 @@ import streamlit as st
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournaments import (
     build_playoff_games,
+    SUPPORTED_TEAM_COUNTS,
     build_round_robin_games,
     build_podium_payload,
     compute_podium_from_playoffs,
@@ -49,7 +50,7 @@ def render(ctx):
     with c1:
         tournament_name = st.text_input("Tournament name", key="tourney_create_name")
     with c2:
-        team_count = st.selectbox("Team count", [4, 5, 7, 8], key="tourney_create_team_count")
+        team_count = st.selectbox("Team count", SUPPORTED_TEAM_COUNTS, key="tourney_create_team_count")
     with c3:
         if st.button("Create", type="primary"):
             if not tournament_name.strip():
@@ -153,8 +154,8 @@ def render(ctx):
         with c2:
             new_team_count = st.selectbox(
                 "Team count",
-                [4, 5, 7, 8],
-                index=[4, 5, 7, 8].index(team_count_value),
+                SUPPORTED_TEAM_COUNTS,
+                index=SUPPORTED_TEAM_COUNTS.index(team_count_value) if team_count_value in SUPPORTED_TEAM_COUNTS else 0,
                 disabled=team_count_locked,
                 key="tourney_team_count_select",
             )
