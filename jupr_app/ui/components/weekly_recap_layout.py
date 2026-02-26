@@ -204,9 +204,9 @@ def render_podium_layout(podium_rows: list[dict]) -> str:
         int(item.get("placement", 0) or 0): str(item.get("display_name", "") or "")
         for item in podium_rows
     }
-    first = podium_by_place.get(1, "")
-    second = podium_by_place.get(2, "")
-    third = podium_by_place.get(3, "")
+    first = podium_by_place.get(1, "Podium not available (missing tournament_podium rows)")
+    second = podium_by_place.get(2, "Podium not available (missing tournament_podium rows)")
+    third = podium_by_place.get(3, "Podium not available (missing tournament_podium rows)")
 
     return f"""
 <div class="podium-grid">
@@ -333,10 +333,13 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         with target_col:
             render_section_card(title_text, rows, css_class)
 
-    if tournaments:
+    if "tournaments" in recap:
         st.markdown("### Tournaments")
-        for tournament in tournaments:
-            render_tournament_podium(tournament)
+        if tournaments:
+            for tournament in tournaments:
+                render_tournament_podium(tournament)
+        else:
+            st.info("Podium not available (missing tournament_podium rows)")
 
     if looking_ahead:
         st.markdown("### Looking Ahead")

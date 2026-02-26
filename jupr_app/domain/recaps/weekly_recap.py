@@ -150,6 +150,7 @@ def _compute_weekly_recap_payload(
         club_id,
         start_dt_utc,
         end_dt_utc,
+        id_to_name=id_to_name,
     )
 
     recap = {
@@ -217,6 +218,7 @@ def _load_matches(
         "context_type",
         "context_id",
         "tournament_id",
+        "tournament_game_id",
     ]
     response = (
         supabase.table("matches")
@@ -231,39 +233,53 @@ def _load_matches(
     return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
 
 
-def _build_tournament_section(supabase, club_id, start_dt, end_dt) -> list[dict]:
+
+
+def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_dt: datetime) -> list[dict]:
     if supabase is None:
         return []
 
     response = (
         supabase.table("matches")
-        .select("tournament_id")
+        .select("tournament_id,context_type,match_type,week_tag,league,score_t1,score_t2")
         .eq("club_id", club_id)
-        .eq("context_type", "TOURNAMENT")
         .gte("date", start_dt.isoformat())
         .lte("date", end_dt.isoformat())
         .execute()
     )
 
-    tournament_ids = list({
-        row.get("tournament_id")
-        for row in (response.data or [])
-        if row.get("tournament_id")
-    })
+    tournament_ids: list[str] = []
+    for row in (response.data or []):
+        if not _is_tournament_match(row):
+            continue
+        tournament_id = row.get("tournament_id")
+        score_t1 = _safe_int(row.get("score_t1")) or 0
+        score_t2 = _safe_int(row.get("score_t2")) or 0
+        if not tournament_id or (score_t1 + score_t2) <= 0:
+            continue
+        tournament_ids.append(str(tournament_id))
 
-    if not tournament_ids:
+    unique_ids = list(dict.fromkeys(tournament_ids))
+    if not unique_ids:
         return []
 
-    response = (
+    tournaments_response = (
         supabase.table("tournaments")
         .select("id,name,status")
         .eq("club_id", club_id)
-        .in_("id", tournament_ids)
+        .in_("id", unique_ids)
         .eq("status", "COMPLETE")
         .execute()
     )
+    tournaments = tournaments_response.data or []
+    order = {t_id: idx for idx, t_id in enumerate(unique_ids)}
+    return sorted(tournaments, key=lambda row: order.get(str(row.get("id")), 99999))
 
-    tournaments = response.data or []
+def _build_tournament_section(supabase, club_id, start_dt, end_dt, *, id_to_name: dict[int, str] | None = None) -> list[dict]:
+    if supabase is None:
+        return []
+
+    tournaments = _load_completed_tournaments(supabase, club_id, start_dt, end_dt)
     if not tournaments:
         return []
 
@@ -273,24 +289,7 @@ def _build_tournament_section(supabase, club_id, start_dt, end_dt) -> list[dict]
         if not tournament_id:
             continue
 
-        podium_rows = _load_tournament_podium(supabase, tournament_id)
-        if not podium_rows:
-            continue
-
-        podium = [
-            {
-                "placement": int(row.get("placement", 0) or 0),
-                "display_name": str(row.get("display_name", "") or "").strip(),
-            }
-            for row in sorted(
-                podium_rows,
-                key=lambda row: int(row.get("placement", 999) or 999),
-            )
-            if str(row.get("display_name", "") or "").strip()
-        ]
-
-        if not podium:
-            continue
+        podium = _load_tournament_podium(supabase, tournament_id, id_to_name=id_to_name)
 
         tournament_section.append(
             {
@@ -303,18 +302,138 @@ def _build_tournament_section(supabase, club_id, start_dt, end_dt) -> list[dict]
     return tournament_section
 
 
-def _load_tournament_podium(supabase, tournament_id: str) -> list[dict]:
+def _load_tournament_podium(supabase, tournament_id: str, *, id_to_name: dict[int, str] | None = None) -> list[dict]:
     if supabase is None:
         return []
 
     response = (
         supabase.table("tournament_podium")
-        .select("placement,display_name")
+        .select("placement,team_id")
         .eq("tournament_id", tournament_id)
-        .order("placement")
         .execute()
     )
-    return response.data or []
+    podium_rows = response.data or []
+    if not podium_rows:
+        return []
+
+    team_ids = [row.get("team_id") for row in podium_rows if row.get("team_id") is not None]
+    teams_by_id = _load_tournament_teams(supabase, team_ids)
+
+    return [
+        {
+            "placement": _normalize_podium_placement(row.get("placement")),
+            "team_id": row.get("team_id"),
+            "display_name": _format_team_display_name(teams_by_id.get(row.get("team_id")), id_to_name=id_to_name),
+        }
+        for row in sorted(podium_rows, key=lambda item: _normalize_podium_placement(item.get("placement")) or 999)
+    ]
+
+
+def _load_tournament_teams(supabase, team_ids: list[object]) -> dict[object, dict]:
+    unique_ids = [team_id for team_id in dict.fromkeys(team_ids) if team_id is not None]
+    if not unique_ids:
+        return {}
+
+    teams_response = (
+        supabase.table("tournament_teams")
+        .select("id,team_number,player1_id,player2_id")
+        .in_("id", unique_ids)
+        .execute()
+    )
+    teams = teams_response.data or []
+    if not teams:
+        return {}
+
+    player_ids: list[int] = []
+    for team in teams:
+        p1 = _safe_int(team.get("player1_id"))
+        p2 = _safe_int(team.get("player2_id"))
+        if p1 is not None:
+            player_ids.append(p1)
+        if p2 is not None:
+            player_ids.append(p2)
+
+    id_to_name = _load_player_names(supabase, player_ids)
+    return {
+        team.get("id"): {
+            **team,
+            "player1_name": id_to_name.get(_safe_int(team.get("player1_id")), "Unknown"),
+            "player2_name": id_to_name.get(_safe_int(team.get("player2_id")), "Unknown"),
+        }
+        for team in teams
+        if team.get("id") is not None
+    }
+
+
+def _load_player_names(supabase, player_ids: list[int]) -> dict[int, str]:
+    unique_ids = [player_id for player_id in dict.fromkeys(player_ids) if player_id is not None]
+    if not unique_ids:
+        return {}
+    players_response = (
+        supabase.table("players")
+        .select("id,name")
+        .in_("id", unique_ids)
+        .execute()
+    )
+    return {
+        _safe_int(row.get("id")): str(row.get("name") or "").strip() or "Unknown"
+        for row in (players_response.data or [])
+        if _safe_int(row.get("id")) is not None
+    }
+
+
+def _format_team_display_name(team: dict | None, *, id_to_name: dict[int, str] | None = None) -> str:
+    if not team:
+        return ""
+    id_to_name = id_to_name or {}
+    team_number = str(team.get("team_number") or "?").strip()
+
+    p1_id = _safe_int(team.get("player1_id"))
+    p2_id = _safe_int(team.get("player2_id"))
+    p1_name = id_to_name.get(p1_id) or str(team.get("player1_name") or "Unknown")
+    p2_name = id_to_name.get(p2_id) or str(team.get("player2_name") or "Unknown")
+    return f"Team {team_number}: {p1_name} / {p2_name}"
+
+
+def _normalize_podium_placement(value) -> int | None:
+    if value is None:
+        return None
+    as_int = _safe_int(value)
+    if as_int in {1, 2, 3}:
+        return as_int
+
+    label = str(value).strip().upper()
+    mapping = {
+        "CHAMPION": 1,
+        "WINNER": 1,
+        "FIRST": 1,
+        "1ST": 1,
+        "RUNNER-UP": 2,
+        "RUNNER UP": 2,
+        "FINALIST": 2,
+        "SECOND": 2,
+        "2ND": 2,
+        "BRONZE": 3,
+        "THIRD": 3,
+        "3RD": 3,
+    }
+    return mapping.get(label)
+
+
+def _is_tournament_match(match: dict) -> bool:
+    context_type = str(match.get("context_type") or "").strip().upper()
+    match_type = str(match.get("match_type") or "").strip().upper()
+    week_tag = str(match.get("week_tag") or "").strip().upper()
+    league = str(match.get("league") or "").strip().upper()
+
+    return (
+        context_type == "TOURNAMENT"
+        or match.get("tournament_id") is not None
+        or match.get("tournament_game_id") is not None
+        or match_type == "TOURNAMENT"
+        or week_tag == "TOURNAMENT"
+        or "TOURNAMENT" in league
+    )
 
 
 def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> pd.DataFrame:
@@ -324,12 +443,9 @@ def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> p
     df["score_t1"] = pd.to_numeric(df.get("score_t1", 0), errors="coerce").fillna(0).astype(int)
     df["score_t2"] = pd.to_numeric(df.get("score_t2", 0), errors="coerce").fillna(0).astype(int)
     df = df[(df["score_t1"] + df["score_t2"]) > 0].copy()
-    if not include_tournaments and "context_type" in df.columns:
-        df = df[df["context_type"].fillna("").astype(str).str.upper() != "TOURNAMENT"].copy()
-    if not include_tournaments and "tournament_id" in df.columns:
-        df = df[df["tournament_id"].isna()].copy()
-    if not include_tournaments and "match_type" in df.columns:
-        df = df[df["match_type"].fillna("").astype(str) != "Tournament"].copy()
+    if not include_tournaments:
+        non_tournament_mask = ~df.apply(lambda row: _is_tournament_match(row.to_dict()), axis=1)
+        df = df[non_tournament_mask].copy()
     df["league"] = df.get("league", "").fillna("").astype(str).str.strip()
     df["match_type"] = df.get("match_type", "").fillna("").astype(str).str.strip()
     if "week_tag" in df.columns:
@@ -402,7 +518,7 @@ def _safe_float(value, default: float | None = None) -> float | None:
 
 
 def _resolve_event_key(match: dict) -> tuple[str, str] | None:
-    if str(match.get("context_type", "") or "").strip().upper() == "TOURNAMENT":
+    if _is_tournament_match(match):
         return None
     league = str(match.get("league", "") or "").strip()
     match_type = str(match.get("match_type", "") or "").strip()

@@ -26,10 +26,15 @@ def render_tournament_podium(tournament: dict) -> None:
 
 
 def _render_tournament_section(recap: dict) -> None:
-    if recap.get("tournaments"):
-        st.header("🏆 Tournaments")
-        for tournament in recap["tournaments"]:
-            render_tournament_podium(tournament)
+    if "tournaments" not in recap:
+        return
+    st.header("🏆 Tournaments")
+    tournaments = recap.get("tournaments") or []
+    if not tournaments:
+        st.info("Podium not available (missing tournament_podium rows)")
+        return
+    for tournament in tournaments:
+        render_tournament_podium(tournament)
 
 def _get_default_date_range(tz_name: str) -> tuple[date, date]:
     today = datetime.now(ZoneInfo(tz_name)).date()
