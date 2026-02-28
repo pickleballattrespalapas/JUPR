@@ -6,6 +6,7 @@ import json
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
     """
@@ -261,7 +262,7 @@ def apply_bulk_match_edits(
 
     if updated_ids and supabase is not None:
         for match_id in updated_ids:
-            enqueue_badge_eval(
+            queued = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),
                 event_type="match_updated",
@@ -269,6 +270,8 @@ def apply_bulk_match_edits(
                 match_id=str(match_id),
                 payload={"updated_ids": updated_ids[:50]},
             )
+            if queued:
+                process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
 
     return {
         "updated_count": len(updated_ids),

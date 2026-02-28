@@ -645,6 +645,7 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
 
     if updated_any:
         st.success("Scores saved.")
+        st.session_state["force_data_refresh"] = True
         st.rerun()
 
 
