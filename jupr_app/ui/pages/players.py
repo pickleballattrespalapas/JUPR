@@ -126,6 +126,7 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     return pb_df.merge(badges_df, on="badge_id", how="left")
 
 
+# Keep this cache short so newly finalized tournament podium trophies appear quickly.
 @st.cache_data(ttl=60)
 def fetch_player_tournament_trophies(_supabase, club_id: str, pid: int) -> list[dict]:
     return get_player_tournament_trophies(_supabase, club_id, pid)
