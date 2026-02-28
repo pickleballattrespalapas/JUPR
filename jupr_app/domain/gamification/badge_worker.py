@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import time
 import traceback
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -71,6 +71,75 @@ def process_badge_eval_queue(
             errored += 1
 
     return {"processed": processed, "errored": errored}
+
+
+def process_badge_eval_queue_until_empty(
+    supabase: Any,
+    club_id: str,
+    *,
+    max_total_jobs: int = 500,
+    batch_max_jobs: int = 10,
+    per_batch_time_budget_seconds: float = 2.0,
+    max_wall_clock_seconds: float = 90.0,
+    max_errors: int = 10,
+    progress_cb: Callable[[dict[str, int | float | str]], None] | None = None,
+) -> dict[str, int | float | str]:
+    started = time.time()
+    loops = 0
+    total_processed = 0
+    total_errored = 0
+    stopped_reason = "max_wall_clock"
+    error_only_loops = 0
+
+    while (time.time() - started) < max_wall_clock_seconds:
+        loops += 1
+        batch = process_badge_eval_queue(
+            supabase,
+            max_jobs=batch_max_jobs,
+            time_budget_seconds=per_batch_time_budget_seconds,
+        )
+        processed = int(batch.get("processed") or 0)
+        errored = int(batch.get("errored") or 0)
+        total_processed += processed
+        total_errored += errored
+
+        if errored > 0 and processed == 0:
+            error_only_loops += 1
+        else:
+            error_only_loops = 0
+
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "loop": loops,
+                    "processed": processed,
+                    "errored": errored,
+                    "total_processed": total_processed,
+                    "total_errored": total_errored,
+                    "duration_seconds": time.time() - started,
+                }
+            )
+
+        if processed == 0 and errored == 0:
+            stopped_reason = "empty"
+            break
+        if (total_processed + total_errored) >= max_total_jobs:
+            stopped_reason = "max_total_jobs"
+            break
+        if total_errored >= max_errors:
+            stopped_reason = "max_errors"
+            break
+        if error_only_loops >= 3:
+            stopped_reason = "error_circuit_breaker"
+            break
+
+    return {
+        "total_processed": total_processed,
+        "total_errored": total_errored,
+        "loops": loops,
+        "stopped_reason": stopped_reason,
+        "duration_seconds": round(time.time() - started, 3),
+    }
 
 
 def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: int) -> Any:

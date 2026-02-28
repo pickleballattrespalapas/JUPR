@@ -10,7 +10,10 @@ from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
-from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.gamification.badge_worker import (
+    process_badge_eval_queue,
+    process_badge_eval_queue_until_empty,
+)
 from jupr_app.ui.layout import page_shell
 
 def _get_api_error_code(exc: APIError) -> str | None:
@@ -139,6 +142,25 @@ def render(ctx):
             )
             st.dataframe(pd.DataFrame(pending_rows.data or []), use_container_width=True, hide_index=True)
 
+    drain_col1, drain_col2 = st.columns(2)
+    with drain_col1:
+        drain_wall_clock = st.selectbox(
+            "Drain max wall clock",
+            options=[30, 60, 90],
+            index=2,
+            format_func=lambda v: f"{int(v)}s",
+            key="badge_eval_queue_drain_max_wall_clock",
+            disabled=not badge_queue_ready,
+        )
+    with drain_col2:
+        drain_batch_size = st.selectbox(
+            "Drain batch size",
+            options=[5, 10, 20],
+            index=1,
+            key="badge_eval_queue_drain_batch_size",
+            disabled=not badge_queue_ready,
+        )
+
     if st.button("Process queued badge evaluations", key="badge_eval_queue_process"):
         if not badge_queue_ready:
             st.info("Run required queue migrations before processing jobs.")
@@ -180,6 +202,76 @@ def render(ctx):
                             st.warning("Recent queue errors")
                             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
                             st.code(str(rows[0].get("last_error") or ""), language="text")
+
+    if st.button("Drain badge queue (run all)", key="badge_eval_queue_drain"):
+        if not badge_queue_ready:
+            st.info("Run required queue migrations before processing jobs.")
+        else:
+            try:
+                pending_resp = (
+                    supabase.table("badge_eval_queue")
+                    .select("id", count="exact")
+                    .eq("club_id", club_id)
+                    .eq("status", "pending")
+                    .execute()
+                )
+                pending_count = int(pending_resp.count or 0)
+                st.info(f"Pending jobs before drain: {pending_count}")
+
+                progress = st.progress(0.0)
+                progress_line = st.empty()
+                target = max(1, pending_count)
+
+                def _on_progress(payload: dict[str, int | float | str]) -> None:
+                    processed_total = int(payload.get("total_processed") or 0)
+                    errored_total = int(payload.get("total_errored") or 0)
+                    completed_total = processed_total + errored_total
+                    ratio = min(1.0, completed_total / target)
+                    progress.progress(ratio)
+                    progress_line.write(
+                        f"Loop {int(payload.get('loop') or 0)}: processed {completed_total}/{target}, "
+                        f"errors {errored_total}"
+                    )
+
+                drain_result = process_badge_eval_queue_until_empty(
+                    supabase,
+                    club_id,
+                    max_total_jobs=500,
+                    batch_max_jobs=int(drain_batch_size),
+                    per_batch_time_budget_seconds=2.0,
+                    max_wall_clock_seconds=float(drain_wall_clock),
+                    max_errors=10,
+                    progress_cb=_on_progress,
+                )
+                progress.progress(1.0)
+                st.success(
+                    "Drain complete: "
+                    f"processed {int(drain_result.get('total_processed') or 0)}, "
+                    f"errors {int(drain_result.get('total_errored') or 0)}, "
+                    f"loops {int(drain_result.get('loops') or 0)}, "
+                    f"reason {drain_result.get('stopped_reason')}, "
+                    f"duration {float(drain_result.get('duration_seconds') or 0):.2f}s."
+                )
+
+                if int(drain_result.get("total_errored") or 0) > 0:
+                    errored_rows = (
+                        supabase.table("badge_eval_queue")
+                        .select("id,event_type,attempts,last_error")
+                        .eq("club_id", club_id)
+                        .eq("status", "error")
+                        .order("created_at", desc=True)
+                        .limit(5)
+                        .execute()
+                    )
+                    rows = errored_rows.data or []
+                    st.warning("Last 5 errored jobs")
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            except APIError as exc:
+                st.error("Failed to drain badge queue.")
+                st.exception(exc)
+            except Exception as exc:  # noqa: BLE001 - UI should not crash
+                st.error("Failed to drain badge queue.")
+                st.exception(exc)
 
     # -------------------------
     # Replay History
