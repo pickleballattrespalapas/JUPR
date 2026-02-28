@@ -13,7 +13,6 @@ from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_t
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.layout import page_shell
 
-
 def _get_api_error_code(exc: APIError) -> str | None:
     code = getattr(exc, "code", None)
     if code:
@@ -22,6 +21,25 @@ def _get_api_error_code(exc: APIError) -> str | None:
         return exc.args[0].get("code")
     return None
 
+def _badge_queue_preflight(supabase, club_id: str) -> bool:
+    try:
+        supabase.table("badge_eval_queue").select("id").eq("club_id", club_id).limit(1).execute()
+        supabase.table("player_badge_facts").select("id").eq("club_id", club_id).limit(1).execute()
+        return True
+    except APIError as exc:
+        st.error("Badge queue prerequisites are missing or inaccessible.")
+        st.code(
+            "-- Apply migrations/20260705_badge_eval_queue.sql (tables)\n"
+            "-- Apply migrations/20260801_badge_queue_and_facts_grants.sql (grants)\n"
+            "NOTIFY pgrst, 'reload schema';",
+            language="sql",
+        )
+        st.caption(f"Details: {_get_api_error_code(exc) or 'unknown'} | {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001 - diagnostics only
+        st.error("Could not verify badge queue prerequisites.")
+        st.exception(exc)
+        return False
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
@@ -77,29 +95,73 @@ def render(ctx):
     # -------------------------
     st.subheader("🧵 Badge Eval Queue")
     st.caption("Process queued badge evaluations without blocking the UI (short time budget).")
+    badge_queue_ready = _badge_queue_preflight(supabase, club_id)
+
+    col_pending, col_jobs = st.columns(2)
+    with col_pending:
+        if st.button("Show pending queue count", key="badge_eval_queue_pending_count") and badge_queue_ready:
+            pending_resp = (
+                supabase.table("badge_eval_queue")
+                .select("id", count="exact")
+                .eq("club_id", club_id)
+                .eq("status", "pending")
+                .execute()
+            )
+            st.info(f"Pending jobs: {int(pending_resp.count or 0)}")
+    with col_jobs:
+        if st.button("Show last 10 pending jobs", key="badge_eval_queue_pending_jobs") and badge_queue_ready:
+            pending_rows = (
+                supabase.table("badge_eval_queue")
+                .select("id,created_at,event_type,match_id,attempts,player_ids,context_id")
+                .eq("club_id", club_id)
+                .eq("status", "pending")
+                .order("created_at", desc=True)
+                .limit(10)
+                .execute()
+            )
+            st.dataframe(pd.DataFrame(pending_rows.data or []), use_container_width=True, hide_index=True)
+
     if st.button("Process queued badge evaluations", key="badge_eval_queue_process"):
-        with st.spinner("Processing queued badge evaluations..."):
-            try:
-                result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
-            except APIError as exc:
-                code = _get_api_error_code(exc)
-                if code in {"PGRST205", "42P01"}:
-                    st.error(
-                        "Missing table badge_eval_queue; apply migrations/20260705_badge_eval_queue.sql and "
-                        "run NOTIFY pgrst, 'reload schema';"
-                    )
-                    st.code(
-                        "-- Apply migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
-                        language="sql",
-                    )
-                else:
+        if not badge_queue_ready:
+            st.info("Run required queue migrations before processing jobs.")
+        else:
+            with st.spinner("Processing queued badge evaluations..."):
+                try:
+                    result = process_badge_eval_queue(supabase, max_jobs=5, time_budget_seconds=2)
+                except APIError as exc:
+                    code = _get_api_error_code(exc)
+                    if code in {"PGRST205", "42P01"}:
+                        st.error(
+                            "Missing table badge_eval_queue; apply migrations/20260705_badge_eval_queue.sql and "
+                            "run NOTIFY pgrst, 'reload schema';"
+                        )
+                        st.code(
+                            "-- Apply migrations/20260705_badge_eval_queue.sql\nNOTIFY pgrst, 'reload schema';",
+                            language="sql",
+                        )
+                    else:
+                        st.error("Failed to process queued badge evaluations.")
+                        st.exception(exc)
+                except Exception as exc:  # noqa: BLE001 - UI should not crash
                     st.error("Failed to process queued badge evaluations.")
                     st.exception(exc)
-            except Exception as exc:  # noqa: BLE001 - UI should not crash
-                st.error("Failed to process queued badge evaluations.")
-                st.exception(exc)
-            else:
-                st.success(f"Processed {result['processed']} job(s); {result['errored']} error(s).")
+                else:
+                    st.success(f"Processed {result['processed']} job(s); {result['errored']} error(s).")
+                    if int(result.get("errored") or 0) > 0:
+                        errored_rows = (
+                            supabase.table("badge_eval_queue")
+                            .select("id,created_at,event_type,match_id,attempts,last_error")
+                            .eq("club_id", club_id)
+                            .eq("status", "error")
+                            .order("created_at", desc=True)
+                            .limit(5)
+                            .execute()
+                        )
+                        rows = errored_rows.data or []
+                        if rows:
+                            st.warning("Recent queue errors")
+                            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                            st.code(str(rows[0].get("last_error") or ""), language="text")
 
     # -------------------------
     # Replay History
@@ -131,7 +193,6 @@ def render(ctx):
         st.success("Replay complete.")
         time.sleep(0.6)
         st.rerun()
-
 
     st.divider()
 

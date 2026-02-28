@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
-from jupr_app.domain.tournament_podium import mint_tournament_podium_badges, upsert_tournament_podium
-
+from jupr_app.domain.tournament_podium import (
+    award_tournament_trophies_from_podium,
+    mint_tournament_podium_badges,
+    upsert_tournament_podium,
+)
 
 class DummyTable:
     def __init__(self) -> None:
@@ -14,7 +17,6 @@ class DummyTable:
     def execute(self):
         return self
 
-
 class DummySupabase:
     def __init__(self) -> None:
         self.last_table = None
@@ -23,7 +25,6 @@ class DummySupabase:
     def table(self, name: str):
         self.last_table = name
         return self.table_obj
-
 
 class FakeTable:
     def __init__(self, storage, name):
@@ -79,14 +80,12 @@ class FakeTable:
             data = sorted(data, key=lambda row: row.get(column), reverse=bool(desc))
         return SimpleNamespace(data=data)
 
-
 class FakeSupabase:
     def __init__(self, storage=None):
         self.storage = storage if storage is not None else {}
 
     def table(self, name):
         return FakeTable(self.storage, name)
-
 
 def test_upsert_tournament_podium_is_idempotent():
     supabase = DummySupabase()
@@ -104,6 +103,40 @@ def test_upsert_tournament_podium_is_idempotent():
         assert call["payload"] == payload
         assert call["on_conflict"] == "tournament_id,placement"
 
+def test_award_tournament_trophies_from_podium_is_idempotent_and_profile_compatible():
+    storage = {
+        "pg_indexes": [
+            {
+                "schemaname": "public",
+                "tablename": "player_badges",
+                "indexname": "player_badges_unique",
+                "indexdef": "CREATE UNIQUE INDEX player_badges_unique ON public.player_badges USING btree (club_id, player_id, badge_id, context_id)",
+            }
+        ],
+        "tournament_podium": [
+            {"tournament_id": "tour1", "placement": 1, "team_id": "team1", "source": "PLAYOFF"},
+            {"tournament_id": "tour1", "placement": 2, "team_id": "team2", "source": "PLAYOFF"},
+            {"tournament_id": "tour1", "placement": 3, "team_id": "team3", "source": "PLAYOFF"},
+        ],
+        "tournament_teams": [
+            {"id": "team1", "team_number": 1, "player1_id": 101, "player2_id": 102},
+            {"id": "team2", "team_number": 2, "player1_id": 103, "player2_id": 104},
+            {"id": "team3", "team_number": 3, "player1_id": 105, "player2_id": 106},
+        ],
+        "player_badges": [],
+    }
+    supabase = FakeSupabase(storage)
+    ctx = SimpleNamespace(supabase=supabase, club_id="club1")
+
+    created_once = award_tournament_trophies_from_podium(ctx, "tour1", "Spring Open")
+    created_twice = award_tournament_trophies_from_podium(ctx, "tour1", "Spring Open")
+
+    assert len(created_once) == 6
+    assert created_twice == []
+    rows = storage["player_badges"]
+    assert len(rows) == 6
+    assert {row["context_type"] for row in rows} == {"tournament"}
+    assert all(":podium:" in row["context_id"] for row in rows)
 
 def test_mint_tournament_podium_badges_is_idempotent_and_profile_compatible():
     storage = {

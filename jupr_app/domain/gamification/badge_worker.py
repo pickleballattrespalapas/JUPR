@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import time
+import traceback
 from types import SimpleNamespace
 from typing import Any
 
@@ -59,7 +60,13 @@ def process_badge_eval_queue(
             ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
             processed += 1
         except Exception as exc:  # noqa: BLE001 - worker should record failures
-            ack_badge_eval(supabase, job_id=str(job.get("id")), status="error", error=str(exc))
+            details = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}".strip()
+            ack_badge_eval(
+                supabase,
+                job_id=str(job.get("id")),
+                status="error",
+                error=details[:2000],
+            )
             errored += 1
 
     return {"processed": processed, "errored": errored}

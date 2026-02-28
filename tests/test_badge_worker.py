@@ -199,6 +199,7 @@ def test_worker_error_marks_queue(monkeypatch):
     rows = storage.get("badge_eval_queue", [])
     assert rows[0]["status"] == "error"
     assert rows[0]["attempts"] == 1
+    assert "RuntimeError" in str(rows[0].get("last_error") or "")
 
 
 def test_enqueue_badge_eval_missing_table_is_ignored():
