@@ -118,9 +118,9 @@ def _story_has_html(raw: str | None) -> bool:
 
 def _log_story_html_warning(
     raw_story: str | None,
-    player_id: int,
+    player_id: int | None,
     source: str,
-    admin_logged_in: bool,
+    admin_logged_in: bool = False,
 ) -> None:
     if not admin_logged_in or not raw_story:
         return
