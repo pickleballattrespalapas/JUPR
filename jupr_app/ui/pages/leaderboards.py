@@ -148,11 +148,14 @@ def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> No
             for badge in visible_badges:
                 icon = badge_icon(badge.badge_id, badge.category)
                 label = f"{icon} {badge.name}".strip()
-                badge_tokens.append(f"`{label}`")
+                badge_tokens.append(f"<span class='lb-chip'>{_safe_text(label)}</span>")
             overflow = len(ordered_badges) - len(visible_badges)
             if overflow > 0:
-                badge_tokens.append(f"`+{overflow}`")
-            st.markdown(f"<p class='lb-badges'>{' '.join(badge_tokens)}</p>", unsafe_allow_html=True)
+                badge_tokens.append(f"<span class='lb-chip lb-chip-overflow'>+{overflow}</span>")
+            st.markdown(
+                f"<div class='lb-badges'>{''.join(badge_tokens)}</div>",
+                unsafe_allow_html=True,
+            )
 
         st.divider()
 
@@ -503,7 +506,7 @@ def render(ctx):
             color: var(--text-muted);
         }
         .lb-player-name {
-            margin: 0 0 2px;
+            margin: 0 0 1px;
             font-size: 19px;
             line-height: 1.15;
         }
@@ -521,6 +524,11 @@ def render(ctx):
             line-height: 1.05;
         }
         .lb-rating-block {
+            min-height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: flex-end;
             text-align: right;
         }
         .lb-rating {
@@ -532,22 +540,41 @@ def render(ctx):
             letter-spacing: 0.01em;
         }
         .lb-delta {
-            margin: 3px 0 0;
+            margin: 2px 0 0;
             text-align: right;
             font-size: 13px;
             line-height: 1.2;
         }
         .lb-secondary-stats {
-            margin: 4px 0 0;
+            margin: 2px 0 0;
             font-size: 12px;
             color: var(--text-muted);
-            line-height: 1.25;
+            line-height: 1.15;
         }
         .lb-badges {
-            margin: 4px 0 0;
-            font-size: 12px;
+            margin: 3px 0 0;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 5px;
+        }
+        .lb-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 1px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-strong);
+            background: var(--pill-bg);
             color: var(--text-muted);
-            line-height: 1.2;
+            font-size: 11px;
+            line-height: 1.25;
+            white-space: nowrap;
+        }
+        .lb-chip-overflow {
+            font-weight: 600;
+        }
+        .stDivider {
+            margin: 0.35rem 0 0.5rem;
         }
         .lb-standings-card {
             background: var(--panel);
