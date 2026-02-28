@@ -66,13 +66,17 @@ def get_match_schedule(format_type: str, players: list[Any], custom_text: str | 
         ]
 
     if format_type == "6-Player":
-        # Expected games: 5
+        # Expected games: 9
         return [
-            {"t1": [p[0], p[1]], "t2": [p[2], p[4]], "desc": "R1"},
-            {"t1": [p[2], p[5]], "t2": [p[0], p[4]], "desc": "R2"},
-            {"t1": [p[1], p[3]], "t2": [p[4], p[5]], "desc": "R3"},
-            {"t1": [p[0], p[5]], "t2": [p[1], p[2]], "desc": "R4"},
-            {"t1": [p[0], p[3]], "t2": [p[1], p[4]], "desc": "R5"},
+            {"t1": [p[0], p[5]], "t2": [p[1], p[3]], "desc": "Rnd 1"},
+            {"t1": [p[3], p[4]], "t2": [p[0], p[2]], "desc": "Rnd 2"},
+            {"t1": [p[2], p[4]], "t2": [p[1], p[5]], "desc": "Rnd 3"},
+            {"t1": [p[2], p[5]], "t2": [p[0], p[1]], "desc": "Rnd 4"},
+            {"t1": [p[0], p[4]], "t2": [p[3], p[5]], "desc": "Rnd 5"},
+            {"t1": [p[0], p[3]], "t2": [p[1], p[2]], "desc": "Rnd 6"},
+            {"t1": [p[3], p[4]], "t2": [p[1], p[5]], "desc": "Rnd 7"},
+            {"t1": [p[2], p[3]], "t2": [p[4], p[5]], "desc": "Rnd 8"},
+            {"t1": [p[1], p[4]], "t2": [p[0], p[2]], "desc": "Rnd 9"},
         ]
 
     if format_type == "8-Player":

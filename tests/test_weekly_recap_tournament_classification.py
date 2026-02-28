@@ -11,8 +11,9 @@ def test_match_with_tournament_week_tag_is_tournament():
     assert _resolve_event_key(match) is None
 
 
-def test_popup_with_tournament_id_is_tournament_not_rr():
+def test_popup_with_tournament_id_is_tournament_not_rr_even_if_popup_flagged():
     match = {
+        "is_popup": True,
         "match_type": "PopUp",
         "tournament_id": "tour-2",
         "context_type": None,
@@ -20,3 +21,13 @@ def test_popup_with_tournament_id_is_tournament_not_rr():
         "week_tag": "Friday",
     }
     assert _resolve_event_key(match) is None
+
+
+def test_context_event_match_is_classified_as_popup_rr():
+    match = {
+        "match_type": "League",
+        "context_type": "event",
+        "context_id": "event-123",
+        "league": "Alpha",
+    }
+    assert _resolve_event_key(match) == ("RR", "event-123")
