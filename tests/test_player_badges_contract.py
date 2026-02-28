@@ -168,3 +168,5 @@ def test_player_badges_upsert_retries_when_awarded_by_uuid_cast_fails(monkeypatc
     assert len(calls) == 2
     assert "awarded_by" in calls[0][0]
     assert "awarded_by" not in calls[1][0]
+    assert "rule_version" in calls[1][0]
+    assert "eval_run_id" in calls[1][0]

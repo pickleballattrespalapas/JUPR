@@ -268,3 +268,69 @@ def test_worker_drain_until_empty_trips_error_circuit_breaker(monkeypatch):
     assert result["total_errored"] == 3
     assert result["loops"] == 3
     assert result["stopped_reason"] == "error_circuit_breaker"
+
+
+def test_worker_respects_time_budget_deadline(monkeypatch):
+    clock = {"now": 0.0}
+    jobs = [
+        {"id": "j1", "club_id": "club", "event_type": "match_recorded", "player_ids": [1], "context_id": "overall"},
+        {"id": "j2", "club_id": "club", "event_type": "match_recorded", "player_ids": [1], "context_id": "overall"},
+        {"id": "j3", "club_id": "club", "event_type": "match_recorded", "player_ids": [1], "context_id": "overall"},
+    ]
+    acked: list[str] = []
+
+    def fake_monotonic():
+        return clock["now"]
+
+    def fake_dequeue(_supabase):
+        return jobs.pop(0) if jobs else None
+
+    def fake_ack(_supabase, job_id, status, error=None):
+        if status == "done":
+            acked.append(str(job_id))
+
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.dequeue_badge_eval", fake_dequeue)
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.ack_badge_eval", fake_ack)
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker._resolve_context", lambda *_a, **_k: _build_ctx())
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker._update_incremental_facts", lambda *_a, **_k: None)
+
+    def fake_compute(*_args, **_kwargs):
+        clock["now"] += 0.7
+        return []
+
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.compute_candidates_for_player", fake_compute)
+
+    result = process_badge_eval_queue(object(), max_jobs=10, time_budget_seconds=1.0, ctx=_build_ctx())
+
+    assert result["processed"] == 2
+    assert acked == ["j1", "j2"]
+
+
+def test_worker_drain_stops_on_max_wall_clock(monkeypatch):
+    clock = {"now": 0.0}
+    budgets: list[float] = []
+
+    def fake_monotonic():
+        return clock["now"]
+
+    def fake_batch(*_args, **kwargs):
+        budget = float(kwargs["time_budget_seconds"])
+        budgets.append(budget)
+        clock["now"] += budget + 0.25
+        return {"processed": 1, "errored": 0}
+
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.process_badge_eval_queue", fake_batch)
+
+    result = process_badge_eval_queue_until_empty(
+        supabase=object(),
+        club_id="club",
+        batch_max_jobs=10,
+        per_batch_time_budget_seconds=0.9,
+        max_wall_clock_seconds=1.0,
+    )
+
+    assert result["stopped_reason"] == "max_wall_clock"
+    assert result["loops"] == 1
+    assert budgets == [0.9]
