@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from postgrest.exceptions import APIError
 
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.badges_repo import ensure_player_badges_contract, upsert_player_badges
@@ -126,3 +127,44 @@ def test_player_badges_contract_check_rejects_wrong_index(monkeypatch):
     monkeypatch.setenv("BADGE_DEBUG", "1")
     with pytest.raises(RuntimeError):
         ensure_player_badges_contract(supabase)
+
+
+def test_player_badges_upsert_retries_when_awarded_by_uuid_cast_fails(monkeypatch):
+    monkeypatch.setattr("jupr_app.domain.gamification.badges_repo._PLAYER_BADGES_CONTRACT_CHECKED", True)
+
+    calls: list[list[dict[str, object]]] = []
+
+    class _RetryTable:
+        def upsert(self, rows, on_conflict=None):
+            calls.append(rows)
+            if len(calls) == 1:
+                raise APIError(
+                    {
+                        "code": "22P02",
+                        "message": 'invalid input syntax for type uuid: "engine"',
+                    }
+                )
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    class _RetrySupabase:
+        def table(self, _name):
+            return _RetryTable()
+
+    candidate = BadgeCandidate(
+        badge_id="participant",
+        player_id=1,
+        club_id="club",
+        context_type="overall",
+        context_id="overall",
+        match_id=None,
+        value_json={"games": 1},
+    )
+
+    upsert_player_badges(_RetrySupabase(), "club", [candidate])
+
+    assert len(calls) == 2
+    assert "awarded_by" in calls[0][0]
+    assert "awarded_by" not in calls[1][0]
