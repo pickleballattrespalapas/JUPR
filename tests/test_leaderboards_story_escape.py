@@ -54,3 +54,56 @@ def test_story_sanitize_removes_legacy_html_wrappers():
     assert "<div" not in cleaned
     assert "lb-row" in cleaned
     assert "Active this season with 10 games logged." in cleaned
+
+
+def test_compose_player_story_tier_c_zero_games_non_empty_and_safe():
+    story = leaderboards.compose_player_story(
+        {"_pid": 10, "matches_played": 0, "Win %": None, "Gain": None},
+        story_badges=[],
+        rival_map={},
+        partner_map={},
+        window_label="this season",
+    )
+    cleaned = leaderboards.sanitize_story_text(story)
+    assert cleaned
+    assert "No matches recorded" in cleaned
+    assert "<" not in cleaned
+
+
+def test_compose_player_story_tier_b_low_data_with_missing_win_rate():
+    story = leaderboards.compose_player_story(
+        {"_pid": 11, "matches_played": 1, "Win %": None, "Gain": None},
+        story_badges=[],
+        rival_map={},
+        partner_map={},
+        window_label="this season",
+    )
+    assert "1 games" in story
+    assert "A few more matches" in story
+
+
+def test_compose_player_story_tier_b_stats_only_mid_games():
+    story = leaderboards.compose_player_story(
+        {"_pid": 12, "matches_played": 6, "Win %": 50.0, "Gain": 0.221},
+        story_badges=[],
+        rival_map={},
+        partner_map={},
+        window_label="this season",
+    )
+    assert "rating +0.221" in story
+    assert "50.0% win rate" in story
+
+
+def test_compose_player_story_tier_a_includes_relationship_or_badges():
+    badges = [leaderboards.StoryBadge(badge_id=1, name="Closer")]
+    story = leaderboards.compose_player_story(
+        {"_pid": 13, "matches_played": 10, "Win %": 66.7, "Gain": 0.4},
+        story_badges=badges,
+        rival_map={13: {"opponent_id": 9, "games": 5, "win_pct": 0.6}},
+        partner_map={},
+        id_to_name={9: "Jordan"},
+        window_label="this season",
+    )
+    assert any(token in story for token in ("Earned", "Rival:", "Best partner:"))
+    cleaned = leaderboards.sanitize_story_text(story + " <b>unsafe</b>")
+    assert "<b>" not in cleaned
