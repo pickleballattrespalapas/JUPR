@@ -14,7 +14,6 @@ from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
-from jupr_app.ui.helpers import build_badge_story
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.domain.story_stats import (
     build_best_partner_map,
@@ -119,7 +118,6 @@ def _story_has_html(raw: str | None) -> bool:
 
 def _log_story_html_warning(
     raw_story: str | None,
-    player_id: object,
     source: str,
     admin_logged_in: bool,
 ) -> None:
@@ -198,46 +196,109 @@ def sanitize_story_text(text: str | None) -> str:
     return normalize_story_text(masked) or "No story yet for this window."
 
 
+def compose_player_story(
+    row,
+    *,
+    story_badges: list[StoryBadge],
+    rival_map: dict[int, dict],
+    partner_map: dict[int, dict],
+    id_to_name: dict[int, str] | None = None,
+    window_label: str,
+) -> str:
+    try:
+        games_raw = row.get("matches_played", 0)
+    except Exception:
+        games_raw = 0
+    try:
+        games = max(int(float(games_raw)), 0)
+    except Exception:
+        games = 0
+
+    try:
+        player_id = row.get("_pid")
+    except Exception:
+        player_id = None
+    try:
+        pid_int = int(player_id) if pd.notna(player_id) else None
+    except Exception:
+        pid_int = None
+
+    rival = rival_map.get(pid_int) if pid_int is not None else None
+    partner = partner_map.get(pid_int) if pid_int is not None else None
+    names = id_to_name or {}
+    has_relationship = bool(rival or partner)
+    has_badges = bool(story_badges)
+
+    try:
+        delta = row.get("Gain")
+        delta_num = float(delta) if pd.notna(delta) else None
+    except Exception:
+        delta_num = None
+    delta_text = "rating steady"
+    if delta_num is not None:
+        if abs(delta_num) < 1e-12:
+            delta_text = "rating steady"
+        else:
+            delta_text = f"rating {delta_num:+.3f}"
+
+    try:
+        win_pct = row.get("Win %")
+        win_pct_text = _format_win_pct(win_pct)
+    except Exception:
+        win_pct_text = "—"
+
+    label = (window_label or "this window").strip()
+    stats_line = f"{delta_text}, {win_pct_text} win rate across {games} games."
+
+    if games >= 8 and (has_badges or has_relationship):
+        lines = [f"In {label}, this player is building momentum.", stats_line]
+        if has_badges:
+            badge_names = [badge.name for badge in story_badges[:MAX_STORY_BADGES] if badge.name]
+            if badge_names:
+                lines.append(f"Earned {', '.join(badge_names)}.")
+        if rival:
+            lines.append(_build_rival_story(rival, names))
+        if partner:
+            lines.append(_build_partner_story(partner, names))
+        return "\n\n".join(line.strip() for line in lines if line and str(line).strip())
+
+    if games >= 1:
+        return "\n\n".join(
+            [
+                f"In {label}, this player has logged early results.",
+                stats_line,
+                "A few more matches will start surfacing rival/partner highlights.",
+            ]
+        )
+
+    return "\n\n".join(
+        [
+            "No matches recorded in this window yet.",
+            "Log a match and your story will start building.",
+            "Badges will start appearing as the reel fills.",
+        ]
+    )
+
+
 
 
 def _build_story_render_data(
     row: pd.Series | dict,
-    player_id: object,
     story_badges: list[StoryBadge],
     story_rivals_by_player: dict[int, dict],
     story_partners_by_player: dict[int, dict],
     id_to_name: dict[int, str],
+    window_label: str,
 ) -> StoryRenderData:
-    story_text = ""
-    story_source = "fallback"
-
-    df_story, df_source = _extract_story_from_row(row)
-    if df_story:
-        story_text = df_story
-        story_source = df_source or "df_column"
-    else:
-        story_text = build_badge_story(row, [badge.__dict__ for badge in story_badges])
-        story_source = "badges"
-        if not story_text:
-            story_text = build_badge_story(row, [])
-            story_source = "stats"
-
-    if pd.notna(player_id):
-        try:
-            pid_int = int(player_id)
-        except Exception:
-            pid_int = None
-        inserts = []
-        if pid_int is not None:
-            rival = story_rivals_by_player.get(pid_int)
-            if rival:
-                inserts.append(_build_rival_story(rival, id_to_name))
-            partner = story_partners_by_player.get(pid_int)
-            if partner:
-                inserts.append(_build_partner_story(partner, id_to_name))
-        if inserts:
-            story_text = f"{story_text} {' '.join(inserts)}".strip()
-            story_source = f"{story_source}+rival_partner"
+    story_text = compose_player_story(
+        row,
+        story_badges=story_badges,
+        rival_map=story_rivals_by_player,
+        partner_map=story_partners_by_player,
+        id_to_name=id_to_name,
+        window_label=window_label,
+    )
+    story_source = "composed"
 
     story_text = sanitize_story_text(story_text)
     return StoryRenderData(
@@ -303,6 +364,9 @@ def _fetch_story_badges(ctx, player_ids):
         for col in ("name", "category", "icon_key", "rarity"):
             if col in merged.columns:
                 merged[col] = merged[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+        sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in merged.columns]
+        if sort_cols:
+            merged = merged.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
         return merged
 
     try:
@@ -337,6 +401,9 @@ def _fetch_story_badges(ctx, player_ids):
     for col in ("name", "category", "icon_key", "rarity"):
         if col in story_df.columns:
             story_df[col] = story_df[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+    sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in story_df.columns]
+    if sort_cols:
+        story_df = story_df.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
     if "badge_id" in story_df.columns and "requirements" not in story_df.columns:
         requirements_map = load_requirements_map()
         story_df["requirements"] = story_df["badge_id"].map(requirements_map).fillna("Requirements TBD")
@@ -1436,11 +1503,11 @@ def render(ctx):
 
             render_data = _build_story_render_data(
                 row=row,
-                player_id=player_id,
                 story_badges=story_badges,
                 story_rivals_by_player=story_rivals_by_player,
                 story_partners_by_player=story_partners_by_player,
                 id_to_name=id_to_name,
+                window_label="this season" if target_league == "OVERALL" else f"{target_league} window",
             )
             _log_story_html_warning(render_data.story_text, player_id, render_data.story_source, admin_logged_in)
 
