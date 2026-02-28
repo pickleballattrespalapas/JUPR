@@ -109,19 +109,26 @@ def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> No
     with st.container():
         left_col, right_col = st.columns([0.7, 0.3])
         if profile_url:
-            left_col.markdown(f"**#{rank} [{player_name}]({profile_url})**")
-        else:
-            left_col.markdown(f"**#{rank} {player_name}**")
-        left_col.markdown(f"### **W-L: {wins}–{losses}**")
-
-        rating_display = f"{rating:.3f}" if rating is not None else "—"
-        right_col.markdown(f"<p style='text-align:right; margin-bottom:0;'><strong>Rating: {rating_display}</strong></p>", unsafe_allow_html=True)
-        if delta_text:
-            delta_css = _delta_class(delta_value)
-            right_col.markdown(
-                f"<p style='text-align:right; margin-top:0;'><span class='jupr-delta {delta_css}'>Δ {delta_text}</span></p>",
+            left_col.markdown(
+                f"<p class='lb-player-name'><strong>#{rank} <a href='{profile_url}' target='_self'>{_safe_text(player_name)}</a></strong></p>",
                 unsafe_allow_html=True,
             )
+        else:
+            left_col.markdown(
+                f"<p class='lb-player-name'><strong>#{rank} {_safe_text(player_name)}</strong></p>",
+                unsafe_allow_html=True,
+            )
+        left_col.markdown(f"<p class='lb-wl'>W-L: {wins}–{losses}</p>", unsafe_allow_html=True)
+
+        rating_display = f"{rating:.3f}" if rating is not None else "—"
+        delta_markup = ""
+        if delta_text:
+            delta_css = _delta_class(delta_value)
+            delta_markup = f"<p class='lb-delta'><span class='jupr-delta {delta_css}'>Δ {delta_text}</span></p>"
+        right_col.markdown(
+            f"<div class='lb-rating-block'><p class='lb-rating'>{rating_display}</p>{delta_markup}</div>",
+            unsafe_allow_html=True,
+        )
 
         secondary = []
         if matches_played is not None:
@@ -129,7 +136,7 @@ def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> No
         if win_pct:
             secondary.append(f"Win%: {win_pct}")
         if secondary:
-            st.caption(" • ".join(secondary))
+            st.markdown(f"<p class='lb-secondary-stats'>{' • '.join(secondary)}</p>", unsafe_allow_html=True)
 
         ordered_badges = sorted(
             badges,
@@ -145,7 +152,7 @@ def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> No
             overflow = len(ordered_badges) - len(visible_badges)
             if overflow > 0:
                 badge_tokens.append(f"`+{overflow}`")
-            st.caption(" ".join(badge_tokens))
+            st.markdown(f"<p class='lb-badges'>{' '.join(badge_tokens)}</p>", unsafe_allow_html=True)
 
         st.divider()
 
@@ -494,6 +501,53 @@ def render(ctx):
         }
         .lb-muted {
             color: var(--text-muted);
+        }
+        .lb-player-name {
+            margin: 0 0 2px;
+            font-size: 19px;
+            line-height: 1.15;
+        }
+        .lb-player-name a {
+            color: inherit;
+            text-decoration: none;
+        }
+        .lb-player-name a:hover {
+            text-decoration: underline;
+        }
+        .lb-wl {
+            margin: 0;
+            font-size: 27px;
+            font-weight: 760;
+            line-height: 1.05;
+        }
+        .lb-rating-block {
+            text-align: right;
+        }
+        .lb-rating {
+            margin: 0;
+            font-size: 38px;
+            font-weight: 800;
+            line-height: 1;
+            text-align: right;
+            letter-spacing: 0.01em;
+        }
+        .lb-delta {
+            margin: 3px 0 0;
+            text-align: right;
+            font-size: 13px;
+            line-height: 1.2;
+        }
+        .lb-secondary-stats {
+            margin: 4px 0 0;
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.25;
+        }
+        .lb-badges {
+            margin: 4px 0 0;
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.2;
         }
         .lb-standings-card {
             background: var(--panel);
