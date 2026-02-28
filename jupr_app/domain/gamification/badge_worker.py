@@ -60,7 +60,8 @@ def process_badge_eval_queue(
             ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
             processed += 1
         except Exception as exc:  # noqa: BLE001 - worker should record failures
-            details = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}".strip()
+            error = f"{type(exc).__name__}: {exc}"
+            details = f"{error}\n{traceback.format_exc()}".strip()
             ack_badge_eval(
                 supabase,
                 job_id=str(job.get("id")),
