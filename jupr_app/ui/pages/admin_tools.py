@@ -21,20 +21,38 @@ def _get_api_error_code(exc: APIError) -> str | None:
         return exc.args[0].get("code")
     return None
 
+
+def _get_api_error_message(exc: APIError) -> str:
+    if exc.args and isinstance(exc.args[0], dict):
+        payload = exc.args[0]
+        return str(payload.get("message") or payload.get("details") or payload.get("hint") or exc)
+    return str(exc)
+
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
     try:
         supabase.table("badge_eval_queue").select("id").eq("club_id", club_id).limit(1).execute()
-        supabase.table("player_badge_facts").select("id").eq("club_id", club_id).limit(1).execute()
+        supabase.table("player_badge_facts").select("club_id").eq("club_id", club_id).limit(1).execute()
         return True
     except APIError as exc:
-        st.error("Badge queue prerequisites are missing or inaccessible.")
+        code = _get_api_error_code(exc) or ""
+        message = _get_api_error_message(exc)
+
+        if code in {"42P01", "PGRST205"}:
+            st.error("Badge queue prerequisite table is missing.")
+        elif code == "42703":
+            st.error("Badge queue prerequisite column mismatch detected.")
+        elif code == "42501":
+            st.error("Badge queue prerequisite permission error (missing grants/RLS access).")
+        else:
+            st.error("Badge queue prerequisites are missing or inaccessible.")
+
         st.code(
             "-- Apply migrations/20260705_badge_eval_queue.sql (tables)\n"
             "-- Apply migrations/20260801_badge_queue_and_facts_grants.sql (grants)\n"
             "NOTIFY pgrst, 'reload schema';",
             language="sql",
         )
-        st.caption(f"Details: {_get_api_error_code(exc) or 'unknown'} | {exc}")
+        st.caption(f"Details: {code or 'unknown'} | {message}")
         return False
     except Exception as exc:  # noqa: BLE001 - diagnostics only
         st.error("Could not verify badge queue prerequisites.")
