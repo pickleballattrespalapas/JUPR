@@ -162,9 +162,9 @@ def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> No
             ).execute()
         elif _is_awarded_by_uuid_error(exc):
             logger.warning(
-                "player_badges.awarded_by appears to be uuid in schema; retrying upsert without provenance fields."
+                "player_badges.awarded_by appears to be uuid in schema; retrying upsert without awarded_by."
             )
-            stripped = [_strip_optional_columns(row, _PLAYER_BADGES_OPTIONAL_COLUMNS) for row in rows]
+            stripped = [_strip_optional_columns(row, ("awarded_by",)) for row in rows]
             supabase.table("player_badges").upsert(
                 stripped,
                 on_conflict=PLAYER_BADGES_CONFLICT_KEY,

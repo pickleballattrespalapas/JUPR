@@ -18,13 +18,9 @@ def make_supabase(url: str, key: str):
     )
 
     options = ClientOptions(
+        httpx_client=http_client,
         postgrest_client_timeout=60,
         storage_client_timeout=60,
     )
 
-    client = create_client(url, key, options=options)
-
-    # Override underlying session for HTTP/2 control
-    client.postgrest._session = http_client
-
-    return client
+    return create_client(url, key, options=options)

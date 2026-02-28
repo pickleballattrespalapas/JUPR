@@ -6,6 +6,7 @@ import traceback
 from types import SimpleNamespace
 from typing import Any, Callable
 
+import httpx
 import pandas as pd
 
 from jupr_app.data.load import load_data
@@ -23,40 +24,18 @@ def process_badge_eval_queue(
     ctx: Any | None = None,
     match_limit: int = 5000,
 ) -> dict[str, int]:
-    started = time.time()
+    deadline = time.monotonic() + float(time_budget_seconds)
     processed = 0
     errored = 0
 
-    while processed < max_jobs and (time.time() - started) < time_budget_seconds:
+    while processed < max_jobs:
+        if time.monotonic() >= deadline:
+            break
         job = dequeue_badge_eval(supabase)
         if not job:
             break
         try:
-            job_club_id = str(job.get("club_id") or "")
-            context = _resolve_context(ctx, supabase, job_club_id, match_limit)
-            event_type = str(job.get("event_type") or "")
-            player_ids = [int(pid) for pid in (job.get("player_ids") or [])]
-            context_id = str(job.get("context_id") or "overall")
-
-            badge_ids = _badge_ids_for_trigger(context, event_type)
-            if badge_ids and player_ids:
-                _update_incremental_facts(supabase, job, player_ids, context_id)
-                candidates = []
-                for pid in player_ids:
-                    candidates.extend(
-                        [
-                            c
-                            for c in compute_candidates_for_player(job_club_id, pid, ctx=context)
-                            if str(c.badge_id) in badge_ids
-                        ]
-                    )
-                if candidates:
-                    upsert_player_badges(
-                        supabase,
-                        job_club_id,
-                        candidates,
-                        awarded_by="engine",
-                    )
+            _process_job_with_retry(supabase, job, ctx=ctx, match_limit=match_limit)
             ack_badge_eval(supabase, job_id=str(job.get("id")), status="done")
             processed += 1
         except Exception as exc:  # noqa: BLE001 - worker should record failures
@@ -69,6 +48,8 @@ def process_badge_eval_queue(
                 error=details[:2000],
             )
             errored += 1
+        if time.monotonic() >= deadline:
+            break
 
     return {"processed": processed, "errored": errored}
 
@@ -84,19 +65,26 @@ def process_badge_eval_queue_until_empty(
     max_errors: int = 10,
     progress_cb: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> dict[str, int | float | str]:
-    started = time.time()
+    started = time.monotonic()
+    drain_deadline = started + float(max_wall_clock_seconds)
     loops = 0
     total_processed = 0
     total_errored = 0
     stopped_reason = "max_wall_clock"
     error_only_loops = 0
 
-    while (time.time() - started) < max_wall_clock_seconds:
+    while True:
+        now = time.monotonic()
+        remaining = drain_deadline - now
+        if remaining <= 0:
+            break
+
         loops += 1
+        batch_budget = min(float(per_batch_time_budget_seconds), max(0.1, remaining))
         batch = process_badge_eval_queue(
             supabase,
             max_jobs=batch_max_jobs,
-            time_budget_seconds=per_batch_time_budget_seconds,
+            time_budget_seconds=batch_budget,
         )
         processed = int(batch.get("processed") or 0)
         errored = int(batch.get("errored") or 0)
@@ -116,7 +104,7 @@ def process_badge_eval_queue_until_empty(
                     "errored": errored,
                     "total_processed": total_processed,
                     "total_errored": total_errored,
-                    "duration_seconds": time.time() - started,
+                    "duration_seconds": time.monotonic() - started,
                 }
             )
 
@@ -138,8 +126,67 @@ def process_badge_eval_queue_until_empty(
         "total_errored": total_errored,
         "loops": loops,
         "stopped_reason": stopped_reason,
-        "duration_seconds": round(time.time() - started, 3),
+        "duration_seconds": round(time.monotonic() - started, 3),
     }
+
+
+def _process_job_with_retry(
+    supabase: Any,
+    job: dict[str, Any],
+    *,
+    ctx: Any | None,
+    match_limit: int,
+) -> None:
+    retry_delays = [0.5, 1.0]
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            _process_job(supabase, job, ctx=ctx, match_limit=match_limit)
+            return
+        except Exception as exc:  # noqa: BLE001 - worker retries transient read errors
+            if attempt >= len(retry_delays) or not _is_transient_read_error(exc):
+                raise
+            time.sleep(retry_delays[attempt])
+
+
+def _is_transient_read_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.ReadError):
+        return True
+    exc_type = type(exc)
+    return exc_type.__name__ == "ReadError" and "http" in exc_type.__module__.lower()
+
+
+def _process_job(
+    supabase: Any,
+    job: dict[str, Any],
+    *,
+    ctx: Any | None,
+    match_limit: int,
+) -> None:
+    job_club_id = str(job.get("club_id") or "")
+    context = _resolve_context(ctx, supabase, job_club_id, match_limit)
+    event_type = str(job.get("event_type") or "")
+    player_ids = [int(pid) for pid in (job.get("player_ids") or [])]
+    context_id = str(job.get("context_id") or "overall")
+
+    badge_ids = _badge_ids_for_trigger(context, event_type)
+    if badge_ids and player_ids:
+        _update_incremental_facts(supabase, job, player_ids, context_id)
+        candidates = []
+        for pid in player_ids:
+            candidates.extend(
+                [
+                    c
+                    for c in compute_candidates_for_player(job_club_id, pid, ctx=context)
+                    if str(c.badge_id) in badge_ids
+                ]
+            )
+        if candidates:
+            upsert_player_badges(
+                supabase,
+                job_club_id,
+                candidates,
+                awarded_by="engine",
+            )
 
 
 def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: int) -> Any:
@@ -188,11 +235,7 @@ def _badge_ids_for_trigger(ctx: Any, event_type: str) -> set[str]:
     else:
         for badge in BADGE_DEFINITIONS:
             triggers_by_id[badge.badge_id] = list(badge.eval_triggers)
-    return {
-        badge_id
-        for badge_id, triggers in triggers_by_id.items()
-        if event_type in triggers
-    }
+    return {badge_id for badge_id, triggers in triggers_by_id.items() if event_type in triggers}
 
 
 def _normalize_triggers(value: Any) -> list[str]:
