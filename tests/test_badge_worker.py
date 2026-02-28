@@ -7,7 +7,10 @@ import pandas as pd
 from postgrest.exceptions import APIError
 
 from jupr_app.domain.gamification.badge_queue import BADGE_QUEUE_TABLE, enqueue_badge_eval
-from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.gamification.badge_worker import (
+    process_badge_eval_queue,
+    process_badge_eval_queue_until_empty,
+)
 
 
 class FakeTable:
@@ -213,3 +216,55 @@ def test_enqueue_badge_eval_missing_table_is_ignored():
         match_id="m1",
     )
     assert storage.get(BADGE_QUEUE_TABLE) is None
+
+
+def test_worker_drain_until_empty_stops_on_empty(monkeypatch):
+    results = iter([
+        {"processed": 10, "errored": 0},
+        {"processed": 10, "errored": 0},
+        {"processed": 10, "errored": 0},
+        {"processed": 0, "errored": 0},
+    ])
+
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_worker.process_badge_eval_queue",
+        lambda *_args, **_kwargs: next(results),
+    )
+
+    result = process_badge_eval_queue_until_empty(
+        supabase=object(),
+        club_id="club",
+        batch_max_jobs=10,
+        max_wall_clock_seconds=10.0,
+    )
+
+    assert result["total_processed"] == 30
+    assert result["total_errored"] == 0
+    assert result["loops"] == 4
+    assert result["stopped_reason"] == "empty"
+
+
+def test_worker_drain_until_empty_trips_error_circuit_breaker(monkeypatch):
+    results = iter([
+        {"processed": 0, "errored": 1},
+        {"processed": 0, "errored": 1},
+        {"processed": 0, "errored": 1},
+    ])
+
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_worker.process_badge_eval_queue",
+        lambda *_args, **_kwargs: next(results),
+    )
+
+    result = process_badge_eval_queue_until_empty(
+        supabase=object(),
+        club_id="club",
+        batch_max_jobs=10,
+        max_wall_clock_seconds=10.0,
+        max_errors=10,
+    )
+
+    assert result["total_processed"] == 0
+    assert result["total_errored"] == 3
+    assert result["loops"] == 3
+    assert result["stopped_reason"] == "error_circuit_breaker"
