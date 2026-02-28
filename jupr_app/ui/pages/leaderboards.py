@@ -36,6 +36,119 @@ def _format_win_pct(value):
         return f"{float(value):.1f}%"
     return "—"
 
+
+def safe_int(x: object) -> int | None:
+    if x is None:
+        return None
+    try:
+        if pd.isna(x):
+            return None
+    except Exception:
+        pass
+    try:
+        return int(float(x))
+    except Exception:
+        return None
+
+
+def safe_float(x: object) -> float | None:
+    if x is None:
+        return None
+    try:
+        if pd.isna(x):
+            return None
+    except Exception:
+        pass
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+
+def fmt_pct(x: object) -> str | None:
+    val = safe_float(x)
+    if val is None:
+        return None
+    return f"{val:.1f}%"
+
+
+def fmt_delta(x: object) -> str | None:
+    val = safe_float(x)
+    if val is None:
+        return None
+    return f"{val:+.3f}"
+
+
+def _delta_class(delta_value: float | None) -> str:
+    if delta_value is None:
+        return "zero"
+    if delta_value > 0:
+        return "pos"
+    if delta_value < 0:
+        return "neg"
+    return "zero"
+
+
+def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> None:
+    profile_url = row.get("_profile_url")
+    player_name = str(row.get("name", "Player") or "Player")
+    wins = safe_int(row.get("wins")) or 0
+    losses = safe_int(row.get("losses")) or 0
+    rating = safe_float(row.get("JUPR"))
+    matches_played = safe_int(row.get("matches_played"))
+    if matches_played is None:
+        matches_played = wins + losses
+
+    win_pct = fmt_pct(row.get("Win %"))
+    if win_pct is None and matches_played > 0:
+        win_pct = fmt_pct((wins / matches_played) * 100.0)
+
+    delta_value = safe_float(row.get("Gain"))
+    delta_text = fmt_delta(delta_value)
+
+    with st.container():
+        left_col, right_col = st.columns([0.7, 0.3])
+        if profile_url:
+            left_col.markdown(f"**#{rank} [{player_name}]({profile_url})**")
+        else:
+            left_col.markdown(f"**#{rank} {player_name}**")
+        left_col.markdown(f"### **W-L: {wins}–{losses}**")
+
+        rating_display = f"{rating:.3f}" if rating is not None else "—"
+        right_col.markdown(f"<p style='text-align:right; margin-bottom:0;'><strong>Rating: {rating_display}</strong></p>", unsafe_allow_html=True)
+        if delta_text:
+            delta_css = _delta_class(delta_value)
+            right_col.markdown(
+                f"<p style='text-align:right; margin-top:0;'><span class='jupr-delta {delta_css}'>Δ {delta_text}</span></p>",
+                unsafe_allow_html=True,
+            )
+
+        secondary = []
+        if matches_played is not None:
+            secondary.append(f"Games: {matches_played}")
+        if win_pct:
+            secondary.append(f"Win%: {win_pct}")
+        if secondary:
+            st.caption(" • ".join(secondary))
+
+        ordered_badges = sorted(
+            badges,
+            key=lambda b: (-int(getattr(b, "prestige", 0) or 0), str(getattr(b, "name", "")).lower()),
+        )
+        visible_badges = ordered_badges[:MAX_BADGES_PER_PLAYER]
+        if visible_badges:
+            badge_tokens = []
+            for badge in visible_badges:
+                icon = badge_icon(badge.badge_id, badge.category)
+                label = f"{icon} {badge.name}".strip()
+                badge_tokens.append(f"`{label}`")
+            overflow = len(ordered_badges) - len(visible_badges)
+            if overflow > 0:
+                badge_tokens.append(f"`+{overflow}`")
+            st.caption(" ".join(badge_tokens))
+
+        st.divider()
+
 def _player_profile_url(pid, public_mode, ctx):
     if pd.isna(pid):
         return None
@@ -180,9 +293,6 @@ def _build_badge_map(badges_df: pd.DataFrame) -> dict[int, list[LeaderboardBadge
                 earned_at_dt=row.get("earned_at_dt"),
             )
         )
-
-    for pid in badges_by_player:
-        badges_by_player[pid] = badges_by_player[pid][:MAX_BADGES_PER_PLAYER]
 
     return badges_by_player
 
@@ -900,7 +1010,6 @@ def render(ctx):
     badges_by_player = _build_badge_map(badges_df)
 
     for _, row in standings.head(limit).iterrows():
-        gain_val = float(row["Gain"]) if pd.notna(row["Gain"]) else None
         player_id = row.get("_pid")
         player_badges: list[LeaderboardBadge] = []
         if pd.notna(player_id):
@@ -909,36 +1018,13 @@ def render(ctx):
             except Exception:
                 player_badges = []
 
-        profile_url = _player_profile_url(row["_pid"], PUBLIC_MODE, ctx)
-        name_label = str(row["name"])
-        if profile_url:
-            st.markdown(f"#### #{int(row['RankNum'])} [{name_label}]({profile_url})")
-        else:
-            st.markdown(f"#### #{int(row['RankNum'])} {name_label}")
-
-        wl_col, rating_col = st.columns([2, 1])
-        wl_col.markdown(f"**W-L: {int(row['wins'])}-{int(row['losses'])}**")
-        rating_col.markdown(f"**Rating: {float(row['JUPR']):.3f}**")
-
-        secondary = []
-        if pd.notna(row.get("matches_played")):
-            secondary.append(f"Games: {int(row['matches_played'])}")
-        if pd.notna(row.get("Win %")):
-            secondary.append(f"Win%: {float(row['Win %']):.1f}%")
-        if gain_val is not None:
-            secondary.append(f"Δ: {gain_val:+.3f}")
-        if secondary:
-            st.caption(" • ".join(secondary))
-
-        badge_tokens = []
-        for badge in player_badges[:MAX_BADGES_PER_PLAYER]:
-            icon = badge_icon(badge.badge_id, badge.category)
-            label = f"{icon} {badge.name}".strip()
-            badge_tokens.append(label)
-        if badge_tokens:
-            st.caption(" ".join(f"`{token}`" for token in badge_tokens))
-
-        st.divider()
+        row_payload = row.copy()
+        row_payload["_profile_url"] = _player_profile_url(row.get("_pid"), PUBLIC_MODE, ctx)
+        render_leaderboard_row(
+            row_payload,
+            rank=safe_int(row.get("RankNum")) or 0,
+            badges=player_badges,
+        )
 
     if len(standings) > limit:
         if st.button("Load more", key="lb_load_more"):
