@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from jupr_app.domain.gamification.badge_types import BadgeCandidate
-
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +49,8 @@ def upsert_tournament_podium(
 def build_tournament_podium_candidates(
     ctx: Any, tournament_id: str, tournament_name: str | None
 ) -> list[BadgeCandidate]:
+    from jupr_app.domain.gamification.badge_types import BadgeCandidate
+
     supabase = getattr(ctx, "supabase", None)
     club_id = str(getattr(ctx, "club_id", "") or "")
     if supabase is None or not club_id or not tournament_id:
@@ -113,12 +113,19 @@ def build_tournament_podium_candidates(
 
 
 def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
-    from jupr_app.domain.gamification.ensure_badges import ensure_badges
+    return mint_tournament_podium_badges(ctx, tournament_id, tournament_name)
 
-    return ensure_badges(
-        ctx,
-        tournament_id=tournament_id,
-        tournament_name=tournament_name,
-        award_timing="manual",
-        status="live",
-    )
+
+def mint_tournament_podium_badges(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "")
+    if supabase is None or not club_id or not tournament_id:
+        return []
+
+    candidates = build_tournament_podium_candidates(ctx, tournament_id, tournament_name)
+    if not candidates:
+        return []
+
+    from jupr_app.domain.gamification.badges_repo import upsert_player_badges
+
+    return upsert_player_badges(supabase, club_id, candidates)
