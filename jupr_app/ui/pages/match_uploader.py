@@ -197,6 +197,7 @@ def render(ctx):
                 df_meta=df_meta,
             )
             st.success("✅ Processed!")
+            st.session_state["force_data_refresh"] = True
             time.sleep(0.8)
             st.rerun()
 
@@ -523,5 +524,6 @@ def render(ctx):
 
                     if "mu_lc_schedule" in st.session_state:
                         del st.session_state.mu_lc_schedule
+                    st.session_state["force_data_refresh"] = True
                     time.sleep(0.8)
                     st.rerun()

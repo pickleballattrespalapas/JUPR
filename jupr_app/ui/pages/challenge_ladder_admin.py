@@ -881,6 +881,7 @@ def render(ctx):
                             if int(pm_result.get("inserted", 0)) != 2:
                                 st.warning(f"Expected 2 inserted matches; got {pm_result}.")
                             else:
+                                st.session_state["force_data_refresh"] = True
                                 st.success("Challenge result recorded. 2 matches inserted and OVERALL ratings updated.")
                             st.rerun()
 

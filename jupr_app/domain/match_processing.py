@@ -12,6 +12,7 @@ from jupr_app.domain.player_activity import (
     max_activity_time,
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 
 
 def process_matches(
@@ -284,13 +285,15 @@ def process_matches(
             sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
 
         if supabase is not None and has_non_popup_match:
-            enqueue_badge_eval(
+            queued = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),
                 event_type="match_recorded",
                 player_ids=sorted(affected_players),
                 payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
             )
+            if queued:
+                process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
 
     # -------------------------
     # Update overall player rows

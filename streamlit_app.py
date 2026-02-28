@@ -13,6 +13,7 @@ import pandas as pd  # kept because pages may rely on it
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
+from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
@@ -299,7 +300,7 @@ def main():
             player_ids = []
             if df_players_all is not None and not df_players_all.empty and "id" in df_players_all.columns:
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
-            enqueue_badge_eval(
+            queued = enqueue_badge_eval(
                 supabase,
                 club_id=CLUB_ID,
                 event_type="match_recorded",
@@ -307,6 +308,8 @@ def main():
                 match_id=f"initial_load:{CLUB_ID}",
                 payload={"initial_load": True},
             )
+            if queued:
+                process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2)
 
         # -------------------------
         # LAZY IMPORT PAGES (prevents import-time KeyError crashes)
