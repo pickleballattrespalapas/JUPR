@@ -160,6 +160,15 @@ def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> No
                 stripped,
                 on_conflict=PLAYER_BADGES_CONFLICT_KEY,
             ).execute()
+        elif _is_awarded_by_uuid_error(exc):
+            logger.warning(
+                "player_badges.awarded_by appears to be uuid in schema; retrying upsert without provenance fields."
+            )
+            stripped = [_strip_optional_columns(row, _PLAYER_BADGES_OPTIONAL_COLUMNS) for row in rows]
+            supabase.table("player_badges").upsert(
+                stripped,
+                on_conflict=PLAYER_BADGES_CONFLICT_KEY,
+            ).execute()
         else:
             raise
 
@@ -176,6 +185,13 @@ def _is_missing_column_error(exc: APIError, columns: Iterable[str]) -> bool:
         return False
     message = str(exc)
     return any(col in message for col in columns)
+
+
+def _is_awarded_by_uuid_error(exc: APIError) -> bool:
+    if getattr(exc, "code", None) != "22P02":
+        return False
+    message = str(exc).lower()
+    return "uuid" in message and "engine" in message
 
 
 def _fetch_existing_keys(
