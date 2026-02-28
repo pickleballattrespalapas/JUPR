@@ -113,7 +113,18 @@ def build_tournament_podium_candidates(
 
 
 def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
-    return mint_tournament_podium_badges(ctx, tournament_id, tournament_name)
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "")
+    if supabase is None or not club_id or not tournament_id:
+        return []
+
+    candidates = build_tournament_podium_candidates(ctx, tournament_id, tournament_name)
+    if not candidates:
+        return []
+
+    from jupr_app.domain.gamification.badges_repo import upsert_player_badges
+
+    return upsert_player_badges(supabase, club_id, candidates, awarded_by="engine")
 
 
 def mint_tournament_podium_badges(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
