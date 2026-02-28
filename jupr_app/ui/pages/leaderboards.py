@@ -3,6 +3,7 @@ import logging
 import re
 import textwrap
 import urllib.parse
+from dataclasses import dataclass
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -13,7 +14,7 @@ from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.pages.players import badge_icon
-from jupr_app.ui.helpers import build_badge_story, sanitize_story_text
+from jupr_app.ui.helpers import build_badge_story
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.domain.story_stats import (
     build_best_partner_map,
@@ -23,10 +24,31 @@ from jupr_app.domain.story_stats import (
 
 logger = logging.getLogger(__name__)
 MAX_STORY_BADGES = 2
+MAX_STORY_TEXT_LEN = 700
 _STORY_HTML_RE = re.compile(
     r"</?(div|span|br|p|ul|li|strong|em|a|img|table|tr|td|th)\b",
     re.IGNORECASE,
 )
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_EMPHASIS_RE = re.compile(r"(\*\*[^*\n]+\*\*|\*[^*\n]+\*)")
+
+
+@dataclass(frozen=True)
+class StoryBadge:
+    badge_id: object
+    name: str
+    prestige: int = 0
+    category: str | None = None
+    icon_key: str | None = None
+    rarity: str | None = None
+    earned_at_dt: pd.Timestamp | None = None
+
+
+@dataclass(frozen=True)
+class StoryRenderData:
+    story_text: str
+    story_badges: list[StoryBadge]
+    story_source: str
 
 
 def _safe_text(value: object) -> str:
@@ -128,11 +150,101 @@ def _extract_story_from_row(row: pd.Series | dict) -> tuple[str | None, str | No
         except Exception:
             if value is None:
                 continue
-        text = str(value).strip()
+
+        text = normalize_story_text(str(value))
+        if not text:
+            continue
+
+        # Keep legacy story_html support, but only as neutralized text.
+        if key == "story_html":
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = normalize_story_text(text)
+
         if text:
             return text, f"df_column:{key}"
     return None, None
 
+
+def normalize_story_text(text: str | None) -> str:
+    value = "" if text is None else str(text)
+    value = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    if len(value) > MAX_STORY_TEXT_LEN:
+        value = value[: MAX_STORY_TEXT_LEN - 1].rstrip() + "…"
+    return value
+
+
+def sanitize_story_text(text: str | None) -> str:
+    normalized = normalize_story_text(text)
+    if not normalized:
+        return "No story yet for this window."
+
+    escaped = html.escape(html.unescape(normalized), quote=False)
+    stripped_links = _MARKDOWN_LINK_RE.sub(lambda m: m.group(1), escaped)
+    stripped_links = re.sub(r"javascript:\s*", "", stripped_links, flags=re.IGNORECASE)
+
+    placeholders: dict[str, str] = {}
+
+    def _save_emphasis(match: re.Match[str]) -> str:
+        token = f"__EMPH_{len(placeholders)}__"
+        placeholders[token] = match.group(0)
+        return token
+
+    masked = _EMPHASIS_RE.sub(_save_emphasis, stripped_links)
+    masked = re.sub(r"[*_`#]", "", masked)
+    for token, original in placeholders.items():
+        masked = masked.replace(token, original)
+    masked = re.sub(r"\n(?!\n|- )", "  \n", masked)
+    return normalize_story_text(masked) or "No story yet for this window."
+
+
+
+
+def _build_story_render_data(
+    row: pd.Series | dict,
+    player_id: object,
+    story_badges: list[StoryBadge],
+    story_rivals_by_player: dict[int, dict],
+    story_partners_by_player: dict[int, dict],
+    id_to_name: dict[int, str],
+) -> StoryRenderData:
+    story_text = ""
+    story_source = "fallback"
+
+    df_story, df_source = _extract_story_from_row(row)
+    if df_story:
+        story_text = df_story
+        story_source = df_source or "df_column"
+    else:
+        story_text = build_badge_story(row, [badge.__dict__ for badge in story_badges])
+        story_source = "badges"
+        if not story_text:
+            story_text = build_badge_story(row, [])
+            story_source = "stats"
+
+    if pd.notna(player_id):
+        try:
+            pid_int = int(player_id)
+        except Exception:
+            pid_int = None
+        inserts = []
+        if pid_int is not None:
+            rival = story_rivals_by_player.get(pid_int)
+            if rival:
+                inserts.append(_build_rival_story(rival, id_to_name))
+            partner = story_partners_by_player.get(pid_int)
+            if partner:
+                inserts.append(_build_partner_story(partner, id_to_name))
+        if inserts:
+            story_text = f"{story_text} {' '.join(inserts)}".strip()
+            story_source = f"{story_source}+rival_partner"
+
+    story_text = sanitize_story_text(story_text)
+    return StoryRenderData(
+        story_text=story_text or "No story yet for this window.",
+        story_badges=story_badges[:MAX_STORY_BADGES],
+        story_source=story_source or "fallback",
+    )
 
 def _player_profile_url(pid, public_mode, ctx):
     if pd.isna(pid):
@@ -187,7 +299,11 @@ def _fetch_story_badges(ctx, player_ids):
         pb_copy = pb_copy[pb_copy["player_id"].isin(player_ids)]
         if pb_copy.empty:
             return pd.DataFrame()
-        return pb_copy.merge(badges_df, on="badge_id", how="left")
+        merged = pb_copy.merge(badges_df, on="badge_id", how="left")
+        for col in ("name", "category", "icon_key", "rarity"):
+            if col in merged.columns:
+                merged[col] = merged[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+        return merged
 
     try:
         resp = (
@@ -218,13 +334,16 @@ def _fetch_story_badges(ctx, player_ids):
         "badges.rarity": "rarity",
     }
     story_df = story_df.rename(columns=column_map)
+    for col in ("name", "category", "icon_key", "rarity"):
+        if col in story_df.columns:
+            story_df[col] = story_df[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
     if "badge_id" in story_df.columns and "requirements" not in story_df.columns:
         requirements_map = load_requirements_map()
         story_df["requirements"] = story_df["badge_id"].map(requirements_map).fillna("Requirements TBD")
     return story_df
 
 
-def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[dict]]:
+def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[StoryBadge]]:
     if badges_df is None or badges_df.empty:
         return {}
 
@@ -246,23 +365,30 @@ def _build_story_badge_map(badges_df: pd.DataFrame) -> dict[int, list[dict]]:
         ["prestige", "earned_at_dt"], ascending=[False, False]
     )
 
-    badges_by_player: dict[int, list[dict]] = {}
+    badges_by_player: dict[int, list[StoryBadge]] = {}
     for _, row in story_df.iterrows():
         try:
             pid = int(row["player_id"])
         except Exception:
             continue
+        name = str(row.get("name", "Badge") or "Badge").strip() or "Badge"
+        category = str(row.get("category", "") or "").strip() or None
+        icon_key = str(row.get("icon_key", "") or "").strip() or None
+        rarity = str(row.get("rarity", "") or "").strip() or None
         badges_by_player.setdefault(pid, []).append(
-            {
-                "badge_id": row.get("badge_id"),
-                "name": row.get("name", "Badge"),
-                "prestige": int(row.get("prestige", 0) or 0),
-                "category": row.get("category"),
-                "icon_key": row.get("icon_key"),
-                "rarity": row.get("rarity"),
-                "earned_at_dt": row.get("earned_at_dt"),
-            }
+            StoryBadge(
+                badge_id=row.get("badge_id"),
+                name=re.sub(r"<[^>]+>", "", name),
+                prestige=int(row.get("prestige", 0) or 0),
+                category=re.sub(r"<[^>]+>", "", category) if category else None,
+                icon_key=icon_key,
+                rarity=rarity,
+                earned_at_dt=row.get("earned_at_dt"),
+            )
         )
+
+    for pid in badges_by_player:
+        badges_by_player[pid] = badges_by_player[pid][:MAX_STORY_BADGES]
 
     return badges_by_player
 
@@ -1275,7 +1401,8 @@ def render(ctx):
                     pid = row.get("_pid")
                     if pd.notna(pid) and story_badges_by_player.get(int(pid)):
                         sanity_story = build_badge_story(
-                            row, story_badges_by_player.get(int(pid), [])
+                            row,
+                            [badge.__dict__ for badge in story_badges_by_player.get(int(pid), [])],
                         )
                         break
                 if not sanity_story:
@@ -1299,69 +1426,24 @@ def render(ctx):
                 f'<span class="lb-badge">{html.escape(b)}</span>' for b in status_badges
             )
 
-            story_badges_html = ""
-            story_text_html = ""
             player_id = row.get("_pid")
-            story_badges = []
+            story_badges: list[StoryBadge] = []
             if pd.notna(player_id):
                 try:
                     story_badges = story_badges_by_player.get(int(player_id), [])
                 except Exception:
                     story_badges = []
-            if story_badges:
-                badge_parts = []
-                for badge in story_badges[:MAX_STORY_BADGES]:
-                    icon = badge_icon(badge.get("badge_id"), badge.get("category"))
-                    name = badge.get("name", "Badge")
-                    prestige = badge.get("prestige", 0)
-                    category = badge.get("category")
-                    title_parts = [str(name)]
-                    if category:
-                        title_parts.append(str(category))
-                    if prestige and int(prestige) > 0:
-                        title_parts.append(f"Prestige {int(prestige)}")
-                    title = " • ".join(title_parts)
-                    badge_parts.append(
-                        f'<span class="lb-story-badge" title="{_safe_text(title)}">'
-                        f"{_safe_text(icon)}</span>"
-                    )
-                story_badges_html = f'<div class="lb-badge-strip">{"".join(badge_parts)}</div>'
-            elif row.get("matches_played", 0) == 0:
-                story_badges_html = (
-                    '<div class="lb-badge-strip"><span class="lb-badge">New</span></div>'
-                )
-            story_text = None
-            story_source = None
-            df_story, df_source = _extract_story_from_row(row)
-            if df_story:
-                story_text = df_story
-                story_source = f"source={df_source}"
-            else:
-                story_text = build_badge_story(row, story_badges)
-                story_source = "source=build_badge_story"
-                if not story_text:
-                    story_text = build_badge_story(row, [])
-                    story_source = "source=build_badge_story:fallback"
-            if pd.notna(player_id):
-                try:
-                    pid_int = int(player_id)
-                except Exception:
-                    pid_int = None
-                inserts = []
-                if pid_int is not None:
-                    rival = story_rivals_by_player.get(pid_int)
-                    if rival:
-                        inserts.append(_build_rival_story(rival, id_to_name))
-                    partner = story_partners_by_player.get(pid_int)
-                    if partner:
-                        inserts.append(_build_partner_story(partner, id_to_name))
-                if inserts:
-                    story_text = f"{story_text} {' '.join(inserts)}".strip()
-                    story_source = f"{story_source}+rival_partner" if story_source else "source=rival_partner"
-            _log_story_html_warning(story_text, player_id, story_source or "source=unknown", admin_logged_in)
-            story_text = sanitize_story_text(story_text)
-            safe_story_html = html.escape(story_text)
-            story_text_html = f'<div class="lb-story-text">{safe_story_html}</div>'
+
+            render_data = _build_story_render_data(
+                row=row,
+                player_id=player_id,
+                story_badges=story_badges,
+                story_rivals_by_player=story_rivals_by_player,
+                story_partners_by_player=story_partners_by_player,
+                id_to_name=id_to_name,
+            )
+            _log_story_html_warning(render_data.story_text, player_id, render_data.story_source, admin_logged_in)
+
             card_html = f"""
             <div class="lb-standings-card">
                 <div class="lb-standings-top">
@@ -1374,12 +1456,24 @@ def render(ctx):
                     <span>{_format_win_pct(row['Win %'])} win %</span>
                     <span style="color:{gain_color};">{gain_val:+.3f} Δ</span>
                 </div>
-                {story_badges_html}
-                {story_text_html}
                 <div class="lb-row" style="gap:6px;">{badge_html}</div>
             </div>
             """
             st.markdown(textwrap.dedent(card_html), unsafe_allow_html=True)
+
+            if render_data.story_badges:
+                badge_labels = []
+                for badge in render_data.story_badges:
+                    icon = badge_icon(badge.badge_id, badge.category)
+                    label = f"{icon} {badge.name}".strip()
+                    if badge.prestige > 0:
+                        label = f"{label} • P{badge.prestige}"
+                    badge_labels.append(label)
+                st.caption(" · ".join(badge_labels))
+            elif row.get("matches_played", 0) == 0:
+                st.caption("New")
+
+            st.markdown(render_data.story_text)
 
         if len(standings) > limit:
             if st.button("Load more", key="lb_load_more"):
