@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from jupr_app.data.sb_safe import safe_execute
+from jupr_app.domain.match_filters import is_popup_event_match, is_tournament_match
 
 
 @dataclass
@@ -459,16 +460,12 @@ def _normalize_podium_placement(value) -> int | None:
 
 
 def _is_tournament_match(match: dict) -> bool:
-    context_type = str(match.get("context_type") or "").strip().upper()
-    match_type = str(match.get("match_type") or "").strip().upper()
     week_tag = str(match.get("week_tag") or "").strip().upper()
     league = str(match.get("league") or "").strip().upper()
 
     return (
-        context_type == "TOURNAMENT"
-        or match.get("tournament_id") is not None
+        is_tournament_match(match)
         or match.get("tournament_game_id") is not None
-        or match_type == "TOURNAMENT"
         or week_tag == "TOURNAMENT"
         or "TOURNAMENT" in league
     )
@@ -559,9 +556,8 @@ def _resolve_event_key(match: dict) -> tuple[str, str] | None:
     if _is_tournament_match(match):
         return None
     league = str(match.get("league", "") or "").strip()
-    match_type = str(match.get("match_type", "") or "").strip()
     week_tag = str(match.get("week_tag", "") or "").strip()
-    if match_type == "PopUp":
+    if is_popup_event_match(match):
         context_id = match.get("context_id")
         if context_id is None or str(context_id).strip() == "":
             fallback = ":".join([x for x in [league, week_tag] if x]) or "POPUP"

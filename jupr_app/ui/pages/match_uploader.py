@@ -316,7 +316,7 @@ def render(ctx):
         format_expected_games = {
             "4-Player": 3,
             "5-Player": 5,
-            "6-Player": 5,
+            "6-Player": 9,
             "8-Player": 14,
             "9-Player": 18,
             "12-Player": 33,

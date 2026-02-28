@@ -42,6 +42,28 @@ def resolve_match_id_column(df_matches: pd.DataFrame) -> str:
     )
 
 
+def _normalize_context_value(value) -> str:
+    return str(value or "").strip().upper()
+
+
+def is_tournament_match(row: dict | pd.Series) -> bool:
+    context_type = _normalize_context_value(row.get("context_type"))
+    match_type = _normalize_context_value(row.get("match_type"))
+    return (
+        context_type == "TOURNAMENT"
+        or row.get("tournament_id") is not None
+        or match_type == "TOURNAMENT"
+    )
+
+
+def is_popup_event_match(row: dict | pd.Series) -> bool:
+    if is_tournament_match(row):
+        return False
+    match_type = _normalize_context_value(row.get("match_type"))
+    context_type = _normalize_context_value(row.get("context_type"))
+    return match_type == "POPUP" or context_type == "EVENT"
+
+
 def _apply_match_filters(
     df_matches: pd.DataFrame, context_filters: dict | None, audit: MatchFilterAudit | None
 ) -> pd.DataFrame:
@@ -81,7 +103,7 @@ def _apply_match_filters(
 
     if "context_type" in df.columns:
         before = df
-        df = df[df["context_type"].fillna("").astype(str).str.upper() != "TOURNAMENT"].copy()
+        df = df[df["context_type"].map(_normalize_context_value) != "TOURNAMENT"].copy()
         _record_audit_step(audit, "exclude_context_type_tournament", before, df, match_id_col)
 
     if "tournament_id" in df.columns:
@@ -91,7 +113,7 @@ def _apply_match_filters(
 
     if "match_type" in df.columns:
         before = df
-        df = df[df["match_type"].fillna("").astype(str) != "Tournament"].copy()
+        df = df[df["match_type"].map(_normalize_context_value) != "TOURNAMENT"].copy()
         _record_audit_step(audit, "exclude_match_type_tournament", before, df, match_id_col)
 
     for col in [
