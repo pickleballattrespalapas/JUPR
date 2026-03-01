@@ -34,10 +34,16 @@ def _approx_text_w(text: str, font_size: float) -> float:
     return len(str(text)) * float(font_size) * 0.52
 
 
+def _previous_month_window(now_utc: datetime) -> tuple[datetime, datetime]:
+    first_of_this_month = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end_dt = first_of_this_month
+    start_dt = (first_of_this_month - timedelta(days=1)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return start_dt, end_dt
+
+
 def _previous_month_subtitle(now_utc: datetime) -> str:
-    first_day_current_month = now_utc.replace(day=1)
-    previous_month_date = first_day_current_month - timedelta(days=1)
-    return previous_month_date.strftime("%B %Y")
+    start_dt, _ = _previous_month_window(now_utc)
+    return start_dt.strftime("%B %Y")
 
 
 def _build_rating_map(df_players_all: pd.DataFrame) -> dict[int, float]:
@@ -49,70 +55,6 @@ def _build_rating_map(df_players_all: pd.DataFrame) -> dict[int, float]:
     tmp[rating_col] = pd.to_numeric(tmp[rating_col], errors="coerce")
     tmp = tmp.dropna(subset=["id"]).copy()
     return {int(pid): float(val) for pid, val in zip(tmp["id"].astype(int), tmp[rating_col]) if pd.notna(val)}
-
-
-def _detect_league_column(df_matches: pd.DataFrame) -> str | None:
-    candidates = [
-        "league_id",
-        "league_key",
-        "league_name",
-        "league",
-        "event_id",
-        "session_id",
-        "division_id",
-    ]
-    for col in candidates:
-        if col in df_matches.columns:
-            return col
-    return None
-
-
-def _build_league_label_map(ctx, league_col: str, values: list[str]) -> dict[str, str]:
-    labels = {v: v for v in values}
-    metadata_names = {
-        "league_id": ["df_leagues", "df_sessions", "df_events"],
-        "league_key": ["df_leagues", "df_sessions", "df_events"],
-        "league_name": ["df_leagues", "df_sessions", "df_events"],
-        "league": ["df_leagues", "df_sessions", "df_events"],
-        "event_id": ["df_events", "df_sessions", "df_leagues"],
-        "session_id": ["df_sessions", "df_events", "df_leagues"],
-        "division_id": ["df_sessions", "df_events", "df_leagues"],
-    }
-    label_candidates = ["league_label", "league_name", "name", "title", "session_name", "event_name", "division_name"]
-    id_candidates = [league_col, "league_id", "league_key", "event_id", "session_id", "division_id", "id"]
-
-    for frame_name in metadata_names.get(league_col, []):
-        df_meta = getattr(ctx, frame_name, None)
-        if df_meta is None or not isinstance(df_meta, pd.DataFrame) or df_meta.empty:
-            continue
-        id_col = next((c for c in id_candidates if c in df_meta.columns), None)
-        label_col = next((c for c in label_candidates if c in df_meta.columns), None)
-        if not id_col or not label_col:
-            continue
-        tmp = df_meta[[id_col, label_col]].copy()
-        tmp[id_col] = tmp[id_col].astype(str)
-        tmp[label_col] = tmp[label_col].astype(str).str.strip()
-        for _, row in tmp.iterrows():
-            key = str(row[id_col])
-            if key in labels and row[label_col]:
-                labels[key] = row[label_col]
-    return labels
-
-
-def list_leagues(ctx, df_recent: pd.DataFrame) -> tuple[list[dict], str | None]:
-    league_col = _detect_league_column(df_recent)
-    if not league_col:
-        return [{"league_id": "all", "league_label": "All Matches"}], None
-
-    series = df_recent[league_col].fillna("Unknown").astype(str).str.strip()
-    values = sorted(v for v in series.unique().tolist() if v)
-    if not values:
-        values = ["Unknown"]
-
-    label_map = _build_league_label_map(ctx, league_col, values)
-    leagues = [{"league_id": value, "league_label": label_map.get(value, value)} for value in values]
-    leagues.sort(key=lambda item: item["league_label"].lower())
-    return leagues, league_col
 
 
 def _build_ranked_rows(df_matches: pd.DataFrame, id_to_name: dict[int, str], rating_map: dict[int, float]) -> list[dict]:
@@ -155,14 +97,13 @@ def _build_ranked_rows(df_matches: pd.DataFrame, id_to_name: dict[int, str], rat
     return top
 
 
-def _build_page_content(rows: list[dict], title: str, subtitle: str, league_label: str) -> bytes:
+def _build_page_content(rows: list[dict], title: str, subtitle: str) -> bytes:
     page_w = 792.0
     page_h = 612.0
     m = 36.0
     title_y = page_h - m
     subtitle_y = title_y - 26.0
-    league_y = subtitle_y - 22.0
-    table_top_y = league_y - 22.0
+    table_top_y = subtitle_y - 24.0
 
     x0 = m
     x1 = x0 + 55.0
@@ -187,31 +128,17 @@ def _build_page_content(rows: list[dict], title: str, subtitle: str, league_labe
 
     commands: list[str] = []
 
-    for i in range(n_rows):
-        if (i + 1) % 2 == 0:
-            row_top = y_header_bottom - i * row_h
-            row_bottom = row_top - row_h
-            commands.append("q")
-            commands.append("0.95 0.95 0.95 rg")
-            commands.append(f"{x0:.2f} {row_bottom:.2f} {(x5 - x0):.2f} {row_h:.2f} re f")
-            commands.append("Q")
-
     commands.append("q")
-    commands.append("0.5 w")
-    for y in [y_header_top, y_header_bottom] + [y_header_bottom - i * row_h for i in range(1, n_rows + 1)]:
-        commands.append(f"{x0:.2f} {y:.2f} m {x5:.2f} {y:.2f} l S")
-    for x in (x0, x1, x2, x3, x4, x5):
-        commands.append(f"{x:.2f} {y_header_top:.2f} m {x:.2f} {table_bottom:.2f} l S")
+    commands.append("0.3 w")
+    commands.append(f"{x0:.2f} {y_header_top:.2f} m {x5:.2f} {y_header_top:.2f} l S")
+    commands.append(f"{x0:.2f} {y_header_bottom:.2f} m {x5:.2f} {y_header_bottom:.2f} l S")
     commands.append("Q")
 
     text: list[str] = ["BT"]
     safe_title = _pdf_escape(title)
     safe_subtitle = _pdf_escape(subtitle)
-    safe_league = _pdf_escape(league_label)
-
     text.extend([f"/F2 22 Tf", f"1 0 0 1 {m:.2f} {title_y:.2f} Tm", f"({safe_title}) Tj"])
     text.extend([f"/F1 18 Tf", f"1 0 0 1 {m:.2f} {subtitle_y:.2f} Tm", f"({safe_subtitle}) Tj"])
-    text.extend([f"/F2 14 Tf", f"1 0 0 1 {m:.2f} {league_y:.2f} Tm", f"({safe_league}) Tj"])
 
     header_font = 11.0
     header_center_y = y_header_top - (header_h / 2.0) - (header_font / 3.0)
@@ -250,7 +177,7 @@ def _build_page_content(rows: list[dict], title: str, subtitle: str, league_labe
 
     if not rows:
         y_msg = y_header_bottom - row_h - (body_font / 3.0)
-        msg = "No eligible active players (min 10 games in last 30 days)."
+        msg = "No eligible active players (min 10 games in previous calendar month)."
         text.extend([f"1 0 0 1 {x1 + 4.0:.2f} {y_msg:.2f} Tm", f"({_pdf_escape(msg)}) Tj"])
 
     text.append("ET")
@@ -258,40 +185,21 @@ def _build_page_content(rows: list[dict], title: str, subtitle: str, league_labe
     return "\n".join(commands).encode("latin-1", "replace")
 
 
-def _build_top_players_pdf(league_pages: list[dict], title: str, subtitle: str) -> bytes:
+def _build_top_players_pdf(rows: list[dict], title: str, subtitle: str) -> bytes:
     objects: list[bytes] = []
     objects.append(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")
     objects.append(b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n")
     objects.append(b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
     objects.append(b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n")
 
-    next_obj = 5
-    page_refs: list[int] = []
-    for league_page in league_pages:
-        content = _build_page_content(league_page.get("rows", []), title, subtitle, league_page.get("league_label", "League"))
-        page_obj_num = next_obj
-        content_obj_num = next_obj + 1
-        next_obj += 2
-
-        page_obj = (
-            f"{page_obj_num} 0 obj\n"
-            "<< /Type /Page /Parent 2 0 R "
-            "/MediaBox [0 0 792 612] "
-            "/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> "
-            f"/Contents {content_obj_num} 0 R >>\n"
-            "endobj\n"
-        ).encode("latin-1")
-        content_obj = (
-            f"{content_obj_num} 0 obj\n<< /Length {len(content)} >>\nstream\n".encode("latin-1")
-            + content
-            + b"\nendstream\nendobj\n"
-        )
-        objects.append(page_obj)
-        objects.append(content_obj)
-        page_refs.append(page_obj_num)
-
-    kids_refs = " ".join(f"{ref} 0 R" for ref in page_refs)
-    objects[1] = f"2 0 obj\n<< /Type /Pages /Kids [{kids_refs}] /Count {len(page_refs)} >>\nendobj\n".encode("latin-1")
+    content = _build_page_content(rows, title, subtitle)
+    objects.append(
+        b"5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>\nendobj\n"
+    )
+    objects.append(
+        f"6 0 obj\n<< /Length {len(content)} >>\nstream\n".encode("latin-1") + content + b"\nendstream\nendobj\n"
+    )
+    objects[1] = b"2 0 obj\n<< /Type /Pages /Kids [5 0 R] /Count 1 >>\nendobj\n"
 
     pdf = bytearray(b"%PDF-1.4\n")
     offsets = [0]
@@ -343,21 +251,21 @@ def _expand_player_matches(df_matches: pd.DataFrame) -> pd.DataFrame:
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
-    page_shell("🧾 Top Active Players PDF", "Printable Top 50 active players (last 30 days).", mode_label=mode_label)
+    page_shell("🧾 Top Active Players PDF", "Printable Top 50 active players (previous calendar month).", mode_label=mode_label)
 
     if bool(ctx.public_mode) or (not bool(getattr(ctx, "admin_logged_in", False))):
         st.error("Admin login required.")
         return
 
     now_utc = datetime.now(timezone.utc)
-    cutoff = now_utc - timedelta(days=30)
+    start_dt, end_dt = _previous_month_window(now_utc)
 
     df_matches = ctx.df_matches.copy() if ctx.df_matches is not None else pd.DataFrame()
     df_players_all = ctx.df_players_all.copy() if ctx.df_players_all is not None else pd.DataFrame()
     id_to_name = dict(getattr(ctx, "id_to_name", {}) or {})
 
     if df_matches.empty:
-        st.info("No active players found in the last 30 days.")
+        st.info("No active players found in the previous calendar month.")
         return
 
     if "date_dt" in df_matches.columns:
@@ -369,49 +277,27 @@ def render(ctx):
     df_matches["score_t2"] = pd.to_numeric(df_matches.get("score_t2"), errors="coerce").fillna(0)
 
     df_recent = df_matches[(df_matches["score_t1"] + df_matches["score_t2"]) > 0].copy()
-    df_recent = df_recent[df_recent["date_dt"] >= cutoff].copy()
+    df_recent = df_recent[(df_recent["date_dt"] >= start_dt) & (df_recent["date_dt"] < end_dt)].copy()
 
     if df_recent.empty:
-        st.info("No active players found in the last 30 days.")
-        return
-
-    leagues, league_col = list_leagues(ctx, df_recent)
-    league_label_to_id = {item["league_label"]: item["league_id"] for item in leagues}
-    selected_labels = st.multiselect("Leagues", options=list(league_label_to_id.keys()), default=list(league_label_to_id.keys()))
-
-    if not selected_labels:
-        st.info("Select at least one league.")
+        st.info("No active players found in the previous calendar month.")
         return
 
     rating_map = _build_rating_map(df_players_all)
+    top_rows = _build_ranked_rows(df_recent, id_to_name, rating_map)
 
-    pages: list[dict] = []
-    preview_rows: list[dict] = []
-    for label in selected_labels:
-        league_id = league_label_to_id[label]
-        if league_col:
-            league_df = df_recent[df_recent[league_col].fillna("Unknown").astype(str).str.strip() == str(league_id)].copy()
-        else:
-            league_df = df_recent.copy()
-
-        top_rows = _build_ranked_rows(league_df, id_to_name, rating_map)
-        pages.append({"league_label": label, "rows": top_rows})
-
-        if top_rows and not preview_rows:
-            preview_rows = top_rows
-
-    if preview_rows:
-        preview_df = pd.DataFrame(preview_rows)
+    if top_rows:
+        preview_df = pd.DataFrame(top_rows)
         st.dataframe(preview_df[["rank", "name", "jupr_str", "wins", "losses", "wl_str"]], use_container_width=True, hide_index=True)
     else:
-        st.info("No eligible active players (min 10 games in last 30 days) for selected leagues.")
+        st.info("No eligible active players (min 10 games in previous calendar month).")
 
     subtitle = _previous_month_subtitle(now_utc)
-    pdf_bytes = _build_top_players_pdf(pages, "Tres Palapas -- Top 50 Players", subtitle)
+    pdf_bytes = _build_top_players_pdf(top_rows, "Tres Palapas -- Top 50 Players", subtitle)
 
     st.download_button(
         "Download PDF",
         data=pdf_bytes,
-        file_name="top_50_active_players_by_league.pdf",
+        file_name="top_50_active_players.pdf",
         mime="application/pdf",
     )
