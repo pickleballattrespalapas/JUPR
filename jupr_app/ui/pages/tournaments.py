@@ -664,7 +664,7 @@ def _build_match_payload(tournament, game, teams_by_id, *, score_a: int, score_b
         "league": tournament.get("name", "Tournament"),
         "match_type": "Tournament",
         "week_tag": "Tournament",
-        "is_popup": True,
+        "is_popup": False,
         "context_type": "TOURNAMENT",
         "context_id": tournament["id"],
         "tournament_id": tournament["id"],
