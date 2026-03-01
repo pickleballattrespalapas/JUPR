@@ -30,24 +30,29 @@ def _truncate_name(name: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
-def _build_top_players_pdf(rows: list[dict], title: str, generated_at_iso: str) -> bytes:
+def _previous_month_subtitle(now_utc: datetime) -> str:
+    first_day_current_month = now_utc.replace(day=1)
+    previous_month_date = first_day_current_month - timedelta(days=1)
+    return previous_month_date.strftime("%B %Y")
+
+
+def _build_top_players_pdf(rows: list[dict], title: str, subtitle: str) -> bytes:
     line_rows = [
         title,
-        "Active = match recorded in last 30 days",
-        f"Generated: {generated_at_iso}",
+        subtitle,
         "",
-        "Rank  Player                         Rating    W-L",
-        "----  ------------------------------  --------  -----",
+        "Rank  Player                         JUPR      W-L",
+        "----  ------------------------------  ------    -----",
     ]
 
     for row in rows:
         rank = int(row.get("rank", 0) or 0)
         name = _truncate_name(str(row.get("name", "")), 30)
-        rating = float(row.get("rating", 1200.0) or 1200.0)
+        jupr = float(row.get("jupr", 3.000) or 3.000)
         wins = int(row.get("wins", 0) or 0)
         losses = int(row.get("losses", 0) or 0)
         record = f"{wins}-{losses}"
-        line_rows.append(f"{rank:>4}  {name:<30}  {rating:>8.2f}  {record:>5}")
+        line_rows.append(f"{rank:>4}  {name:<30}  {jupr:>6.3f}    {record:>5}")
 
     lines_per_page = 52
     pages: list[list[str]] = [line_rows[i : i + lines_per_page] for i in range(0, len(line_rows), lines_per_page)]
@@ -62,13 +67,19 @@ def _build_top_players_pdf(rows: list[dict], title: str, generated_at_iso: str) 
     objects.append(b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n")
 
     font_obj_num = 3
-    objects.append(b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n")
+    objects.append(b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")
 
     next_obj_num = 4
     for page_lines in pages:
-        text_commands = ["BT", "/F1 10 Tf", "54 760 Td", "12 TL"]
+        text_commands = ["BT", "54 760 Td", "12 TL"]
         for idx, line in enumerate(page_lines):
             safe_line = _pdf_escape(str(line)).encode("latin-1", "replace").decode("latin-1")
+            if idx == 0:
+                text_commands.append("/F1 16 Tf")
+            elif idx == 1:
+                text_commands.append("/F1 12 Tf")
+            else:
+                text_commands.append("/F1 10 Tf")
             text_commands.append(f"({safe_line}) Tj")
             if idx < len(page_lines) - 1:
                 text_commands.append("T*")
@@ -191,6 +202,11 @@ def render(ctx):
         expanded.groupby("player_id", as_index=False)
         .agg(wins=("wins", "sum"), losses=("losses", "sum"), games=("games", "sum"))
     )
+    stats = stats[stats["games"] >= 10].copy()
+
+    if stats.empty:
+        st.info("No active players found in the last 30 days.")
+        return
 
     rating_col = "rating" if "rating" in df_players_all.columns else ("elo" if "elo" in df_players_all.columns else None)
     rating_map: dict[int, float] = {}
@@ -207,19 +223,21 @@ def render(ctx):
         wins = int(item["wins"])
         losses = int(item["losses"])
         games = int(item["games"])
-        rating = float(rating_map.get(pid, 1200.0))
+        rating_elo = float(rating_map.get(pid, 1200.0))
+        jupr = rating_elo / 400.0
         rows.append(
             {
                 "player_id": pid,
                 "name": id_to_name.get(pid, f"#{pid}"),
-                "rating": rating,
+                "rating_elo": rating_elo,
+                "jupr": jupr,
                 "wins": wins,
                 "losses": losses,
                 "games": games,
             }
         )
 
-    top = sorted(rows, key=lambda r: (r["rating"], r["games"], r["wins"]), reverse=True)[:50]
+    top = sorted(rows, key=lambda r: (r["jupr"], r["games"], r["wins"]), reverse=True)[:50]
 
     for idx, row in enumerate(top, start=1):
         row["rank"] = idx
@@ -231,13 +249,13 @@ def render(ctx):
         return
 
     st.dataframe(
-        top_df[["rank", "name", "rating", "wins", "losses", "record_str"]],
+        top_df[["rank", "name", "jupr", "wins", "losses", "record_str"]],
         use_container_width=True,
         hide_index=True,
     )
 
-    generated_at_iso = now_utc.replace(microsecond=0).isoformat()
-    pdf_bytes = _build_top_players_pdf(top, "Top 50 Active Players", generated_at_iso)
+    subtitle = _previous_month_subtitle(now_utc)
+    pdf_bytes = _build_top_players_pdf(top, "Tres Palapas -- Top 50 Players", subtitle)
 
     st.download_button(
         "Download Top 50 Active Players PDF",
