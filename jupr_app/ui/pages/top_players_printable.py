@@ -30,6 +30,12 @@ def _truncate_name(name: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
+def _previous_month_subtitle(now_utc: datetime) -> str:
+    first_day_current_month = now_utc.replace(day=1)
+    previous_month_date = first_day_current_month - timedelta(days=1)
+    return previous_month_date.strftime("%B %Y")
+
+
 def _build_top_players_pdf(rows: list[dict], title: str, subtitle: str) -> bytes:
     line_rows = [
         title,
@@ -248,7 +254,8 @@ def render(ctx):
         hide_index=True,
     )
 
-    pdf_bytes = _build_top_players_pdf(top, "Tres Palapas -- Top 50 Players", "Month of February")
+    subtitle = _previous_month_subtitle(now_utc)
+    pdf_bytes = _build_top_players_pdf(top, "Tres Palapas -- Top 50 Players", subtitle)
 
     st.download_button(
         "Download Top 50 Active Players PDF",
