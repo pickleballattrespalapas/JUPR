@@ -337,6 +337,7 @@ def main():
             tournament_manager,
             weekly_recap,
             weekly_recap_admin,
+            top_players_printable,
         )
 
         # ---- Router ----
@@ -364,6 +365,7 @@ def main():
             "🏆 Tournaments": tournaments,
             "🏆 Tournament Manager": tournament_manager,
             "🗞️ Weekly Recap": weekly_recap,
+            "🧾 Top Active Players PDF": top_players_printable,
 
             # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
@@ -393,6 +395,7 @@ def main():
             "tournaments": "🏆 Tournaments",
             "tournament_manager": "🏆 Tournament Manager",
             "weekly_recap": "🗞️ Weekly Recap",
+            "top_players_printable": "🧾 Top Active Players PDF",
 
             # Admin-only deep links
             "weekly_recap_admin": "🗞️ Weekly Recap Admin",
@@ -414,6 +417,7 @@ def main():
             "🏆 Tournament Manager",
             "🧪 Badge Debug",
             "🗞️ Weekly Recap Admin",
+            "🧾 Top Active Players PDF",
         }
 
         # Visible labels based on auth
