@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.tournaments import (
     build_playoff_games,
     SUPPORTED_TEAM_COUNTS,
@@ -611,8 +610,6 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
         except ValueError:
             continue
 
-        supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
-
         match_payload = _build_match_payload(
             tournament,
             game,
@@ -620,15 +617,21 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
             score_a=score_a,
             score_b=score_b,
         )
-        process_matches(
-            [match_payload],
-            supabase=supabase,
-            club_id=str(ctx.club_id),
-            name_to_id=name_to_id,
-            df_players_all=df_players_all,
-            df_leagues=df_leagues,
-            df_meta=df_meta,
-        )
+        try:
+            process_matches(
+                [match_payload],
+                supabase=supabase,
+                club_id=str(ctx.club_id),
+                name_to_id=name_to_id,
+                df_players_all=df_players_all,
+                df_leagues=df_leagues,
+                df_meta=df_meta,
+            )
+        except Exception as exc:
+            st.error(f"Could not create public match row for tournament game {game_id}: {exc}")
+            raise
+
+        supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
 
         if stage == "PLAYOFF":
             playoff_games_resp = (
@@ -650,26 +653,13 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
 
 
 def _build_match_payload(tournament, game, teams_by_id, *, score_a: int, score_b: int) -> dict:
-    team_a = teams_by_id.get(game.get("team_a_id"))
-    team_b = teams_by_id.get(game.get("team_b_id"))
-
-    return {
-        "t1_p1": team_a.get("player1_id") if team_a else None,
-        "t1_p2": team_a.get("player2_id") if team_a else None,
-        "t2_p1": team_b.get("player1_id") if team_b else None,
-        "t2_p2": team_b.get("player2_id") if team_b else None,
-        "s1": int(score_a),
-        "s2": int(score_b),
-        "date": datetime.now(timezone.utc).isoformat(),
-        "league": tournament.get("name", "Tournament"),
-        "match_type": "Tournament",
-        "week_tag": "Tournament",
-        "is_popup": False,
-        "context_type": "TOURNAMENT",
-        "context_id": tournament["id"],
-        "tournament_id": tournament["id"],
-        "tournament_game_id": game["id"],
-    }
+    return build_tournament_match_payload(
+        tournament,
+        game,
+        teams_by_id,
+        score_a=score_a,
+        score_b=score_b,
+    )
 
 
 def _score_key(stage: str, side: str, game_id: str) -> str:
