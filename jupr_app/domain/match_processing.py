@@ -282,7 +282,26 @@ def process_matches(
         CHUNK_M = 300
         for i in range(0, len(db_matches), CHUNK_M):
             chunk = db_matches[i : i + CHUNK_M]
-            sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
+            insert_result = sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
+            inserted_rows = getattr(insert_result, "data", None) if insert_result is not None else None
+            if not inserted_rows:
+                error_obj = getattr(insert_result, "error", None) if insert_result is not None else None
+                sample = chunk[0] if chunk else {}
+                debug_payload = {
+                    "club_id": sample.get("club_id"),
+                    "league": sample.get("league"),
+                    "t1_p1": sample.get("t1_p1"),
+                    "t1_p2": sample.get("t1_p2"),
+                    "t2_p1": sample.get("t2_p1"),
+                    "t2_p2": sample.get("t2_p2"),
+                    "score_t1": sample.get("score_t1"),
+                    "score_t2": sample.get("score_t2"),
+                    "tournament_game_id": sample.get("tournament_game_id"),
+                }
+                raise RuntimeError(
+                    "Failed to insert match rows into matches table; "
+                    f"error={error_obj!r}; sample_row={debug_payload}"
+                )
 
         if supabase is not None and has_non_popup_match:
             queued = enqueue_badge_eval(
