@@ -11,6 +11,7 @@ from jupr_app.domain.recaps.weekly_recap import (
     DEFAULT_SPOTLIGHT_DESCRIPTIONS,
     SPOTLIGHT_DEFAULT_ORDER,
     compute_weekly_recap,
+    get_date_range_bounds,
     get_spotlight_candidates,
 )
 from jupr_app.ui.components.weekly_recap_layout import render_podium_layout, render_weekly_recap
@@ -105,6 +106,33 @@ def _normalize_overrides(overrides: dict, generated_spotlight: list[dict]) -> di
     return normalized
 
 
+def _load_debug_matches(supabase, club_id: str, start_dt_utc: datetime, end_dt_utc: datetime, limit: int = 50) -> list[dict]:
+    columns = [
+        "id",
+        "date",
+        "league",
+        "match_type",
+        "week_tag",
+        "t1_p1",
+        "t1_p2",
+        "t2_p1",
+        "t2_p2",
+        "score_t1",
+        "score_t2",
+    ]
+    response = (
+        supabase.table("matches")
+        .select(",".join(columns))
+        .eq("club_id", club_id)
+        .gte("date", start_dt_utc.isoformat())
+        .lte("date", end_dt_utc.isoformat())
+        .order("date", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return response.data or []
+
+
 def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, list[dict]]) -> dict:
     recap = deepcopy(generated_json or {})
     if not recap:
@@ -185,6 +213,16 @@ def render(ctx):
         st.error("Date range cannot exceed 60 days.")
         date_range_valid = False
 
+    with st.expander("Debug: date-range inputs", expanded=False):
+        st.write(
+            {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "day_span": day_span,
+                "timezone": tz_name,
+            }
+        )
+
     try:
         row = _load_weekly_row(supabase, club_id, start_date, end_date)
     except APIError as exc:
@@ -198,6 +236,34 @@ def render(ctx):
     if st.button("Generate Draft", disabled=not date_range_valid):
         with st.spinner("Generating weekly recap..."):
             recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
+            start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
+
+            with st.expander("Debug: recap match window", expanded=True):
+                st.write(
+                    {
+                        "start_dt_utc": start_dt_utc.isoformat(),
+                        "end_dt_utc": end_dt_utc.isoformat(),
+                        "recap_matches": (recap.get("numbers") or {}).get("matches", 0),
+                    }
+                )
+                try:
+                    debug_rows = _load_debug_matches(supabase, club_id, start_dt_utc, end_dt_utc, limit=50)
+                except APIError as exc:
+                    st.warning(f"Unable to load debug matches: {exc}")
+                else:
+                    if debug_rows:
+                        row_dates = [str(row.get("date")) for row in debug_rows if row.get("date")]
+                        st.caption(f"Fetched {len(debug_rows)} rows (latest 50 by date).")
+                        st.write(
+                            {
+                                "min_date": min(row_dates) if row_dates else None,
+                                "max_date": max(row_dates) if row_dates else None,
+                            }
+                        )
+                        st.dataframe(debug_rows, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No matches found within computed bounds.")
+
             payload = {
                 "club_id": club_id,
                 "week_start": start_date.isoformat(),
