@@ -1874,6 +1874,20 @@ def render(ctx):
             show["Overall Δ"] = show["delta_raw"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
             show["Overall After"] = show["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
 
+            # Render Overall history with a native LinkColumn so Explain links are clickable.
+            if title_prefix == "Overall":
+                show = show.rename(columns={"Explain": "EXPLAIN"})
+                show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "EXPLAIN"]]
+                st.dataframe(
+                    show,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "EXPLAIN": st.column_config.LinkColumn("Explain", display_text="Explain"),
+                    },
+                )
+                return
+
             def result_badge(result: str) -> str:
                 label = str(result or "").strip().upper() or "—"
                 normalized = label.upper()
