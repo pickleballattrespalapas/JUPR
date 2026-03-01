@@ -4,6 +4,7 @@ import logging
 import math
 import re
 import textwrap
+from urllib.parse import urlencode
 
 import streamlit as st
 import pandas as pd
@@ -13,7 +14,6 @@ from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
 from jupr_app.ui.components.badge_cards import render_inline_badge_text
 from jupr_app.ui.helpers import (
     qp_get,
-    build_match_explorer_link,
     display_requirement_text,
 )
 from jupr_app.ui.layout import page_shell
@@ -1657,16 +1657,19 @@ def render(ctx):
             if partner is None or opp1 is None or opp2 is None:
                 return ""
 
-            return build_match_explorer_link(
-                ctx="OVERALL",
-                me=int(pid),
-                partner=int(partner),
-                opp1=int(opp1),
-                opp2=int(opp2),
-                sy=int(sy),
-                so=int(so),
-                public=bool(ctx.public_mode),
-            )
+            params = {
+                "page": "match_explorer",
+                "ctx": "OVERALL",
+                "me": int(pid),
+                "partner": int(partner),
+                "opp1": int(opp1),
+                "opp2": int(opp2),
+                "sy": int(sy),
+                "so": int(so),
+            }
+            if bool(ctx.public_mode):
+                params["public"] = 1
+            return f"/?{urlencode(params)}"
 
         def get_overall_snap(r: dict, pid_: int):
             pid_ = int(pid_)
