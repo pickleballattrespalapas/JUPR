@@ -97,6 +97,53 @@ def _build_ranked_rows(df_matches: pd.DataFrame, id_to_name: dict[int, str], rat
     return top
 
 
+def build_top50_previous_month_df(ctx, now_utc: datetime | None = None) -> pd.DataFrame:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    start_dt, end_dt = _previous_month_window(now_utc)
+
+    df_matches = ctx.df_matches.copy() if ctx.df_matches is not None else pd.DataFrame()
+    df_players_all = ctx.df_players_all.copy() if ctx.df_players_all is not None else pd.DataFrame()
+    id_to_name = dict(getattr(ctx, "id_to_name", {}) or {})
+
+    columns = ["rank", "player_id", "player_name", "jupr", "wins", "losses", "games", "wl"]
+    if df_matches.empty:
+        return pd.DataFrame(columns=columns)
+
+    if "date_dt" in df_matches.columns:
+        df_matches["date_dt"] = pd.to_datetime(df_matches["date_dt"], errors="coerce", utc=True)
+    else:
+        df_matches["date_dt"] = pd.to_datetime(df_matches.get("date"), errors="coerce", utc=True)
+
+    df_matches["score_t1"] = pd.to_numeric(df_matches.get("score_t1"), errors="coerce").fillna(0)
+    df_matches["score_t2"] = pd.to_numeric(df_matches.get("score_t2"), errors="coerce").fillna(0)
+
+    df_recent = df_matches[(df_matches["score_t1"] + df_matches["score_t2"]) > 0].copy()
+    df_recent = df_recent[(df_recent["date_dt"] >= start_dt) & (df_recent["date_dt"] < end_dt)].copy()
+
+    if df_recent.empty:
+        return pd.DataFrame(columns=columns)
+
+    rating_map = _build_rating_map(df_players_all)
+    top_rows = _build_ranked_rows(df_recent, id_to_name, rating_map)
+    if not top_rows:
+        return pd.DataFrame(columns=columns)
+
+    rows_out = [
+        {
+            "rank": int(row["rank"]),
+            "player_id": int(row["player_id"]),
+            "player_name": str(row["name"]),
+            "jupr": str(row["jupr_str"]),
+            "wins": int(row["wins"]),
+            "losses": int(row["losses"]),
+            "games": int(row["games"]),
+            "wl": str(row["wl_str"]),
+        }
+        for row in top_rows
+    ]
+    return pd.DataFrame(rows_out, columns=columns)
+
+
 def _build_page_content(rows: list[dict], title: str, subtitle: str) -> bytes:
     page_w = 792.0
     page_h = 612.0
@@ -258,46 +305,44 @@ def render(ctx):
         return
 
     now_utc = datetime.now(timezone.utc)
-    start_dt, end_dt = _previous_month_window(now_utc)
+    start_dt, _ = _previous_month_window(now_utc)
+    month_label = start_dt.strftime("%B %Y")
+    month_slug = month_label.replace(" ", "_")
 
-    df_matches = ctx.df_matches.copy() if ctx.df_matches is not None else pd.DataFrame()
-    df_players_all = ctx.df_players_all.copy() if ctx.df_players_all is not None else pd.DataFrame()
-    id_to_name = dict(getattr(ctx, "id_to_name", {}) or {})
-
-    if df_matches.empty:
-        st.info("No active players found in the previous calendar month.")
-        return
-
-    if "date_dt" in df_matches.columns:
-        df_matches["date_dt"] = pd.to_datetime(df_matches["date_dt"], errors="coerce", utc=True)
-    else:
-        df_matches["date_dt"] = pd.to_datetime(df_matches.get("date"), errors="coerce", utc=True)
-
-    df_matches["score_t1"] = pd.to_numeric(df_matches.get("score_t1"), errors="coerce").fillna(0)
-    df_matches["score_t2"] = pd.to_numeric(df_matches.get("score_t2"), errors="coerce").fillna(0)
-
-    df_recent = df_matches[(df_matches["score_t1"] + df_matches["score_t2"]) > 0].copy()
-    df_recent = df_recent[(df_recent["date_dt"] >= start_dt) & (df_recent["date_dt"] < end_dt)].copy()
-
-    if df_recent.empty:
-        st.info("No active players found in the previous calendar month.")
-        return
-
-    rating_map = _build_rating_map(df_players_all)
-    top_rows = _build_ranked_rows(df_recent, id_to_name, rating_map)
-
-    if top_rows:
-        preview_df = pd.DataFrame(top_rows)
-        st.dataframe(preview_df[["rank", "name", "jupr_str", "wins", "losses", "wl_str"]], use_container_width=True, hide_index=True)
-    else:
-        st.info("No eligible active players (min 10 games in previous calendar month).")
-
+    df_out = build_top50_previous_month_df(ctx, now_utc=now_utc)
     subtitle = _previous_month_subtitle(now_utc)
+    top_rows = []
+    if not df_out.empty:
+        top_rows = [
+            {
+                "rank": int(row["rank"]),
+                "name": str(row["player_name"]),
+                "jupr_str": str(row["jupr"]),
+                "wins": int(row["wins"]),
+                "losses": int(row["losses"]),
+                "wl_str": str(row["wl"]),
+            }
+            for _, row in df_out.iterrows()
+        ]
+        st.dataframe(df_out, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No eligible players for {month_label} (min 10 games).")
+
+    if df_out.empty:
+        return
+
     pdf_bytes = _build_top_players_pdf(top_rows, "Tres Palapas -- Top 50 Players", subtitle)
+    csv_bytes = df_out.to_csv(index=False).encode("utf-8")
 
     st.download_button(
         "Download PDF",
         data=pdf_bytes,
-        file_name="top_50_active_players.pdf",
+        file_name=f"tres_palapas_top_50_players_{month_slug}.pdf",
         mime="application/pdf",
+    )
+    st.download_button(
+        "Download CSV",
+        data=csv_bytes,
+        file_name=f"tres_palapas_top_50_players_{month_slug}.csv",
+        mime="text/csv",
     )
