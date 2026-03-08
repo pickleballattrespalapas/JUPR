@@ -5,6 +5,40 @@ from typing import Any
 Match = dict[str, Any]
 
 
+def _validate_14p_rounds(rounds: list[dict[str, Any]]) -> bool:
+    total_matches = 0
+    for round_data in rounds:
+        matches = round_data["matches"]
+        if len(matches) != 3:
+            return False
+
+        used_players: set[int] = set()
+        for t1_p1, t1_p2, t2_p1, t2_p2 in matches:
+            players_in_match = [t1_p1, t1_p2, t2_p1, t2_p2]
+            if any(not 1 <= player_num <= 14 for player_num in players_in_match):
+                return False
+            if len(set(players_in_match)) != 4:
+                return False
+            if any(player_num in used_players for player_num in players_in_match):
+                return False
+            used_players.update(players_in_match)
+
+        if len(used_players) != 12:
+            return False
+
+        byes = round_data.get("byes", [])
+        if len(byes) != 2 or len(set(byes)) != 2:
+            return False
+        if any(not 1 <= bye <= 14 for bye in byes):
+            return False
+        if any(bye in used_players for bye in byes):
+            return False
+
+        total_matches += len(matches)
+
+    return total_matches == 39
+
+
 def get_match_schedule(format_type: str, players: list[Any], custom_text: str | None = None) -> list[Match]:
     """
     Returns a list of matches, each match is:
@@ -158,5 +192,38 @@ def get_match_schedule(format_type: str, players: list[Any], custom_text: str | 
             {"t1": [p[11], p[8]], "t2": [p[9], p[4]], "desc": "Rnd 11 (Ct 2)"},
             {"t1": [p[1], p[3]], "t2": [p[5], p[6]], "desc": "Rnd 11 (Ct 3)"},
         ]
+
+    if format_type == "14-Player":
+        # Expected games: 39
+        rounds = [
+            {"matches": [(6, 10, 9, 1), (4, 3, 12, 2), (13, 7, 5, 11)], "byes": [8, 14]},
+            {"matches": [(13, 14, 8, 12), (11, 4, 3, 1), (5, 9, 7, 2)], "byes": [6, 10]},
+            {"matches": [(5, 14, 13, 10), (7, 11, 4, 12), (2, 3, 9, 6)], "byes": [1, 8]},
+            {"matches": [(4, 8, 9, 11), (13, 1, 2, 10), (6, 12, 3, 5)], "byes": [14, 7]},
+            {"matches": [(14, 12, 2, 5), (6, 7, 8, 9), (10, 1, 11, 13)], "byes": [3, 4]},
+            {"matches": [(13, 3, 1, 7), (11, 10, 2, 14), (8, 5, 6, 4)], "byes": [12, 9]},
+            {"matches": [(10, 12, 6, 8), (1, 4, 5, 7), (9, 13, 14, 3)], "byes": [2, 11]},
+            {"matches": [(4, 5, 14, 12), (2, 13, 6, 11), (7, 9, 8, 1)], "byes": [10, 3]},
+            {"matches": [(10, 14, 7, 4), (11, 8, 13, 5), (1, 2, 12, 3)], "byes": [9, 6]},
+            {"matches": [(7, 8, 10, 3), (5, 6, 12, 11), (14, 1, 9, 2)], "byes": [4, 13]},
+            {"matches": [(12, 1, 11, 14), (4, 2, 10, 8), (3, 7, 13, 6)], "byes": [9, 5]},
+            {"matches": [(3, 9, 8, 13), (1, 11, 14, 6), (4, 10, 5, 12)], "byes": [7, 2]},
+            {"matches": [(14, 4, 1, 6), (10, 5, 3, 8), (11, 2, 7, 9)], "byes": [12, 13]},
+        ]
+
+        if not _validate_14p_rounds(rounds):
+            return []
+
+        matches: list[Match] = []
+        for round_index, round_data in enumerate(rounds, start=1):
+            for court_index, (t1_p1, t1_p2, t2_p1, t2_p2) in enumerate(round_data["matches"], start=1):
+                matches.append(
+                    {
+                        "t1": [p[t1_p1 - 1], p[t1_p2 - 1]],
+                        "t2": [p[t2_p1 - 1], p[t2_p2 - 1]],
+                        "desc": f"Rnd {round_index} (Ct {court_index})",
+                    }
+                )
+        return matches
 
     return []

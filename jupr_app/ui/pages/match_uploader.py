@@ -321,6 +321,7 @@ def render(ctx):
             "8-Player": 14,
             "9-Player": 18,
             "12-Player": 33,
+            "14-Player": 39,
         }
 
         st.session_state.mu_lc_courts = st.number_input(
@@ -337,7 +338,7 @@ def render(ctx):
                 cc1, cc2 = st.columns([1, 3])
                 t = cc1.selectbox(
                     f"Format C{i+1}",
-                    ["4-Player", "5-Player", "6-Player", "8-Player", "9-Player", "12-Player"],
+                    ["4-Player", "5-Player", "6-Player", "8-Player", "9-Player", "12-Player", "14-Player"],
                     key=f"mu_fmt_{i}",
                 )
                 expected_games = format_expected_games.get(t)
