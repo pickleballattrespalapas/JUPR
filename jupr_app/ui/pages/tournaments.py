@@ -18,6 +18,14 @@ from jupr_app.domain.tournaments import (
 )
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
 from jupr_app.ui.layout import page_shell
+from jupr_app.domain.tournament_registration_repo import (
+    build_public_urls,
+    build_registration_state,
+    get_registration_settings,
+    list_event_options as list_registration_event_options,
+    list_registration_days,
+    registration_feature_available,
+)
 
 
 def render(ctx):
@@ -120,6 +128,26 @@ def render(ctx):
     )
     podium_rows = podium_resp.data or []
     is_complete = tournament.get("status") == "COMPLETE"
+
+
+    available, _ = registration_feature_available(supabase)
+    registration_bridge = None
+    if available:
+        try:
+            reg_settings = get_registration_settings(supabase, tournament_id, tournament_name=str(tournament.get("name") or ""))
+            reg_days = list_registration_days(supabase, tournament_id)
+            reg_events = list_registration_event_options(supabase, tournament_id)
+            reg_state = build_registration_state(supabase, tournament, reg_settings, reg_days, reg_events)
+            registration_bridge = {
+                "settings": reg_settings,
+                "days": reg_days,
+                "events": reg_events,
+                "state": reg_state,
+            }
+        except Exception:
+            registration_bridge = None
+
+    _render_registration_bridge(tournament, registration_bridge)
 
     st.subheader("Tournament Completion")
     if is_complete:
@@ -346,6 +374,34 @@ def render(ctx):
                 disabled=is_complete,
             )
 
+
+
+def _render_registration_bridge(tournament: dict, registration_bridge: dict | None) -> None:
+    st.subheader("Registration Bridge")
+    if not registration_bridge:
+        st.caption("Registration module not configured for this tournament yet.")
+        return
+
+    settings = registration_bridge.get("settings") or {}
+    state = registration_bridge.get("state") or {}
+    summary = state.get("summary") or {}
+    links = build_public_urls(
+        base_url=str(st.session_state.get("base_url") or ""),
+        tournament_id=str(tournament.get("id")),
+        registration_slug=settings.get("registration_slug"),
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Registrations", summary.get("total_registrations", 0))
+    c2.metric("Confirmed", summary.get("confirmed_entries", 0))
+    c3.metric("Needs partner", summary.get("needs_partner_entries", 0))
+    c4.metric("Issues", summary.get("issue_count", 0))
+
+    st.caption("Use Tournament Manager for registration setup and partner-board publishing. Use this page for live operations once divisions are ready.")
+    with st.expander("Registration links"):
+        st.text_input("Registration setup", value=links["admin_manager"], key=f"ops_reg_admin_{tournament.get('id')}")
+        st.text_input("Public registration", value=links["registration"], key=f"ops_reg_public_{tournament.get('id')}")
+        st.text_input("Public partner board", value=links["partner_board"], key=f"ops_reg_partner_{tournament.get('id')}")
 
 def _teams_ready(teams_by_number: dict[int, dict], team_count: int) -> bool:
     if len(teams_by_number) != team_count:
