@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import StringIO
 import pandas as pd
 import streamlit as st
 
@@ -32,6 +33,57 @@ from jupr_app.domain.tournament_registration_repo import (
 LEGACY_DEFAULT_TEAM_COUNT = 4
 TOURNAMENT_STATUS_OPTIONS = ["DRAFT", "REGISTRATION", "REGISTRATION_OPEN", "REGISTRATION_CLOSED"]
 TOURNAMENT_LOCALE_OPTIONS = ["en", "es", "bilingual"]
+
+
+def _normalize_name(value: object) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _find_event_roster(registration_bridge: dict | None, *, event_option_id: str, registration_day_id: str) -> dict | None:
+    state = (registration_bridge or {}).get("state") or {}
+    for roster in state.get("event_rosters") or []:
+        if str(roster.get("event_option_id")) == str(event_option_id) and str(roster.get("event_day_id")) == str(registration_day_id):
+            return roster
+    return None
+
+
+def _parse_bulk_upload(file, pasted_text: str) -> pd.DataFrame:
+    if file is not None:
+        name = str(getattr(file, "name", "")).lower()
+        if name.endswith(".xlsx"):
+            return pd.read_excel(file)
+        return pd.read_csv(file)
+    text = str(pasted_text or "").strip()
+    if not text:
+        return pd.DataFrame()
+    sep = "\t" if "\t" in text and text.count("\t") >= text.count(",") else ","
+    return pd.read_csv(StringIO(text), sep=sep)
+
+
+def _canonical_import_df(raw_df: pd.DataFrame) -> pd.DataFrame:
+    if raw_df.empty:
+        return pd.DataFrame(columns=["Player 1", "Player 2", "Team Name", "Seed", "Notes"])
+    aliases = {
+        "player 1": "Player 1",
+        "player1": "Player 1",
+        "player one": "Player 1",
+        "player 2": "Player 2",
+        "player2": "Player 2",
+        "player two": "Player 2",
+        "team": "Team Name",
+        "team name": "Team Name",
+        "seed": "Seed",
+        "notes": "Notes",
+    }
+    renamed = {}
+    for col in raw_df.columns:
+        key = " ".join(str(col).strip().lower().split())
+        renamed[col] = aliases.get(key, str(col).strip())
+    df = raw_df.rename(columns=renamed).copy()
+    for col in ["Player 1", "Player 2", "Team Name", "Seed", "Notes"]:
+        if col not in df.columns:
+            df[col] = None
+    return df[["Player 1", "Player 2", "Team Name", "Seed", "Notes"]]
 
 
 def _parse_optional_date(value):
@@ -177,40 +229,14 @@ def render(ctx):
     meta_cols[2].metric("Start", str(tournament.get("start_date") or "—"))
     meta_cols[3].metric("End", str(tournament.get("end_date") or "—"))
 
-    teams_resp = (
-        supabase.table("tournament_teams")
+    draws_resp = (
+        supabase.table("tournament_event_draws")
         .select("*")
         .eq("tournament_id", tournament_id)
-        .order("team_number")
+        .order("created_at", desc=False)
         .execute()
     )
-    teams = teams_resp.data or []
-    teams_by_number = {int(t["team_number"]): t for t in teams}
-    teams_by_id = {t["id"]: t for t in teams}
-
-    games_resp = (
-        supabase.table("tournament_games")
-        .select("*")
-        .eq("tournament_id", tournament_id)
-        .order("rr_round_number", desc=False)
-        .order("rr_slot_number", desc=False)
-        .execute()
-    )
-    games = games_resp.data or []
-
-    rr_games = [g for g in games if g.get("stage") == "ROUND_ROBIN"]
-    playoff_games = [g for g in games if g.get("stage") == "PLAYOFF"]
-
-    podium_resp = (
-        supabase.table("tournament_podium")
-        .select("*")
-        .eq("tournament_id", tournament_id)
-        .order("placement", desc=False)
-        .execute()
-    )
-    podium_rows = podium_resp.data or []
-    is_complete = tournament.get("status") == "COMPLETE"
-
+    draws = draws_resp.data or []
 
     available, _ = registration_feature_available(supabase)
     registration_bridge = None
@@ -229,7 +255,110 @@ def render(ctx):
         except Exception:
             registration_bridge = None
 
+    selected_draw_id = None
+    selected_event_option_id = None
+    selected_day_id = None
+    selected_event_type = ""
+
+    st.subheader("Event Operations / Division Builder")
+    day_options = (registration_bridge or {}).get("days") or []
+    event_options = (registration_bridge or {}).get("events") or []
+    day_map = {str(d.get("id")): d for d in day_options}
+
+    if event_options:
+        event_labels = []
+        for row in event_options:
+            day = day_map.get(str(row.get("registration_day_id")), {})
+            event_labels.append(f"{day.get('label') or 'Day ?'} • {row.get('label') or 'Event'}")
+        selected_event_label = st.selectbox("Select registration event/division", event_labels, key=f"ops_event_{tournament_id}")
+        event_idx = event_labels.index(selected_event_label)
+        selected_event = event_options[event_idx]
+        selected_event_option_id = str(selected_event.get("id"))
+        selected_day_id = str(selected_event.get("registration_day_id"))
+        selected_event_type = str(selected_event.get("event_type") or "")
+
+        scoped_draws = [
+            d for d in draws
+            if str(d.get("event_option_id")) == selected_event_option_id and str(d.get("registration_day_id")) == selected_day_id
+        ]
+        if scoped_draws:
+            draw_labels = [f"{d.get('name') or 'Draw'} ({d.get('status') or 'draft'})" for d in scoped_draws]
+            draw_pick = st.selectbox("Select ops draw", draw_labels, key=f"ops_draw_{tournament_id}")
+            draw = scoped_draws[draw_labels.index(draw_pick)]
+            selected_draw_id = str(draw.get("id"))
+        if st.button("Create operations draw for selected division", key=f"create_draw_{tournament_id}"):
+            draw_payload = {
+                "tournament_id": tournament_id,
+                "registration_day_id": selected_day_id,
+                "event_option_id": selected_event_option_id,
+                "name": f"{selected_event.get('label') or 'Division'} Ops Draw",
+                "status": "draft",
+            }
+            supabase.table("tournament_event_draws").insert(draw_payload).execute()
+            st.success("Division ops draw created.")
+            st.rerun()
+
+        if selected_draw_id and st.button("Build Division from Registrations", key=f"build_from_reg_{tournament_id}"):
+            roster = _find_event_roster(registration_bridge, event_option_id=selected_event_option_id, registration_day_id=selected_day_id) or {}
+            entries = [e for e in (roster.get("entries") or []) if str(e.get("status")) == "CONFIRMED"]
+            payload = []
+            for idx, entry in enumerate(entries, start=1):
+                members = entry.get("members") or []
+                p1_name = str((members[0] if len(members) > 0 else {}).get("display_name") or "").strip()
+                p2_name = str((members[1] if len(members) > 1 else {}).get("display_name") or "").strip()
+                payload.append(
+                    {
+                        "tournament_id": tournament_id,
+                        "draw_id": selected_draw_id,
+                        "event_option_id": selected_event_option_id,
+                        "registration_day_id": selected_day_id,
+                        "team_number": idx,
+                        "player1_id": name_to_id.get(p1_name),
+                        "player2_id": name_to_id.get(p2_name) if p2_name else None,
+                        "source": "REGISTRATION",
+                        "notes": None,
+                    }
+                )
+            if payload:
+                supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,draw_id,team_number").execute()
+                st.success(f"Imported {len(payload)} confirmed entries into this division draw.")
+                st.rerun()
+            st.info("No confirmed registration entries found for this event/division.")
+    else:
+        st.info("Configure registration days/events first in Tournament Manager to build division-scoped operations.")
+
     _render_registration_bridge(tournament, registration_bridge)
+
+    team_query = supabase.table("tournament_teams").select("*").eq("tournament_id", tournament_id)
+    game_query = supabase.table("tournament_games").select("*").eq("tournament_id", tournament_id)
+    if selected_draw_id:
+        team_query = team_query.eq("draw_id", selected_draw_id)
+        game_query = game_query.eq("draw_id", selected_draw_id)
+    else:
+        team_query = team_query.is_("draw_id", "null")
+        game_query = game_query.is_("draw_id", "null")
+
+    teams_resp = team_query.order("team_number").execute()
+    teams = teams_resp.data or []
+    teams_by_number = {int(t["team_number"]): t for t in teams}
+    teams_by_id = {t["id"]: t for t in teams}
+
+    games_resp = game_query.order("rr_round_number", desc=False).order("rr_slot_number", desc=False).execute()
+    games = games_resp.data or []
+
+    rr_games = [g for g in games if g.get("stage") == "ROUND_ROBIN"]
+    playoff_games = [g for g in games if g.get("stage") == "PLAYOFF"]
+
+    podium_resp = (
+        supabase.table("tournament_podium")
+        .select("*")
+        .eq("tournament_id", tournament_id)
+        .order("placement", desc=False)
+        .execute()
+    )
+    podium_rows = podium_resp.data or []
+    is_complete = tournament.get("status") == "COMPLETE"
+
 
     st.subheader("Tournament Completion")
     if is_complete:
@@ -254,12 +383,18 @@ def render(ctx):
 
     with tabs[0]:
         st.subheader("Teams")
+        singles_division = str(selected_event_type or "").upper() == "SINGLES"
+        if selected_draw_id:
+            st.caption("Editing teams for selected event/division draw.")
+        else:
+            st.caption("No division draw selected. Editing legacy tournament-wide team list.")
+
         team_count_locked = bool(games) or is_complete
         team_count_value = int(tournament.get("team_count", 4))
 
         c1, c2 = st.columns([2, 1])
         with c1:
-            st.caption("Team count is a legacy/manual operations setting used for bracket generation. It is not part of tournament shell creation and locks once games are generated.")
+            st.caption("Team count is an operations-draw setting used for bracket generation and locks once games are generated.")
         with c2:
             new_team_count = st.selectbox(
                 "Team count",
@@ -278,53 +413,148 @@ def render(ctx):
             team = teams_by_number.get(num)
             p1_name = id_to_name.get(team.get("player1_id")) if team else None
             p2_name = id_to_name.get(team.get("player2_id")) if team else None
-            rows.append({"Team": num, "Player 1": p1_name, "Player 2": p2_name})
+            rows.append({
+                "Team / Slot": num,
+                "Player 1": p1_name,
+                "Player 2": p2_name,
+                "Source": str(team.get("source") or "MANUAL") if team else "MANUAL",
+                "Notes": str(team.get("notes") or "") if team else "",
+            })
 
         editor_df = st.data_editor(
             pd.DataFrame(rows),
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Player 1": st.column_config.SelectboxColumn("Player 1", options=player_names),
-                "Player 2": st.column_config.SelectboxColumn("Player 2", options=player_names),
+                "Player 1": st.column_config.SelectboxColumn("Player 1", options=player_names, required=True),
+                "Player 2": st.column_config.SelectboxColumn("Player 2", options=player_names, required=not singles_division),
+                "Source": st.column_config.SelectboxColumn("Source", options=["REGISTRATION", "MANUAL", "BULK_UPLOAD"]),
+                "Notes": st.column_config.TextColumn("Notes"),
             },
             key="tourney_team_editor",
             disabled=is_complete,
         )
 
-        if st.button("Save Teams", disabled=is_complete):
-            selected_ids = []
-            for _, row in editor_df.iterrows():
-                p1 = row.get("Player 1")
-                p2 = row.get("Player 2")
-                if p1 and p2 and p1 == p2:
-                    st.error("A team cannot use the same player twice.")
+        save_col, import_col = st.columns([1, 1])
+        with save_col:
+            if st.button("Save Teams", disabled=is_complete):
+                selected_ids = []
+                for _, row in editor_df.iterrows():
+                    p1 = row.get("Player 1")
+                    p2 = row.get("Player 2")
+                    if p1 and p2 and p1 == p2:
+                        st.error("A team cannot use the same player twice.")
+                        st.stop()
+                    if singles_division and not p1:
+                        st.error("Singles divisions require Player 1.")
+                        st.stop()
+                    if (not singles_division) and (not p1 or not p2):
+                        st.error("Doubles divisions require both Player 1 and Player 2.")
+                        st.stop()
+                    if p1:
+                        selected_ids.append(name_to_id.get(p1))
+                    if p2:
+                        selected_ids.append(name_to_id.get(p2))
+
+                duplicates = {pid for pid in selected_ids if pid is not None and selected_ids.count(pid) > 1}
+                if duplicates:
+                    names = ", ".join(id_to_name.get(pid, str(pid)) for pid in duplicates)
+                    st.error(f"Duplicate players detected: {names}.")
                     st.stop()
-                if p1:
-                    selected_ids.append(name_to_id.get(p1))
-                if p2:
-                    selected_ids.append(name_to_id.get(p2))
 
-            duplicates = {pid for pid in selected_ids if pid is not None and selected_ids.count(pid) > 1}
-            if duplicates:
-                names = ", ".join(id_to_name.get(pid, str(pid)) for pid in duplicates)
-                st.error(f"Duplicate players detected: {names}.")
-                st.stop()
+                payload = []
+                for _, row in editor_df.iterrows():
+                    payload.append(
+                        {
+                            "tournament_id": tournament_id,
+                            "draw_id": selected_draw_id,
+                            "event_option_id": selected_event_option_id,
+                            "registration_day_id": selected_day_id,
+                            "team_number": int(row.get("Team / Slot")),
+                            "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
+                            "player2_id": name_to_id.get(row.get("Player 2")) if row.get("Player 2") else None,
+                            "source": str(row.get("Source") or "MANUAL"),
+                            "notes": str(row.get("Notes") or "").strip() or None,
+                        }
+                    )
 
-            payload = []
-            for _, row in editor_df.iterrows():
-                payload.append(
-                    {
-                        "tournament_id": tournament_id,
-                        "team_number": int(row.get("Team")),
-                        "player1_id": name_to_id.get(row.get("Player 1")) if row.get("Player 1") else None,
-                        "player2_id": name_to_id.get(row.get("Player 2")) if row.get("Player 2") else None,
-                    }
-                )
+                supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,draw_id,team_number").execute()
+                st.success("Teams saved.")
+                st.rerun()
 
-            supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,team_number").execute()
-            st.success("Teams saved.")
-            st.rerun()
+        with import_col:
+            with st.expander("Bulk Upload Teams"):
+                upload_mode = st.radio("Save mode", ["Append", "Replace"], horizontal=True, key=f"bulk_mode_{tournament_id}")
+                uploaded = st.file_uploader("CSV/XLSX", type=["csv", "xlsx"], key=f"bulk_file_{tournament_id}")
+                pasted = st.text_area("Or paste CSV/TSV", key=f"bulk_text_{tournament_id}")
+                if st.button("Preview Import", key=f"bulk_preview_{tournament_id}"):
+                    try:
+                        parsed = _canonical_import_df(_parse_bulk_upload(uploaded, pasted))
+                    except Exception as exc:
+                        st.error(f"Could not parse upload: {exc}")
+                        st.stop()
+                    if parsed.empty:
+                        st.warning("No rows found.")
+                        st.stop()
+                    parsed = parsed.fillna("")
+                    unresolved = []
+                    dupes = []
+                    id_counts = {}
+                    resolved_rows = []
+                    for _, row in parsed.iterrows():
+                        p1_name = str(row.get("Player 1") or "").strip()
+                        p2_name = str(row.get("Player 2") or "").strip()
+                        p1_id = name_to_id.get(p1_name)
+                        p2_id = name_to_id.get(p2_name) if p2_name else None
+                        if not p1_id:
+                            unresolved.append(p1_name)
+                        if p2_name and not p2_id:
+                            unresolved.append(p2_name)
+                        for pid in [p1_id, p2_id]:
+                            if pid:
+                                id_counts[pid] = id_counts.get(pid, 0) + 1
+                        resolved_rows.append({
+                            "Player 1": p1_name,
+                            "Player 2": p2_name,
+                            "Player 1 Resolved": bool(p1_id),
+                            "Player 2 Resolved": True if not p2_name else bool(p2_id),
+                            "Team Name": str(row.get("Team Name") or "").strip(),
+                            "Seed": row.get("Seed"),
+                            "Notes": str(row.get("Notes") or "").strip(),
+                        })
+                    dupes = [id_to_name.get(pid, str(pid)) for pid, count in id_counts.items() if count > 1]
+                    st.dataframe(pd.DataFrame(resolved_rows), use_container_width=True, hide_index=True)
+                    if unresolved:
+                        st.error("Unresolved names: " + ", ".join(sorted({u for u in unresolved if u})))
+                    if dupes:
+                        st.error("Duplicate players in import: " + ", ".join(sorted(set(dupes))))
+                    if unresolved or dupes:
+                        st.stop()
+
+                    if upload_mode == "Replace":
+                        q = supabase.table("tournament_teams").delete().eq("tournament_id", tournament_id)
+                        q = q.eq("draw_id", selected_draw_id) if selected_draw_id else q.is_("draw_id", "null")
+                        q.execute()
+
+                    payload = []
+                    for i, row in enumerate(resolved_rows, start=1):
+                        payload.append(
+                            {
+                                "tournament_id": tournament_id,
+                                "draw_id": selected_draw_id,
+                                "event_option_id": selected_event_option_id,
+                                "registration_day_id": selected_day_id,
+                                "team_number": i,
+                                "player1_id": name_to_id.get(row.get("Player 1")),
+                                "player2_id": name_to_id.get(row.get("Player 2")) if row.get("Player 2") else None,
+                                "seed": int(row.get("Seed")) if str(row.get("Seed") or "").strip().isdigit() else None,
+                                "source": "BULK_UPLOAD",
+                                "notes": row.get("Notes") or None,
+                            }
+                        )
+                    supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,draw_id,team_number").execute()
+                    st.success("Bulk upload saved.")
+                    st.rerun()
 
     with tabs[1]:
         st.subheader("Round Robin")
@@ -337,6 +567,10 @@ def render(ctx):
         if st.button("Generate RR Schedule", disabled=bool(rr_games) or not ready_teams or is_complete):
             team_ids = {int(num): t["id"] for num, t in teams_by_number.items()}
             games_payload = build_round_robin_games(tournament_id=tournament_id, team_ids_by_number=team_ids)
+            for row in games_payload:
+                row["draw_id"] = selected_draw_id
+                row["event_option_id"] = selected_event_option_id
+                row["registration_day_id"] = selected_day_id
             supabase.table("tournament_games").insert(games_payload).execute()
             supabase.table("tournaments").update({"status": "ROUND_ROBIN"}).eq("id", tournament_id).execute()
             st.success("Round robin schedule generated.")
@@ -350,8 +584,16 @@ def render(ctx):
                     "Regenerate RR Schedule",
                     disabled=confirm.strip().upper() != "RESET" or is_complete,
                 ):
-                    supabase.table("tournament_games").delete().eq("tournament_id", tournament_id).execute()
-                    supabase.table("tournament_teams").update({"seed": None}).eq("tournament_id", tournament_id).execute()
+                    clear_games = supabase.table("tournament_games").delete().eq("tournament_id", tournament_id)
+                    clear_teams = supabase.table("tournament_teams").update({"seed": None}).eq("tournament_id", tournament_id)
+                    if selected_draw_id:
+                        clear_games = clear_games.eq("draw_id", selected_draw_id)
+                        clear_teams = clear_teams.eq("draw_id", selected_draw_id)
+                    else:
+                        clear_games = clear_games.is_("draw_id", "null")
+                        clear_teams = clear_teams.is_("draw_id", "null")
+                    clear_games.execute()
+                    clear_teams.execute()
                     supabase.table("tournaments").update({"status": "DRAFT", "playoff_advance_count": None}).eq("id", tournament_id).execute()
                     st.success("Schedule cleared.")
                     st.rerun()
@@ -363,7 +605,7 @@ def render(ctx):
                 id_to_name=id_to_name,
                 on_save=lambda updates: _save_games(
                     ctx,
-                    tournament,
+                    {**tournament, "active_draw_id": selected_draw_id},
                     teams_by_id,
                     updates,
                     stage="ROUND_ROBIN",
@@ -434,6 +676,10 @@ def render(ctx):
                 advance_count=int(selected_advance),
                 standings=standings,
             )
+            for row in games_payload:
+                row["draw_id"] = selected_draw_id
+                row["event_option_id"] = selected_event_option_id
+                row["registration_day_id"] = selected_day_id
             supabase.table("tournament_games").insert(games_payload).execute()
             supabase.table("tournaments").update(
                 {"status": "PLAYOFFS", "playoff_advance_count": int(selected_advance)}
@@ -448,7 +694,7 @@ def render(ctx):
                 id_to_name=id_to_name,
                 on_save=lambda updates: _save_games(
                     ctx,
-                    tournament,
+                    {**tournament, "active_draw_id": selected_draw_id},
                     teams_by_id,
                     updates,
                     stage="PLAYOFF",
@@ -775,13 +1021,17 @@ def _save_games(ctx, tournament, teams_by_id, game_map, stage: str):
         supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
 
         if stage == "PLAYOFF":
-            playoff_games_resp = (
+            playoff_query = (
                 supabase.table("tournament_games")
                 .select("*")
                 .eq("tournament_id", tournament["id"])
                 .eq("stage", "PLAYOFF")
-                .execute()
             )
+            if tournament.get("active_draw_id"):
+                playoff_query = playoff_query.eq("draw_id", tournament.get("active_draw_id"))
+            else:
+                playoff_query = playoff_query.is_("draw_id", "null")
+            playoff_games_resp = playoff_query.execute()
             playoff_games = playoff_games_resp.data or []
             updates = resolve_playoff_dependencies(playoff_games)
             for upd in updates:
