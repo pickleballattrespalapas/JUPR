@@ -25,7 +25,37 @@ from jupr_app.domain.tournament_registration_repo import (
     list_event_options as list_registration_event_options,
     list_registration_days,
     registration_feature_available,
+    upsert_registration_settings,
 )
+
+
+LEGACY_DEFAULT_TEAM_COUNT = 4
+TOURNAMENT_STATUS_OPTIONS = ["DRAFT", "REGISTRATION", "REGISTRATION_OPEN", "REGISTRATION_CLOSED"]
+TOURNAMENT_LOCALE_OPTIONS = ["en", "es", "bilingual"]
+
+
+def _parse_optional_date(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _insert_tournament_shell(supabase, payload: dict) -> None:
+    try:
+        supabase.table("tournaments").insert(payload).execute()
+        return
+    except Exception:
+        pass
+
+    fallback_payload = {
+        "club_id": payload["club_id"],
+        "name": payload["name"],
+        "status": payload.get("status") or "DRAFT",
+        # team_count is required by the legacy tournament bracket schema.
+        "team_count": int(payload.get("team_count") or LEGACY_DEFAULT_TEAM_COUNT),
+    }
+    supabase.table("tournaments").insert(fallback_payload).execute()
 
 
 def render(ctx):
@@ -52,27 +82,71 @@ def render(ctx):
 
     player_names = sorted(df_players_all["name"].dropna().astype(str).tolist())
 
-    st.subheader("Create Tournament")
-    c1, c2, c3 = st.columns([3, 2, 1])
+    st.subheader("Create Tournament Shell")
+    st.caption("Stage 1 of 3: Create a tournament shell here. Configure registration details in Tournament Manager, then run brackets and scoring in Tournament Operations.")
+    c1, c2 = st.columns(2)
     with c1:
-        tournament_name = st.text_input("Tournament name", key="tourney_create_name")
+        tournament_name = st.text_input("Tournament name *", key="tourney_create_name")
+        start_date = st.text_input("Start date (recommended, YYYY-MM-DD)", key="tourney_create_start")
+        end_date = st.text_input("End date (recommended, YYYY-MM-DD)", key="tourney_create_end")
+        registration_enabled = st.checkbox("Registration enabled", value=True, key="tourney_create_reg_enabled")
     with c2:
-        team_count = st.selectbox("Team count", SUPPORTED_TEAM_COUNTS, key="tourney_create_team_count")
-    with c3:
-        if st.button("Create", type="primary"):
-            if not tournament_name.strip():
-                st.error("Tournament name is required.")
-            else:
-                supabase.table("tournaments").insert(
-                    {
-                        "club_id": str(club_id),
-                        "name": tournament_name.strip(),
-                        "status": "DRAFT",
-                        "team_count": int(team_count),
-                    }
-                ).execute()
-                st.success("Tournament created.")
-                st.rerun()
+        status = st.selectbox("Status", TOURNAMENT_STATUS_OPTIONS, index=0, key="tourney_create_status")
+        public_slug = st.text_input("Public slug (optional)", key="tourney_create_slug")
+        locale = st.selectbox("Locale", TOURNAMENT_LOCALE_OPTIONS, index=0, key="tourney_create_locale")
+        reg_open_at = st.text_input("Registration open at (optional ISO)", key="tourney_create_reg_open")
+        reg_close_at = st.text_input("Registration close at (optional ISO)", key="tourney_create_reg_close")
+
+    if st.button("Create Tournament", type="primary"):
+        if not tournament_name.strip():
+            st.error("Tournament name is required.")
+        else:
+            payload = {
+                "club_id": str(club_id),
+                "name": tournament_name.strip(),
+                "status": status,
+                # Legacy tournament ops compatibility: bracket engine still expects this.
+                "team_count": LEGACY_DEFAULT_TEAM_COUNT,
+                "start_date": _parse_optional_date(start_date),
+                "end_date": _parse_optional_date(end_date),
+                "registration_enabled": bool(registration_enabled),
+                "public_slug": str(public_slug or "").strip() or None,
+                "locale": locale,
+                "registration_open_at": _parse_optional_date(reg_open_at),
+                "registration_close_at": _parse_optional_date(reg_close_at),
+            }
+            _insert_tournament_shell(supabase, payload)
+            created = (
+                supabase.table("tournaments")
+                .select("id,name")
+                .eq("club_id", str(club_id))
+                .eq("name", tournament_name.strip())
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            created_row = (created.data or [None])[0]
+            if created_row:
+                reg_available, _ = registration_feature_available(supabase)
+                if reg_available:
+                    try:
+                        upsert_registration_settings(
+                            supabase,
+                            {
+                                "tournament_id": created_row["id"],
+                                "registration_slug": str(public_slug or "").strip() or None,
+                                "locale": locale,
+                                "registration_status": "open" if registration_enabled else "draft",
+                                "registration_open_at": _parse_optional_date(reg_open_at),
+                                "registration_close_at": _parse_optional_date(reg_close_at),
+                            },
+                        )
+                    except Exception:
+                        pass
+            st.success("Tournament shell created.")
+            st.info("Next step: open Tournament Manager and configure registration days/events.")
+            st.link_button("Configure Registration", f"?page=tournament_manager&tournament_id={(created_row or {}).get('id','')}")
+            st.rerun()
 
     st.divider()
 
@@ -94,6 +168,14 @@ def render(ctx):
     selected_idx = tournament_labels.index(selected_label)
     tournament = tournaments[selected_idx]
     tournament_id = tournament["id"]
+
+    st.subheader("Tournament Shell / Overview")
+    st.caption("Stage 1: shell metadata • Stage 2: registration setup in Tournament Manager • Stage 3: operations below.")
+    meta_cols = st.columns(4)
+    meta_cols[0].metric("Status", str(tournament.get("status") or "DRAFT"))
+    meta_cols[1].metric("Legacy team count", int(tournament.get("team_count") or LEGACY_DEFAULT_TEAM_COUNT))
+    meta_cols[2].metric("Start", str(tournament.get("start_date") or "—"))
+    meta_cols[3].metric("End", str(tournament.get("end_date") or "—"))
 
     teams_resp = (
         supabase.table("tournament_teams")
@@ -168,7 +250,7 @@ def render(ctx):
 
     st.divider()
 
-    tabs = st.tabs(["Teams", "Round Robin", "Standings", "Playoffs"])
+    tabs = st.tabs(["Tournament Operations (Teams)", "Round Robin", "Standings", "Playoffs"])
 
     with tabs[0]:
         st.subheader("Teams")
@@ -177,7 +259,7 @@ def render(ctx):
 
         c1, c2 = st.columns([2, 1])
         with c1:
-            st.caption("Team count is locked once games are generated.")
+            st.caption("Team count is a legacy/manual operations setting used for bracket generation. It is not part of tournament shell creation and locks once games are generated.")
         with c2:
             new_team_count = st.selectbox(
                 "Team count",
@@ -377,9 +459,11 @@ def render(ctx):
 
 
 def _render_registration_bridge(tournament: dict, registration_bridge: dict | None) -> None:
-    st.subheader("Registration Bridge")
+    st.subheader("Registration Bridge (Stage 2)")
     if not registration_bridge:
-        st.caption("Registration module not configured for this tournament yet.")
+        st.warning("Registration is not configured for this tournament yet.")
+        st.info("Use Tournament Manager to define days, events, skill/age labels, and partner requirements.")
+        st.link_button("Configure Registration", f"?page=tournament_manager&tournament_id={tournament.get('id')}")
         return
 
     settings = registration_bridge.get("settings") or {}
@@ -397,7 +481,8 @@ def _render_registration_bridge(tournament: dict, registration_bridge: dict | No
     c3.metric("Needs partner", summary.get("needs_partner_entries", 0))
     c4.metric("Issues", summary.get("issue_count", 0))
 
-    st.caption("Use Tournament Manager for registration setup and partner-board publishing. Use this page for live operations once divisions are ready.")
+    st.caption("Use Tournament Manager for registration setup and partner-board publishing. Return here once registrations are finalized to run teams, rounds, brackets, standings, and scoring.")
+    st.link_button("Configure Registration", f"?page=tournament_manager&tournament_id={tournament.get('id')}")
     with st.expander("Registration links"):
         st.text_input("Registration setup", value=links["admin_manager"], key=f"ops_reg_admin_{tournament.get('id')}")
         st.text_input("Public registration", value=links["registration"], key=f"ops_reg_public_{tournament.get('id')}")
