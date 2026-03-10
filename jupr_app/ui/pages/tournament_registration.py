@@ -129,9 +129,11 @@ def render(ctx):
         st.warning("This tournament does not have a registration form configured yet.")
         st.stop()
 
-    day_events: dict[str, list[dict[str, Any]]] = {}
+    day_events: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for event in event_options:
-        day_events.setdefault(str(event.get("registration_day_id")), []).append(event)
+        day_id = str(event.get("registration_day_id"))
+        family = str(event.get("event_family_label") or event.get("label") or "Event")
+        day_events.setdefault(day_id, {}).setdefault(family, []).append(event)
 
     with st.form(f"registration_form_{tournament.get('id')}"):
         st.markdown("### Player information")
@@ -159,54 +161,52 @@ def render(ctx):
         selections: list[dict[str, Any]] = []
         for day in days:
             day_id = str(day.get("id"))
-            options = day_events.get(day_id, [])
-            label_map = {"— Not playing this day —": None}
-            for event in options:
-                label_map[str(event.get("label"))] = event
+            family_map = day_events.get(day_id, {})
             st.markdown(f"#### {day.get('label')}")
-            selected_label = st.selectbox(
-                f"Choose one event for {day.get('label')}",
-                list(label_map.keys()),
-                key=f"event_pick_{tournament.get('id')}_{day_id}",
-            )
-            selected_event = label_map[selected_label]
-            if not selected_event:
-                continue
-
-            selection_row = {
-                "id": _uid("sel"),
-                "registration_day_id": day_id,
-                "event_option_id": str(selected_event.get("id")),
-                "partner_mode": "NONE",
-            }
-
-            if bool(selected_event.get("partner_required")):
-                partner_mode_label = st.radio(
-                    f"Partner status for {selected_event.get('label')}",
-                    ["I already have a partner", "I need a partner"],
-                    horizontal=True,
-                    key=f"partner_mode_{day_id}",
+            for family, options in family_map.items():
+                st.markdown(f"**{family}**")
+                division_lookup = {"— Not playing this event —": None}
+                for event in options:
+                    division_lookup[str(event.get("division_name") or event.get("label"))] = event
+                selected_label = st.selectbox(
+                    f"Division for {family}",
+                    list(division_lookup.keys()),
+                    key=f"event_pick_{tournament.get('id')}_{day_id}_{family}",
                 )
-                if partner_mode_label == "I already have a partner":
-                    selection_row["partner_mode"] = "HAS_PARTNER"
-                    p1, p2 = st.columns(2)
-                    with p1:
-                        selection_row["partner_name"] = st.text_input("Partner name", key=f"partner_name_{day_id}")
-                        selection_row["partner_email"] = st.text_input("Partner email", key=f"partner_email_{day_id}")
-                        selection_row["partner_phone"] = st.text_input("Partner phone", key=f"partner_phone_{day_id}")
-                    with p2:
-                        selection_row["partner_dupr_id"] = st.text_input("Partner DUPR ID", key=f"partner_dupr_{day_id}")
-                        selection_row["partner_skill"] = _coerce_float(st.text_input("Partner skill", key=f"partner_skill_{day_id}"))
-                        selection_row["partner_age"] = _coerce_int(st.text_input("Partner age", key=f"partner_age_{day_id}"))
-                else:
-                    selection_row["partner_mode"] = "NEEDS_PARTNER"
-                    selection_row["show_on_partner_board"] = bool(settings.get("partner_board_enabled", True)) and wants_contact
-                    selection_row["partner_note"] = st.text_input(
-                        "Note for partner board",
-                        key=f"partner_note_{day_id}",
-                        help="Optional: skill, age target, or playing style.",
+                selected_event = division_lookup[selected_label]
+                if not selected_event:
+                    continue
+
+                selection_row = {
+                    "id": _uid("sel"),
+                    "registration_day_id": day_id,
+                    "event_option_id": str(selected_event.get("id")),
+                    "partner_mode": "NONE",
+                }
+
+                if bool(selected_event.get("partner_required")):
+                    partner_mode_label = st.radio(
+                        f"Partner status for {selected_event.get('division_name') or selected_event.get('label')}",
+                        ["I already have a partner", "I need a partner"],
+                        horizontal=True,
+                        key=f"partner_mode_{day_id}_{selected_event.get('id')}",
                     )
-            selections.append(selection_row)
+                    if partner_mode_label == "I already have a partner":
+                        selection_row["partner_mode"] = "HAS_PARTNER"
+                        p1, p2 = st.columns(2)
+                        with p1:
+                            selection_row["partner_name"] = st.text_input("Partner name", key=f"partner_name_{selected_event.get('id')}")
+                            selection_row["partner_email"] = st.text_input("Partner email", key=f"partner_email_{selected_event.get('id')}")
+                            selection_row["partner_phone"] = st.text_input("Partner phone", key=f"partner_phone_{selected_event.get('id')}")
+                        with p2:
+                            selection_row["partner_dupr_id"] = st.text_input("Partner DUPR ID", key=f"partner_dupr_{selected_event.get('id')}")
+                            selection_row["partner_skill"] = _coerce_float(st.text_input("Partner skill", key=f"partner_skill_{selected_event.get('id')}"))
+                            selection_row["partner_age"] = _coerce_int(st.text_input("Partner age", key=f"partner_age_{selected_event.get('id')}"))
+                    else:
+                        selection_row["partner_mode"] = "NEEDS_PARTNER"
+                        selection_row["show_on_partner_board"] = bool(settings.get("partner_board_enabled", True)) and wants_contact
+                        selection_row["partner_note"] = st.text_input("Note for partner board", key=f"partner_note_{selected_event.get('id')}")
+                selections.append(selection_row)
 
         submitted = st.form_submit_button("Submit registration", type="primary")
 
