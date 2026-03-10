@@ -53,6 +53,14 @@ def _parse_optional_date(value: Any) -> str | None:
     return text or None
 
 
+
+
+def _tournament_date_window_text(tournament: dict[str, Any]) -> str | None:
+    start = _safe_text(tournament.get("start_date"))
+    end = _safe_text(tournament.get("end_date"))
+    if not start or not end:
+        return None
+    return f"{start} → {end}"
 def _resolve_player_id(name: str, name_to_id: dict[str, Any], id_to_name: dict[Any, str]) -> Any:
     if name in name_to_id:
         return name_to_id[name]
@@ -364,6 +372,11 @@ def render(ctx):
         "Configured divisions",
         len((registration_bridge or {}).get("events") or []),
     )
+    date_window = _tournament_date_window_text(tournament)
+    if date_window:
+        st.caption(f"Tournament date window: {date_window}. Tournament Manager can auto-generate day rows from this range.")
+    else:
+        st.info("This tournament has no saved start/end dates yet. Add dates in Tournament Manager to auto-generate the default day schedule.")
     st.link_button("Open Tournament Manager", f"?page=tournament_manager&tournament_id={tournament_id}")
 
     draws = _list_draws(supabase, tournament_id)

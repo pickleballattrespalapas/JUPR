@@ -146,6 +146,32 @@ def _date_rows(start_date: Any, end_date: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _date_window_message(start_date: Any, end_date: Any) -> tuple[str, str]:
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    if not start or not end:
+        return (
+            "warning",
+            "Tournament dates are missing. Add start and end dates to auto-generate the default day schedule.",
+        )
+    if end < start:
+        return ("error", "End date cannot be before start date. Fix dates before generating days.")
+    day_count = (end - start).days + 1
+    return ("info", f"Date window: {start.isoformat()} → {end.isoformat()} ({day_count} day{'s' if day_count != 1 else ''}).")
+
+def _update_tournament_shell(supabase, tournament_id: str, *, name: str, start_date: date | None, end_date: date | None) -> None:
+    payload = {
+        "name": name.strip(),
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
+    }
+    try:
+        supabase.table("tournaments").update(payload).eq("id", tournament_id).execute()
+        return
+    except Exception:
+        pass
+    supabase.table("tournaments").update({"name": name.strip()}).eq("id", tournament_id).execute()
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -199,7 +225,7 @@ def _seed_days(days: list[dict[str, Any]], tournament: dict[str, Any]) -> pd.Dat
 
     generated = _date_rows(tournament.get("start_date"), tournament.get("end_date"))
     if not generated:
-        generated = [{"event_date": None, "label": "Day 1", "enabled": True}]
+        return pd.DataFrame(columns=["event_date", "label", "enabled"])
     rows = [{"id": _uid("day"), **row} for row in generated]
     return _df_with_hidden_ids(rows, "id", ["event_date", "label", "enabled"])
 
@@ -621,35 +647,41 @@ def render(ctx):
             refund = st.text_area("Refund policy", value=_safe_text(settings.get("refund_policy_markdown")), height=90)
         notes = st.text_area("Rules / registration notes", value=_safe_text(settings.get("rules_markdown")), height=140)
 
+        window_level, window_message = _date_window_message(start_date, end_date)
+        getattr(st, window_level)(window_message)
+
         if st.button("Save tournament info", type="primary"):
-            supabase.table("tournaments").update(
-                {
-                    "name": name.strip(),
-                    "start_date": start_date.isoformat() if start_date else None,
-                    "end_date": end_date.isoformat() if end_date else None,
-                }
-            ).eq("id", tournament_id).execute()
-            upsert_registration_settings(
-                supabase,
-                {
-                    "id": settings.get("id"),
-                    "tournament_id": tournament_id,
-                    "registration_slug": slug or None,
-                    "locale": locale,
-                    "registration_status": status,
-                    "registration_open_at": _parse_local_dt(reg_open),
-                    "registration_close_at": _parse_local_dt(reg_close),
-                    "sponsor_markdown": sponsor,
-                    "refund_policy_markdown": refund,
-                    "rules_markdown": notes,
-                    "waitlist_enabled": True,
-                    "partner_board_enabled": True,
-                },
-            )
-            if not days and not structure_locked:
-                st.session_state[f"tm_days_seed_{tournament_id}"] = _seed_days([], {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()})
-            st.success("Tournament info saved.")
-            st.rerun()
+            if end_date and start_date and end_date < start_date:
+                st.error("End date cannot be before start date.")
+            else:
+                _update_tournament_shell(
+                    supabase,
+                    tournament_id,
+                    name=name,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                upsert_registration_settings(
+                    supabase,
+                    {
+                        "id": settings.get("id"),
+                        "tournament_id": tournament_id,
+                        "registration_slug": slug or None,
+                        "locale": locale,
+                        "registration_status": status,
+                        "registration_open_at": _parse_local_dt(reg_open),
+                        "registration_close_at": _parse_local_dt(reg_close),
+                        "sponsor_markdown": sponsor,
+                        "refund_policy_markdown": refund,
+                        "rules_markdown": notes,
+                        "waitlist_enabled": True,
+                        "partner_board_enabled": True,
+                    },
+                )
+                if not days and not structure_locked:
+                    st.session_state[f"tm_days_seed_{tournament_id}"] = _seed_days([], {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()})
+                st.success("Tournament info saved.")
+                st.rerun()
 
     days_seed_key = f"tm_days_seed_{tournament_id}"
     if days_seed_key not in st.session_state:
@@ -658,6 +690,8 @@ def render(ctx):
     with tabs[1]:
         st.subheader("Days")
         st.caption("Days are created from the tournament date range. Relabel them to match how you actually talk about the schedule, such as 'Mixed Doubles Day' or 'Championship Sunday'.")
+        if not _date_rows(tournament.get("start_date"), tournament.get("end_date")):
+            st.warning("No tournament date range is saved yet. You can add days manually, or save dates in Tournament Info to auto-generate days.")
         if structure_locked:
             st.caption("Days are view-only because registrations already exist.")
         days_df = st.data_editor(
@@ -675,7 +709,11 @@ def render(ctx):
         )
         st.session_state[days_seed_key] = days_df.copy()
         if st.button("Regenerate days from tournament dates", disabled=structure_locked):
-            st.session_state[days_seed_key] = _seed_days([], tournament)
+            generated = _seed_days([], tournament)
+            if generated.empty:
+                st.warning("Cannot regenerate days yet. Save both start and end dates first.")
+            else:
+                st.session_state[days_seed_key] = generated
             st.rerun()
 
     event_seed_df = _seed_event_templates(event_options)
