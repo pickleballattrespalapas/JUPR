@@ -111,19 +111,75 @@ def _events_editor_seed(days: list[dict[str, Any]], events: list[dict[str, Any]]
         default_day = str((days[0].get("id") or days[0].get("day_key"))) if days else "day_1"
         rows = [
             {
-                "event_key": "event_1",
+                "event_key": "event_mens_doubles",
                 "day_key": default_day,
                 "day_label": day_lookup.get(default_day, "Day 1"),
-                "label": "Women's Doubles 3.5",
+                "label": "Men's Doubles",
                 "event_type": "GENDER_DOUBLES",
-                "gender_restriction": "WOMEN",
-                "skill_label": "3.5",
-                "age_label": None,
+                "gender_restriction": "MEN",
+                "skill_label": "Open",
+                "age_label": "All Ages",
                 "partner_required": True,
                 "capacity_teams": 8,
                 "public_partner_board": True,
                 "price_usd": None,
-            }
+            },
+            {
+                "event_key": "event_womens_doubles",
+                "day_key": default_day,
+                "day_label": day_lookup.get(default_day, "Day 1"),
+                "label": "Women's Doubles",
+                "event_type": "GENDER_DOUBLES",
+                "gender_restriction": "WOMEN",
+                "skill_label": "Open",
+                "age_label": "All Ages",
+                "partner_required": True,
+                "capacity_teams": 8,
+                "public_partner_board": True,
+                "price_usd": None,
+            },
+            {
+                "event_key": "event_mixed_doubles",
+                "day_key": default_day,
+                "day_label": day_lookup.get(default_day, "Day 1"),
+                "label": "Mixed Doubles",
+                "event_type": "MIXED_DOUBLES",
+                "gender_restriction": "MIXED",
+                "skill_label": "Open",
+                "age_label": "All Ages",
+                "partner_required": True,
+                "capacity_teams": 8,
+                "public_partner_board": True,
+                "price_usd": None,
+            },
+            {
+                "event_key": "event_mens_singles",
+                "day_key": default_day,
+                "day_label": day_lookup.get(default_day, "Day 1"),
+                "label": "Men's Singles",
+                "event_type": "SINGLES",
+                "gender_restriction": "MEN",
+                "skill_label": "Open",
+                "age_label": "All Ages",
+                "partner_required": False,
+                "capacity_teams": 16,
+                "public_partner_board": False,
+                "price_usd": None,
+            },
+            {
+                "event_key": "event_womens_singles",
+                "day_key": default_day,
+                "day_label": day_lookup.get(default_day, "Day 1"),
+                "label": "Women's Singles",
+                "event_type": "SINGLES",
+                "gender_restriction": "WOMEN",
+                "skill_label": "Open",
+                "age_label": "All Ages",
+                "partner_required": False,
+                "capacity_teams": 16,
+                "public_partner_board": False,
+                "price_usd": None,
+            },
         ]
     return pd.DataFrame(rows)
 
@@ -223,8 +279,21 @@ def render(ctx):
 
     tournaments = list_existing_tournaments(supabase, club_id)
     if not tournaments:
-        st.info("No tournaments exist yet. Create one on the Tournaments page first.")
+        st.info("Create a tournament first on the Tournaments page.")
         st.stop()
+
+    st.markdown("### Admin Setup Steps")
+    st.markdown(
+        """
+1. **Pick tournament** (created on the **Tournaments** page).
+2. **Configure registration settings** (slug, status, open/close dates, locale, waitlist).
+3. **Define tournament days** (Day 1, Day 2, etc.).
+4. **Define event options** (doubles/singles, gender, skill/age labels, partner rules, capacity, pricing).
+5. **Publish registration links** for players and partner board.
+6. **Monitor registrations and compiled rosters**. Once registrations exist, structural day/event edits are locked.
+        """
+    )
+    st.caption("This page configures registration for the selected tournament. Tournament shell creation and live bracket operations happen on the Tournaments page.")
 
     preselected = str(st.query_params.get("tournament_id", "")).strip()
     labels = [f"{row.get('name')} ({row.get('status')})" for row in tournaments]
@@ -258,7 +327,7 @@ def render(ctx):
         st.text_input("Public partner board", value=links["partner_board"], key=f"board_link_{tournament_id}")
         st.text_input("Admin operations", value=links["admin_operations"], key=f"ops_link_{tournament_id}")
 
-    tabs = st.tabs(["Setup", "Days & Events", "Registrations", "Partner Board", "Issues & Rosters"])
+    tabs = st.tabs(["Step 2: Settings", "Step 3-4: Days & Events", "Step 5: Publish & Registrations", "Partner Board", "Step 6: Issues & Rosters"])
 
     with tabs[0]:
         st.subheader("Registration settings")
@@ -346,6 +415,7 @@ def render(ctx):
 
     with tabs[1]:
         st.subheader("Days and event options")
+        st.caption("Once registrations are submitted, structural day/event changes are locked to preserve data integrity.")
         registration_count = count_tournament_registrations(supabase, tournament_id)
         if registration_count:
             st.warning(
@@ -380,11 +450,11 @@ def render(ctx):
                 "day_key": st.column_config.SelectboxColumn("Day key", options=day_key_options or ["day_1"]),
                 "day_label": st.column_config.TextColumn("Day label", disabled=True),
                 "label": st.column_config.TextColumn("Event label"),
-                "event_type": st.column_config.SelectboxColumn("Type", options=EVENT_TYPE_OPTIONS),
-                "gender_restriction": st.column_config.SelectboxColumn("Gender", options=GENDER_RESTRICTION_OPTIONS),
+                "event_type": st.column_config.SelectboxColumn("Event format", options=EVENT_TYPE_OPTIONS),
+                "gender_restriction": st.column_config.SelectboxColumn("Eligible gender", options=GENDER_RESTRICTION_OPTIONS),
                 "skill_label": st.column_config.TextColumn("Skill label"),
                 "age_label": st.column_config.TextColumn("Age label"),
-                "partner_required": st.column_config.CheckboxColumn("Partner required"),
+                "partner_required": st.column_config.CheckboxColumn("Partner required at registration"),
                 "capacity_teams": st.column_config.NumberColumn("Capacity", step=1, min_value=1),
                 "public_partner_board": st.column_config.CheckboxColumn("Public partner board"),
                 "price_usd": st.column_config.NumberColumn("Price USD", step=1),
@@ -415,7 +485,7 @@ def render(ctx):
                 st.error(f"Could not replace registration configuration: {exc}")
 
     with tabs[2]:
-        st.subheader("Registrations")
+        st.subheader("Publish links and registrations")
         _render_metrics(state)
         regs = state.get("registrations", [])
         if not regs:
