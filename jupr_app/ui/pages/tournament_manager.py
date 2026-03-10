@@ -350,13 +350,6 @@ def render(ctx):
                 if str(settings.get("locale") or "en") in ["en", "es", "bilingual"]
                 else 0,
             )
-            max_events_per_day = st.number_input(
-                "Max events per day",
-                min_value=1,
-                max_value=4,
-                step=1,
-                value=int(settings.get("max_events_per_day") or 1),
-            )
             waitlist_enabled = st.checkbox("Enable waitlist", value=bool(settings.get("waitlist_enabled", True)))
             partner_board_enabled = st.checkbox(
                 "Enable public partner board",
@@ -401,7 +394,6 @@ def render(ctx):
                         "registration_close_at": _parse_local_dt(close_at) or close_at or None,
                         "waitlist_enabled": waitlist_enabled,
                         "partner_board_enabled": partner_board_enabled,
-                        "max_events_per_day": max_events_per_day,
                         "rules_markdown": rules_markdown,
                         "refund_policy_markdown": refund_policy_markdown,
                         "sponsor_markdown": sponsor_markdown,
