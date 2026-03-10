@@ -140,7 +140,7 @@ def collapse_duplicate_registrations(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Merge duplicate registrations by tournament+email, keeping the latest registration record and
-    the latest event selection per day.
+    the latest event selection per event option.
     """
     reg_by_id = {str(row.get("id")): deepcopy(row) for row in registrations}
     selections_by_reg_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -159,29 +159,29 @@ def collapse_duplicate_registrations(
     for _, group in grouped.items():
         ordered = sorted(group, key=lambda row: _parse_dt(row.get("submitted_at") or row.get("updated_at") or row.get("created_at")))
         latest = deepcopy(ordered[-1])
-        selection_by_day: dict[str, dict[str, Any]] = {}
+        selection_by_event: dict[str, dict[str, Any]] = {}
 
         for index, registration in enumerate(ordered):
             reg_id = str(registration.get("id"))
             for selection in selections_by_reg_id.get(reg_id, []):
-                day_id = str(selection.get("registration_day_id"))
-                selection_by_day[day_id] = deepcopy(selection)
+                event_id = str(selection.get("event_option_id") or selection.get("id"))
+                selection_by_event[event_id] = deepcopy(selection)
             if index < len(ordered) - 1:
                 issues.append(
                     _issue(
                         str(tournament_id),
                         "DUPLICATE_SUBMISSION",
                         "warning",
-                        f"{latest.get('display_name') or latest.get('email')} submitted more than once. Latest player record and latest selection per day were used.",
+                        f"{latest.get('display_name') or latest.get('email')} submitted more than once. Latest player record and latest selection per division were used.",
                         registration_id=reg_id,
                     )
                 )
 
         latest["_collapsed_from_ids"] = [str(row.get("id")) for row in ordered]
-        latest["_selection_count"] = len(selection_by_day)
+        latest["_selection_count"] = len(selection_by_event)
         merged_regs.append(latest)
 
-        for selection in selection_by_day.values():
+        for selection in selection_by_event.values():
             selection["registration_id"] = str(latest.get("id"))
             merged_selections.append(selection)
 

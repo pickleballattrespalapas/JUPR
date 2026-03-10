@@ -104,7 +104,7 @@ def _insert_tournament_shell(supabase, payload: dict) -> None:
         "club_id": payload["club_id"],
         "name": payload["name"],
         "status": payload.get("status") or "DRAFT",
-        # team_count is required by the legacy tournament bracket schema.
+        # team_count may be absent on shell creation; fallback only for legacy schemas.
         "team_count": int(payload.get("team_count") or LEGACY_DEFAULT_TEAM_COUNT),
     }
     supabase.table("tournaments").insert(fallback_payload).execute()
@@ -157,8 +157,8 @@ def render(ctx):
                 "club_id": str(club_id),
                 "name": tournament_name.strip(),
                 "status": status,
-                # Legacy tournament ops compatibility: bracket engine still expects this.
-                "team_count": LEGACY_DEFAULT_TEAM_COUNT,
+                # team_count intentionally deferred for ops; legacy dbs backfill server-side if required.
+                "team_count": None,
                 "start_date": _parse_optional_date(start_date),
                 "end_date": _parse_optional_date(end_date),
                 "registration_enabled": bool(registration_enabled),
@@ -196,7 +196,7 @@ def render(ctx):
                     except Exception:
                         pass
             st.success("Tournament shell created.")
-            st.info("Next step: open Tournament Manager and configure registration days/events.")
+            st.info("Next step: open Tournament Manager and run the Days → Events → Divisions builder.")
             st.link_button("Configure Registration", f"?page=tournament_manager&tournament_id={(created_row or {}).get('id','')}")
             st.rerun()
 
