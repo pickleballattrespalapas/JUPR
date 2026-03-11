@@ -572,6 +572,8 @@ def render(ctx):
         st.info("Create a tournament shell on the Tournaments page first.")
         st.stop()
 
+    st.subheader("Select Tournament")
+    st.caption("Choose which tournament shell to manage before editing metadata, days, events, and divisions.")
     requested_id = _safe_text(st.query_params.get("tournament_id"))
     labels = [f"{row.get('name')} ({row.get('status')})" for row in tournaments]
     default_index = 0
@@ -618,41 +620,55 @@ def render(ctx):
     with tabs[0]:
         st.subheader("Tournament Info")
         st.caption("Set the tournament shell, registration window, and published content. The date range is used to generate tournament days.")
-        c1, c2 = st.columns(2)
         start_default = _parse_date(tournament.get("start_date")) or date.today()
         end_default = _parse_date(tournament.get("end_date")) or start_default
-        with c1:
-            name = st.text_input("Tournament name", value=_safe_text(tournament.get("name")))
-            start_date = st.date_input("Start date", value=start_default)
-            end_date = st.date_input("End date", value=end_default, min_value=start_date)
-            slug = st.text_input("Registration slug", value=_safe_text(settings.get("registration_slug")))
-            locale = st.selectbox(
-                "Locale",
-                ["en", "es", "bilingual"],
-                index=["en", "es", "bilingual"].index(_safe_text(settings.get("locale") or "en"))
-                if _safe_text(settings.get("locale") or "en") in ["en", "es", "bilingual"]
-                else 0,
-            )
-        with c2:
-            status = st.selectbox(
-                "Registration status",
-                REGISTRATION_STATUS_OPTIONS,
-                index=REGISTRATION_STATUS_OPTIONS.index(_safe_text(settings.get("registration_status") or "draft"))
-                if _safe_text(settings.get("registration_status") or "draft") in REGISTRATION_STATUS_OPTIONS
-                else 0,
-            )
-            reg_open = st.text_input("Registration opens (YYYY-MM-DDTHH:MM)", value=_fmt_dt(settings.get("registration_open_at")))
-            reg_close = st.text_input("Registration closes (YYYY-MM-DDTHH:MM)", value=_fmt_dt(settings.get("registration_close_at")))
-            sponsor = st.text_area("Sponsor / callout text", value=_safe_text(settings.get("sponsor_markdown")), height=90)
-            refund = st.text_area("Refund policy", value=_safe_text(settings.get("refund_policy_markdown")), height=90)
-        notes = st.text_area("Rules / registration notes", value=_safe_text(settings.get("rules_markdown")), height=140)
+        safe_end_default = end_default if end_default >= start_default else start_default
 
-        window_level, window_message = _date_window_message(start_date, end_date)
-        getattr(st, window_level)(window_message)
+        st.caption(
+            f"Current tournament: **{_safe_text(tournament.get('name') or 'Untitled Tournament')}** · "
+            f"{_safe_text(tournament.get('start_date') or 'No start date')} → {_safe_text(tournament.get('end_date') or 'No end date')}"
+        )
 
-        if st.button("Save tournament info", type="primary"):
+        with st.form("edit_tournament"):
+            c1, c2 = st.columns(2)
+            with c1:
+                name = st.text_input("Tournament name", value=_safe_text(tournament.get("name")))
+                start_date = st.date_input("Start date", value=start_default)
+                end_date = st.date_input("End date", value=safe_end_default)
+                slug = st.text_input("Registration slug", value=_safe_text(settings.get("registration_slug")))
+                locale = st.selectbox(
+                    "Locale",
+                    ["en", "es", "bilingual"],
+                    index=["en", "es", "bilingual"].index(_safe_text(settings.get("locale") or "en"))
+                    if _safe_text(settings.get("locale") or "en") in ["en", "es", "bilingual"]
+                    else 0,
+                )
+            with c2:
+                status = st.selectbox(
+                    "Registration status",
+                    REGISTRATION_STATUS_OPTIONS,
+                    index=REGISTRATION_STATUS_OPTIONS.index(_safe_text(settings.get("registration_status") or "draft"))
+                    if _safe_text(settings.get("registration_status") or "draft") in REGISTRATION_STATUS_OPTIONS
+                    else 0,
+                )
+                reg_open = st.text_input("Registration opens (YYYY-MM-DDTHH:MM)", value=_fmt_dt(settings.get("registration_open_at")))
+                reg_close = st.text_input("Registration closes (YYYY-MM-DDTHH:MM)", value=_fmt_dt(settings.get("registration_close_at")))
+                sponsor = st.text_area("Sponsor / callout text", value=_safe_text(settings.get("sponsor_markdown")), height=90)
+                refund = st.text_area("Refund policy", value=_safe_text(settings.get("refund_policy_markdown")), height=90)
+            notes = st.text_area("Rules / registration notes", value=_safe_text(settings.get("rules_markdown")), height=140)
+
+            submitted = st.form_submit_button("Save Changes", use_container_width=True)
+
+        if submitted:
+            errors: list[str] = []
+            if not _safe_text(name):
+                errors.append("Tournament name cannot be blank.")
             if end_date and start_date and end_date < start_date:
-                st.error("End date cannot be before start date.")
+                errors.append("End date cannot be before start date.")
+
+            if errors:
+                for error in errors:
+                    st.error(error)
             else:
                 _update_tournament_shell(
                     supabase,
@@ -682,6 +698,9 @@ def render(ctx):
                     st.session_state[f"tm_days_seed_{tournament_id}"] = _seed_days([], {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()})
                 st.success("Tournament info saved.")
                 st.rerun()
+
+        st.divider()
+        st.caption("Admin-only actions are kept separate from the main save form.")
 
     days_seed_key = f"tm_days_seed_{tournament_id}"
     if days_seed_key not in st.session_state:
