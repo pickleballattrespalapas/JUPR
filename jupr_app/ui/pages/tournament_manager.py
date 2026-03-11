@@ -230,6 +230,60 @@ def _seed_days(days: list[dict[str, Any]], tournament: dict[str, Any]) -> pd.Dat
     return _df_with_hidden_ids(rows, "id", ["event_date", "label", "enabled"])
 
 
+def _sync_days_with_date_range(
+    tournament_id: str,
+    start_date: date | None,
+    end_date: date | None,
+    existing_days: list[dict[str, Any]],
+    existing_event_options: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    generated_days = _date_rows(start_date, end_date)
+    if not generated_days:
+        return [], existing_event_options
+
+    existing_by_date = {
+        _safe_text(row.get("event_date")): row
+        for row in existing_days
+        if _safe_text(row.get("event_date"))
+    }
+
+    synced_days: list[dict[str, Any]] = []
+    for sort_order, generated in enumerate(generated_days, start=1):
+        existing = existing_by_date.get(_safe_text(generated.get("event_date")))
+        synced_days.append(
+            {
+                "id": str(existing.get("id") if existing else _uid("day")),
+                "tournament_id": tournament_id,
+                "sort_order": sort_order,
+                "label": _safe_text((existing or {}).get("label")) or _safe_text(generated.get("label")),
+                "event_date": _safe_text(generated.get("event_date")) or None,
+                "enabled": bool((existing or {}).get("enabled", True)),
+            }
+        )
+
+    new_day_ids = [str(day.get("id")) for day in synced_days]
+    old_day_id_to_new_day_id: dict[str, str] = {}
+    for index, old_day in enumerate(existing_days):
+        old_id = _safe_text(old_day.get("id"))
+        if not old_id or not new_day_ids:
+            continue
+        old_date = _safe_text(old_day.get("event_date"))
+        matched = next((day for day in synced_days if _safe_text(day.get("event_date")) == old_date), None)
+        if matched:
+            old_day_id_to_new_day_id[old_id] = str(matched.get("id"))
+            continue
+        old_day_id_to_new_day_id[old_id] = new_day_ids[min(index, len(new_day_ids) - 1)]
+
+    fallback_day_id = new_day_ids[0] if new_day_ids else None
+    synced_event_options: list[dict[str, Any]] = []
+    for event in existing_event_options:
+        existing_day_id = _safe_text(event.get("registration_day_id"))
+        reassigned_day_id = old_day_id_to_new_day_id.get(existing_day_id) or fallback_day_id
+        synced_event_options.append({**event, "registration_day_id": reassigned_day_id})
+
+    return synced_days, synced_event_options
+
+
 def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
     grouped: dict[str, dict[str, Any]] = {}
     for row in event_options:
@@ -586,6 +640,7 @@ def render(ctx):
     tournament = tournaments[labels.index(picked)]
     tournament_id = str(tournament.get("id"))
     st.query_params["tournament_id"] = tournament_id
+    tournament = get_tournament_record(supabase, tournament_id) or tournament
 
     settings = get_registration_settings(supabase, tournament_id, tournament_name=_safe_text(tournament.get("name")))
     days = list_registration_days(supabase, tournament_id)
@@ -670,6 +725,10 @@ def render(ctx):
                 for error in errors:
                     st.error(error)
             else:
+                original_start = _parse_date(tournament.get("start_date"))
+                original_end = _parse_date(tournament.get("end_date"))
+                dates_changed = original_start != start_date or original_end != end_date
+
                 _update_tournament_shell(
                     supabase,
                     tournament_id,
@@ -694,9 +753,31 @@ def render(ctx):
                         "partner_board_enabled": True,
                     },
                 )
-                if not days and not structure_locked:
-                    st.session_state[f"tm_days_seed_{tournament_id}"] = _seed_days([], {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()})
-                st.success("Tournament info saved.")
+                if dates_changed and not structure_locked:
+                    synced_days, synced_events = _sync_days_with_date_range(
+                        tournament_id,
+                        start_date,
+                        end_date,
+                        days,
+                        event_options,
+                    )
+                    replace_registration_configuration(
+                        supabase,
+                        tournament_id=tournament_id,
+                        days=synced_days,
+                        event_options=synced_events,
+                    )
+
+                st.session_state.pop(f"tm_days_seed_{tournament_id}", None)
+                st.session_state.pop(f"tm_days_editor_{tournament_id}", None)
+                st.session_state.pop(f"tm_events_editor_{tournament_id}", None)
+                st.session_state.pop(f"tm_divisions_editor_{tournament_id}", None)
+
+                st.success(
+                    "Tournament info and days synchronized."
+                    if dates_changed and not structure_locked
+                    else "Tournament info saved."
+                )
                 st.rerun()
 
         st.divider()
