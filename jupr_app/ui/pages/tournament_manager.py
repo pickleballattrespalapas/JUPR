@@ -284,6 +284,17 @@ def _sync_days_with_date_range(
     return synced_days, synced_event_options
 
 
+def _clear_tournament_manager_state(tournament_id: str) -> None:
+    stale_keys = [
+        f"tm_days_seed_{tournament_id}",
+        f"tm_days_editor_{tournament_id}",
+        f"tm_events_editor_{tournament_id}",
+        f"tm_divisions_editor_{tournament_id}",
+    ]
+    for key in stale_keys:
+        st.session_state.pop(key, None)
+
+
 def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
     grouped: dict[str, dict[str, Any]] = {}
     for row in event_options:
@@ -646,8 +657,15 @@ def render(ctx):
     days = list_registration_days(supabase, tournament_id)
     event_options = list_event_options(supabase, tournament_id)
     registration_count = count_tournament_registrations(supabase, tournament_id)
-    structure_locked = bool(registration_count)
 
+    if st.session_state.pop(f"tm_refresh_{tournament_id}", False):
+        tournament = get_tournament_record(supabase, tournament_id) or tournament
+        settings = get_registration_settings(supabase, tournament_id, tournament_name=_safe_text(tournament.get("name")))
+        days = list_registration_days(supabase, tournament_id)
+        event_options = list_event_options(supabase, tournament_id)
+        registration_count = count_tournament_registrations(supabase, tournament_id)
+
+    structure_locked = bool(registration_count)
     if structure_locked:
         st.warning(
             "This tournament already has registrations. Structural changes to days, events, and divisions are locked to protect submitted data."
@@ -712,7 +730,7 @@ def render(ctx):
                 refund = st.text_area("Refund policy", value=_safe_text(settings.get("refund_policy_markdown")), height=90)
             notes = st.text_area("Rules / registration notes", value=_safe_text(settings.get("rules_markdown")), height=140)
 
-            submitted = st.form_submit_button("Save Changes", use_container_width=True)
+            submitted = st.form_submit_button("Save tournament info", use_container_width=True)
 
         if submitted:
             errors: list[str] = []
@@ -736,6 +754,9 @@ def render(ctx):
                     start_date=start_date,
                     end_date=end_date,
                 )
+                persisted_tournament = get_tournament_record(supabase, tournament_id) or {}
+                persisted_start = _parse_date(persisted_tournament.get("start_date"))
+                persisted_end = _parse_date(persisted_tournament.get("end_date"))
                 upsert_registration_settings(
                     supabase,
                     {
@@ -756,8 +777,8 @@ def render(ctx):
                 if dates_changed and not structure_locked:
                     synced_days, synced_events = _sync_days_with_date_range(
                         tournament_id,
-                        start_date,
-                        end_date,
+                        persisted_start,
+                        persisted_end,
                         days,
                         event_options,
                     )
@@ -768,10 +789,8 @@ def render(ctx):
                         event_options=synced_events,
                     )
 
-                st.session_state.pop(f"tm_days_seed_{tournament_id}", None)
-                st.session_state.pop(f"tm_days_editor_{tournament_id}", None)
-                st.session_state.pop(f"tm_events_editor_{tournament_id}", None)
-                st.session_state.pop(f"tm_divisions_editor_{tournament_id}", None)
+                _clear_tournament_manager_state(tournament_id)
+                st.session_state[f"tm_refresh_{tournament_id}"] = True
 
                 st.success(
                     "Tournament info and days synchronized."
