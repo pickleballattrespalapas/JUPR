@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "id": "event-nknu138y",
+  "name": "Demo Ladder Night",
+  "type": "league",
+  "participants": [
+    {
+      "id": "p1",
+      "seed": 1,
+      "name": "Amy"
+    },
+    {
+      "id": "p2",
+      "seed": 2,
+      "name": "Brooke"
+    },
+    {
+      "id": "p3",
+      "seed": 3,
+      "name": "Chris"
+    },
+    {
+      "id": "p4",
+      "seed": 4,
+      "name": "Dana"
+    },
+    {
+      "id": "p5",
+      "seed": 5,
+      "name": "Eli"
+    },
+    {
+      "id": "p6",
+      "seed": 6,
+      "name": "Finn"
+    },
+    {
+      "id": "p7",
+      "seed": 7,
+      "name": "Gia"
+    },
+    {
+      "id": "p8",
+      "seed": 8,
+      "name": "Hugo"
+    },
+    {
+      "id": "p9",
+      "seed": 9,
+      "name": "Ivy"
+    }
+  ],
+  "courtSizes": [
+    4,
+    5
+  ],
+  "totalRounds": 3,
+  "currentRoundNumber": 1,
+  "rounds": [
+    {
+      "number": 1,
+      "courts": [
+        {
+          "courtNumber": 1,
+          "size": 4,
+          "participantIds": [
+            "p1",
+            "p2",
+            "p3",
+            "p4"
+          ],
+          "miniRounds": [
+            {
+              "number": 1,
+              "byeParticipantId": null,
+              "matches": [
+                {
+                  "id": "lg-r1-c1-mr1-m1",
+                  "teamA": [
+                    "p2",
+                    "p1"
+                  ],
+                  "teamB": [
+                    "p3",
+                    "p4"
+                  ],
+                  "scoreA": 11,
+                  "scoreB": 7
+                }
+              ]
+            },
+            {
+              "number": 2,
+              "byeParticipantId": null,
+              "matches": [
+                {
+                  "id": "lg-r1-c1-mr2-m1",
+                  "teamA": [
+                    "p4",
+                    "p2"
+                  ],
+                  "teamB": [
+                    "p1",
+                    "p3"
+                  ],
+                  "scoreA": 11,
+                  "scoreB": 8
+                }
+              ]
+            },
+            {
+              "number": 3,
+              "byeParticipantId": null,
+              "matches": [
+                {
+                  "id": "lg-r1-c1-mr3-m1",
+                  "teamA": [
+                    "p4",
+                    "p1"
+                  ],
+                  "teamB": [
+                    "p2",
+                    "p3"
+                  ],
+                  "scoreA": 11,
+                  "scoreB": 9
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "courtNumber": 2,
+          "size": 5,
+          "participantIds": [
+            "p5",
+            "p6",
+            "p7",
+            "p8",
+            "p9"
+          ],
+          "miniRounds": [
+            {
+              "number": 1,
+              "byeParticipantId": "p9",
+              "matches": [
+                {
+                  "id": "lg-r1-c2-mr1-m1",
+                  "teamA": [
+                    "p5",
+                    "p6"
+                  ],
+                  "teamB": [
+                    "p7",
+                    "p8"
+                  ],
+                  "scoreA": 12,
+                  "scoreB": 7
+                }
+              ]
+            },
+            {
+              "number": 2,
+              "byeParticipantId": "p5",
+              "matches": [
+                {
+                  "id": "lg-r1-c2-mr2-m1",
+                  "teamA": [
+                    "p6",
+                    "p8"
+                  ],
+                  "teamB": [
+                    "p7",
+                    "p9"
+                  ],
+                  "scoreA": 12,
+                  "scoreB": 8
+                }
+              ]
+            },
+            {
+              "number": 3,
+              "byeParticipantId": "p8",
+              "matches": [
+                {
+                  "id": "lg-r1-c2-mr3-m1",
+                  "teamA": [
+                    "p5",
+                    "p9"
+                  ],
+                  "teamB": [
+                    "p6",
+                    "p7"
+                  ],
+                  "scoreA": 12,
+                  "scoreB": 9
+                }
+              ]
+            },
+            {
+              "number": 4,
+              "byeParticipantId": "p6",
+              "matches": [
+                {
+                  "id": "lg-r1-c2-mr4-m1",
+                  "teamA": [
+                    "p5",
+                    "p7"
+                  ],
+                  "teamB": [
+                    "p8",
+                    "p9"
+                  ],
+                  "scoreA": 12,
+                  "scoreB": 10
+                }
+              ]
+            },
+            {
+              "number": 5,
+              "byeParticipantId": "p7",
+              "matches": [
+                {
+                  "id": "lg-r1-c2-mr5-m1",
+                  "teamA": [
+                    "p5",
+                    "p8"
+                  ],
+                  "teamB": [
+                    "p6",
+                    "p9"
+                  ],
+                  "scoreA": 12,
+                  "scoreB": 11
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "pendingAssignments": {
+    "p2": 1,
+    "p1": 1,
+    "p4": 1,
+    "p3": 2,
+    "p5": 1,
+    "p6": 2,
+    "p8": 2,
+    "p9": 2,
+    "p7": 2
+  },
+  "createdAt": "2026-03-17T18:53:25.386Z"
+}

@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "id": "event-max8tr9f",
+  "name": "Demo Club Championship",
+  "type": "tournament",
+  "participants": [
+    {
+      "id": "p1",
+      "seed": 1,
+      "name": "Amy"
+    },
+    {
+      "id": "p2",
+      "seed": 2,
+      "name": "Brooke"
+    },
+    {
+      "id": "p3",
+      "seed": 3,
+      "name": "Chris"
+    },
+    {
+      "id": "p4",
+      "seed": 4,
+      "name": "Dana"
+    },
+    {
+      "id": "p5",
+      "seed": 5,
+      "name": "Eli"
+    },
+    {
+      "id": "p6",
+      "seed": 6,
+      "name": "Finn"
+    }
+  ],
+  "bracketSize": 8,
+  "rounds": [
+    {
+      "number": 1,
+      "matches": [
+        {
+          "slot": 1,
+          "participantAId": "p1",
+          "participantBId": null,
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": "p1",
+          "sourceA": null,
+          "sourceB": null
+        },
+        {
+          "slot": 2,
+          "participantAId": "p4",
+          "participantBId": "p5",
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": null,
+          "sourceA": null,
+          "sourceB": null
+        },
+        {
+          "slot": 3,
+          "participantAId": "p2",
+          "participantBId": null,
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": "p2",
+          "sourceA": null,
+          "sourceB": null
+        },
+        {
+          "slot": 4,
+          "participantAId": "p3",
+          "participantBId": "p6",
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": null,
+          "sourceA": null,
+          "sourceB": null
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "matches": [
+        {
+          "slot": 1,
+          "participantAId": "p1",
+          "participantBId": null,
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": "p1",
+          "sourceA": {
+            "roundNumber": 1,
+            "slot": 1
+          },
+          "sourceB": {
+            "roundNumber": 1,
+            "slot": 2
+          }
+        },
+        {
+          "slot": 2,
+          "participantAId": "p2",
+          "participantBId": null,
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": "p2",
+          "sourceA": {
+            "roundNumber": 1,
+            "slot": 3
+          },
+          "sourceB": {
+            "roundNumber": 1,
+            "slot": 4
+          }
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "matches": [
+        {
+          "slot": 1,
+          "participantAId": "p1",
+          "participantBId": "p2",
+          "scoreA": null,
+          "scoreB": null,
+          "winnerId": null,
+          "sourceA": {
+            "roundNumber": 2,
+            "slot": 1
+          },
+          "sourceB": {
+            "roundNumber": 2,
+            "slot": 2
+          }
+        }
+      ]
+    }
+  ],
+  "createdAt": "2026-03-17T18:53:25.387Z"
+}
