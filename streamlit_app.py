@@ -15,6 +15,14 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.context import AppContext
+from jupr_app.ui.public_nav import render_public_top_nav
+from jupr_app.ui.page_registry import (
+    ADMIN_ONLY_LABELS,
+    LABEL_TO_PAGE_KEY,
+    PAGE_KEY_TO_LABEL,
+    PUBLIC_NAV_KEYS,
+    labels_for_keys,
+)
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
@@ -165,29 +173,6 @@ def hide_sidebar_and_header_for_public():
         "</style>",
         unsafe_allow_html=True,
     )
-
-
-def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> str:
-    """
-    Public mode top navigation (horizontal radio).
-    Returns the selected label.
-    """
-    st.markdown("**Go to:**")
-
-    try:
-        idx = labels_in_order.index(current_label)
-    except ValueError:
-        idx = 0
-
-    sel = st.radio(
-        label="public_top_nav",
-        options=labels_in_order,
-        index=idx,
-        horizontal=True,
-        key="public_top_nav_radio",
-        label_visibility="collapsed",
-    )
-    return sel
 
 
 def main():
@@ -386,58 +371,6 @@ def main():
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
         }
 
-        PAGE_KEY_TO_LABEL = {
-            "leaderboards": "🏆 Leaderboards",
-            "league_results": "📊 League Results",
-            "league_printout": "🖨️ League Night Printout",
-            "match_explorer": "🎯 Match Explorer",
-            "players": "🔍 Player Search",
-            "badge_codex": "📼 Badge Codex",
-            "badge_debug": "🧪 Badge Debug",
-            "challenge_ladder": "🪜 Challenge Ladder",
-            "faqs": "❓ FAQs",
-            # Admin-only deep links
-            "league_manager": "🏟️ League Manager",
-            "match_uploader": "📝 Match Uploader",
-            "match_log": "📝 Match Log",
-            "player_editor": "👥 Player Editor",
-            "admin_tools": "⚙️ Admin Tools",
-            "admin_guide": "📘 Admin Guide",
-            "challenge_ladder_admin": "🛠️ Challenge Ladder Admin",
-            "moneyball": "💰 Moneyball",
-            "jupr_live": "🔴 JUPR Live",
-            "jupr_live_admin": "🔴 JUPR Live Admin",
-            "theme_qa": "🎨 Theme QA",
-            "tournaments": "🏆 Tournaments",
-            "tournament_manager": "🏆 Tournament Manager",
-            "tournament_registration": "📝 Tournament Registration",
-            "tournament_partner_board": "🤝 Partner Board",
-            "weekly_recap": "🗞️ Weekly Recap",
-            "top_players_printable": "🧾 Top Active Players PDF",
-            # Admin-only deep links
-            "weekly_recap_admin": "🗞️ Weekly Recap Admin",
-        }
-        LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
-
-        ADMIN_ONLY_LABELS = {
-            "🖨️ League Night Printout",
-            "🏟️ League Manager",
-            "📝 Match Uploader",
-            "📝 Match Log",
-            "👥 Player Editor",
-            "⚙️ Admin Tools",
-            "📘 Admin Guide",
-            "🛠️ Challenge Ladder Admin",
-            "💰 Moneyball",
-            "🔴 JUPR Live Admin",
-            "🎨 Theme QA",
-            "🏆 Tournaments",
-            "🏆 Tournament Manager",
-            "🧪 Badge Debug",
-            "🗞️ Weekly Recap Admin",
-            "🧾 Top Active Players PDF",
-        }
-
         # Visible labels based on auth
         all_labels = list(PAGES.keys())
         if not admin_logged_in:
@@ -445,23 +378,7 @@ def main():
         else:
             visible_labels = all_labels
 
-        # Public nav order (old UX)
-        PUBLIC_NAV_KEYS = [
-            "leaderboards",
-            "league_results",
-            "weekly_recap",
-            "tournament_registration",
-            "tournament_partner_board",
-            "match_explorer",
-            "players",
-            "badge_codex",
-            "jupr_live",
-            "challenge_ladder",
-            "faqs",
-        ]
-        public_labels_in_order = [
-            PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)
-        ]
+        public_labels_in_order = labels_for_keys(PUBLIC_NAV_KEYS)
 
         # -------------------------
         # Deep link resolution
