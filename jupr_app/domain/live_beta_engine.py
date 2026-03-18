@@ -6,12 +6,12 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from jupr_app.domain.schedule import get_match_schedule
+from jupr_app.domain.schedule import SUPPORTED_DOUBLES_PLAYER_COUNTS, get_match_schedule
 from jupr_app.domain.league_night_roster import suggest_court_sizes
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 
 
-SUPPORTED_RR_FORMATS = [4, 5, 6, 8, 9, 12, 14]
+SUPPORTED_RR_FORMATS = SUPPORTED_DOUBLES_PLAYER_COUNTS
 SUPPORTED_TOURNAMENT_TEAM_COUNTS = [4, 5, 6, 7, 8]
 
 
@@ -191,7 +191,7 @@ def create_round_robin_event(
     count = len(names)
     if count not in SUPPORTED_RR_FORMATS:
         raise ValueError(
-            "Round Robin currently supports 4, 5, 6, 8, 9, 12, or 14 participants in JUPR Live Beta."
+            "Round Robin currently supports every JUPR doubles format from 4 to 20 participants in JUPR Live Beta."
         )
     participants = _build_participants(names, resolved_ids=resolved_ids)
     schedule = get_match_schedule(f"{count}-Player", [p["id"] for p in participants])
