@@ -36,6 +36,17 @@ def test_round_robin_standings_rank_scored_matches_only():
     assert standings[-1]["matches"] == 2
 
 
+def test_round_robin_event_supports_full_4_to_20_schedule_range():
+    event = create_round_robin_event(
+        name="Extended RR",
+        participant_names=[f"Player {idx}" for idx in range(1, 21)],
+    )
+
+    assert len(event["participants"]) == 20
+    assert len(event["rounds"]) == 19
+    assert sum(len(round_data["matches"]) for round_data in event["rounds"]) == 95
+
+
 def test_round_robin_payloads_require_resolved_player_ids():
     event = create_round_robin_event(
         name="Official RR",

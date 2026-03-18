@@ -1,8 +1,36 @@
 import re
 from typing import Any
 
+from jupr_app.domain.generated_doubles_templates import GENERATED_DOUBLES_TEMPLATES
+
 
 Match = dict[str, Any]
+
+HAND_AUTHORED_DOUBLES_PLAYER_COUNTS = [4, 5, 6, 8, 9, 12, 14]
+GENERATED_DOUBLES_PLAYER_COUNTS = sorted(
+    int(format_name.split("-", 1)[0]) for format_name in GENERATED_DOUBLES_TEMPLATES
+)
+SUPPORTED_DOUBLES_PLAYER_COUNTS = sorted(HAND_AUTHORED_DOUBLES_PLAYER_COUNTS + GENERATED_DOUBLES_PLAYER_COUNTS)
+SUPPORTED_DOUBLES_FORMAT_TYPES = [f"{count}-Player" for count in SUPPORTED_DOUBLES_PLAYER_COUNTS]
+EXPECTED_DOUBLES_GAMES_BY_FORMAT = {
+    "4-Player": 3,
+    "5-Player": 5,
+    "6-Player": 9,
+    "8-Player": 14,
+    "9-Player": 18,
+    "12-Player": 33,
+    "14-Player": 39,
+    **{format_name: int(template["matchCount"]) for format_name, template in GENERATED_DOUBLES_TEMPLATES.items()},
+}
+
+
+def _map_template_match_rows(players: list[Any], match_rows: list[dict[str, Any]]) -> list[Match]:
+    mapped: list[Match] = []
+    for row in match_rows:
+        t1 = [players[int(position) - 1] for position in row["t1"]]
+        t2 = [players[int(position) - 1] for position in row["t2"]]
+        mapped.append({"t1": t1, "t2": t2, "desc": str(row["desc"])})
+    return mapped
 
 
 def _validate_14p_rounds(rounds: list[dict[str, Any]]) -> bool:
@@ -225,5 +253,9 @@ def get_match_schedule(format_type: str, players: list[Any], custom_text: str | 
                     }
                 )
         return matches
+
+    generated_template = GENERATED_DOUBLES_TEMPLATES.get(format_type)
+    if generated_template is not None:
+        return _map_template_match_rows(p, generated_template["flatMatches"])
 
     return []

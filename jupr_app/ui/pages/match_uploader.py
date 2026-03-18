@@ -8,7 +8,11 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.events import upsert_or_get_active_event
-from jupr_app.domain.schedule import get_match_schedule
+from jupr_app.domain.schedule import (
+    EXPECTED_DOUBLES_GAMES_BY_FORMAT,
+    SUPPORTED_DOUBLES_FORMAT_TYPES,
+    get_match_schedule,
+)
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.ui.layout import page_shell
@@ -314,15 +318,7 @@ def render(ctx):
 
             st.stop()
 
-        format_expected_games = {
-            "4-Player": 3,
-            "5-Player": 5,
-            "6-Player": 9,
-            "8-Player": 14,
-            "9-Player": 18,
-            "12-Player": 33,
-            "14-Player": 39,
-        }
+        format_expected_games = EXPECTED_DOUBLES_GAMES_BY_FORMAT
 
         st.session_state.mu_lc_courts = st.number_input(
             "Courts",
@@ -338,7 +334,7 @@ def render(ctx):
                 cc1, cc2 = st.columns([1, 3])
                 t = cc1.selectbox(
                     f"Format C{i+1}",
-                    ["4-Player", "5-Player", "6-Player", "8-Player", "9-Player", "12-Player", "14-Player"],
+                    SUPPORTED_DOUBLES_FORMAT_TYPES,
                     key=f"mu_fmt_{i}",
                 )
                 expected_games = format_expected_games.get(t)
