@@ -275,6 +275,7 @@ def _render_setup(ctx, state: dict) -> None:
     state["event_name"] = st.text_input("Event name", value=state["event_name"], key="jupr_live_event_name")
     if state["type_label"] == "Round Robin":
         help_text = "Enter one participant per line. JUPR Live Beta now supports every current JUPR doubles schedule from 4 through 20 participants."
+        help_text += " Organized RR prioritizes maximum player exposure in ~8 rounds."
         placeholder = "Amy\nBrooke\nChris\nDana"
     elif state["type_label"] == "Tournament":
         help_text = "Enter one doubles team per line using 'Player 1 / Player 2'. Tournament brackets support 4 to 8 fixed teams."

@@ -6,7 +6,11 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from jupr_app.domain.schedule import SUPPORTED_DOUBLES_PLAYER_COUNTS, get_match_schedule
+from jupr_app.domain.schedule import (
+    ORGANIZED_RR_DEFAULT_MODE,
+    SUPPORTED_DOUBLES_PLAYER_COUNTS,
+    get_match_schedule,
+)
 from jupr_app.domain.league_night_roster import suggest_court_sizes
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 
@@ -186,6 +190,7 @@ def create_round_robin_event(
     participant_names: list[str],
     resolved_ids: dict[str, int] | None = None,
     official_context: dict[str, Any] | None = None,
+    schedule_mode: str = ORGANIZED_RR_DEFAULT_MODE,
 ) -> dict[str, Any]:
     names = [normalize_name(x) for x in participant_names if normalize_name(x)]
     count = len(names)
@@ -194,13 +199,14 @@ def create_round_robin_event(
             "Round Robin currently supports every JUPR doubles format from 4 to 20 participants in JUPR Live Beta."
         )
     participants = _build_participants(names, resolved_ids=resolved_ids)
-    schedule = get_match_schedule(f"{count}-Player", [p["id"] for p in participants])
+    schedule = get_match_schedule(f"{count}-Player", [p["id"] for p in participants], schedule_mode=schedule_mode)
     rounds = _group_schedule_matches(schedule, prefix="rr")
     return {
         "schemaVersion": 1,
         "name": normalize_name(name) or "JUPR Live Round Robin",
         "type": "round_robin",
         "participants": participants,
+        "scheduleMode": str(schedule_mode),
         "rounds": rounds,
         "official_context": dict(official_context or {}),
         "saved_rounds": [],
