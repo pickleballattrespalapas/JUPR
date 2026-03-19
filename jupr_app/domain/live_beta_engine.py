@@ -405,19 +405,26 @@ def get_active_sub_for_match(
 ) -> dict[str, Any] | None:
     substitutions = list(event.get("substitutions") or [])
     substitutions.sort(key=lambda item: str(item.get("created_at") or ""))
-    active: dict[str, Any] | None = None
+    game_level: dict[str, Any] | None = None
+    round_level: dict[str, Any] | None = None
     for substitution in substitutions:
         if str(match_id) not in _substitution_matches(substitution):
             continue
-        if original_participant_id is not None and str(substitution.get("original_participant_id")) != str(original_participant_id):
+        if (
+            original_participant_id is not None
+            and str(substitution.get("original_participant_id")) != str(original_participant_id)
+        ):
             continue
         if not include_inactive and not substitution_is_active(event, substitution):
             continue
-        active = substitution
-    return active
+        if str(substitution.get("scope")) == "game":
+            game_level = substitution
+        elif str(substitution.get("scope")) == "round":
+            round_level = substitution
+    return game_level or round_level
 
 
-def resolve_display_name(
+def resolve_active_player_name(
     event: dict[str, Any],
     match_id: str,
     original_participant_id: str,
@@ -427,8 +434,15 @@ def resolve_display_name(
     substitution = get_active_sub_for_match(event, match_id, original_participant_id, include_inactive=True)
     if not substitution:
         return base_name
-    sub_name = str(substitution.get("substitute_name") or "Substitute")
-    return f"{base_name} (sub: {sub_name})"
+    return str(substitution.get("substitute_name") or base_name)
+
+
+def resolve_display_name(
+    event: dict[str, Any],
+    match_id: str,
+    original_participant_id: str,
+) -> str:
+    return resolve_active_player_name(event, match_id, original_participant_id)
 
 
 def resolve_player_of_record(

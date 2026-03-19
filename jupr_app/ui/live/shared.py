@@ -30,6 +30,7 @@ from jupr_app.domain.live_beta_engine import (
     match_is_scored,
     match_payloads_from_current_league_round,
     match_payloads_from_rr,
+    resolve_active_player_name,
     matches_for_round,
     normalize_name,
     resolve_display_name,
@@ -128,6 +129,33 @@ def inject_styles() -> None:
         }
         .jupr-live-pill {
             display:inline-block; padding:0.35rem 0.7rem; border-radius:999px; background:#eaf2ff; color:#2F6FED; font-weight:600; margin-right:0.4rem;
+        }
+        .jupr-live-slot {
+            border: 1px solid rgba(15,23,42,0.08);
+            border-radius: 14px;
+            padding: 0.6rem 0.7rem;
+            background: rgba(248, 250, 252, 0.95);
+            margin-bottom: 0.45rem;
+        }
+        .jupr-live-slot-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #64748b;
+            margin-bottom: 0.15rem;
+        }
+        .jupr-live-slot-name {
+            font-weight: 700;
+            font-size: 0.98rem;
+            line-height: 1.3;
+        }
+        .jupr-live-sub-summary {
+            border: 1px solid rgba(47,111,237,0.12);
+            border-radius: 14px;
+            background: #f8fbff;
+            padding: 0.65rem 0.8rem;
+            margin: 0.4rem 0 0.8rem;
+            font-size: 0.92rem;
         }
         </style>
         """,
@@ -499,13 +527,6 @@ def _match_round_number(event: dict, match_id: str) -> int:
     return _current_round_number(event)
 
 
-def _display_team_label(event: dict, match: dict, ids: list[str]) -> str:
-    return " / ".join(
-        resolve_display_name(event, str(match.get("id")), str(pid))
-        for pid in (ids or [])
-    )
-
-
 def _player_directory(ctx) -> tuple[list[str], dict[str, int]]:
     df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
     if df_players_all is None or df_players_all.empty:
@@ -561,218 +582,239 @@ def _substitution_summary(substitution: dict, event: dict) -> str:
     )
 
 
-def _render_substitution_badges(event: dict, match: dict) -> None:
+def _active_round_substitutions(event: dict, round_number: int) -> list[dict]:
     substitutions = [
         sub
         for sub in (event.get("substitutions") or [])
-        if str(match.get("id")) in {str(x) for x in (sub.get("affected_match_ids") or [])}
+        if str(sub.get("scope")) == "round"
+        and int(sub.get("round_number") or 0) == int(round_number)
+        and substitution_is_active(event, sub)
     ]
+    substitutions.sort(
+        key=lambda item: (
+            str(item.get("original_player_name") or ""),
+            str(item.get("created_at") or ""),
+        )
+    )
+    return substitutions
+
+
+def _render_round_sub_summary(event: dict, round_number: int) -> None:
+    substitutions = _active_round_substitutions(event, round_number)
     if not substitutions:
         return
+    summary = " · ".join(
+        f"{sub.get('substitute_name')} for {sub.get('original_player_name')}"
+        for sub in substitutions
+    )
+    st.markdown(
+        f"<div class='jupr-live-sub-summary'><strong>Active round subs:</strong> {summary}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _find_substitution(
+    event: dict,
+    *,
+    scope: str,
+    original_participant_id: str,
+    match_id: str | None = None,
+    round_number: int | None = None,
+) -> dict | None:
+    substitutions = list(event.get("substitutions") or [])
+    substitutions.sort(key=lambda item: str(item.get("created_at") or ""))
+    selected: dict | None = None
     for substitution in substitutions:
-        scope = "Round sub" if substitution.get("scope") == "round" else "Game sub"
-        st.caption(
-            f"{scope}: {resolve_display_name(event, str(match.get('id')), str(substitution.get('original_participant_id')))}"
-        )
+        if str(substitution.get("scope")) != str(scope):
+            continue
+        if str(substitution.get("original_participant_id")) != str(original_participant_id):
+            continue
+        if match_id is not None and str(substitution.get("match_id") or "") != str(match_id):
+            continue
+        if round_number is not None and int(substitution.get("round_number") or 0) != int(round_number):
+            continue
+        selected = substitution
+    return selected
 
 
 def _render_substitutions_area(ctx, state: dict, event: dict, config: LivePageConfig) -> None:
     if not _is_official(config):
         return
     clear_expired_substitutions(event)
-    round_number = _current_round_number(event)
     substitutions = list(event.get("substitutions") or [])
     st.markdown("#### Substitutions")
-    player_options, player_name_to_id = _player_directory(ctx)
-    if not player_options:
-        st.warning("No substitute player directory is available.")
+    if not substitutions:
+        st.caption("Use the edit icon on a player slot to swap in a sub for this game or the rest of the round.")
         return
-    participant_map = _participant_name_map(event)
-    round_matches = matches_for_round(event, round_number)
-    available_round_participants: list[str] = []
-    for match in round_matches:
-        if match_is_scored(match):
-            continue
-        for pid in (match.get("teamA") or []) + (match.get("teamB") or []):
-            pid = str(pid)
-            if pid not in available_round_participants:
-                available_round_participants.append(pid)
-    if not available_round_participants:
-        st.info("No unscored matches remain in the current round for substitutions.")
-    else:
-        cols = st.columns([1.2, 1.2, 1.2, 1.4, 0.9])
-        round_labels = [participant_map.get(pid, pid) for pid in available_round_participants]
-        selected_label = cols[0].selectbox(
-            "Replace for round",
-            round_labels,
-            key=f"{config.state_key}_round_sub_out_r{round_number}",
-        )
-        selected_pid = available_round_participants[round_labels.index(selected_label)]
-        substitute_name = cols[1].selectbox(
-            "Substitute",
-            player_options,
-            key=f"{config.state_key}_round_sub_in_r{round_number}",
-        )
-        note = cols[2].text_input(
-            "Note",
-            key=f"{config.state_key}_round_sub_note_r{round_number}",
-        )
-        affected_matches = [
-            str(match.get("id"))
-            for match in round_matches
-            if not match_is_scored(match)
-            and selected_pid in [str(x) for x in (match.get("teamA") or []) + (match.get("teamB") or [])]
-        ]
-        cols[3].metric("Affected games", len(affected_matches))
-        if cols[4].button("Sub for round", key=f"{config.state_key}_round_sub_apply_r{round_number}", type="primary"):
-            try:
-                if not substitute_name:
-                    raise ValueError("Choose a substitute player first.")
-                substitution = apply_round_substitution(
-                    event,
-                    round_number=round_number,
-                    original_participant_id=selected_pid,
-                    substitute_player_id=int(player_name_to_id[substitute_name]),
-                    substitute_name=substitute_name,
-                    created_by="admin",
-                    created_at=_utc_now_iso(),
-                    note=note,
-                    substitution_id=state.get("editing_substitution_id"),
-                )
-                _upsert_substitution(event, substitution)
-                state["editing_substitution_id"] = None
-                st.success("Round substitution applied.")
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
-    if substitutions:
-        st.caption("Active / pending substitution state")
+    with st.expander("View substitution audit", expanded=False):
         for substitution in substitutions:
-            c1, c2, c3 = st.columns([6, 1.2, 1.2])
+            c1, c2 = st.columns([6, 1.2])
             c1.write(_substitution_summary(substitution, event))
-            can_edit = substitution_is_active(event, substitution) and not substitution_is_locked(event, substitution)
+            can_remove = substitution_is_active(event, substitution) and not substitution_is_locked(event, substitution)
             if c2.button(
-                "Edit",
-                key=f"{config.state_key}_edit_sub_{substitution['id']}",
-                disabled=not can_edit,
-            ):
-                state["editing_substitution_id"] = str(substitution["id"])
-                if substitution.get("scope") == "round":
-                    participant_map_reverse = {
-                        v: k for k, v in _participant_name_map(event).items()
-                    }
-                    player_name = participant_map.get(
-                        str(substitution.get("original_participant_id")),
-                        participant_map_reverse.get(
-                            str(substitution.get("original_participant_id")),
-                            str(substitution.get("original_participant_id")),
-                        ),
-                    )
-                    st.session_state[
-                        f"{config.state_key}_round_sub_out_r{int(substitution.get('round_number') or 0)}"
-                    ] = player_name
-                    st.session_state[
-                        f"{config.state_key}_round_sub_in_r{int(substitution.get('round_number') or 0)}"
-                    ] = str(substitution.get("substitute_name") or "")
-                    st.session_state[
-                        f"{config.state_key}_round_sub_note_r{int(substitution.get('round_number') or 0)}"
-                    ] = str(substitution.get("note") or "")
-                elif substitution.get("match_id"):
-                    match_id = str(substitution.get("match_id"))
-                    st.session_state[
-                        f"{config.state_key}_game_sub_note_{match_id}"
-                    ] = str(substitution.get("note") or "")
-                    st.session_state[
-                        f"{config.state_key}_game_sub_in_{match_id}"
-                    ] = str(substitution.get("substitute_name") or "")
-                st.rerun()
-            if c3.button(
                 "Remove",
                 key=f"{config.state_key}_remove_sub_{substitution['id']}",
-                disabled=not can_edit,
+                disabled=not can_remove,
             ):
                 _remove_substitution(event, str(substitution["id"]))
-                if state.get("editing_substitution_id") == str(substitution["id"]):
-                    state["editing_substitution_id"] = None
                 st.rerun()
 
 
-def _render_game_substitution_controls(ctx, event: dict, config: LivePageConfig, match: dict) -> None:
-    player_options, player_name_to_id = _player_directory(ctx)
-    if not player_options:
-        return
+def _render_player_slot_editor(
+    ctx,
+    event: dict,
+    config: LivePageConfig,
+    match: dict,
+    *,
+    participant_id: str,
+    slot_label: str,
+) -> None:
     match_id = str(match.get("id"))
-    round_number = _match_round_number(event, match_id)
-    participant_map = _participant_name_map(event)
-    existing_subs = [
-        sub
-        for sub in (event.get("substitutions") or [])
-        if str(sub.get("scope")) == "game" and str(sub.get("match_id")) == match_id
-    ]
-    with st.expander("Sub for game", expanded=False):
-        match_participants = [
-            str(pid) for pid in (match.get("teamA") or []) + (match.get("teamB") or [])
-        ]
-        player_labels = [participant_map.get(pid, pid) for pid in match_participants]
-        replace_label = st.radio(
-            "Replace player",
-            player_labels,
+    slot_markup = (
+        f"<div class='jupr-live-slot'><div class='jupr-live-slot-label'>{slot_label}</div>"
+        f"<div class='jupr-live-slot-name'>{resolve_display_name(event, match_id, participant_id)}</div></div>"
+    )
+    with st.container():
+        if not _is_official(config) or match_is_scored(match):
+            st.markdown(slot_markup, unsafe_allow_html=True)
+            return
+        player_options, player_name_to_id = _player_directory(ctx)
+        if not player_options:
+            st.markdown(slot_markup, unsafe_allow_html=True)
+            return
+        round_number = _match_round_number(event, match_id)
+        original_name = _participant_name_map(event).get(participant_id, participant_id)
+        round_sub = _find_substitution(
+            event,
+            scope="round",
+            original_participant_id=participant_id,
+            round_number=round_number,
+        )
+        game_sub = _find_substitution(
+            event,
+            scope="game",
+            original_participant_id=participant_id,
+            match_id=match_id,
+        )
+        active_sub = get_active_sub_for_match(event, match_id, participant_id, include_inactive=True)
+        active_scope_label = "This game only" if game_sub else ("Rest of round" if round_sub else "Original player")
+        status = original_name if active_sub is None else f"{resolve_active_player_name(event, match_id, participant_id)} • {active_scope_label}"
+        editor_key = f"{config.state_key}_slot_editor_{match_id}_{participant_id}"
+        c_name, c_action = st.columns([5, 1])
+        c_name.markdown(slot_markup, unsafe_allow_html=True)
+        if c_action.button("Edit", key=f"{editor_key}_toggle"):
+            st.session_state[editor_key] = not bool(st.session_state.get(editor_key, False))
+            st.rerun()
+        if not bool(st.session_state.get(editor_key, False)):
+            return
+        st.caption(f"Slot owner: {original_name} • Active: {status}")
+        scope_options = ["This game only", "Rest of round"]
+        preferred_scope = 0 if game_sub or not round_sub else 1
+        scope_key = f"{editor_key}_scope"
+        if scope_key not in st.session_state:
+            st.session_state[scope_key] = scope_options[preferred_scope]
+        selected_scope = st.radio(
+            "Apply change to",
+            scope_options,
             horizontal=True,
-            key=f"{config.state_key}_game_sub_out_{match_id}",
+            key=scope_key,
         )
-        replace_pid = match_participants[player_labels.index(replace_label)]
-        substitute_name = st.selectbox(
-            "Substitute player",
+        scoped_sub = game_sub if selected_scope == "This game only" else round_sub
+        substitute_key = f"{editor_key}_substitute"
+        scope_memory_key = f"{editor_key}_scope_memory"
+        default_substitute = ""
+        if scoped_sub:
+            default_substitute = str(scoped_sub.get("substitute_name") or "")
+        elif active_sub:
+            default_substitute = str(active_sub.get("substitute_name") or "")
+        note_key = f"{editor_key}_note"
+        if (
+            scope_memory_key not in st.session_state
+            or st.session_state.get(scope_memory_key) != selected_scope
+        ):
+            st.session_state[scope_memory_key] = selected_scope
+            st.session_state[substitute_key] = (
+                default_substitute if default_substitute in player_options else player_options[0]
+            )
+            st.session_state[note_key] = str(scoped_sub.get("note") or "")
+        elif substitute_key not in st.session_state:
+            st.session_state[substitute_key] = (
+                default_substitute if default_substitute in player_options else player_options[0]
+            )
+        elif note_key not in st.session_state:
+            st.session_state[note_key] = str(scoped_sub.get("note") or "")
+        selected_name = st.selectbox(
+            "Replacement player",
             player_options,
-            key=f"{config.state_key}_game_sub_in_{match_id}",
+            index=player_options.index(st.session_state[substitute_key]) if st.session_state.get(substitute_key) in player_options else 0,
+            key=substitute_key,
         )
-        note = st.text_input("Note", key=f"{config.state_key}_game_sub_note_{match_id}")
-        if existing_subs:
-            for sub in existing_subs:
-                st.caption(_substitution_summary(sub, event))
-        apply_col, remove_col = st.columns([1, 1])
-        if apply_col.button("Apply game sub", key=f"{config.state_key}_game_sub_apply_{match_id}"):
+        st.text_input("Note", key=note_key)
+        apply_col, clear_col, cancel_col = st.columns([1, 1, 1])
+        if apply_col.button("Apply", type="primary", key=f"{editor_key}_apply"):
             try:
-                if not substitute_name:
-                    raise ValueError("Choose a substitute player first.")
-                current_sub = get_active_sub_for_match(
-                    event,
-                    match_id,
-                    replace_pid,
-                    include_inactive=True,
-                )
-                substitution = apply_single_game_substitution(
-                    event,
-                    round_number=round_number,
-                    match_id=match_id,
-                    original_participant_id=replace_pid,
-                    substitute_player_id=int(player_name_to_id[substitute_name]),
-                    substitute_name=substitute_name,
-                    created_by="admin",
-                    created_at=_utc_now_iso(),
-                    note=note,
-                    substitution_id=(str(current_sub["id"]) if current_sub else None),
-                )
+                if selected_scope == "Rest of round":
+                    substitution = apply_round_substitution(
+                        event,
+                        round_number=round_number,
+                        original_participant_id=participant_id,
+                        substitute_player_id=int(player_name_to_id[selected_name]),
+                        substitute_name=selected_name,
+                        created_by="admin",
+                        created_at=_utc_now_iso(),
+                        note=str(st.session_state.get(note_key) or ""),
+                        substitution_id=(str(round_sub["id"]) if round_sub else None),
+                    )
+                else:
+                    substitution = apply_single_game_substitution(
+                        event,
+                        round_number=round_number,
+                        match_id=match_id,
+                        original_participant_id=participant_id,
+                        substitute_player_id=int(player_name_to_id[selected_name]),
+                        substitute_name=selected_name,
+                        created_by="admin",
+                        created_at=_utc_now_iso(),
+                        note=str(st.session_state.get(note_key) or ""),
+                        substitution_id=(str(game_sub["id"]) if game_sub else None),
+                    )
                 _upsert_substitution(event, substitution)
-                st.success("Game substitution applied.")
+                st.session_state[editor_key] = False
                 st.rerun()
             except Exception as exc:
                 st.error(str(exc))
-        removable = next(
-            (
-                sub for sub in existing_subs
-                if str(sub.get("original_participant_id")) == replace_pid
-                and not substitution_is_locked(event, sub)
-            ),
-            None,
-        )
-        if remove_col.button(
-            "Remove game sub",
-            key=f"{config.state_key}_game_sub_remove_{match_id}",
-            disabled=removable is None,
+        removable = game_sub if selected_scope == "This game only" else round_sub
+        if clear_col.button(
+            "Clear",
+            key=f"{editor_key}_clear",
+            disabled=removable is None or substitution_is_locked(event, removable),
         ):
             _remove_substitution(event, str(removable["id"]))
+            st.session_state[editor_key] = False
             st.rerun()
+        if cancel_col.button("Done", key=f"{editor_key}_done"):
+            st.session_state[editor_key] = False
+            st.rerun()
+
+
+def _render_match_team(
+    ctx,
+    event: dict,
+    config: LivePageConfig,
+    match: dict,
+    *,
+    team_label: str,
+    participant_ids: list[str],
+) -> None:
+    for index, pid in enumerate(participant_ids, start=1):
+        _render_player_slot_editor(
+            ctx,
+            event,
+            config,
+            match,
+            participant_id=str(pid),
+            slot_label=f"{team_label} • Player {index}",
+        )
 
 
 def _render_event_exports(event: dict, standings: list[dict]) -> None:
@@ -879,15 +921,22 @@ def _render_rr_scoring(
         _render_substitutions_area(ctx, state, event, config)
         for round_data in event.get("rounds") or []:
             st.markdown(f"#### Round {int(round_data.get('number') or 0)}")
+            if int(round_data.get("number") or 0) == _current_round_number(event):
+                _render_round_sub_summary(event, int(round_data.get("number") or 0))
             for match in round_data.get("matches") or []:
                 st.markdown(
                     '<div class="jupr-live-score-shell">', unsafe_allow_html=True
                 )
                 cols = st.columns([3.6, 1.1, 0.6, 1.1, 3.6])
-                cols[0].markdown(
-                    f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamA') or [])}</div>",
-                    unsafe_allow_html=True,
-                )
+                with cols[0]:
+                    _render_match_team(
+                        ctx,
+                        event,
+                        config,
+                        match,
+                        team_label="Team A",
+                        participant_ids=[str(pid) for pid in (match.get("teamA") or [])],
+                    )
                 cols[1].number_input(
                     f"JUPR Live Score {match['id']} A",
                     min_value=0,
@@ -907,14 +956,16 @@ def _render_rr_scoring(
                     step=1,
                     key=f"{config.state_key}_rr_{match['id']}_b",
                 )
-                cols[4].markdown(
-                    f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamB') or [])}</div>",
-                    unsafe_allow_html=True,
-                )
-                _render_substitution_badges(event, match)
+                with cols[4]:
+                    _render_match_team(
+                        ctx,
+                        event,
+                        config,
+                        match,
+                        team_label="Team B",
+                        participant_ids=[str(pid) for pid in (match.get("teamB") or [])],
+                    )
                 st.caption(str(match.get("desc") or ""))
-                if _is_official(config) and not match_is_scored(match):
-                    _render_game_substitution_controls(ctx, event, config, match)
                 st.markdown("</div>", unsafe_allow_html=True)
             st.divider()
         submit_label = (
@@ -1014,6 +1065,7 @@ def _render_league_scoring(
             unsafe_allow_html=True,
         )
         _render_substitutions_area(ctx, state, event, config)
+        _render_round_sub_summary(event, current_round_number)
         for court in round_data.get("courts") or []:
             st.markdown(f"#### Court {int(court.get('courtNumber') or 0)}")
             for mini_round in court.get("miniRounds") or []:
@@ -1028,10 +1080,15 @@ def _render_league_scoring(
                         unsafe_allow_html=True,
                     )
                     cols = st.columns([3.6, 1.1, 0.6, 1.1, 3.6])
-                    cols[0].markdown(
-                        f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamA') or [])}</div>",
-                        unsafe_allow_html=True,
-                    )
+                    with cols[0]:
+                        _render_match_team(
+                            ctx,
+                            event,
+                            config,
+                            match,
+                            team_label="Team A",
+                            participant_ids=[str(pid) for pid in (match.get("teamA") or [])],
+                        )
                     cols[1].number_input(
                         f"JUPR Live Score {match['id']} A",
                         min_value=0,
@@ -1051,13 +1108,15 @@ def _render_league_scoring(
                         step=1,
                         key=f"{config.state_key}_lg_{match['id']}_b",
                     )
-                    cols[4].markdown(
-                        f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamB') or [])}</div>",
-                        unsafe_allow_html=True,
-                    )
-                    _render_substitution_badges(event, match)
-                    if _is_official(config) and not match_is_scored(match):
-                        _render_game_substitution_controls(ctx, event, config, match)
+                    with cols[4]:
+                        _render_match_team(
+                            ctx,
+                            event,
+                            config,
+                            match,
+                            team_label="Team B",
+                            participant_ids=[str(pid) for pid in (match.get("teamB") or [])],
+                        )
                     st.markdown("</div>", unsafe_allow_html=True)
         submitted = st.button(
             "Update round & movement",
