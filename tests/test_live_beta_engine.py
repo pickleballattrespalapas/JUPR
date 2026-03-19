@@ -121,7 +121,7 @@ def test_round_substitution_keeps_standings_slot_but_changes_player_of_record():
     slot_row = next(row for row in standings if row["participantId"] == "p-1")
     assert slot_row["wins"] == 1
     assert resolved[0]["t1_p2"] == 99
-    assert "Mike Jones" in resolve_display_name(event, first_match["id"], "p-1")
+    assert resolve_display_name(event, first_match["id"], "p-1") == "Mike Jones"
 
 
 def test_single_game_substitution_only_applies_to_selected_match():
@@ -156,6 +156,48 @@ def test_single_game_substitution_only_applies_to_selected_match():
     second_payload = next(item for item in resolved if item["match_id"] == second_match["id"])
     assert 42 in first_payload.values()
     assert 42 not in second_payload.values()
+
+
+def test_game_substitution_overrides_round_substitution_for_match_display_and_payload():
+    event = create_round_robin_event(
+        name="RR",
+        participant_names=["Amy", "Brooke", "Chris", "Dana"],
+        resolved_ids={"Amy": 1, "Brooke": 2, "Chris": 3, "Dana": 4},
+    )
+    first_match = event["rounds"][0]["matches"][0]
+    original_pid = str(first_match["teamA"][0])
+    round_sub = apply_round_substitution(
+        event,
+        round_number=1,
+        original_participant_id=original_pid,
+        substitute_player_id=50,
+        substitute_name="Round Sub",
+        created_by="admin",
+        created_at="2026-03-19T00:00:00+00:00",
+    )
+    game_sub = apply_single_game_substitution(
+        event,
+        round_number=1,
+        match_id=first_match["id"],
+        original_participant_id=original_pid,
+        substitute_player_id=60,
+        substitute_name="Game Sub",
+        created_by="admin",
+        created_at="2026-03-19T00:01:00+00:00",
+    )
+    event["substitutions"] = [round_sub, game_sub]
+    update_round_robin_score(event, first_match["id"], 11, 6)
+
+    resolved = resolve_payload_player_ids(
+        event,
+        match_payloads_from_rr(event),
+        materialize_substitutions=True,
+    )
+
+    first_payload = next(item for item in resolved if item["match_id"] == first_match["id"])
+    assert resolve_display_name(event, first_match["id"], original_pid) == "Game Sub"
+    assert 60 in first_payload.values()
+    assert 50 not in first_payload.values()
 
 
 def test_clear_expired_substitutions_drops_saved_round_entries():
