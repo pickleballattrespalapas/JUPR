@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.live_beta_engine import clear_expired_substitutions
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.live.shared import (
     LivePageConfig,
@@ -50,6 +51,8 @@ def _save_rr_official(ctx, state: dict, event: dict) -> None:
         return
     res = _process_payloads(ctx, payloads)
     state["last_saved_rounds"] = ["rr"]
+    event["saved_rounds"] = ["rr"]
+    clear_expired_substitutions(event)
     st.session_state["force_data_refresh"] = True
     st.success(f"Official results saved ({res['inserted']} matches).")
 
@@ -66,6 +69,8 @@ def _save_league_round_official(ctx, state: dict, event: dict) -> bool:
     res = _process_payloads(ctx, payloads)
     saved_rounds.add(current_round_number)
     state["last_saved_rounds"] = sorted(saved_rounds)
+    event["saved_rounds"] = sorted(saved_rounds)
+    clear_expired_substitutions(event)
     st.session_state["force_data_refresh"] = True
     st.success(
         f"Official round {current_round_number} saved ({res['inserted']} matches)."
