@@ -1,12 +1,17 @@
 from jupr_app.domain.live_beta_engine import (
+    apply_round_substitution,
+    apply_single_game_substitution,
     build_league_movement,
+    clear_expired_substitutions,
     create_league_event,
     create_round_robin_event,
     create_tournament_event,
+    get_active_sub_for_match,
     league_aggregate_standings,
     mark_tournament_matches_saved,
     match_payloads_from_current_league_round,
     match_payloads_from_rr,
+    resolve_display_name,
     resolve_payload_player_ids,
     round_robin_standings,
     set_pending_assignment,
@@ -83,6 +88,98 @@ def test_round_robin_payloads_require_resolved_player_ids():
             "s2": 7,
         }
     ]
+
+
+def test_round_substitution_keeps_standings_slot_but_changes_player_of_record():
+    event = create_league_event(
+        name="League",
+        participant_names=["Amy", "Brooke", "Chris", "Dana"],
+        total_rounds=1,
+        resolved_ids={"Amy": 1, "Brooke": 2, "Chris": 3, "Dana": 4},
+    )
+    first_match = event["rounds"][0]["courts"][0]["miniRounds"][0]["matches"][0]
+    substitution = apply_round_substitution(
+        event,
+        round_number=1,
+        original_participant_id="p-1",
+        substitute_player_id=99,
+        substitute_name="Mike Jones",
+        created_by="admin",
+        created_at="2026-03-19T00:00:00+00:00",
+    )
+    event["substitutions"] = [substitution]
+
+    update_league_score(event, first_match["id"], 11, 4)
+    standings = league_aggregate_standings(event)
+    payloads = match_payloads_from_current_league_round(event)
+    resolved = resolve_payload_player_ids(
+        event,
+        payloads,
+        materialize_substitutions=True,
+    )
+
+    slot_row = next(row for row in standings if row["participantId"] == "p-1")
+    assert slot_row["wins"] == 1
+    assert resolved[0]["t1_p2"] == 99
+    assert "Mike Jones" in resolve_display_name(event, first_match["id"], "p-1")
+
+
+def test_single_game_substitution_only_applies_to_selected_match():
+    event = create_round_robin_event(
+        name="RR",
+        participant_names=["Amy", "Brooke", "Chris", "Dana"],
+        resolved_ids={"Amy": 1, "Brooke": 2, "Chris": 3, "Dana": 4},
+    )
+    first_match = event["rounds"][0]["matches"][0]
+    second_match = event["rounds"][1]["matches"][0]
+    substitution = apply_single_game_substitution(
+        event,
+        round_number=1,
+        match_id=first_match["id"],
+        original_participant_id=first_match["teamA"][0],
+        substitute_player_id=42,
+        substitute_name="Single Game Sub",
+        created_by="admin",
+        created_at="2026-03-19T00:00:00+00:00",
+    )
+    event["substitutions"] = [substitution]
+    update_round_robin_score(event, first_match["id"], 11, 6)
+    update_round_robin_score(event, second_match["id"], 11, 7)
+
+    resolved = resolve_payload_player_ids(
+        event,
+        match_payloads_from_rr(event),
+        materialize_substitutions=True,
+    )
+
+    first_payload = next(item for item in resolved if item["match_id"] == first_match["id"])
+    second_payload = next(item for item in resolved if item["match_id"] == second_match["id"])
+    assert 42 in first_payload.values()
+    assert 42 not in second_payload.values()
+
+
+def test_clear_expired_substitutions_drops_saved_round_entries():
+    event = create_league_event(
+        name="League",
+        participant_names=["Amy", "Brooke", "Chris", "Dana"],
+        total_rounds=1,
+    )
+    event["substitutions"] = [
+        apply_round_substitution(
+            event,
+            round_number=1,
+            original_participant_id="p-1",
+            substitute_player_id=88,
+            substitute_name="Saved Round Sub",
+            created_by="admin",
+            created_at="2026-03-19T00:00:00+00:00",
+        )
+    ]
+    event["saved_rounds"] = [1]
+
+    clear_expired_substitutions(event)
+
+    assert event["substitutions"] == []
 
 
 def test_league_finalize_generates_next_round_using_pending_assignments():

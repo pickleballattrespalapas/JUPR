@@ -208,6 +208,7 @@ def create_round_robin_event(
         "participants": participants,
         "scheduleMode": str(schedule_mode),
         "rounds": rounds,
+        "substitutions": [],
         "official_context": dict(official_context or {}),
         "saved_rounds": [],
     }
@@ -257,6 +258,7 @@ def create_league_event(
         "currentRoundNumber": 1,
         "rounds": [_build_league_round(1, court_groups)],
         "pendingAssignments": None,
+        "substitutions": [],
         "official_context": dict(official_context or {}),
         "saved_rounds": [],
     }
@@ -290,6 +292,238 @@ def league_round_matches(round_data: dict[str, Any] | None) -> list[dict[str, An
 def set_match_score(match: dict[str, Any], score_a: int | None, score_b: int | None) -> None:
     match["scoreA"] = None if score_a in (None, "") else int(score_a)
     match["scoreB"] = None if score_b in (None, "") else int(score_b)
+
+
+def match_is_scored(match: dict[str, Any] | None) -> bool:
+    if not match:
+        return False
+    return match.get("scoreA") is not None and match.get("scoreB") is not None
+
+
+def find_match_by_id(event: dict[str, Any], match_id: str) -> dict[str, Any] | None:
+    event_type = str(event.get("type") or "")
+    if event_type == "round_robin":
+        for match in round_robin_matches(event):
+            if str(match.get("id")) == str(match_id):
+                return match
+        return None
+    if event_type == "league":
+        for round_data in event.get("rounds") or []:
+            for match in league_round_matches(round_data):
+                if str(match.get("id")) == str(match_id):
+                    return match
+        return None
+    return None
+
+
+def round_robin_current_round_number(event: dict[str, Any]) -> int:
+    rounds = event.get("rounds") or []
+    if not rounds:
+        return 1
+    for round_data in rounds:
+        matches = round_data.get("matches") or []
+        if any(not match_is_scored(match) for match in matches):
+            return int(round_data.get("number") or 1)
+    return int(rounds[-1].get("number") or 1)
+
+
+def matches_for_round(event: dict[str, Any], round_number: int) -> list[dict[str, Any]]:
+    event_type = str(event.get("type") or "")
+    if event_type == "round_robin":
+        for round_data in event.get("rounds") or []:
+            if int(round_data.get("number") or 0) == int(round_number):
+                return list(round_data.get("matches") or [])
+        return []
+    if event_type == "league":
+        for round_data in event.get("rounds") or []:
+            if int(round_data.get("number") or 0) == int(round_number):
+                return league_round_matches(round_data)
+        return []
+    return []
+
+
+def _substitution_matches(substitution: dict[str, Any]) -> set[str]:
+    match_ids = {str(x) for x in (substitution.get("affected_match_ids") or []) if str(x)}
+    if substitution.get("match_id"):
+        match_ids.add(str(substitution.get("match_id")))
+    return match_ids
+
+
+def _saved_round_markers(event: dict[str, Any]) -> set[str]:
+    return {str(x) for x in (event.get("saved_rounds") or [])}
+
+
+def substitution_is_locked(event: dict[str, Any], substitution: dict[str, Any]) -> bool:
+    for match_id in _substitution_matches(substitution):
+        if match_is_scored(find_match_by_id(event, match_id)):
+            return True
+    return False
+
+
+def substitution_is_active(event: dict[str, Any], substitution: dict[str, Any]) -> bool:
+    scope = str(substitution.get("scope") or "")
+    round_number = int(substitution.get("round_number") or 0)
+    if scope == "game":
+        match_id = str(substitution.get("match_id") or "")
+        return bool(match_id) and not match_is_scored(find_match_by_id(event, match_id))
+    if scope == "round":
+        current_round = (
+            int(event.get("currentRoundNumber") or 1)
+            if str(event.get("type")) == "league"
+            else round_robin_current_round_number(event)
+        )
+        if current_round != round_number:
+            return False
+        return any(
+            not match_is_scored(find_match_by_id(event, match_id))
+            for match_id in _substitution_matches(substitution)
+        )
+    return False
+
+
+def clear_expired_substitutions(event: dict[str, Any]) -> None:
+    saved_rounds = _saved_round_markers(event)
+    cleared: list[dict[str, Any]] = []
+    for substitution in event.get("substitutions") or []:
+        round_marker = str(substitution.get("round_number") or "")
+        if "rr" in saved_rounds and str(event.get("type")) == "round_robin":
+            continue
+        if round_marker and round_marker in saved_rounds:
+            continue
+        if not _substitution_matches(substitution):
+            continue
+        cleared.append(substitution)
+    event["substitutions"] = cleared
+
+
+def get_active_sub_for_match(
+    event: dict[str, Any],
+    match_id: str,
+    original_participant_id: str | None = None,
+    *,
+    include_inactive: bool = False,
+) -> dict[str, Any] | None:
+    substitutions = list(event.get("substitutions") or [])
+    substitutions.sort(key=lambda item: str(item.get("created_at") or ""))
+    active: dict[str, Any] | None = None
+    for substitution in substitutions:
+        if str(match_id) not in _substitution_matches(substitution):
+            continue
+        if original_participant_id is not None and str(substitution.get("original_participant_id")) != str(original_participant_id):
+            continue
+        if not include_inactive and not substitution_is_active(event, substitution):
+            continue
+        active = substitution
+    return active
+
+
+def resolve_display_name(
+    event: dict[str, Any],
+    match_id: str,
+    original_participant_id: str,
+) -> str:
+    participant = _participant_map(event).get(str(original_participant_id), {})
+    base_name = str(participant.get("name") or original_participant_id)
+    substitution = get_active_sub_for_match(event, match_id, original_participant_id, include_inactive=True)
+    if not substitution:
+        return base_name
+    sub_name = str(substitution.get("substitute_name") or "Substitute")
+    return f"{base_name} (sub: {sub_name})"
+
+
+def resolve_player_of_record(
+    event: dict[str, Any],
+    match_id: str,
+    original_participant_id: str,
+) -> int:
+    substitution = get_active_sub_for_match(event, match_id, original_participant_id, include_inactive=True)
+    if substitution and substitution.get("substitute_player_id") is not None:
+        return int(substitution["substitute_player_id"])
+    participant = _participant_map(event).get(str(original_participant_id))
+    if participant is None or participant.get("player_id") is None:
+        raise ValueError(f"Participant {original_participant_id} is not resolved to a JUPR player.")
+    return int(participant["player_id"])
+
+
+def apply_round_substitution(
+    event: dict[str, Any],
+    *,
+    round_number: int,
+    original_participant_id: str,
+    substitute_player_id: int,
+    substitute_name: str,
+    created_by: str,
+    created_at: str = "",
+    note: str = "",
+    substitution_id: str | None = None,
+) -> dict[str, Any]:
+    affected_match_ids = [
+        str(match.get("id"))
+        for match in matches_for_round(event, round_number)
+        if not match_is_scored(match)
+        and str(original_participant_id) in [str(x) for x in (match.get("teamA") or []) + (match.get("teamB") or [])]
+    ]
+    if not affected_match_ids:
+        raise ValueError("No remaining unscored matches are affected by that round substitution.")
+    substitution = {
+        "id": substitution_id or f"sub-{len(event.get('substitutions') or []) + 1}",
+        "scope": "round",
+        "round_number": int(round_number),
+        "match_id": None,
+        "original_participant_id": str(original_participant_id),
+        "original_slot": f"participant:{str(original_participant_id)}",
+        "original_player_name": str(
+            _participant_map(event).get(str(original_participant_id), {}).get("name") or original_participant_id
+        ),
+        "substitute_player_id": int(substitute_player_id),
+        "substitute_name": normalize_name(substitute_name),
+        "affected_match_ids": affected_match_ids,
+        "created_by": normalize_name(created_by) or "admin",
+        "created_at": str(created_at or ""),
+        "note": str(note or "").strip(),
+    }
+    return substitution
+
+
+def apply_single_game_substitution(
+    event: dict[str, Any],
+    *,
+    round_number: int,
+    match_id: str,
+    original_participant_id: str,
+    substitute_player_id: int,
+    substitute_name: str,
+    created_by: str,
+    created_at: str = "",
+    note: str = "",
+    substitution_id: str | None = None,
+) -> dict[str, Any]:
+    match = find_match_by_id(event, match_id)
+    if match is None:
+        raise ValueError("Match not found.")
+    if match_is_scored(match):
+        raise ValueError("Scored matches cannot be changed retroactively.")
+    participants = [str(x) for x in (match.get("teamA") or []) + (match.get("teamB") or [])]
+    if str(original_participant_id) not in participants:
+        raise ValueError("Selected player is not part of that match.")
+    substitution = {
+        "id": substitution_id or f"sub-{len(event.get('substitutions') or []) + 1}",
+        "scope": "game",
+        "round_number": int(round_number),
+        "match_id": str(match_id),
+        "original_participant_id": str(original_participant_id),
+        "original_slot": f"participant:{str(original_participant_id)}",
+        "original_player_name": str(
+            _participant_map(event).get(str(original_participant_id), {}).get("name") or original_participant_id
+        ),
+        "substitute_player_id": int(substitute_player_id),
+        "substitute_name": normalize_name(substitute_name),
+        "affected_match_ids": [str(match_id)],
+        "created_by": normalize_name(created_by) or "admin",
+        "created_at": str(created_at or ""),
+        "note": str(note or "").strip(),
+    }
+    return substitution
 
 
 def update_round_robin_score(event: dict[str, Any], match_id: str, score_a: int | None, score_b: int | None) -> None:
@@ -766,13 +1000,23 @@ def match_payloads_from_current_league_round(event: dict[str, Any]) -> list[dict
     return payloads
 
 
-def resolve_payload_player_ids(event: dict[str, Any], payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def resolve_payload_player_ids(
+    event: dict[str, Any],
+    payloads: list[dict[str, Any]],
+    *,
+    materialize_substitutions: bool = False,
+) -> list[dict[str, Any]]:
     participant_map = _participant_map(event)
     resolved_payloads: list[dict[str, Any]] = []
     for payload in payloads:
         resolved = dict(payload)
+        match_id = str(payload.get("match_id") or "")
         for key in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
-            participant = participant_map.get(str(resolved.get(key)))
+            participant_id = str(resolved.get(key))
+            if materialize_substitutions and match_id:
+                resolved[key] = resolve_player_of_record(event, match_id, participant_id)
+                continue
+            participant = participant_map.get(participant_id)
             if participant is None or participant.get("player_id") is None:
                 raise ValueError(f"Participant for {key} is not resolved to a JUPR player.")
             resolved[key] = int(participant["player_id"])

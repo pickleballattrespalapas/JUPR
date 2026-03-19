@@ -12,24 +12,35 @@ import streamlit.components.v1 as components
 from jupr_app.domain.live_beta_engine import (
     SUPPORTED_RR_FORMATS,
     SUPPORTED_TOURNAMENT_TEAM_COUNTS,
+    apply_round_substitution,
+    apply_single_game_substitution,
     build_league_movement,
+    clear_expired_substitutions,
     create_league_event,
     create_round_robin_event,
     create_tournament_event,
     current_league_round,
     export_event_json,
+    find_match_by_id,
+    get_active_sub_for_match,
     is_league_round_complete,
     league_aggregate_standings,
     league_round_summary,
     mark_tournament_matches_saved,
+    match_is_scored,
     match_payloads_from_current_league_round,
     match_payloads_from_rr,
+    matches_for_round,
     normalize_name,
+    resolve_display_name,
     resolve_payload_player_ids,
+    round_robin_current_round_number,
     round_robin_standings,
     set_pending_assignment,
     start_next_league_round,
     standings_csv_rows,
+    substitution_is_active,
+    substitution_is_locked,
     suggest_exact_league_court_sizes,
     tournament_bracket_rows,
     tournament_champion,
@@ -67,6 +78,7 @@ def _default_state(config: LivePageConfig) -> dict:
         "official_league": "",
         "official_week_tag": "Week 1",
         "last_saved_rounds": [],
+        "editing_substitution_id": None,
     }
 
 
@@ -470,6 +482,299 @@ def _team_label(event: dict, ids: list[str]) -> str:
     return " / ".join(name_map.get(str(pid), str(pid)) for pid in (ids or []))
 
 
+def _current_round_number(event: dict) -> int:
+    if str(event.get("type")) == "league":
+        return int(event.get("currentRoundNumber") or 1)
+    return round_robin_current_round_number(event)
+
+
+def _match_round_number(event: dict, match_id: str) -> int:
+    for round_data in event.get("rounds") or []:
+        matches = round_data.get("matches") or []
+        if str(event.get("type")) == "league":
+            matches = matches_for_round(event, int(round_data.get("number") or 0))
+        for match in matches:
+            if str(match.get("id")) == str(match_id):
+                return int(round_data.get("number") or 0)
+    return _current_round_number(event)
+
+
+def _display_team_label(event: dict, match: dict, ids: list[str]) -> str:
+    return " / ".join(
+        resolve_display_name(event, str(match.get("id")), str(pid))
+        for pid in (ids or [])
+    )
+
+
+def _player_directory(ctx) -> tuple[list[str], dict[str, int]]:
+    df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
+    if df_players_all is None or df_players_all.empty:
+        return [], {}
+    if "name" not in df_players_all.columns or "id" not in df_players_all.columns:
+        return [], {}
+    frame = df_players_all[["name", "id"]].copy()
+    frame["name"] = frame["name"].fillna("").astype(str).map(normalize_name)
+    frame = frame[frame["name"] != ""]
+    frame = frame.drop_duplicates(subset=["name"], keep="first")
+    options = sorted(frame["name"].tolist())
+    return options, {str(row["name"]): int(row["id"]) for _, row in frame.iterrows()}
+
+
+def _upsert_substitution(event: dict, substitution: dict) -> None:
+    substitutions = list(event.get("substitutions") or [])
+    replacements: list[dict] = []
+    for existing in substitutions:
+        same_target = (
+            str(existing.get("scope")) == str(substitution.get("scope"))
+            and int(existing.get("round_number") or 0) == int(substitution.get("round_number") or 0)
+            and str(existing.get("original_participant_id")) == str(substitution.get("original_participant_id"))
+            and str(existing.get("match_id") or "") == str(substitution.get("match_id") or "")
+        )
+        if str(existing.get("id")) == str(substitution.get("id")) or same_target:
+            continue
+        replacements.append(existing)
+    replacements.append(substitution)
+    replacements.sort(key=lambda item: str(item.get("created_at") or ""))
+    event["substitutions"] = replacements
+
+
+def _remove_substitution(event: dict, substitution_id: str) -> None:
+    event["substitutions"] = [
+        item
+        for item in (event.get("substitutions") or [])
+        if str(item.get("id")) != str(substitution_id)
+    ]
+
+
+def _substitution_summary(substitution: dict, event: dict) -> str:
+    participant_map = _participant_name_map(event)
+    replaced = participant_map.get(
+        str(substitution.get("original_participant_id")),
+        str(substitution.get("original_participant_id") or "Unknown"),
+    )
+    scope = "Round" if substitution.get("scope") == "round" else "Game"
+    match_part = f" • {substitution.get('match_id')}" if substitution.get("match_id") else ""
+    note = f" • Note: {substitution.get('note')}" if substitution.get("note") else ""
+    return (
+        f"{scope} sub — {replaced} → {substitution.get('substitute_name')} "
+        f"(Round {int(substitution.get('round_number') or 0)}, {len(substitution.get('affected_match_ids') or [])} match(es){match_part}){note}"
+    )
+
+
+def _render_substitution_badges(event: dict, match: dict) -> None:
+    substitutions = [
+        sub
+        for sub in (event.get("substitutions") or [])
+        if str(match.get("id")) in {str(x) for x in (sub.get("affected_match_ids") or [])}
+    ]
+    if not substitutions:
+        return
+    for substitution in substitutions:
+        scope = "Round sub" if substitution.get("scope") == "round" else "Game sub"
+        st.caption(
+            f"{scope}: {resolve_display_name(event, str(match.get('id')), str(substitution.get('original_participant_id')))}"
+        )
+
+
+def _render_substitutions_area(ctx, state: dict, event: dict, config: LivePageConfig) -> None:
+    if not _is_official(config):
+        return
+    clear_expired_substitutions(event)
+    round_number = _current_round_number(event)
+    substitutions = list(event.get("substitutions") or [])
+    st.markdown("#### Substitutions")
+    player_options, player_name_to_id = _player_directory(ctx)
+    if not player_options:
+        st.warning("No substitute player directory is available.")
+        return
+    participant_map = _participant_name_map(event)
+    round_matches = matches_for_round(event, round_number)
+    available_round_participants: list[str] = []
+    for match in round_matches:
+        if match_is_scored(match):
+            continue
+        for pid in (match.get("teamA") or []) + (match.get("teamB") or []):
+            pid = str(pid)
+            if pid not in available_round_participants:
+                available_round_participants.append(pid)
+    if not available_round_participants:
+        st.info("No unscored matches remain in the current round for substitutions.")
+    else:
+        cols = st.columns([1.2, 1.2, 1.2, 1.4, 0.9])
+        round_labels = [participant_map.get(pid, pid) for pid in available_round_participants]
+        selected_label = cols[0].selectbox(
+            "Replace for round",
+            round_labels,
+            key=f"{config.state_key}_round_sub_out_r{round_number}",
+        )
+        selected_pid = available_round_participants[round_labels.index(selected_label)]
+        substitute_name = cols[1].selectbox(
+            "Substitute",
+            player_options,
+            key=f"{config.state_key}_round_sub_in_r{round_number}",
+        )
+        note = cols[2].text_input(
+            "Note",
+            key=f"{config.state_key}_round_sub_note_r{round_number}",
+        )
+        affected_matches = [
+            str(match.get("id"))
+            for match in round_matches
+            if not match_is_scored(match)
+            and selected_pid in [str(x) for x in (match.get("teamA") or []) + (match.get("teamB") or [])]
+        ]
+        cols[3].metric("Affected games", len(affected_matches))
+        if cols[4].button("Sub for round", key=f"{config.state_key}_round_sub_apply_r{round_number}", type="primary"):
+            try:
+                if not substitute_name:
+                    raise ValueError("Choose a substitute player first.")
+                substitution = apply_round_substitution(
+                    event,
+                    round_number=round_number,
+                    original_participant_id=selected_pid,
+                    substitute_player_id=int(player_name_to_id[substitute_name]),
+                    substitute_name=substitute_name,
+                    created_by="admin",
+                    created_at=_utc_now_iso(),
+                    note=note,
+                    substitution_id=state.get("editing_substitution_id"),
+                )
+                _upsert_substitution(event, substitution)
+                state["editing_substitution_id"] = None
+                st.success("Round substitution applied.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+    if substitutions:
+        st.caption("Active / pending substitution state")
+        for substitution in substitutions:
+            c1, c2, c3 = st.columns([6, 1.2, 1.2])
+            c1.write(_substitution_summary(substitution, event))
+            can_edit = substitution_is_active(event, substitution) and not substitution_is_locked(event, substitution)
+            if c2.button(
+                "Edit",
+                key=f"{config.state_key}_edit_sub_{substitution['id']}",
+                disabled=not can_edit,
+            ):
+                state["editing_substitution_id"] = str(substitution["id"])
+                if substitution.get("scope") == "round":
+                    participant_map_reverse = {
+                        v: k for k, v in _participant_name_map(event).items()
+                    }
+                    player_name = participant_map.get(
+                        str(substitution.get("original_participant_id")),
+                        participant_map_reverse.get(
+                            str(substitution.get("original_participant_id")),
+                            str(substitution.get("original_participant_id")),
+                        ),
+                    )
+                    st.session_state[
+                        f"{config.state_key}_round_sub_out_r{int(substitution.get('round_number') or 0)}"
+                    ] = player_name
+                    st.session_state[
+                        f"{config.state_key}_round_sub_in_r{int(substitution.get('round_number') or 0)}"
+                    ] = str(substitution.get("substitute_name") or "")
+                    st.session_state[
+                        f"{config.state_key}_round_sub_note_r{int(substitution.get('round_number') or 0)}"
+                    ] = str(substitution.get("note") or "")
+                elif substitution.get("match_id"):
+                    match_id = str(substitution.get("match_id"))
+                    st.session_state[
+                        f"{config.state_key}_game_sub_note_{match_id}"
+                    ] = str(substitution.get("note") or "")
+                    st.session_state[
+                        f"{config.state_key}_game_sub_in_{match_id}"
+                    ] = str(substitution.get("substitute_name") or "")
+                st.rerun()
+            if c3.button(
+                "Remove",
+                key=f"{config.state_key}_remove_sub_{substitution['id']}",
+                disabled=not can_edit,
+            ):
+                _remove_substitution(event, str(substitution["id"]))
+                if state.get("editing_substitution_id") == str(substitution["id"]):
+                    state["editing_substitution_id"] = None
+                st.rerun()
+
+
+def _render_game_substitution_controls(ctx, event: dict, config: LivePageConfig, match: dict) -> None:
+    player_options, player_name_to_id = _player_directory(ctx)
+    if not player_options:
+        return
+    match_id = str(match.get("id"))
+    round_number = _match_round_number(event, match_id)
+    participant_map = _participant_name_map(event)
+    existing_subs = [
+        sub
+        for sub in (event.get("substitutions") or [])
+        if str(sub.get("scope")) == "game" and str(sub.get("match_id")) == match_id
+    ]
+    with st.expander("Sub for game", expanded=False):
+        match_participants = [
+            str(pid) for pid in (match.get("teamA") or []) + (match.get("teamB") or [])
+        ]
+        player_labels = [participant_map.get(pid, pid) for pid in match_participants]
+        replace_label = st.radio(
+            "Replace player",
+            player_labels,
+            horizontal=True,
+            key=f"{config.state_key}_game_sub_out_{match_id}",
+        )
+        replace_pid = match_participants[player_labels.index(replace_label)]
+        substitute_name = st.selectbox(
+            "Substitute player",
+            player_options,
+            key=f"{config.state_key}_game_sub_in_{match_id}",
+        )
+        note = st.text_input("Note", key=f"{config.state_key}_game_sub_note_{match_id}")
+        if existing_subs:
+            for sub in existing_subs:
+                st.caption(_substitution_summary(sub, event))
+        apply_col, remove_col = st.columns([1, 1])
+        if apply_col.button("Apply game sub", key=f"{config.state_key}_game_sub_apply_{match_id}"):
+            try:
+                if not substitute_name:
+                    raise ValueError("Choose a substitute player first.")
+                current_sub = get_active_sub_for_match(
+                    event,
+                    match_id,
+                    replace_pid,
+                    include_inactive=True,
+                )
+                substitution = apply_single_game_substitution(
+                    event,
+                    round_number=round_number,
+                    match_id=match_id,
+                    original_participant_id=replace_pid,
+                    substitute_player_id=int(player_name_to_id[substitute_name]),
+                    substitute_name=substitute_name,
+                    created_by="admin",
+                    created_at=_utc_now_iso(),
+                    note=note,
+                    substitution_id=(str(current_sub["id"]) if current_sub else None),
+                )
+                _upsert_substitution(event, substitution)
+                st.success("Game substitution applied.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+        removable = next(
+            (
+                sub for sub in existing_subs
+                if str(sub.get("original_participant_id")) == replace_pid
+                and not substitution_is_locked(event, sub)
+            ),
+            None,
+        )
+        if remove_col.button(
+            "Remove game sub",
+            key=f"{config.state_key}_game_sub_remove_{match_id}",
+            disabled=removable is None,
+        ):
+            _remove_substitution(event, str(removable["id"]))
+            st.rerun()
+
+
 def _render_event_exports(event: dict, standings: list[dict]) -> None:
     c1, c2 = st.columns([1, 1])
     c1.download_button(
@@ -526,13 +831,19 @@ def official_base_payload(state: dict) -> dict:
 
 
 def build_rr_official_payloads(state: dict, event: dict) -> list[dict]:
-    payloads = resolve_payload_player_ids(event, match_payloads_from_rr(event))
+    payloads = resolve_payload_player_ids(
+        event,
+        match_payloads_from_rr(event),
+        materialize_substitutions=True,
+    )
     return [{**payload, **official_base_payload(state)} for payload in payloads]
 
 
 def build_league_round_official_payloads(state: dict, event: dict) -> list[dict]:
     payloads = resolve_payload_player_ids(
-        event, match_payloads_from_current_league_round(event)
+        event,
+        match_payloads_from_current_league_round(event),
+        materialize_substitutions=True,
     )
     return [{**payload, **official_base_payload(state)} for payload in payloads]
 
@@ -565,50 +876,57 @@ def _render_rr_scoring(
             f"<span class='jupr-live-pill'>{config.mode_pill_label}</span><span class='jupr-live-pill'>Leader: {leader}</span>",
             unsafe_allow_html=True,
         )
-        with st.form(f"{config.state_key}_rr_form"):
-            for round_data in event.get("rounds") or []:
-                st.markdown(f"#### Round {int(round_data.get('number') or 0)}")
-                for match in round_data.get("matches") or []:
-                    st.markdown(
-                        '<div class="jupr-live-score-shell">', unsafe_allow_html=True
-                    )
-                    cols = st.columns([3.6, 1.1, 0.6, 1.1, 3.6])
-                    cols[0].markdown(
-                        f"<div class='jupr-live-team'>{_team_label(event, match.get('teamA') or [])}</div>",
-                        unsafe_allow_html=True,
-                    )
-                    cols[1].number_input(
-                        f"JUPR Live Score {match['id']} A",
-                        min_value=0,
-                        max_value=99,
-                        value=int(match.get("scoreA") or 0),
-                        step=1,
-                        key=f"{config.state_key}_rr_{match['id']}_a",
-                    )
-                    cols[2].markdown(
-                        "<div class='jupr-live-vs'>vs</div>", unsafe_allow_html=True
-                    )
-                    cols[3].number_input(
-                        f"JUPR Live Score {match['id']} B",
-                        min_value=0,
-                        max_value=99,
-                        value=int(match.get("scoreB") or 0),
-                        step=1,
-                        key=f"{config.state_key}_rr_{match['id']}_b",
-                    )
-                    cols[4].markdown(
-                        f"<div class='jupr-live-team'>{_team_label(event, match.get('teamB') or [])}</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(str(match.get("desc") or ""))
-                    st.markdown("</div>", unsafe_allow_html=True)
-                st.divider()
-            submit_label = (
-                "Save official results"
-                if _is_official(config)
-                else "Update live standings"
-            )
-            submitted = st.form_submit_button(submit_label, type="primary")
+        _render_substitutions_area(ctx, state, event, config)
+        for round_data in event.get("rounds") or []:
+            st.markdown(f"#### Round {int(round_data.get('number') or 0)}")
+            for match in round_data.get("matches") or []:
+                st.markdown(
+                    '<div class="jupr-live-score-shell">', unsafe_allow_html=True
+                )
+                cols = st.columns([3.6, 1.1, 0.6, 1.1, 3.6])
+                cols[0].markdown(
+                    f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamA') or [])}</div>",
+                    unsafe_allow_html=True,
+                )
+                cols[1].number_input(
+                    f"JUPR Live Score {match['id']} A",
+                    min_value=0,
+                    max_value=99,
+                    value=int(match.get("scoreA") or 0),
+                    step=1,
+                    key=f"{config.state_key}_rr_{match['id']}_a",
+                )
+                cols[2].markdown(
+                    "<div class='jupr-live-vs'>vs</div>", unsafe_allow_html=True
+                )
+                cols[3].number_input(
+                    f"JUPR Live Score {match['id']} B",
+                    min_value=0,
+                    max_value=99,
+                    value=int(match.get("scoreB") or 0),
+                    step=1,
+                    key=f"{config.state_key}_rr_{match['id']}_b",
+                )
+                cols[4].markdown(
+                    f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamB') or [])}</div>",
+                    unsafe_allow_html=True,
+                )
+                _render_substitution_badges(event, match)
+                st.caption(str(match.get("desc") or ""))
+                if _is_official(config) and not match_is_scored(match):
+                    _render_game_substitution_controls(ctx, event, config, match)
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.divider()
+        submit_label = (
+            "Save official results"
+            if _is_official(config)
+            else "Update live standings"
+        )
+        submitted = st.button(
+            submit_label,
+            type="primary",
+            key=f"{config.state_key}_rr_submit",
+        )
         if submitted:
             for round_data in event.get("rounds") or []:
                 for match in round_data.get("matches") or []:
@@ -695,50 +1013,57 @@ def _render_league_scoring(
             f"<span class='jupr-live-pill'>{config.mode_pill_label}</span>",
             unsafe_allow_html=True,
         )
-        with st.form(f"{config.state_key}_league_form_r{current_round_number}"):
-            for court in round_data.get("courts") or []:
-                st.markdown(f"#### Court {int(court.get('courtNumber') or 0)}")
-                for mini_round in court.get("miniRounds") or []:
-                    bye_pid = mini_round.get("byeParticipantId")
-                    label = f"Mini-round {int(mini_round.get('number') or 0)}"
-                    if bye_pid:
-                        label += f" • Bye: {_participant_name_map(event).get(str(bye_pid), str(bye_pid))}"
-                    st.caption(label)
-                    for match in mini_round.get("matches") or []:
-                        st.markdown(
-                            '<div class="jupr-live-score-shell">',
-                            unsafe_allow_html=True,
-                        )
-                        cols = st.columns([3.6, 1.1, 0.6, 1.1, 3.6])
-                        cols[0].markdown(
-                            f"<div class='jupr-live-team'>{_team_label(event, match.get('teamA') or [])}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        cols[1].number_input(
-                            f"JUPR Live Score {match['id']} A",
-                            min_value=0,
-                            max_value=99,
-                            value=int(match.get("scoreA") or 0),
-                            step=1,
-                            key=f"{config.state_key}_lg_{match['id']}_a",
-                        )
-                        cols[2].markdown(
-                            "<div class='jupr-live-vs'>vs</div>", unsafe_allow_html=True
-                        )
-                        cols[3].number_input(
-                            f"JUPR Live Score {match['id']} B",
-                            min_value=0,
-                            max_value=99,
-                            value=int(match.get("scoreB") or 0),
-                            step=1,
-                            key=f"{config.state_key}_lg_{match['id']}_b",
-                        )
-                        cols[4].markdown(
-                            f"<div class='jupr-live-team'>{_team_label(event, match.get('teamB') or [])}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown("</div>", unsafe_allow_html=True)
-            submitted = st.form_submit_button("Update round & movement", type="primary")
+        _render_substitutions_area(ctx, state, event, config)
+        for court in round_data.get("courts") or []:
+            st.markdown(f"#### Court {int(court.get('courtNumber') or 0)}")
+            for mini_round in court.get("miniRounds") or []:
+                bye_pid = mini_round.get("byeParticipantId")
+                label = f"Mini-round {int(mini_round.get('number') or 0)}"
+                if bye_pid:
+                    label += f" • Bye: {_participant_name_map(event).get(str(bye_pid), str(bye_pid))}"
+                st.caption(label)
+                for match in mini_round.get("matches") or []:
+                    st.markdown(
+                        '<div class="jupr-live-score-shell">',
+                        unsafe_allow_html=True,
+                    )
+                    cols = st.columns([3.6, 1.1, 0.6, 1.1, 3.6])
+                    cols[0].markdown(
+                        f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamA') or [])}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    cols[1].number_input(
+                        f"JUPR Live Score {match['id']} A",
+                        min_value=0,
+                        max_value=99,
+                        value=int(match.get("scoreA") or 0),
+                        step=1,
+                        key=f"{config.state_key}_lg_{match['id']}_a",
+                    )
+                    cols[2].markdown(
+                        "<div class='jupr-live-vs'>vs</div>", unsafe_allow_html=True
+                    )
+                    cols[3].number_input(
+                        f"JUPR Live Score {match['id']} B",
+                        min_value=0,
+                        max_value=99,
+                        value=int(match.get("scoreB") or 0),
+                        step=1,
+                        key=f"{config.state_key}_lg_{match['id']}_b",
+                    )
+                    cols[4].markdown(
+                        f"<div class='jupr-live-team'>{_display_team_label(event, match, match.get('teamB') or [])}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    _render_substitution_badges(event, match)
+                    if _is_official(config) and not match_is_scored(match):
+                        _render_game_substitution_controls(ctx, event, config, match)
+                    st.markdown("</div>", unsafe_allow_html=True)
+        submitted = st.button(
+            "Update round & movement",
+            type="primary",
+            key=f"{config.state_key}_league_submit_r{current_round_number}",
+        )
         if submitted:
             for court in round_data.get("courts") or []:
                 for mini_round in court.get("miniRounds") or []:
