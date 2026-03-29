@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pandas as pd
+
 from jupr_app.domain.live_beta_engine import normalize_name, round_robin_standings
 
 
@@ -25,6 +27,152 @@ def _normalized_name_to_player_id(name_to_id: dict[object, object]) -> dict[str,
             continue
         result[key] = int(raw_id)
     return result
+
+
+def normalized_player_name_map(df_players_all: pd.DataFrame | None) -> dict[str, list[dict[str, object]]]:
+    result: dict[str, list[dict[str, object]]] = {}
+    if df_players_all is None or df_players_all.empty:
+        return result
+    for _, row in df_players_all.iterrows():
+        player_id = row.get("id")
+        if pd.isna(player_id):
+            continue
+        normalized = normalize_person_name(row.get("name"))
+        if not normalized:
+            continue
+        result.setdefault(normalized, []).append(
+            {
+                "id": int(player_id),
+                "name": str(row.get("name") or "").strip(),
+            }
+        )
+    return result
+
+
+def find_exact_player_link_candidates(
+    club_people_rows: list[dict],
+    player_name_map: dict[str, list[dict[str, object]]],
+) -> dict[str, int]:
+    matches: dict[str, int] = {}
+    for row in club_people_rows or []:
+        if row.get("linked_player_id") is not None:
+            continue
+        club_person_id = row.get("id")
+        if club_person_id is None:
+            continue
+        normalized = normalize_person_name(row.get("normalized_name") or row.get("display_name"))
+        candidates = player_name_map.get(normalized, [])
+        if len(candidates) == 1:
+            matches[str(club_person_id)] = int(candidates[0]["id"])
+    return matches
+
+
+def auto_link_exact_matches(
+    supabase,
+    *,
+    club_id: str,
+    club_people_rows: list[dict],
+    df_players_all: pd.DataFrame | None,
+) -> dict[str, int]:
+    player_map = normalized_player_name_map(df_players_all)
+    candidates = find_exact_player_link_candidates(club_people_rows, player_map)
+    linked_count = 0
+    for club_person_id, player_id in candidates.items():
+        supabase.table("club_people").update({"linked_player_id": int(player_id)}).eq("club_id", club_id).eq(
+            "id", club_person_id
+        ).execute()
+        linked_count += 1
+    return {
+        "linked_count": linked_count,
+        "candidate_count": len(candidates),
+        "skipped_count": max(0, len(club_people_rows or []) - len(candidates)),
+    }
+
+
+def social_person_rollup_rows(supabase, club_id: str) -> list[dict]:
+    club_people = (
+        supabase.table("club_people")
+        .select("id,display_name,normalized_name,linked_player_id,first_seen_on,last_seen_on")
+        .eq("club_id", club_id)
+        .order("last_seen_on", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    if not club_people:
+        return []
+
+    cp_ids = [str(row["id"]) for row in club_people if row.get("id")]
+    participants = (
+        supabase.table("live_event_participants")
+        .select("id,event_id,club_person_id")
+        .in_("club_person_id", cp_ids)
+        .execute()
+        .data
+        or []
+    )
+    participant_ids = [str(row["id"]) for row in participants if row.get("id")]
+    matches = []
+    if participant_ids:
+        matches = (
+            supabase.table("live_event_matches")
+            .select(
+                "id,t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,score_t1,score_t2"
+            )
+            .or_(
+                ",".join(
+                    [
+                        f"t1_p1_participant_id.in.({','.join(participant_ids)})",
+                        f"t1_p2_participant_id.in.({','.join(participant_ids)})",
+                        f"t2_p1_participant_id.in.({','.join(participant_ids)})",
+                        f"t2_p2_participant_id.in.({','.join(participant_ids)})",
+                    ]
+                )
+            )
+            .execute()
+            .data
+            or []
+        )
+
+    participant_to_person = {
+        str(row["id"]): str(row["club_person_id"])
+        for row in participants
+        if row.get("id") and row.get("club_person_id")
+    }
+    event_sets: dict[str, set[str]] = {str(cp["id"]): set() for cp in club_people if cp.get("id")}
+    for row in participants:
+        cp_id = str(row.get("club_person_id") or "")
+        event_id = str(row.get("event_id") or "")
+        if cp_id and event_id:
+            event_sets.setdefault(cp_id, set()).add(event_id)
+
+    match_counts: dict[str, int] = {str(cp["id"]): 0 for cp in club_people if cp.get("id")}
+    for row in matches:
+        scored = (int(row.get("score_t1") or 0) + int(row.get("score_t2") or 0)) > 0
+        if not scored:
+            continue
+        seen_people: set[str] = set()
+        for key in ("t1_p1_participant_id", "t1_p2_participant_id", "t2_p1_participant_id", "t2_p2_participant_id"):
+            participant_id = str(row.get(key) or "")
+            cp_id = participant_to_person.get(participant_id)
+            if cp_id:
+                seen_people.add(cp_id)
+        for cp_id in seen_people:
+            match_counts[cp_id] = match_counts.get(cp_id, 0) + 1
+
+    rows: list[dict] = []
+    for cp in club_people:
+        cp_id = str(cp.get("id") or "")
+        if not cp_id:
+            continue
+        rows.append(
+            {
+                **cp,
+                "social_event_count": len(event_sets.get(cp_id, set())),
+                "social_match_count": int(match_counts.get(cp_id, 0)),
+            }
+        )
+    return rows
 
 
 def resolve_or_create_club_person(

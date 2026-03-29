@@ -4,10 +4,15 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from jupr_app.domain.live_social import (
+    auto_link_exact_matches,
+    find_exact_player_link_candidates,
+    normalized_player_name_map,
     resolve_or_create_club_person,
     save_social_round_robin,
+    social_person_rollup_rows,
     social_round_robin_match_rows_from_event,
 )
+import pandas as pd
 
 
 class _Resp:
@@ -29,6 +34,17 @@ class _TableQuery:
 
     def eq(self, key: str, value: object):
         self._filters.append((key, value))
+        return self
+
+    def in_(self, key: str, values: list[object]):
+        self._filters.append((key, ("__in__", set(values))))
+        return self
+
+    def order(self, _key: str, desc: bool = False):
+        self._order = (_key, desc)
+        return self
+
+    def or_(self, _expr: str):
         return self
 
     def insert(self, payload):
@@ -53,7 +69,14 @@ class _TableQuery:
     def _filtered(self) -> list[dict]:
         rows = list(self.store.setdefault(self.name, []))
         for key, value in self._filters:
-            rows = [row for row in rows if row.get(key) == value]
+            if isinstance(value, tuple) and value and value[0] == "__in__":
+                rows = [row for row in rows if row.get(key) in value[1]]
+            else:
+                rows = [row for row in rows if row.get(key) == value]
+        order = getattr(self, "_order", None)
+        if order:
+            key, desc = order
+            rows = sorted(rows, key=lambda r: str(r.get(key) or ""), reverse=bool(desc))
         return rows
 
     def execute(self):
@@ -215,3 +238,73 @@ def test_resave_replaces_children_instead_of_duplicating():
     assert len(participants) == 4
     assert len(matches) == 1
     assert matches[0]["score_t2"] == 2
+
+
+def test_exact_match_auto_link_only_links_unambiguous_matches():
+    players = pd.DataFrame(
+        [
+            {"id": 10, "name": "Alice"},
+            {"id": 11, "name": "Bob"},
+        ]
+    )
+    club_people = [
+        {"id": "cp-1", "display_name": "Alice", "normalized_name": "alice", "linked_player_id": None},
+        {"id": "cp-2", "display_name": "No Match", "normalized_name": "no match", "linked_player_id": None},
+    ]
+    player_map = normalized_player_name_map(players)
+    matches = find_exact_player_link_candidates(club_people, player_map)
+    assert matches == {"cp-1": 10}
+
+
+def test_exact_match_auto_link_skips_ambiguous_same_names():
+    players = pd.DataFrame(
+        [
+            {"id": 10, "name": "Sam"},
+            {"id": 11, "name": "Sam"},
+        ]
+    )
+    club_people = [{"id": "cp-1", "display_name": "Sam", "normalized_name": "sam", "linked_player_id": None}]
+    player_map = normalized_player_name_map(players)
+    matches = find_exact_player_link_candidates(club_people, player_map)
+    assert matches == {}
+
+
+def test_auto_link_exact_matches_updates_database_rows():
+    supabase = _FakeSupabase()
+    supabase.store["club_people"] = [
+        {"id": "cp-1", "club_id": "club-1", "display_name": "Alice", "normalized_name": "alice", "linked_player_id": None}
+    ]
+    players = pd.DataFrame([{"id": 10, "name": "Alice"}])
+    result = auto_link_exact_matches(
+        supabase,
+        club_id="club-1",
+        club_people_rows=supabase.store["club_people"],
+        df_players_all=players,
+    )
+    assert result["linked_count"] == 1
+    assert supabase.store["club_people"][0]["linked_player_id"] == 10
+
+
+def test_social_person_rollup_rows_counts_events_and_matches():
+    supabase = _FakeSupabase()
+    supabase.store["club_people"] = [
+        {"id": "cp-1", "club_id": "club-1", "display_name": "Alice", "normalized_name": "alice", "linked_player_id": None},
+    ]
+    supabase.store["live_event_participants"] = [
+        {"id": "p-1", "event_id": "evt-1", "club_person_id": "cp-1"},
+        {"id": "p-2", "event_id": "evt-2", "club_person_id": "cp-1"},
+    ]
+    supabase.store["live_event_matches"] = [
+        {
+            "id": "m-1",
+            "t1_p1_participant_id": "p-1",
+            "t1_p2_participant_id": "p-1",
+            "t2_p1_participant_id": "p-1",
+            "t2_p2_participant_id": "p-1",
+            "score_t1": 11,
+            "score_t2": 8,
+        }
+    ]
+    rows = social_person_rollup_rows(supabase, "club-1")
+    assert rows[0]["social_event_count"] == 2
+    assert rows[0]["social_match_count"] == 1
