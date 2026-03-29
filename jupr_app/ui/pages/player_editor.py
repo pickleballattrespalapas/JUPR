@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 
 from jupr_app.ui.layout import page_shell
+from jupr_app.domain.live_social import auto_link_exact_matches, social_person_rollup_rows
 from jupr_app.domain.player_ops import safe_add_player
 
 def render(ctx):
@@ -249,3 +250,99 @@ def render(ctx):
         st.success("Merge completed. Now run Admin Tools → Replay History → ALL.")
         time.sleep(0.4)
         st.rerun()
+
+    st.divider()
+
+    # -------------------------
+    # Social Identity Linking
+    # -------------------------
+    st.subheader("🧩 Social Identity Linking")
+    st.caption("Review club_people rows and explicitly link social-only identities to existing players.")
+
+    rollup_rows = social_person_rollup_rows(supabase, club_id)
+    if not rollup_rows:
+        st.info("No social club_people rows found yet.")
+        return
+
+    id_to_player = {}
+    player_options = []
+    for _, player in df_players_all.sort_values(by=["name"]).iterrows():
+        pid = int(player["id"])
+        label = f"{str(player.get('name') or '').strip()} (#{pid})"
+        player_options.append(label)
+        id_to_player[label] = pid
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        if st.button("Auto-link exact matches", key="club_people_auto_link_exact"):
+            result = auto_link_exact_matches(
+                supabase,
+                club_id=club_id,
+                club_people_rows=rollup_rows,
+                df_players_all=df_players_all,
+            )
+            st.success(
+                f"Linked {result['linked_count']} rows. "
+                f"Skipped {result['skipped_count']} (already linked, unmatched, or ambiguous)."
+            )
+            time.sleep(0.2)
+            st.rerun()
+    with c2:
+        st.caption("Auto-link only applies exact normalized-name matches with one unique player candidate.")
+
+    table_df = pd.DataFrame(rollup_rows)
+    if not table_df.empty:
+        table_df = table_df.rename(
+            columns={
+                "linked_player_id": "linked_player_id",
+                "first_seen_on": "first_seen_on",
+                "last_seen_on": "last_seen_on",
+                "social_event_count": "social_event_count",
+                "social_match_count": "social_match_count",
+            }
+        )
+        st.dataframe(
+            table_df[
+                [
+                    "display_name",
+                    "normalized_name",
+                    "linked_player_id",
+                    "first_seen_on",
+                    "last_seen_on",
+                    "social_event_count",
+                    "social_match_count",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    unlinked_rows = [row for row in rollup_rows if row.get("linked_player_id") in (None, "")]
+    if not unlinked_rows:
+        st.success("All club_people rows are linked.")
+        return
+
+    st.markdown("#### Manual link controls (unlinked only)")
+    for row in unlinked_rows:
+        person_id = str(row.get("id"))
+        name = str(row.get("display_name") or "Unknown")
+        with st.form(f"manual_link_{person_id}"):
+            st.write(f"**{name}**  \nNormalized: `{row.get('normalized_name') or ''}`")
+            selection = st.selectbox(
+                "Link to player",
+                options=[""] + player_options,
+                index=0,
+                key=f"manual_link_pick_{person_id}",
+            )
+            submitted = st.form_submit_button("Save Link")
+            if submitted:
+                if not selection:
+                    st.warning("Pick a player before saving.")
+                else:
+                    player_id = int(id_to_player[selection])
+                    supabase.table("club_people").update({"linked_player_id": player_id}).eq("club_id", club_id).eq(
+                        "id", person_id
+                    ).execute()
+                    st.success(f"Linked {name} to {selection}.")
+                    time.sleep(0.2)
+                    st.rerun()

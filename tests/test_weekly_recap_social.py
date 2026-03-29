@@ -42,6 +42,7 @@ def test_social_spotlight_candidates_rank_correctly():
 def test_linked_player_identity_dedupes_total_players():
     social_stats, _, social_meta = _compute_social_stats(_social_fixture(), {10: "Alex Linked"})
     assert social_stats[("player", 10)]["display_name"] == "Alex Linked"
+    assert ("person", "cp-a") not in social_stats
 
     numbers = _build_numbers(
         df_week=pd.DataFrame([{"id": 1}]),

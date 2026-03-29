@@ -39,3 +39,10 @@ def test_existing_public_pages_remain_in_shared_public_nav():
         "🪜 Challenge Ladder",
         "❓ FAQs",
     ]
+
+
+def test_player_editor_remains_admin_only():
+    public_labels = labels_for_keys(PUBLIC_NAV_KEYS)
+    assert "player_editor" not in PUBLIC_NAV_KEYS
+    assert PAGE_KEY_TO_LABEL["player_editor"] == "👥 Player Editor"
+    assert "👥 Player Editor" not in public_labels
