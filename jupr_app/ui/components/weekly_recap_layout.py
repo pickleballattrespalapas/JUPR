@@ -7,8 +7,10 @@ import streamlit as st
 ACCENT_CLASS_BY_KEY = {
     "TOP_PERFORMER_WEEK": "baja-top",
     "BIGGEST_JUMP_WEEK": "baja-jump",
+    "COMMUNITY_STANDOUT_WEEK": "baja-community",
     "GIANT_SLAYER_WEEK": "baja-slayer",
     "GRIND_WEEK": "baja-grind",
+    "SOCIAL_GRIND_WEEK": "baja-social-grind",
     "PERFECT_RUN": "baja-perfect",
 }
 
@@ -49,7 +51,7 @@ def _inject_baja_styles(print_view: bool) -> None:
   .weekly-range { font-size: 14px; font-weight: 600; color: inherit; }
   .numbers-strip {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
     gap: 8px;
     margin-bottom: 16px;
   }
@@ -94,6 +96,16 @@ def _inject_baja_styles(print_view: bool) -> None:
     border-left: 6px solid #D63384;
   }
 
+  .baja-community {
+    background: linear-gradient(135deg, #E8F7FF, #D6EEFF);
+    border-left: 6px solid #1F78B4;
+  }
+
+  .baja-social-grind {
+    background: linear-gradient(135deg, #ECFFF1, #D8FBE4);
+    border-left: 6px solid #2E8B57;
+  }
+
   .baja-league {
     background: linear-gradient(135deg, #EAF4FF, #D4E8FF);
     border-left: 6px solid #1976D2;
@@ -107,6 +119,11 @@ def _inject_baja_styles(print_view: bool) -> None:
   .baja-pop {
     background: linear-gradient(135deg, #FFFBE6, #FFF1B8);
     border-left: 6px solid #C48F00;
+  }
+
+  .baja-social-event {
+    background: linear-gradient(135deg, #EAFBFF, #D9F4FF);
+    border-left: 6px solid #0077B6;
   }
 
   .baja-tournament {
@@ -274,6 +291,13 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
             date_label = f"{week_start} – {week_end}"
 
     numbers = recap.get("numbers", {})
+    numbers_cards = recap.get("numbers_cards") or [
+        {"key": "matches", "label": "Matches", "value": numbers.get("matches", 0)},
+        {"key": "players", "label": "Players", "value": numbers.get("players", 0)},
+        {"key": "leagues", "label": "Leagues", "value": numbers.get("leagues", 0)},
+        {"key": "round_robins", "label": "Pop-Ups", "value": numbers.get("round_robins", 0)},
+        {"key": "new_faces", "label": "New Faces", "value": numbers.get("new_faces", 0)},
+    ]
     spotlight = recap.get("spotlight", []) or []
     around = recap.get("around_club", {})
     tournaments = recap.get("tournaments", []) or []
@@ -289,11 +313,7 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
     <div class="weekly-range">{date_label}</div>
   </div>
   <div class="numbers-strip">
-    <div class="number-card"><div class="number-value">{numbers.get('matches', 0)}</div><div class="number-label">Matches</div></div>
-    <div class="number-card"><div class="number-value">{numbers.get('players', 0)}</div><div class="number-label">Players</div></div>
-    <div class="number-card"><div class="number-value">{numbers.get('leagues', 0)}</div><div class="number-label">Leagues</div></div>
-    <div class="number-card"><div class="number-value">{numbers.get('round_robins', 0)}</div><div class="number-label">Pop-Ups</div></div>
-    <div class="number-card"><div class="number-value">{numbers.get('new_faces', 0)}</div><div class="number-label">New Faces</div></div>
+    {"".join([f"<div class='number-card'><div class='number-value'>{card.get('value', 0)}</div><div class='number-label'>{card.get('label', '')}</div></div>" for card in numbers_cards])}
   </div>
 </div>
 """,
@@ -343,6 +363,16 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
             around_sections.append((title_text, rows, "baja-pop"))
         else:
             around_sections.append((title_text, rows, "baja-roundrobin"))
+
+    for item in around.get("social_round_robins", []) or []:
+        title_text = str(item.get("event_name", "Social Round Robin"))
+        rows = [
+            str((highlight or {}).get("display", "")).strip()
+            for highlight in item.get("highlights", []) or []
+            if str((highlight or {}).get("display", "")).strip()
+        ]
+        if rows:
+            around_sections.append((title_text, rows, "baja-social-event"))
 
     st.markdown("### Around the Club")
     around_col1, around_col2 = st.columns(2)
