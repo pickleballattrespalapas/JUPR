@@ -5,6 +5,7 @@ import json
 import re
 from collections import defaultdict
 from typing import Any
+from uuid import uuid4
 
 from jupr_app.domain.schedule import (
     ORGANIZED_RR_DEFAULT_MODE,
@@ -25,6 +26,10 @@ def normalize_name(value: object) -> str:
 
 def _uid(prefix: str, index: int) -> str:
     return f"{prefix}-{index}"
+
+
+def _event_uid(prefix: str) -> str:
+    return f"{prefix}-{uuid4().hex}"
 
 
 def _build_participants(names: list[str], resolved_ids: dict[str, int] | None = None) -> list[dict[str, Any]]:
@@ -203,6 +208,7 @@ def create_round_robin_event(
     rounds = _group_schedule_matches(schedule, prefix="rr")
     return {
         "schemaVersion": 1,
+        "sourceEventUid": _event_uid("rr"),
         "name": normalize_name(name) or "JUPR Live Round Robin",
         "type": "round_robin",
         "participants": participants,
@@ -250,6 +256,7 @@ def create_league_event(
         cursor += size
     return {
         "schemaVersion": 1,
+        "sourceEventUid": _event_uid("league"),
         "name": normalize_name(name) or "JUPR Live League",
         "type": "league",
         "participants": participants,
@@ -799,6 +806,7 @@ def create_tournament_event(
         matches_in_round = max(1, matches_in_round // 2)
     event = {
         "schemaVersion": 1,
+        "sourceEventUid": _event_uid("tournament"),
         "type": "tournament",
         "name": normalize_name(name) or "JUPR Live Tournament",
         "teams": teams,

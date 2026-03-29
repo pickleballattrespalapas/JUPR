@@ -65,6 +65,7 @@ class LivePageConfig:
     allow_official: bool = False
     allow_tournament: bool = False
     show_official_context: bool = False
+    persistent_save_label: str | None = None
 
 
 def _default_state(config: LivePageConfig) -> dict:
@@ -99,6 +100,16 @@ def _utc_now_iso() -> str:
 
 def _is_official(config: LivePageConfig) -> bool:
     return bool(config.allow_official)
+
+
+def _save_button_label(
+    config: LivePageConfig, callback_present: bool, *, default_non_official: str
+) -> str:
+    if _is_official(config):
+        return "Save official results"
+    if callback_present and config.persistent_save_label:
+        return str(config.persistent_save_label)
+    return default_non_official
 
 
 def inject_styles() -> None:
@@ -968,10 +979,10 @@ def _render_rr_scoring(
                 st.caption(str(match.get("desc") or ""))
                 st.markdown("</div>", unsafe_allow_html=True)
             st.divider()
-        submit_label = (
-            "Save official results"
-            if _is_official(config)
-            else "Update live standings"
+        submit_label = _save_button_label(
+            config,
+            on_save_rr is not None,
+            default_non_official="Update live standings",
         )
         submitted = st.button(
             submit_label,
@@ -997,8 +1008,8 @@ def _render_rr_scoring(
                         update_round_robin_score(event, match["id"], None, None)
                     else:
                         update_round_robin_score(event, match["id"], a_val, b_val)
-            if _is_official(config) and on_save_rr is not None:
-                if not bool(getattr(ctx, "admin_logged_in", False)):
+            if on_save_rr is not None:
+                if _is_official(config) and not bool(getattr(ctx, "admin_logged_in", False)):
                     st.error("Admin login required to save official results.")
                 else:
                     on_save_rr(ctx, state, event)
