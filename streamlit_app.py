@@ -15,6 +15,14 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.context import AppContext
+from jupr_app.ui.public_nav import render_public_top_nav
+from jupr_app.ui.page_registry import (
+    ADMIN_ONLY_LABELS,
+    LABEL_TO_PAGE_KEY,
+    PAGE_KEY_TO_LABEL,
+    PUBLIC_NAV_KEYS,
+    labels_for_keys,
+)
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
@@ -73,7 +81,9 @@ def _sign_admin_session(expires_at: int, secret: str) -> str:
 def _create_admin_session() -> None:
     secret = _get_admin_session_secret()
     if not secret:
-        st.error("Admin session secret is missing. Set supabase.admin_session_secret in secrets.")
+        st.error(
+            "Admin session secret is missing. Set supabase.admin_session_secret in secrets."
+        )
         st.stop()
 
     expires_at = int(time.time()) + int(ADMIN_SESSION_TTL_SECONDS)
@@ -128,11 +138,8 @@ def get_supabase():
     admin_password = "..."  # your chosen admin login password
     admin_session_secret = "..."  # used to sign short-lived admin sessions
     """
-    url = (
-        st.secrets.get("SUPABASE_URL")
-        or get_secret(["supabase", "url"])
-    )
-    
+    url = st.secrets.get("SUPABASE_URL") or get_secret(["supabase", "url"])
+
     key = (
         st.secrets.get("SUPABASE_ANON_KEY")
         or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -168,29 +175,6 @@ def hide_sidebar_and_header_for_public():
     )
 
 
-def render_public_top_nav(*, labels_in_order: list[str], current_label: str) -> str:
-    """
-    Public mode top navigation (horizontal radio).
-    Returns the selected label.
-    """
-    st.markdown("**Go to:**")
-
-    try:
-        idx = labels_in_order.index(current_label)
-    except ValueError:
-        idx = 0
-
-    sel = st.radio(
-        label="public_top_nav",
-        options=labels_in_order,
-        index=idx,
-        horizontal=True,
-        key="public_top_nav_radio",
-        label_visibility="collapsed",
-    )
-    return sel
-
-
 def main():
     """
     Main Streamlit entrypoint. Keep this deterministic for reloads.
@@ -202,12 +186,14 @@ def main():
             page_icon="🌵",
             initial_sidebar_state="collapsed",
         )
-        apply_clean_theme(accent_hex="#2F6FED")  # pick your accent once (can later be club-specific)
+        apply_clean_theme(
+            accent_hex="#2F6FED"
+        )  # pick your accent once (can later be club-specific)
         st.markdown(
             "<!-- JUPR_THEME_ACTIVE_2026_01_22 -->",  # TODO: remove after deployment verification
             unsafe_allow_html=True,
         )
-                                
+
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
 
@@ -229,9 +215,13 @@ def main():
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
 
                     if st.button("Login", key="admin_login_btn"):
-                        expected = str(get_secret(["supabase", "admin_password"], "") or "")
+                        expected = str(
+                            get_secret(["supabase", "admin_password"], "") or ""
+                        )
                         if not expected:
-                            st.error("Admin password is not configured in secrets (supabase.admin_password).")
+                            st.error(
+                                "Admin password is not configured in secrets (supabase.admin_password)."
+                            )
                         elif pwd == expected:
                             _create_admin_session()
                             st.rerun()
@@ -298,7 +288,11 @@ def main():
 
         if df_player_badges is not None and df_player_badges.empty:
             player_ids = []
-            if df_players_all is not None and not df_players_all.empty and "id" in df_players_all.columns:
+            if (
+                df_players_all is not None
+                and not df_players_all.empty
+                and "id" in df_players_all.columns
+            ):
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
             queued = enqueue_badge_eval(
                 supabase,
@@ -332,6 +326,8 @@ def main():
             admin_tools,
             admin_guide,
             moneyball,
+            jupr_live,
+            jupr_live_admin,
             theme_gallery,
             tournaments,
             tournament_manager,
@@ -353,7 +349,6 @@ def main():
             "🧪 Badge Debug": badge_debug,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
-
             # Admin-only
             "🏟️ League Manager": league_manager,
             "📝 Match Uploader": match_uploader,
@@ -363,6 +358,8 @@ def main():
             "📘 Admin Guide": admin_guide,
             "🛠️ Challenge Ladder Admin": challenge_ladder_admin,
             "💰 Moneyball": moneyball,
+            "🔴 JUPR Live": jupr_live,
+            "🔴 JUPR Live Admin": jupr_live_admin,
             "🎨 Theme QA": theme_gallery,
             "🏆 Tournaments": tournaments,
             "🏆 Tournament Manager": tournament_manager,
@@ -370,60 +367,8 @@ def main():
             "🤝 Partner Board": tournament_partner_board,
             "🗞️ Weekly Recap": weekly_recap,
             "🧾 Top Active Players PDF": top_players_printable,
-
             # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
-        }
-
-        PAGE_KEY_TO_LABEL = {
-            "leaderboards": "🏆 Leaderboards",
-            "league_results": "📊 League Results",
-            "league_printout": "🖨️ League Night Printout",
-            "match_explorer": "🎯 Match Explorer",
-            "players": "🔍 Player Search",
-            "badge_codex": "📼 Badge Codex",
-            "badge_debug": "🧪 Badge Debug",
-            "challenge_ladder": "🪜 Challenge Ladder",
-            "faqs": "❓ FAQs",
-
-            # Admin-only deep links
-            "league_manager": "🏟️ League Manager",
-            "match_uploader": "📝 Match Uploader",
-            "match_log": "📝 Match Log",
-            "player_editor": "👥 Player Editor",
-            "admin_tools": "⚙️ Admin Tools",
-            "admin_guide": "📘 Admin Guide",
-            "challenge_ladder_admin": "🛠️ Challenge Ladder Admin",
-            "moneyball": "💰 Moneyball",
-            "theme_qa": "🎨 Theme QA",
-            "tournaments": "🏆 Tournaments",
-            "tournament_manager": "🏆 Tournament Manager",
-            "tournament_registration": "📝 Tournament Registration",
-            "tournament_partner_board": "🤝 Partner Board",
-            "weekly_recap": "🗞️ Weekly Recap",
-            "top_players_printable": "🧾 Top Active Players PDF",
-
-            # Admin-only deep links
-            "weekly_recap_admin": "🗞️ Weekly Recap Admin",
-        }
-        LABEL_TO_PAGE_KEY = {v: k for k, v in PAGE_KEY_TO_LABEL.items()}
-
-        ADMIN_ONLY_LABELS = {
-            "🖨️ League Night Printout",
-            "🏟️ League Manager",
-            "📝 Match Uploader",
-            "📝 Match Log",
-            "👥 Player Editor",
-            "⚙️ Admin Tools",
-            "📘 Admin Guide",
-            "🛠️ Challenge Ladder Admin",
-            "💰 Moneyball",
-            "🎨 Theme QA",
-            "🏆 Tournaments",
-            "🏆 Tournament Manager",
-            "🧪 Badge Debug",
-            "🗞️ Weekly Recap Admin",
-            "🧾 Top Active Players PDF",
         }
 
         # Visible labels based on auth
@@ -433,20 +378,7 @@ def main():
         else:
             visible_labels = all_labels
 
-        # Public nav order (old UX)
-        PUBLIC_NAV_KEYS = [
-            "leaderboards",
-            "league_results",
-            "weekly_recap",
-            "tournament_registration",
-            "tournament_partner_board",
-            "match_explorer",
-            "players",
-            "badge_codex",
-            "challenge_ladder",
-            "faqs",
-        ]
-        public_labels_in_order = [PAGE_KEY_TO_LABEL[k] for k in PUBLIC_NAV_KEYS if PAGE_KEY_TO_LABEL.get(k)]
+        public_labels_in_order = labels_for_keys(PUBLIC_NAV_KEYS)
 
         # -------------------------
         # Deep link resolution
@@ -459,7 +391,11 @@ def main():
             if deep_label in ADMIN_ONLY_LABELS:
                 deep_label = ""
 
-            current_label = deep_label if deep_label in public_labels_in_order else public_labels_in_order[0]
+            current_label = (
+                deep_label
+                if deep_label in public_labels_in_order
+                else public_labels_in_order[0]
+            )
             sel = render_public_top_nav(
                 labels_in_order=public_labels_in_order,
                 current_label=current_label,
@@ -467,18 +403,25 @@ def main():
 
         else:
             # Apply deep link once (only if that page is visible)
-            if (not bool(st.session_state.get("deep_link_applied", False))) and (deep_label in visible_labels):
+            if (not bool(st.session_state.get("deep_link_applied", False))) and (
+                deep_label in visible_labels
+            ):
                 st.session_state["main_nav"] = deep_label
                 st.session_state["deep_link_applied"] = True
 
             # Ensure valid selection
-            if "main_nav" not in st.session_state or st.session_state["main_nav"] not in visible_labels:
+            if (
+                "main_nav" not in st.session_state
+                or st.session_state["main_nav"] not in visible_labels
+            ):
                 st.session_state["main_nav"] = visible_labels[0]
 
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
                 get_data.clear()
                 try:
-                    from jupr_app.domain.gamification.requirements import clear_requirements_cache
+                    from jupr_app.domain.gamification.requirements import (
+                        clear_requirements_cache,
+                    )
 
                     clear_requirements_cache()
                 except Exception:

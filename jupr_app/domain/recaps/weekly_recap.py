@@ -196,7 +196,8 @@ def _load_matches(
             frames.append(in_range)
 
     if supabase is None:
-        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        return _dedupe_matches(combined)
 
     select_cols = [
         "id",
@@ -231,8 +232,53 @@ def _load_matches(
         .lte("date", end_dt.isoformat())
     )
     frames.append(pd.DataFrame(response.data or []))
+    combined = pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
+    return _dedupe_matches(combined)
 
-    return pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
+
+def _dedupe_matches(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+
+    deduped = df.copy()
+    if "id" in deduped.columns:
+        id_str = deduped["id"].astype("string").str.strip()
+        has_id = id_str.notna() & (id_str != "")
+        with_id = deduped.loc[has_id].copy()
+        without_id = deduped.loc[~has_id].copy()
+        if not with_id.empty:
+            with_id.loc[:, "id"] = id_str.loc[has_id]
+            with_id = with_id.drop_duplicates(subset=["id"], keep="last")
+    else:
+        with_id = deduped.iloc[0:0].copy()
+        without_id = deduped.copy()
+
+    fallback_cols = [
+        "date",
+        "league",
+        "match_type",
+        "week_tag",
+        "t1_p1",
+        "t1_p2",
+        "t2_p1",
+        "t2_p2",
+        "score_t1",
+        "score_t2",
+    ]
+    available_cols = [col for col in fallback_cols if col in without_id.columns]
+    if available_cols and not without_id.empty:
+        # Local + Supabase loading can overlap for the same date range; dedupe keeps recap stats deterministic.
+        fallback_key = (
+            without_id[available_cols]
+            .astype("string")
+            .fillna("")
+            .agg("|".join, axis=1)
+        )
+        without_id = without_id.assign(_fallback_key=fallback_key).drop_duplicates(
+            subset=["_fallback_key"], keep="last"
+        ).drop(columns=["_fallback_key"])
+
+    return pd.concat([with_id, without_id], ignore_index=True)
 
 
 

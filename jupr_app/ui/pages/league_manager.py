@@ -171,6 +171,21 @@ def _extract_court_board_defaults(meta_row: dict | None) -> dict:
     }
 
 
+def _league_week_options(meta_row: dict | None, default_weeks: int = 20) -> list[str]:
+    max_weeks = default_weeks
+    schedule_cfg = _safe_json_load((meta_row or {}).get("schedule_config"), {}) or {}
+    if isinstance(schedule_cfg, dict):
+        try:
+            parsed_weeks = int(schedule_cfg.get("weeks"))
+        except Exception:
+            parsed_weeks = None
+        if parsed_weeks is not None and parsed_weeks > 0:
+            max_weeks = parsed_weeks
+    if max_weeks < 1:
+        max_weeks = default_weeks
+    return [f"Week {i}" for i in range(1, max_weeks + 1)] + ["Playoffs"]
+
+
 def _seed_rating_for_player(pid: int, league_name: str, df_players_all: pd.DataFrame, df_leagues: pd.DataFrame) -> float:
     # League rating if exists, else overall
     if df_leagues is not None and not df_leagues.empty:
@@ -279,7 +294,7 @@ def render(ctx):
                     value=int(st.session_state.get("ladder_game_format_time", 15)),
                     key="ladder_game_format_time",
                 )
-            week_select = st.selectbox("Week", [f"Week {i}" for i in range(1, 13)] + ["Playoffs"], key="ladder_wk")
+            week_select = st.selectbox("Week", _league_week_options(meta_row), key="ladder_wk")
             num_rounds = st.number_input(
                 "Total Rounds to Play",
                 1, 20,
