@@ -2,10 +2,15 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from datetime import date
+
 from jupr_app.domain.recaps.weekly_recap import (
     _build_numbers,
+    _build_numbers_cards,
+    _build_social_around_club,
     _build_social_spotlight_candidates,
     _compute_social_stats,
+    _load_social_live_data,
 )
 from jupr_app.ui.components.weekly_recap_layout import ACCENT_CLASS_BY_KEY
 
@@ -64,14 +69,153 @@ def test_new_spotlight_accents_exist_and_numbers_cards_shape():
     assert ACCENT_CLASS_BY_KEY["COMMUNITY_STANDOUT_WEEK"]
     assert ACCENT_CLASS_BY_KEY["SOCIAL_GRIND_WEEK"]
 
-    numbers_cards = [
-        {"key": "matches", "label": "Matches", "value": 10},
-        {"key": "players", "label": "Players", "value": 8},
-        {"key": "leagues", "label": "Leagues", "value": 2},
-        {"key": "round_robins", "label": "Pop-Ups", "value": 3},
-        {"key": "social_round_robins", "label": "Social RRs", "value": 1},
-        {"key": "new_faces", "label": "New Faces", "value": 2},
-    ]
-
+    numbers_cards = _build_numbers_cards(
+        {
+            "matches": 10,
+            "players": 8,
+            "leagues": 2,
+            "round_robins": 3,
+            "community_events": 1,
+            "new_faces": 2,
+        }
+    )
     assert len(numbers_cards) == 6
-    assert numbers_cards[-2]["label"] == "Social RRs"
+    assert numbers_cards[-2]["label"] == "Community Events"
+
+
+class _Resp:
+    def __init__(self, data):
+        self.data = data
+
+
+class _Q:
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+        self.filters: list[tuple[str, object]] = []
+
+    def select(self, _cols: str):
+        return self
+
+    def eq(self, key: str, value: object):
+        self.filters.append((key, value))
+        return self
+
+    def gte(self, key: str, value: object):
+        self.filters.append((f"{key}__gte", value))
+        return self
+
+    def lte(self, key: str, value: object):
+        self.filters.append((f"{key}__lte", value))
+        return self
+
+    def in_(self, key: str, values: list[object]):
+        self.filters.append((f"{key}__in", set(values)))
+        return self
+
+    def execute(self):
+        result = list(self.rows)
+        for key, value in self.filters:
+            if key.endswith("__gte"):
+                col = key[:-5]
+                result = [row for row in result if str(row.get(col) or "") >= str(value)]
+            elif key.endswith("__lte"):
+                col = key[:-5]
+                result = [row for row in result if str(row.get(col) or "") <= str(value)]
+            elif key.endswith("__in"):
+                col = key[:-4]
+                result = [row for row in result if row.get(col) in value]
+            else:
+                result = [row for row in result if row.get(key) == value]
+        return _Resp(result)
+
+
+class _Supabase:
+    def __init__(self):
+        self.tables = {
+            "live_events": [
+                {
+                    "id": "evt-saved",
+                    "club_id": "club-1",
+                    "name": "Saved Social",
+                    "event_type": "round_robin",
+                    "event_date": "2026-03-21",
+                    "result_mode": "social_unrated",
+                    "status": "saved",
+                },
+                {
+                    "id": "evt-league",
+                    "club_id": "club-1",
+                    "name": "Saved Ladder",
+                    "event_type": "league",
+                    "event_date": "2026-03-22",
+                    "result_mode": "social_unrated",
+                    "status": "saved",
+                },
+                {
+                    "id": "evt-rejected",
+                    "club_id": "club-1",
+                    "name": "Rejected Social",
+                    "event_type": "round_robin",
+                    "event_date": "2026-03-21",
+                    "result_mode": "social_unrated",
+                    "status": "rejected",
+                },
+                {
+                    "id": "evt-pending",
+                    "club_id": "club-1",
+                    "name": "Pending Social",
+                    "event_type": "league",
+                    "event_date": "2026-03-23",
+                    "result_mode": "social_unrated",
+                    "status": "pending",
+                },
+            ],
+            "live_event_participants": [],
+            "live_event_matches": [],
+        }
+
+    def table(self, name: str):
+        return _Q(list(self.tables.get(name, [])))
+
+
+def test_load_social_data_ignores_rejected_events():
+    supabase = _Supabase()
+    loaded = _load_social_live_data(supabase, "club-1", date(2026, 3, 1), date(2026, 3, 31))
+    event_ids = {row["id"] for row in loaded["events"]}
+    assert event_ids == {"evt-saved", "evt-league"}
+
+
+def test_build_social_around_club_handles_rr_and_league_labels():
+    rows = _build_social_around_club(
+        {
+            "evt-rr": {
+                ("player", 1): {
+                    "display_name": "Amy",
+                    "games": 6,
+                    "wins": 5,
+                    "losses": 1,
+                    "points_for": 66,
+                    "points_against": 40,
+                    "differential": 26,
+                }
+            },
+            "evt-lg": {
+                ("player", 2): {
+                    "display_name": "Ben",
+                    "games": 7,
+                    "wins": 4,
+                    "losses": 3,
+                    "points_for": 70,
+                    "points_against": 61,
+                    "differential": 9,
+                }
+            },
+        },
+        {
+            "evt-rr": {"name": "Morning RR", "event_type": "round_robin", "event_date": "2026-03-21"},
+            "evt-lg": {"name": "Night Ladder", "event_type": "league", "event_date": "2026-03-22"},
+        },
+    )
+    labels = {row["event_name"]: row["event_type_label"] for row in rows}
+    assert labels["Morning RR"] == "Social RR"
+    assert labels["Night Ladder"] == "Social Ladder"

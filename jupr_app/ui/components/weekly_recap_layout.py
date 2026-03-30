@@ -296,6 +296,11 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         {"key": "players", "label": "Players", "value": numbers.get("players", 0)},
         {"key": "leagues", "label": "Leagues", "value": numbers.get("leagues", 0)},
         {"key": "round_robins", "label": "Pop-Ups", "value": numbers.get("round_robins", 0)},
+        {
+            "key": "community_events",
+            "label": "Community Events",
+            "value": numbers.get("community_events", numbers.get("social_round_robins", 0)),
+        },
         {"key": "new_faces", "label": "New Faces", "value": numbers.get("new_faces", 0)},
     ]
     spotlight = recap.get("spotlight", []) or []
@@ -364,8 +369,12 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         else:
             around_sections.append((title_text, rows, "baja-roundrobin"))
 
-    for item in around.get("social_round_robins", []) or []:
-        title_text = str(item.get("event_name", "Social Round Robin"))
+    community_items = around.get("community_events")
+    if community_items is None:
+        community_items = around.get("social_round_robins", [])
+    for item in community_items or []:
+        type_label = str(item.get("event_type_label") or "Community Event").strip()
+        title_text = f"{str(item.get('event_name', 'Community Event'))} ({type_label})"
         rows = [
             str((highlight or {}).get("display", "")).strip()
             for highlight in item.get("highlights", []) or []

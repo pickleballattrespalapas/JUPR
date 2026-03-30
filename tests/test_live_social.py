@@ -6,9 +6,13 @@ from uuid import uuid4
 from jupr_app.domain.live_social import (
     auto_link_exact_matches,
     find_exact_player_link_candidates,
+    list_social_submissions_for_review,
+    moderate_social_submission,
     normalized_player_name_map,
     resolve_or_create_club_person,
+    save_social_live_event,
     save_social_round_robin,
+    social_league_match_rows_from_event,
     social_person_rollup_rows,
     social_round_robin_match_rows_from_event,
 )
@@ -44,6 +48,10 @@ class _TableQuery:
         self._order = (_key, desc)
         return self
 
+    def limit(self, count: int):
+        self._limit = int(count)
+        return self
+
     def or_(self, _expr: str):
         return self
 
@@ -77,6 +85,8 @@ class _TableQuery:
         if order:
             key, desc = order
             rows = sorted(rows, key=lambda r: str(r.get(key) or ""), reverse=bool(desc))
+        if getattr(self, "_limit", None) is not None:
+            rows = rows[: int(self._limit)]
         return rows
 
     def execute(self):
@@ -130,8 +140,10 @@ class _TableQuery:
 class _FakeSupabase:
     def __init__(self):
         self.store: dict[str, list[dict]] = {}
+        self.calls: list[str] = []
 
     def table(self, name: str):
+        self.calls.append(name)
         return _TableQuery(self.store, name)
 
 
@@ -162,6 +174,73 @@ def _sample_event() -> dict:
                     {"id": "m2", "teamA": ["p-1", "p-3"], "teamB": ["p-2", "p-4"], "scoreA": None, "scoreB": None},
                 ],
             }
+        ],
+    }
+
+
+def _sample_league_event() -> dict:
+    return {
+        "type": "league",
+        "name": "Ladder Night",
+        "sourceEventUid": "lg-fixed-1",
+        "eventDate": "2026-03-29",
+        "currentRoundNumber": 2,
+        "totalRounds": 3,
+        "participants": [
+            {"id": "p-1", "name": "Alice", "seed": 1},
+            {"id": "p-2", "name": "Bob", "seed": 2},
+            {"id": "p-3", "name": "Cami", "seed": 3},
+            {"id": "p-4", "name": "Drew", "seed": 4},
+        ],
+        "rounds": [
+            {
+                "number": 1,
+                "courts": [
+                    {
+                        "courtNumber": 1,
+                        "miniRounds": [
+                            {
+                                "number": 1,
+                                "matches": [
+                                    {
+                                        "id": "lg-r1-m1",
+                                        "teamA": ["p-1", "p-2"],
+                                        "teamB": ["p-3", "p-4"],
+                                        "scoreA": 11,
+                                        "scoreB": 9,
+                                        "courtNumber": 1,
+                                        "miniRoundNumber": 1,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "number": 2,
+                "courts": [
+                    {
+                        "courtNumber": 1,
+                        "miniRounds": [
+                            {
+                                "number": 1,
+                                "matches": [
+                                    {
+                                        "id": "lg-r2-m1",
+                                        "teamA": ["p-1", "p-3"],
+                                        "teamB": ["p-2", "p-4"],
+                                        "scoreA": 11,
+                                        "scoreB": 5,
+                                        "courtNumber": 1,
+                                        "miniRoundNumber": 1,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
         ],
     }
 
@@ -238,6 +317,186 @@ def test_resave_replaces_children_instead_of_duplicating():
     assert len(participants) == 4
     assert len(matches) == 1
     assert matches[0]["score_t2"] == 2
+
+
+def test_social_league_rows_emit_only_scored_matches():
+    event = _sample_league_event()
+    event["rounds"][1]["courts"][0]["miniRounds"][0]["matches"][0]["scoreA"] = None
+    event["rounds"][1]["courts"][0]["miniRounds"][0]["matches"][0]["scoreB"] = None
+    rows = social_league_match_rows_from_event(event)
+    assert [row["match_key"] for row in rows] == ["lg-r1-m1"]
+
+
+def test_public_social_submission_saves_pending():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    event = _sample_event()
+    result = save_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Court Host",
+    )
+    assert result["status"] == "pending"
+    assert result["submission_mode"] == "public"
+    assert result["submitted_by_name"] == "Court Host"
+    assert result["saved_rounds"] == ["rr"]
+    assert supabase.store["live_events"][0]["status"] == "pending"
+
+
+def test_admin_social_submission_saves_saved_status():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    event = _sample_event()
+    result = save_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    assert result["status"] == "saved"
+    assert result["submission_mode"] == "admin"
+    assert result["submitted_by_name"] == "admin"
+    assert supabase.store["live_events"][0]["status"] == "saved"
+
+
+def test_league_resave_replaces_children_and_persists_scored_rounds():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    event = _sample_league_event()
+    first = save_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host 1",
+    )
+    assert first["match_count"] == 2
+    assert first["saved_rounds"] == [1, 2]
+    event["rounds"][1]["courts"][0]["miniRounds"][0]["matches"][0]["scoreB"] = 8
+    second = save_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host 1",
+    )
+    assert second["event_id"] == first["event_id"]
+    assert second["status"] == "pending"
+    matches = [
+        row for row in supabase.store["live_event_matches"] if row["event_id"] == first["event_id"]
+    ]
+    assert len(matches) == 2
+    updated = [row for row in matches if row["match_key"] == "lg-r2-m1"][0]
+    assert updated["score_t2"] == 8
+
+
+def test_social_save_does_not_write_public_matches_table():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    save_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    assert "matches" not in supabase.calls
+
+
+def test_approve_moves_pending_to_saved():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    save_result = save_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    moderated = moderate_social_submission(
+        ctx,
+        event_id=save_result["event_id"],
+        action="approve",
+    )
+    assert moderated["status"] == "saved"
+    assert moderated["rejection_reason"] is None
+    assert moderated["moderated_at"] is not None
+
+
+def test_reject_moves_pending_to_rejected():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    save_result = save_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    moderated = moderate_social_submission(
+        ctx,
+        event_id=save_result["event_id"],
+        action="reject",
+        rejection_reason="spam test",
+    )
+    assert moderated["status"] == "rejected"
+    assert moderated["rejection_reason"] == "spam test"
+    assert moderated["moderated_at"] is not None
+
+
+def test_public_resubmission_resets_rejected_event_to_pending_and_clears_reason():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    save_result = save_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    moderate_social_submission(
+        ctx,
+        event_id=save_result["event_id"],
+        action="reject",
+        rejection_reason="bad data",
+    )
+    resaved = save_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    assert resaved["status"] == "pending"
+    row = supabase.store["live_events"][0]
+    assert row["status"] == "pending"
+    assert row["rejection_reason"] is None
+
+
+def test_list_review_queue_scopes_to_club_and_status():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    other_ctx = _Ctx(supabase=supabase, club_id="club-2", name_to_id={})
+    save_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    save_social_live_event(
+        other_ctx,
+        _sample_event(),
+        target_club_id="club-2",
+        submission_mode="public",
+        host_name="Host",
+    )
+    queue = list_social_submissions_for_review(ctx, status="pending", limit=10)
+    assert len(queue) == 1
+    assert queue[0]["club_id"] == "club-1"
 
 
 def test_exact_match_auto_link_only_links_unambiguous_matches():

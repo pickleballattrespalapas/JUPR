@@ -5,7 +5,13 @@ from uuid import uuid4
 
 import pandas as pd
 
-from jupr_app.domain.live_beta_engine import normalize_name, round_robin_standings
+from jupr_app.domain.live_beta_engine import (
+    league_aggregate_standings,
+    match_is_scored,
+    matches_for_round,
+    normalize_name,
+    round_robin_standings,
+)
 
 
 def normalize_person_name(value: object) -> str:
@@ -180,10 +186,11 @@ def resolve_or_create_club_person(
     *,
     display_name: str,
     event_date: str,
+    club_id: str | None = None,
 ) -> tuple[dict, bool, bool]:
     """Returns (club_person_row, created_new, matched_competitive_player)."""
     supabase = ctx.supabase
-    club_id = str(ctx.club_id)
+    club_id = str(club_id or ctx.club_id)
     display = normalize_name(display_name)
     normalized = normalize_person_name(display)
     if not normalized:
@@ -318,12 +325,48 @@ def social_round_robin_match_rows_from_event(event: dict) -> list[dict]:
     return rows
 
 
+def social_league_match_rows_from_event(event: dict) -> list[dict]:
+    rows: list[dict] = []
+    played_on = _event_date_from_event(event)
+    for round_data in event.get("rounds") or []:
+        round_number = int(round_data.get("number") or 0) or None
+        for match in matches_for_round(event, int(round_data.get("number") or 0)):
+            if not match_is_scored(match):
+                continue
+            team_a = [str(x) for x in (match.get("teamA") or [])]
+            team_b = [str(x) for x in (match.get("teamB") or [])]
+            if len(team_a) != 2 or len(team_b) != 2:
+                continue
+            rows.append(
+                {
+                    "match_key": str(match.get("id")),
+                    "played_on": played_on,
+                    "round_number": round_number,
+                    "court_number": int(match.get("courtNumber") or 0) or None,
+                    "mini_round_number": int(match.get("miniRoundNumber") or 0) or None,
+                    "t1_p1_key": team_a[0],
+                    "t1_p2_key": team_a[1],
+                    "t2_p1_key": team_b[0],
+                    "t2_p2_key": team_b[1],
+                    "score_t1": int(match.get("scoreA") or 0),
+                    "score_t2": int(match.get("scoreB") or 0),
+                }
+            )
+    return rows
+
+
 def build_social_event_summary(event: dict, *, match_count: int) -> dict:
-    standings = round_robin_standings(event)
+    event_type = str(event.get("type") or "")
+    standings = (
+        round_robin_standings(event)
+        if event_type == "round_robin"
+        else league_aggregate_standings(event)
+    )
     leader = standings[0] if standings else None
     return {
         "participant_count": len(event.get("participants") or []),
         "match_count": int(match_count),
+        "event_type": event_type,
         "schedule_mode": str(event.get("scheduleMode") or ""),
         "leader": (
             {
@@ -346,12 +389,43 @@ def _event_uid(event: dict) -> str:
     )
 
 
-def save_social_round_robin(ctx, event: dict, *, saved_by: str = "admin") -> dict:
-    if str(event.get("type") or "") != "round_robin":
-        raise ValueError("Only round_robin social saves are supported.")
+def _status_for_submission_mode(submission_mode: str) -> str:
+    return "saved" if str(submission_mode or "").strip().lower() == "admin" else "pending"
 
+
+def _moderated_by(ctx, fallback: str = "admin") -> str:
+    name = normalize_name(getattr(ctx, "admin_name", "") or getattr(ctx, "user_name", ""))
+    return name or fallback
+
+
+def _saved_rounds(event: dict) -> list[int | str]:
+    if str(event.get("type") or "") == "round_robin":
+        return ["rr"]
+    rounds: set[int] = set()
+    for round_data in event.get("rounds") or []:
+        round_number = int(round_data.get("number") or 0)
+        if round_number <= 0:
+            continue
+        if any(match_is_scored(match) for match in matches_for_round(event, round_number)):
+            rounds.add(round_number)
+    return sorted(rounds)
+
+
+def save_social_live_event(
+    ctx,
+    event: dict,
+    *,
+    target_club_id: str,
+    submission_mode: str,
+    host_name: str,
+) -> dict:
+    event_type = str(event.get("type") or "")
+    if event_type not in {"round_robin", "league"}:
+        raise ValueError("Social saves only support round_robin and league events.")
     supabase = ctx.supabase
-    club_id = str(ctx.club_id)
+    club_id = str(target_club_id or "").strip()
+    if not club_id:
+        raise ValueError("target_club_id is required for social saves.")
     event_date = _event_date_from_event(event)
     source_event_uid = _event_uid(event)
     participants = list(event.get("participants") or [])
@@ -366,6 +440,7 @@ def save_social_round_robin(ctx, event: dict, *, saved_by: str = "admin") -> dic
             ctx,
             display_name=display_name,
             event_date=event_date,
+            club_id=club_id,
         )
         created_people_count += int(bool(created_new))
         linked_existing_players_count += int(bool(matched_player))
@@ -379,22 +454,34 @@ def save_social_round_robin(ctx, event: dict, *, saved_by: str = "admin") -> dic
             }
         )
 
-    match_rows = social_round_robin_match_rows_from_event(event)
+    match_rows = (
+        social_round_robin_match_rows_from_event(event)
+        if event_type == "round_robin"
+        else social_league_match_rows_from_event(event)
+    )
     summary_json = build_social_event_summary(event, match_count=len(match_rows))
+    normalized_submission_mode = str(submission_mode or "").strip().lower() or "public"
+    status = _status_for_submission_mode(normalized_submission_mode)
+    submitted_by = normalize_name(host_name) or ("admin" if status == "saved" else "guest")
+    moderated_at = datetime.now(timezone.utc).isoformat() if status == "saved" else None
+    moderated_by = _moderated_by(ctx) if status == "saved" else None
 
     upsert_payload = {
         "club_id": club_id,
         "source_event_uid": source_event_uid,
-        "name": str(event.get("name") or "JUPR Live Social Round Robin"),
-        "event_type": "round_robin",
+        "name": str(event.get("name") or "JUPR Live Club Social"),
+        "event_type": event_type,
         "result_mode": "social_unrated",
         "event_date": event_date,
-        "status": "saved",
+        "status": status,
+        "submission_mode": normalized_submission_mode,
+        "submitted_by_name": submitted_by,
+        "moderated_at": moderated_at,
+        "moderated_by": moderated_by,
+        "rejection_reason": None,
         "raw_event_json": event,
         "summary_json": summary_json,
-        "updated_by": saved_by,
     }
-    upsert_payload.pop("updated_by", None)
 
     supabase.table("live_events").upsert(
         upsert_payload,
@@ -455,8 +542,81 @@ def save_social_round_robin(ctx, event: dict, *, saved_by: str = "admin") -> dic
 
     return {
         "event_id": event_id,
+        "status": status,
+        "submission_mode": normalized_submission_mode,
+        "submitted_by_name": submitted_by,
+        "saved_rounds": _saved_rounds(event),
         "participant_count": len(participant_rows),
         "match_count": len(match_rows),
         "created_people_count": created_people_count,
         "linked_existing_players_count": linked_existing_players_count,
     }
+
+
+def save_social_round_robin(ctx, event: dict, *, saved_by: str = "admin") -> dict:
+    return save_social_live_event(
+        ctx,
+        event,
+        target_club_id=str(ctx.club_id),
+        submission_mode="admin" if str(saved_by).strip().lower() == "admin" else "public",
+        host_name=str(saved_by or "").strip() or "admin",
+    )
+
+
+def list_social_submissions_for_review(
+    ctx,
+    *,
+    status: str = "pending",
+    limit: int = 100,
+) -> list[dict]:
+    club_id = str(ctx.club_id)
+    rows = (
+        ctx.supabase.table("live_events")
+        .select(
+            "id,name,event_type,event_date,status,submitted_by_name,submission_mode,"
+            "summary_json,raw_event_json,created_at,updated_at,rejection_reason,moderated_at,moderated_by"
+        )
+        .eq("club_id", club_id)
+        .eq("result_mode", "social_unrated")
+        .eq("status", status)
+        .order("updated_at", desc=True)
+        .limit(int(limit))
+        .execute()
+        .data
+        or []
+    )
+    return [dict(row) for row in rows]
+
+
+def moderate_social_submission(
+    ctx,
+    *,
+    event_id: str,
+    action: str,
+    rejection_reason: str = "",
+) -> dict:
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"approve", "reject"}:
+        raise ValueError("action must be 'approve' or 'reject'.")
+    status = "saved" if normalized_action == "approve" else "rejected"
+    payload = {
+        "status": status,
+        "moderated_at": datetime.now(timezone.utc).isoformat(),
+        "moderated_by": _moderated_by(ctx),
+        "rejection_reason": (
+            normalize_name(rejection_reason) if normalized_action == "reject" else None
+        ),
+    }
+    rows = (
+        ctx.supabase.table("live_events")
+        .update(payload)
+        .eq("id", str(event_id))
+        .eq("club_id", str(ctx.club_id))
+        .eq("result_mode", "social_unrated")
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise RuntimeError("Unable to moderate social submission for this club.")
+    return dict(rows[0])

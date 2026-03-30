@@ -35,7 +35,6 @@ PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("moneyball", "💰 Moneyball", admin_only=True),
     PageDefinition("jupr_live", "🔴 JUPR Live", public=True),
     PageDefinition("jupr_live_admin", "🔴 JUPR Live Admin", admin_only=True),
-    PageDefinition("jupr_live_social", "🟢 JUPR Live Social", admin_only=True),
     PageDefinition("theme_qa", "🎨 Theme QA", admin_only=True),
     PageDefinition("tournaments", "🏆 Tournaments", admin_only=True),
     PageDefinition("tournament_manager", "🏆 Tournament Manager", admin_only=True),
