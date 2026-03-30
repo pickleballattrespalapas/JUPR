@@ -202,7 +202,9 @@ def _compute_weekly_recap_payload(
         id_to_name,
         supabase,
     )
-    around_club["social_round_robins"] = _build_social_around_club(social_event_stats, social_meta["events"])
+    community_events = _build_social_around_club(social_event_stats, social_meta["events"])
+    around_club["community_events"] = community_events
+    around_club["social_round_robins"] = community_events
 
     tournaments_section = _build_tournament_section(
         supabase,
@@ -239,7 +241,7 @@ def _load_social_live_data(supabase, club_id: str, start_date: date, end_date: d
 
     events_response = safe_execute(
         supabase.table("live_events")
-        .select("id,name,event_date")
+        .select("id,name,event_type,event_date,status,result_mode")
         .eq("club_id", club_id)
         .eq("result_mode", "social_unrated")
         .eq("status", "saved")
@@ -436,10 +438,14 @@ def _build_social_around_club(social_event_stats: dict[str, dict], events: dict[
         if grinder and (not standout or grinder[0].candidate_id != standout[0].candidate_id):
             highlights.append({"key": "SOCIAL_GRIND_WEEK", "display": f"Social Grinder: {grinder[0].display}"})
         if highlights:
+            event_type = str(events.get(event_id, {}).get("event_type") or "round_robin")
+            event_type_label = "Social Ladder" if event_type == "league" else "Social RR"
             rows.append(
                 {
                     "event_id": event_id,
-                    "event_name": str(events.get(event_id, {}).get("name") or "Social Round Robin"),
+                    "event_name": str(events.get(event_id, {}).get("name") or "Club Social Event"),
+                    "event_type": event_type,
+                    "event_type_label": event_type_label,
                     "highlights": highlights[:2],
                 }
             )
@@ -1233,6 +1239,7 @@ def _build_numbers(
         "players": len(canonical_identities),
         "leagues": league_count,
         "round_robins": rr_count,
+        "community_events": int(social_event_count or 0),
         "social_round_robins": int(social_event_count or 0),
         "new_faces": len(new_faces),
     }
@@ -1244,7 +1251,11 @@ def _build_numbers_cards(numbers: dict) -> list[dict]:
         {"key": "players", "label": "Players", "value": int(numbers.get("players", 0) or 0)},
         {"key": "leagues", "label": "Leagues", "value": int(numbers.get("leagues", 0) or 0)},
         {"key": "round_robins", "label": "Pop-Ups", "value": int(numbers.get("round_robins", 0) or 0)},
-        {"key": "social_round_robins", "label": "Social RRs", "value": int(numbers.get("social_round_robins", 0) or 0)},
+        {
+            "key": "community_events",
+            "label": "Community Events",
+            "value": int(numbers.get("community_events", numbers.get("social_round_robins", 0)) or 0),
+        },
         {"key": "new_faces", "label": "New Faces", "value": int(numbers.get("new_faces", 0) or 0)},
     ]
 

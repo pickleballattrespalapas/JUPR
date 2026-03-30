@@ -1199,13 +1199,9 @@ def _render_league_scoring(
                 key=f"{config.state_key}_next_round_{current_round_number}",
             ):
                 try:
-                    if _is_official(config) and on_save_league is not None:
-                        if not bool(getattr(ctx, "admin_logged_in", False)):
-                            raise ValueError(
-                                "Admin login required to save official round results."
-                            )
-                        if on_save_league(ctx, state, event) is False:
-                            st.stop()
+                    _maybe_save_league_before_advance(
+                        ctx, state, event, config, on_save_league
+                    )
                     if current_round_number < total_rounds:
                         start_next_league_round(event)
                         st.success(f"Round {current_round_number} finalized.")
@@ -1240,6 +1236,21 @@ def _render_league_scoring(
                 f"Court {int(court_info['courtNumber'])} standings",
             )
         _render_standings_table(aggregate, "Cumulative ladder standings")
+
+
+def _maybe_save_league_before_advance(
+    ctx,
+    state: dict,
+    event: dict,
+    config: LivePageConfig,
+    on_save_league: SaveCallback | None,
+) -> None:
+    if on_save_league is None:
+        return
+    if _is_official(config) and not bool(getattr(ctx, "admin_logged_in", False)):
+        raise ValueError("Admin login required to save official round results.")
+    if on_save_league(ctx, state, event) is False:
+        st.stop()
 
 
 def _render_tournament_scoring(
