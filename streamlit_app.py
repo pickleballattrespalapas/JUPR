@@ -438,9 +438,15 @@ def main():
         # Keep URL synced (canonical deep links)
         # -------------------------
         try:
-            st.query_params["page"] = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
+            target_page = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
+            current_page = qp_get("page", "").strip()
+            if current_page != target_page:
+                st.query_params["page"] = target_page
+
+            current_public = qp_get("public", "").strip().lower()
             if PUBLIC_MODE:
-                st.query_params["public"] = "1"
+                if current_public != "1":
+                    st.query_params["public"] = "1"
             else:
                 if "public" in st.query_params:
                     st.query_params.pop("public", None)
