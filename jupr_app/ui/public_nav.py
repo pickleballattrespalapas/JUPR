@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from jupr_app.ui.page_registry import (
-    LABEL_TO_PAGE_KEY,
-    PAGE_KEY_TO_LABEL,
-    PUBLIC_NAV_KEYS,
-)
+from jupr_app.ui.page_registry import PAGE_KEY_TO_LABEL, PUBLIC_NAV_KEYS
 from jupr_app.ui.url import qp_get
 
 
@@ -50,15 +46,5 @@ def render_public_top_nav(
         label_visibility="collapsed",
         key="public_top_nav_radio",
     )
-
-    selected_key = LABEL_TO_PAGE_KEY.get(
-        selected_label,
-        qp_get("page", default_page).strip() or default_page,
-    )
-
-    try:
-        st.query_params["page"] = selected_key
-    except Exception:
-        pass
 
     return selected_label
