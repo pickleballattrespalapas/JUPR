@@ -130,10 +130,11 @@ def inject_styles() -> None:
             border-radius: 18px;
             padding: 0.9rem 1rem;
             background: #fff;
+            color: #0f172a;
             margin-bottom: 0.9rem;
         }
-        .jupr-live-team { font-weight: 700; font-size: 1rem; }
-        .jupr-live-vs { text-align: center; font-size: 0.9rem; font-weight: 700; color: #64748b; margin-top: 1.9rem; }
+        .jupr-live-team { color: #0f172a; font-weight: 700; font-size: 1rem; }
+        .jupr-live-vs { text-align: center; font-size: 0.9rem; font-weight: 700; color: #475569; margin-top: 1.9rem; }
         .jupr-live-actions button[kind="primary"] {
             min-height: 3rem;
             font-weight: 700;
@@ -152,10 +153,11 @@ def inject_styles() -> None:
             font-size: 0.72rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            color: #64748b;
+            color: #475569;
             margin-bottom: 0.15rem;
         }
         .jupr-live-slot-name {
+            color: #0f172a;
             font-weight: 700;
             font-size: 0.98rem;
             line-height: 1.3;
