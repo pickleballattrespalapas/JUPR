@@ -12,6 +12,7 @@ import streamlit as st
 from jupr_court_board import court_board
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.live_ladder import build_movement_preview, compute_round_stats, validate_courts
 from jupr_app.domain.league_night_roster import (
     RosterChangeError,
@@ -1165,6 +1166,7 @@ def render(ctx):
                     "k_factor": int(k_factor or default_k),
                     "is_active": False,
                     "status": "draft",
+                    "event_tags": normalize_event_tags({"skill_levels": [], "date_tags": []}),
                 }
 
                 try:
@@ -1286,6 +1288,10 @@ def render(ctx):
                 "default_depth": award_defaults,
                 "categories": categories,
             }
+            default_date_tags = derive_default_date_tags(
+                start_date=schedule_payload.get("start_date"),
+                end_date=schedule_payload.get("end_date") or schedule_payload.get("start_date"),
+            )
             payload = {
                 "description": str(st.session_state.get("le_desc", "") or ""),
                 "min_games": min_games_val,
@@ -1294,6 +1300,7 @@ def render(ctx):
                 "court_board_defaults": court_payload,
                 "rules_config": rules_payload,
                 "awards_config": awards_payload,
+                "event_tags": normalize_event_tags({"skill_levels": [], "date_tags": default_date_tags}),
             }
             if status_override is not None:
                 payload["status"] = status_override
@@ -1330,6 +1337,7 @@ def render(ctx):
                 "court_board_defaults": court_cfg,
                 "rules_config": rules_cfg,
                 "awards_config": awards_cfg,
+                "event_tags": normalize_event_tags(meta_row.get("event_tags")),
             }
             ctx.supabase.table("leagues_metadata").insert(payload).execute()
             st.session_state["force_data_refresh"] = True

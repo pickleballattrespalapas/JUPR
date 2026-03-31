@@ -5,6 +5,8 @@ from typing import Any
 import re
 import uuid
 
+from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
+
 from .tournament_registration_compiler import compile_tournament_registration_state
 
 REGISTRATION_STATUS_OPTIONS = ["draft", "open", "closed"]
@@ -12,6 +14,18 @@ EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
 GENDER_RESTRICTION_OPTIONS = ["ANY", "MEN", "WOMEN", "MIXED"]
 PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
 
+
+
+def _with_normalized_event_tags(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return row
+    tags = normalize_event_tags(row.get("event_tags"))
+    if not tags.get("date_tags"):
+        tags = normalize_event_tags({
+            "skill_levels": tags.get("skill_levels"),
+            "date_tags": derive_default_date_tags(start_date=row.get("start_date"), end_date=row.get("end_date")),
+        })
+    return {**row, "event_tags": tags}
 
 def _uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -66,7 +80,7 @@ def list_existing_tournaments(supabase, club_id: str) -> list[dict[str, Any]]:
         .order("created_at", desc=True)
         .execute()
     )
-    return _safe_data(resp)
+    return [_with_normalized_event_tags(row) or row for row in _safe_data(resp)]
 
 
 def get_tournament_record(supabase, tournament_id: str) -> dict[str, Any] | None:
@@ -77,7 +91,7 @@ def get_tournament_record(supabase, tournament_id: str) -> dict[str, Any] | None
         .limit(1)
         .execute()
     )
-    return _safe_first(resp)
+    return _with_normalized_event_tags(_safe_first(resp))
 
 
 def get_registration_settings(supabase, tournament_id: str, *, tournament_name: str | None = None) -> dict[str, Any]:

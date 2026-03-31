@@ -7,6 +7,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from jupr_app.domain.awards import TOP_PERFORMER_SPECS, compute_top_performer_awards
+from jupr_app.domain.event_tags import get_event_tags
 from jupr_app.domain.gamification.top_performer_awards import (
     TOP_PERFORMER_BADGE_IDS,
     _build_league_standings,
@@ -36,6 +37,11 @@ def get_league_meta_row(df_meta: pd.DataFrame | None, league_id: str) -> dict[st
         return None
     return hit.iloc[0].to_dict()
 
+
+
+def get_league_event_tags(meta_row: Mapping[str, Any] | None) -> dict[str, list[str]]:
+    payload = meta_row if isinstance(meta_row, Mapping) else {}
+    return get_event_tags(dict(payload), default_skill_all=False)
 
 def normalize_league_status(meta_row: Mapping[str, Any] | None) -> str:
     if not meta_row:
