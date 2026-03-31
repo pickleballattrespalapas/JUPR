@@ -23,6 +23,10 @@ from jupr_app.domain.gamification.profile import (
 from jupr_app.domain.gamification.requirements import load_requirements_map
 from jupr_app.domain.gamification.top_performer_awards import TOP_PERFORMER_BADGE_IDS
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
+from jupr_app.domain.live_social import (
+    SOCIAL_TABLES_INSTALL_MESSAGE,
+    is_missing_social_tables_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +324,236 @@ def _inactive_league_frame(
         lambda r: _build_league_display_label(r["league_name"], r.get("season_label", "")), axis=1
     )
     return inactive_df
+
+
+def _social_skill_levels_from_summary(summary_json: object) -> list[str]:
+    payload = summary_json if isinstance(summary_json, dict) else {}
+    tags = payload.get("event_tags") if isinstance(payload, dict) else {}
+    skill_levels = []
+    if isinstance(tags, dict):
+        raw_levels = tags.get("skill_levels")
+        if isinstance(raw_levels, str):
+            raw_levels = [raw_levels]
+        if isinstance(raw_levels, (list, tuple, set)):
+            for value in raw_levels:
+                text = str(value or "").strip()
+                if text and text not in skill_levels:
+                    skill_levels.append(text)
+    if not skill_levels:
+        return ["All"]
+    if "All" in skill_levels:
+        return ["All"]
+    return skill_levels
+
+
+@st.cache_data(ttl=60)
+def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: int = 100) -> pd.DataFrame:
+    try:
+        events_resp = (
+            _supabase.table("live_events")
+            .select("id,name,event_type,event_date,submitted_by,status,result_mode,summary_json")
+            .eq("club_id", str(club_id))
+            .eq("result_mode", "social_unrated")
+            .eq("status", "saved")
+            .order("event_date", desc=True)
+            .limit(max(int(limit), 1))
+            .execute()
+        )
+    except Exception as exc:
+        if is_missing_social_tables_error(exc):
+            return pd.DataFrame([{"_missing_social_tables": True, "_social_message": SOCIAL_TABLES_INSTALL_MESSAGE}])
+        raise
+
+    events = events_resp.data or []
+    event_ids = [str(row.get("id")) for row in events if row.get("id")]
+    if not event_ids:
+        return pd.DataFrame()
+
+    try:
+        participants_resp = (
+            _supabase.table("live_event_participants")
+            .select("id,event_id,club_person_id,linked_player_id")
+            .in_("event_id", event_ids)
+            .execute()
+        )
+        participants_df = pd.DataFrame(participants_resp.data or [])
+        if participants_df.empty:
+            return pd.DataFrame()
+
+        person_match_df = participants_df[participants_df.get("linked_player_id") == int(pid)].copy()
+        if person_match_df.empty and "club_person_id" in participants_df.columns:
+            club_people_resp = (
+                _supabase.table("club_people")
+                .select("id,linked_player_id")
+                .eq("club_id", str(club_id))
+                .eq("linked_player_id", int(pid))
+                .execute()
+            )
+            club_people_df = pd.DataFrame(club_people_resp.data or [])
+            if not club_people_df.empty and "id" in club_people_df.columns:
+                cp_ids = club_people_df["id"].dropna().astype(str).tolist()
+                if cp_ids:
+                    person_match_df = participants_df[
+                        participants_df.get("club_person_id").astype(str).isin(cp_ids)
+                    ].copy()
+
+        if person_match_df.empty:
+            return pd.DataFrame()
+        target_participant_ids = set(person_match_df["id"].dropna().astype(str).tolist())
+
+        matches_resp = (
+            _supabase.table("live_event_matches")
+            .select(
+                "event_id,played_on,t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,score_t1,score_t2"
+            )
+            .in_("event_id", event_ids)
+            .execute()
+        )
+    except Exception as exc:
+        if is_missing_social_tables_error(exc):
+            return pd.DataFrame([{"_missing_social_tables": True, "_social_message": SOCIAL_TABLES_INSTALL_MESSAGE}])
+        raise
+
+    events_by_id = {str(row.get("id")): row for row in events if row.get("id")}
+    history_rows: list[dict] = []
+    for event_id in sorted(person_match_df["event_id"].dropna().astype(str).unique().tolist()):
+        event_row = events_by_id.get(str(event_id))
+        if not event_row:
+            continue
+        summary_json = event_row.get("summary_json")
+        skill_tags = _social_skill_levels_from_summary(summary_json)
+        history_rows.append(
+            {
+                "event_id": str(event_id),
+                "Date": event_row.get("event_date"),
+                "Event": str(event_row.get("name") or "Social Event").strip() or "Social Event",
+                "Event Type": str(event_row.get("event_type") or "social_unrated").strip() or "social_unrated",
+                "Skill Tags": ", ".join(skill_tags),
+                "_skill_tags_list": skill_tags,
+                "Matches": 0,
+                "Wins": 0,
+                "Losses": 0,
+                "Diff": 0,
+                "Submitted By": str(event_row.get("submitted_by") or "").strip(),
+            }
+        )
+
+    if not history_rows:
+        return pd.DataFrame()
+
+    history_df = pd.DataFrame(history_rows)
+    matches_df = pd.DataFrame(matches_resp.data or [])
+    if matches_df.empty:
+        return history_df.sort_values(["Date", "event_id"], ascending=[False, False]).reset_index(drop=True)
+
+    for _, row in matches_df.iterrows():
+        s1 = int(row.get("score_t1") or 0)
+        s2 = int(row.get("score_t2") or 0)
+        if (s1 + s2) <= 0 or s1 == s2:
+            continue
+        event_id = str(row.get("event_id") or "")
+        if not event_id or event_id not in set(history_df["event_id"].astype(str)):
+            continue
+
+        team1_ids = {str(row.get("t1_p1_participant_id") or ""), str(row.get("t1_p2_participant_id") or "")}
+        team2_ids = {str(row.get("t2_p1_participant_id") or ""), str(row.get("t2_p2_participant_id") or "")}
+        on_team1 = bool(team1_ids & target_participant_ids)
+        on_team2 = bool(team2_ids & target_participant_ids)
+        if not on_team1 and not on_team2:
+            continue
+
+        idx = history_df.index[history_df["event_id"].astype(str) == event_id]
+        if len(idx) == 0:
+            continue
+        i = idx[0]
+        history_df.at[i, "Matches"] = int(history_df.at[i, "Matches"]) + 1
+        if on_team1:
+            won = s1 > s2
+            diff = s1 - s2
+        else:
+            won = s2 > s1
+            diff = s2 - s1
+        if won:
+            history_df.at[i, "Wins"] = int(history_df.at[i, "Wins"]) + 1
+        else:
+            history_df.at[i, "Losses"] = int(history_df.at[i, "Losses"]) + 1
+        history_df.at[i, "Diff"] = int(history_df.at[i, "Diff"]) + int(diff)
+
+    history_df["Date"] = pd.to_datetime(history_df["Date"], utc=True, errors="coerce")
+    history_df = history_df.sort_values(["Date", "event_id"], ascending=[False, False]).reset_index(drop=True)
+    return history_df
+
+
+@st.cache_data(ttl=60)
+def fetch_player_social_participation(_supabase, club_id: str, pid: int) -> dict:
+    history_df = fetch_player_social_event_history(_supabase, club_id, pid, limit=400)
+    if history_df.empty:
+        return {"available": True, "history_df": history_df}
+    if bool(history_df.get("_missing_social_tables", pd.Series(dtype=bool)).fillna(False).any()):
+        return {
+            "available": False,
+            "message": str(history_df.iloc[0].get("_social_message") or SOCIAL_TABLES_INSTALL_MESSAGE),
+            "history_df": pd.DataFrame(),
+        }
+
+    history_df = history_df.copy()
+    history_df["Matches"] = pd.to_numeric(history_df.get("Matches"), errors="coerce").fillna(0).astype(int)
+    history_df["Wins"] = pd.to_numeric(history_df.get("Wins"), errors="coerce").fillna(0).astype(int)
+    history_df["Losses"] = pd.to_numeric(history_df.get("Losses"), errors="coerce").fillna(0).astype(int)
+    history_df["Diff"] = pd.to_numeric(history_df.get("Diff"), errors="coerce").fillna(0).astype(int)
+
+    events = int(len(history_df))
+    matches = int(history_df["Matches"].sum())
+    wins = int(history_df["Wins"].sum())
+    losses = int(history_df["Losses"].sum())
+    diff = int(history_df["Diff"].sum())
+    last_dt = pd.to_datetime(history_df.get("Date"), utc=True, errors="coerce").max()
+    last_appearance = last_dt.strftime("%Y-%m-%d") if pd.notna(last_dt) else "—"
+
+    buckets: dict[str, dict[str, int | str]] = {}
+    for _, row in history_df.iterrows():
+        skill_levels = row.get("_skill_tags_list")
+        if isinstance(skill_levels, str):
+            skill_levels = [skill_levels]
+        if not isinstance(skill_levels, list) or not skill_levels:
+            skill_levels = ["All"]
+        if "All" in skill_levels:
+            target_levels = ["All"]
+        else:
+            target_levels = [str(level).strip() for level in skill_levels if str(level).strip()] or ["All"]
+        for level in target_levels:
+            bucket = buckets.setdefault(
+                level,
+                {"Skill Level": level, "Events": 0, "Matches": 0, "Wins": 0, "Losses": 0, "Diff": 0},
+            )
+            bucket["Events"] += 1
+            bucket["Matches"] += int(row.get("Matches") or 0)
+            bucket["Wins"] += int(row.get("Wins") or 0)
+            bucket["Losses"] += int(row.get("Losses") or 0)
+            bucket["Diff"] += int(row.get("Diff") or 0)
+
+    skill_breakdown_df = (
+        pd.DataFrame(list(buckets.values()))
+        .sort_values(["Skill Level"], ascending=[True])
+        .reset_index(drop=True)
+        if buckets
+        else pd.DataFrame(columns=["Skill Level", "Events", "Matches", "Wins", "Losses", "Diff"])
+    )
+
+    return {
+        "available": True,
+        "history_df": history_df,
+        "summary": {
+            "events": events,
+            "matches": matches,
+            "wins": wins,
+            "losses": losses,
+            "record": f"{wins}-{losses}",
+            "diff": diff,
+            "last_appearance": last_appearance,
+        },
+        "skill_breakdown_df": skill_breakdown_df,
+    }
 
 
 def build_inactive_league_options(
@@ -841,7 +1075,7 @@ def render(ctx):
     c1.metric("Player", pick_name)
     c2.metric("Overall JUPR", f"{current_jupr:.3f}")
 
-    tape_tab, ratings_tab = st.tabs(["Trophy Room", "Ratings"])
+    tape_tab, ratings_tab, social_tab = st.tabs(["Trophy Room", "Ratings", "Social"])
 
     with tape_tab:
         debug_render = False
@@ -1944,5 +2178,79 @@ def render(ctx):
                 # Show league replay trend if available; otherwise overall trend filtered to that league’s matches.
                 render_chart_and_table(df_lg, f"League: {lg}", league_trend=True, league_name=lg)
 
+    def render_social_tab():
+        st.markdown("### Social / Community")
+        try:
+            social_data = fetch_player_social_participation(_supabase, club_id, pid)
+        except Exception:
+            logger.exception("Failed to load social profile data")
+            st.info("No social RR history yet.")
+            return
+
+        if not social_data.get("available", True):
+            st.info(
+                "Social profile data is unavailable until Club Social tables are installed."
+            )
+            return
+
+        history_df = social_data.get("history_df")
+        if history_df is None or history_df.empty:
+            st.info("No social RR history yet.")
+            return
+
+        summary = social_data.get("summary") or {}
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Social Events", f"{int(summary.get('events', 0))}")
+        m2.metric("Social Matches", f"{int(summary.get('matches', 0))}")
+        m3.metric("Social Record", str(summary.get("record") or "0-0"))
+        m4.metric("Social Diff", f"{int(summary.get('diff', 0)):+d}")
+        m5.metric("Last Social Appearance", str(summary.get("last_appearance") or "—"))
+
+        st.markdown("#### Skill-Level Breakdown")
+        skill_df = social_data.get("skill_breakdown_df")
+        if isinstance(skill_df, pd.DataFrame) and not skill_df.empty:
+            st.dataframe(skill_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No skill-level tags found for this player's social events.")
+
+        chart_df = history_df.copy()
+        chart_df["Date"] = pd.to_datetime(chart_df.get("Date"), utc=True, errors="coerce")
+        chart_df = chart_df.dropna(subset=["Date"]).copy()
+        if not chart_df.empty:
+            st.markdown("#### Social Match Activity")
+            daily = (
+                chart_df.groupby(chart_df["Date"].dt.date)["Matches"].sum().reset_index().rename(columns={"Date": "Day"})
+            )
+            daily["Cumulative Matches"] = daily["Matches"].cumsum()
+            daily["Day"] = pd.to_datetime(daily["Day"], errors="coerce")
+            if alt is not None:
+                chart = (
+                    alt.Chart(daily)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X("Day:T", title="Date"),
+                        y=alt.Y("Cumulative Matches:Q", title="Cumulative Social Matches"),
+                        tooltip=[
+                            alt.Tooltip("Day:T", title="Date"),
+                            alt.Tooltip("Matches:Q", title="Matches"),
+                            alt.Tooltip("Cumulative Matches:Q", title="Cumulative"),
+                        ],
+                    )
+                    .interactive()
+                )
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.line_chart(daily.set_index("Day")["Cumulative Matches"])
+
+        st.markdown("#### Recent Social Events")
+        show_df = history_df.copy()
+        show_df["Date"] = pd.to_datetime(show_df.get("Date"), utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
+        cols = ["Date", "Event", "Event Type", "Skill Tags", "Matches", "Wins", "Losses", "Diff", "Submitted By"]
+        cols = [c for c in cols if c in show_df.columns]
+        st.dataframe(show_df[cols], use_container_width=True, hide_index=True)
+
     with ratings_tab:
         render_ratings_tab()
+
+    with social_tab:
+        render_social_tab()
