@@ -374,7 +374,10 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
         community_items = around.get("social_round_robins", [])
     for item in community_items or []:
         type_label = str(item.get("event_type_label") or "Community Event").strip()
-        title_text = f"{str(item.get('event_name', 'Community Event'))} ({type_label})"
+        if item.get("skill_level"):
+            title_text = type_label
+        else:
+            title_text = f"{str(item.get('event_name', 'Community Event'))} ({type_label})"
         rows = [
             str((highlight or {}).get("display", "")).strip()
             for highlight in item.get("highlights", []) or []
