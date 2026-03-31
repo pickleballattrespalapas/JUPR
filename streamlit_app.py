@@ -15,13 +15,10 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.context import AppContext
-from jupr_app.ui.public_nav import render_public_top_nav
 from jupr_app.ui.page_registry import (
     ADMIN_ONLY_LABELS,
     LABEL_TO_PAGE_KEY,
     PAGE_KEY_TO_LABEL,
-    PUBLIC_NAV_KEYS,
-    labels_for_keys,
 )
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
@@ -160,21 +157,6 @@ def get_data(club_id: str):
     return load_data(supabase, club_id, match_limit=5000)
 
 
-# -------------------------
-# UI helpers
-# -------------------------
-def hide_sidebar_and_header_for_public():
-    # Hide sidebar + collapse control for public, keep app content full-width.
-    st.markdown(
-        "<style>"
-        "section[data-testid='stSidebar']{display:none;}"
-        "div[data-testid='collapsedControl']{display:none;}"
-        "header{visibility:hidden;}"
-        "</style>",
-        unsafe_allow_html=True,
-    )
-
-
 def main():
     """
     Main Streamlit entrypoint. Keep this deterministic for reloads.
@@ -205,11 +187,8 @@ def main():
         st.session_state.setdefault("deep_link_applied", False)
 
         # ---- Sidebar / Auth ----
-        if PUBLIC_MODE:
-            hide_sidebar_and_header_for_public()
-        else:
-            st.sidebar.title("JUPR Leagues 🌵")
-
+        st.sidebar.title("JUPR Leagues 🌵")
+        if not PUBLIC_MODE:
             if not _validate_admin_session():
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
@@ -378,61 +357,47 @@ def main():
         else:
             visible_labels = all_labels
 
-        public_labels_in_order = labels_for_keys(PUBLIC_NAV_KEYS)
-
         # -------------------------
         # Deep link resolution
         # -------------------------
         deep_page_key = qp_get("page", "").strip().lower()
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
-        if PUBLIC_MODE:
-            # Block admin-only deep links in public mode
-            if deep_label in ADMIN_ONLY_LABELS:
-                deep_label = ""
+        # Block admin-only deep links in public mode
+        if PUBLIC_MODE and deep_label in ADMIN_ONLY_LABELS:
+            deep_label = ""
 
-            current_label = (
-                deep_label
-                if deep_label in public_labels_in_order
-                else public_labels_in_order[0]
-            )
-            sel = render_public_top_nav(
-                labels_in_order=public_labels_in_order,
-                current_label=current_label,
-            )
+        # Apply deep link once (only if that page is visible)
+        if (not bool(st.session_state.get("deep_link_applied", False))) and (
+            deep_label in visible_labels
+        ):
+            st.session_state["main_nav"] = deep_label
+            st.session_state["deep_link_applied"] = True
 
-        else:
-            # Apply deep link once (only if that page is visible)
-            if (not bool(st.session_state.get("deep_link_applied", False))) and (
-                deep_label in visible_labels
-            ):
-                st.session_state["main_nav"] = deep_label
-                st.session_state["deep_link_applied"] = True
+        # Ensure valid selection
+        if (
+            "main_nav" not in st.session_state
+            or st.session_state["main_nav"] not in visible_labels
+        ):
+            st.session_state["main_nav"] = visible_labels[0]
 
-            # Ensure valid selection
-            if (
-                "main_nav" not in st.session_state
-                or st.session_state["main_nav"] not in visible_labels
-            ):
-                st.session_state["main_nav"] = visible_labels[0]
+        if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
+            get_data.clear()
+            try:
+                from jupr_app.domain.gamification.requirements import (
+                    clear_requirements_cache,
+                )
 
-            if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
-                get_data.clear()
-                try:
-                    from jupr_app.domain.gamification.requirements import (
-                        clear_requirements_cache,
-                    )
+                clear_requirements_cache()
+            except Exception:
+                pass
+            st.rerun()
 
-                    clear_requirements_cache()
-                except Exception:
-                    pass
-                st.rerun()
+        sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
 
-            sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
-
-            if sel not in visible_labels:
-                sel = visible_labels[0]
-                st.session_state["main_nav"] = sel
+        if sel not in visible_labels:
+            sel = visible_labels[0]
+            st.session_state["main_nav"] = sel
 
         # -------------------------
         # Keep URL synced (canonical deep links)
