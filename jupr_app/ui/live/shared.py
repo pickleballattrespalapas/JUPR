@@ -76,6 +76,7 @@ def _default_state(config: LivePageConfig) -> dict:
         "event_name": "Saturday Event",
         "participant_count": 8,
         "participant_text": "",
+        "selected_existing_players": [],
         "league_rounds": 3,
         "official_league": "",
         "official_week_tag": "Week 1",
@@ -208,6 +209,26 @@ def _participant_lines(value: str) -> list[str]:
         if normalize_name(x)
     ]
 
+
+def _dedupe_names(names: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for raw_name in names:
+        clean = normalize_name(raw_name)
+        if not clean:
+            continue
+        key = clean.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(clean)
+    return deduped
+
+
+def _merge_participant_text(participant_text: str, selected_names: list[str]) -> str:
+    existing_lines = _participant_lines(participant_text)
+    merged_lines = _dedupe_names(existing_lines + list(selected_names or []))
+    return "\n".join(merged_lines)
 
 def _team_entry_lines(value: str) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
@@ -368,12 +389,33 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             help_text = "League / Ladder currently requires an exact 4-player / 5-player court fit."
         placeholder = "Amy\nBrooke\nChris\nDana"
     st.caption(help_text)
+    player_options, _ = _player_directory(ctx)
+    selected_players_key = f"{config.state_key}_selected_existing_players"
+    participants_key = f"{config.state_key}_participants"
+    if selected_players_key not in st.session_state:
+        st.session_state[selected_players_key] = state.get("selected_existing_players", [])
+    selected_existing_players = st.multiselect(
+        "Add from current players",
+        options=player_options,
+        key=selected_players_key,
+        help="Search and select existing player names to quickly add them to the roster.",
+    )
+    state["selected_existing_players"] = list(selected_existing_players)
+    st.caption(
+        "Search current players to add them quickly. You can still type guest names below."
+    )
+    merged_participant_text = _merge_participant_text(
+        state["participant_text"], state["selected_existing_players"]
+    )
+    if merged_participant_text != state["participant_text"]:
+        state["participant_text"] = merged_participant_text
+        st.session_state[participants_key] = merged_participant_text
     state["participant_text"] = st.text_area(
         "Names or roster entry",
         value=state["participant_text"],
         height=180,
         placeholder=placeholder,
-        key=f"{config.state_key}_participants",
+        key=participants_key,
     )
     if state["type_label"] == "League / Ladder":
         state["league_rounds"] = int(
