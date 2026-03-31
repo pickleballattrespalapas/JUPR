@@ -13,6 +13,27 @@ from jupr_app.domain.live_beta_engine import (
     round_robin_standings,
 )
 
+SOCIAL_SKILL_LEVEL_OPTIONS = ["2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "All"]
+
+
+def normalize_skill_levels(values: object) -> list[str]:
+    if isinstance(values, str):
+        raw_values = [values]
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = list(values)
+    else:
+        raw_values = []
+    normalized: list[str] = []
+    for value in raw_values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if text in SOCIAL_SKILL_LEVEL_OPTIONS and text not in normalized:
+            normalized.append(text)
+    if "All" in normalized:
+        return ["All"]
+    return normalized or ["All"]
+
 
 def normalize_person_name(value: object) -> str:
     return normalize_name(value).casefold()
@@ -355,7 +376,7 @@ def social_league_match_rows_from_event(event: dict) -> list[dict]:
     return rows
 
 
-def build_social_event_summary(event: dict, *, match_count: int) -> dict:
+def build_social_event_summary(event: dict, *, match_count: int, skill_levels: list[str] | None = None) -> dict:
     event_type = str(event.get("type") or "")
     standings = (
         round_robin_standings(event)
@@ -368,6 +389,7 @@ def build_social_event_summary(event: dict, *, match_count: int) -> dict:
         "match_count": int(match_count),
         "event_type": event_type,
         "schedule_mode": str(event.get("scheduleMode") or ""),
+        "skill_levels": normalize_skill_levels(skill_levels if skill_levels is not None else event.get("skill_levels")),
         "leader": (
             {
                 "name": leader.get("name"),
@@ -418,6 +440,7 @@ def save_social_live_event(
     target_club_id: str,
     submission_mode: str,
     host_name: str,
+    skill_levels: object = None,
 ) -> dict:
     event_type = str(event.get("type") or "")
     if event_type not in {"round_robin", "league"}:
@@ -459,7 +482,12 @@ def save_social_live_event(
         if event_type == "round_robin"
         else social_league_match_rows_from_event(event)
     )
-    summary_json = build_social_event_summary(event, match_count=len(match_rows))
+    normalized_skill_levels = normalize_skill_levels(skill_levels if skill_levels is not None else event.get("skill_levels"))
+    summary_json = build_social_event_summary(
+        event,
+        match_count=len(match_rows),
+        skill_levels=normalized_skill_levels,
+    )
     normalized_submission_mode = str(submission_mode or "").strip().lower() or "public"
     status = _status_for_submission_mode(normalized_submission_mode)
     submitted_by = normalize_name(host_name) or ("admin" if status == "saved" else "guest")
@@ -479,7 +507,7 @@ def save_social_live_event(
         "moderated_at": moderated_at,
         "moderated_by": moderated_by,
         "rejection_reason": None,
-        "raw_event_json": event,
+        "raw_event_json": {**event, "skill_levels": normalized_skill_levels},
         "summary_json": summary_json,
     }
 

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import streamlit as st
 
-from jupr_app.domain.live_social import save_social_live_event
+from jupr_app.domain.live_social import (
+    SOCIAL_SKILL_LEVEL_OPTIONS,
+    normalize_skill_levels,
+    save_social_live_event,
+)
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.live import LivePageConfig, render_live_page
 
@@ -38,6 +42,7 @@ CLUB_SOCIAL_CONFIG = LivePageConfig(
 MODE_OPTIONS = ("Quick Session", "Club Social")
 MODE_KEY = "jupr_live_mode"
 PREFILL_MODE_KEY = "jupr_live_prefill_mode"
+SOCIAL_SKILL_LEVELS_KEY = "jupr_live_social_skill_levels"
 
 
 def _mode_selector() -> str:
@@ -82,6 +87,7 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
     if admin_logged_in and not host_name:
         host_name = "admin"
 
+    skill_levels = normalize_skill_levels(st.session_state.get(SOCIAL_SKILL_LEVELS_KEY))
     submission_mode = "admin" if admin_logged_in else "public"
     result = save_social_live_event(
         ctx,
@@ -89,6 +95,7 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
         target_club_id=club_id,
         submission_mode=submission_mode,
         host_name=host_name,
+        skill_levels=skill_levels,
     )
     state["last_saved_rounds"] = list(result.get("saved_rounds") or [])
     event["saved_rounds"] = list(result.get("saved_rounds") or [])
@@ -109,6 +116,8 @@ def _render_club_social_mode(ctx) -> None:
     admin_logged_in = bool(getattr(ctx, "admin_logged_in", False))
     if "jupr_live_social_host_name" not in st.session_state:
         st.session_state["jupr_live_social_host_name"] = _default_host_name(ctx)
+    if SOCIAL_SKILL_LEVELS_KEY not in st.session_state:
+        st.session_state[SOCIAL_SKILL_LEVELS_KEY] = ["All"]
 
     if club_id:
         label = club_name or club_id
@@ -131,6 +140,17 @@ def _render_club_social_mode(ctx) -> None:
             "Admins default to 'admin'."
         ),
     )
+    selected_skill_levels = st.multiselect(
+        "Skill level tags",
+        options=SOCIAL_SKILL_LEVEL_OPTIONS,
+        key=SOCIAL_SKILL_LEVELS_KEY,
+        help="Used for Weekly Recap social grouping (for example, Social 3.5, Social 4.0, or Social All).",
+    )
+    normalized_skill_levels = normalize_skill_levels(selected_skill_levels)
+    if normalized_skill_levels != selected_skill_levels:
+        st.session_state[SOCIAL_SKILL_LEVELS_KEY] = normalized_skill_levels
+        st.rerun()
+    st.caption(f"Weekly Recap grouping tags: {', '.join(normalized_skill_levels)}")
 
     if not club_id:
         render_live_page(ctx, CLUB_SOCIAL_CONFIG)
