@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.tournaments import (
@@ -288,6 +289,10 @@ def render(ctx):
                 "locale": locale,
                 "registration_open_at": _parse_optional_date(reg_open_at),
                 "registration_close_at": _parse_optional_date(reg_close_at),
+                "event_tags": normalize_event_tags({
+                    "skill_levels": [],
+                    "date_tags": derive_default_date_tags(start_date=start_date, end_date=end_date),
+                }),
             }
             _insert_tournament_shell(supabase, payload)
             created = (

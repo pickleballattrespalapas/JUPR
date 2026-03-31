@@ -8,6 +8,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from jupr_app.data.sb_safe import safe_execute
+from jupr_app.domain.event_tags import (
+    SKILL_LEVEL_OPTIONS,
+    derive_default_date_tags,
+    get_event_date_tags,
+    get_event_skill_levels,
+)
 from jupr_app.domain.match_filters import is_popup_event_match, is_tournament_match
 
 
@@ -46,7 +52,7 @@ RECAP_CATEGORY_CONFIG = {
     "TOP_PERFORMER": {"label": "Top Performer", "max_featured": MAX_FEATURED_PER_CATEGORY},
     "BIGGEST_JUMP": {"label": "Biggest Jump", "max_featured": MAX_FEATURED_PER_CATEGORY},
 }
-SOCIAL_SKILL_BUCKETS = ("2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "All")
+SOCIAL_SKILL_BUCKETS = tuple(SKILL_LEVEL_OPTIONS)
 
 
 def normalize_date_range(start_date: date, end_date: date) -> tuple[date, date]:
@@ -142,18 +148,17 @@ def _social_display_name(row: dict, id_to_name: dict[int, str]) -> str:
 
 
 def social_event_skill_levels(event_row: dict) -> list[str]:
-    summary_json = event_row.get("summary_json") if isinstance(event_row, dict) else None
-    raw_values = summary_json.get("skill_levels") if isinstance(summary_json, dict) else None
-    values: list[str] = []
-    if isinstance(raw_values, str):
-        values = [raw_values]
-    elif isinstance(raw_values, (list, tuple, set)):
-        values = [str(item or "").strip() for item in raw_values]
-    normalized = [item for item in values if item in SOCIAL_SKILL_BUCKETS]
-    if "All" in normalized:
-        return ["All"]
-    normalized_specific = [item for item in normalized if item != "All"]
-    return normalized_specific or ["All"]
+    summary_json = event_row.get("summary_json") if isinstance(event_row, dict) else {}
+    levels = get_event_skill_levels(summary_json if isinstance(summary_json, dict) else {}, default_all=True)
+    return levels or ["All"]
+
+
+def social_event_date_tags(event_row: dict) -> list[str]:
+    summary_json = event_row.get("summary_json") if isinstance(event_row, dict) else {}
+    date_tags = get_event_date_tags(summary_json if isinstance(summary_json, dict) else {})
+    if date_tags:
+        return date_tags
+    return derive_default_date_tags(event_date=event_row.get("event_date"))
 
 
 def _compute_weekly_recap_payload(
@@ -293,6 +298,11 @@ def _compute_social_stats(social_data: dict, id_to_name: dict[int, str]) -> tupl
 
     event_lookup = {str(event.get("id")): event for event in events if event.get("id")}
     participant_lookup = {str(row.get("id")): row for row in participants if row.get("id")}
+    event_tags_by_id: dict[str, dict[str, list[str]]] = {}
+    for event_id, event_row in event_lookup.items():
+        levels = social_event_skill_levels(event_row)
+        date_tags = social_event_date_tags(event_row)
+        event_tags_by_id[event_id] = {"skill_levels": levels, "date_tags": date_tags}
 
     stats: dict[tuple[str, int | str], dict] = {}
     skill_stats: dict[str, dict[tuple[str, int | str], dict]] = {}
@@ -309,13 +319,25 @@ def _compute_social_stats(social_data: dict, id_to_name: dict[int, str]) -> tupl
                 "points_against": 0,
                 "differential": 0,
                 "event_ids": set(),
+                "event_tags": {"skill_levels": ["All"], "date_tags": []},
+                "date_tags": [],
             }
         stats[identity]["event_ids"].add(event_id)
+        event_tags = event_tags_by_id.get(event_id, {"skill_levels": ["All"], "date_tags": []})
+        existing_date_tags = list(stats[identity].get("date_tags") or [])
+        merged_date_tags = [*existing_date_tags, *(event_tags.get("date_tags") or [])]
+        deduped_date_tags = []
+        for tag in merged_date_tags:
+            if tag and tag not in deduped_date_tags:
+                deduped_date_tags.append(tag)
+        stats[identity]["date_tags"] = deduped_date_tags
+        stats[identity]["event_tags"] = {"skill_levels": ["All"], "date_tags": deduped_date_tags}
 
     def apply_match(identity: tuple[str, int | str], display_name: str, *, event_id: str, won: bool, pf: int, pa: int) -> None:
         overall = stats[identity]
         ensure_identity(identity, display_name, event_id)
-        event_levels = social_event_skill_levels(event_lookup.get(event_id, {}))
+        event_tags = event_tags_by_id.get(event_id, {"skill_levels": ["All"], "date_tags": []})
+        event_levels = event_tags.get("skill_levels") or ["All"]
         target_skill_levels = ["All"] if event_levels == ["All"] else [level for level in event_levels if level != "All"]
         for skill_level in target_skill_levels:
             by_skill = skill_stats.setdefault(skill_level, {})
@@ -329,14 +351,38 @@ def _compute_social_stats(social_data: dict, id_to_name: dict[int, str]) -> tupl
                     "points_for": 0,
                     "points_against": 0,
                     "differential": 0,
+                    "event_tags": {"skill_levels": [skill_level], "date_tags": []},
+                    "date_tags": [],
                 }
-        for target in [overall] + [skill_stats[level][identity] for level in target_skill_levels]:
+        event_date_tags = event_tags.get("date_tags") or []
+
+        overall["games"] += 1
+        overall["wins"] += int(bool(won))
+        overall["losses"] += int(not won)
+        overall["points_for"] += pf
+        overall["points_against"] += pa
+        overall["differential"] = overall["points_for"] - overall["points_against"]
+        overall_tags = []
+        for tag in [*(overall.get("date_tags") or []), *event_date_tags]:
+            if tag and tag not in overall_tags:
+                overall_tags.append(tag)
+        overall["date_tags"] = overall_tags
+        overall["event_tags"] = {"skill_levels": ["All"], "date_tags": overall_tags}
+
+        for skill_level in target_skill_levels:
+            target = skill_stats[skill_level][identity]
             target["games"] += 1
             target["wins"] += int(bool(won))
             target["losses"] += int(not won)
             target["points_for"] += pf
             target["points_against"] += pa
             target["differential"] = target["points_for"] - target["points_against"]
+            level_tags = []
+            for tag in [*(target.get("date_tags") or []), *event_date_tags]:
+                if tag and tag not in level_tags:
+                    level_tags.append(tag)
+            target["date_tags"] = level_tags
+            target["event_tags"] = {"skill_levels": [skill_level], "date_tags": level_tags}
 
     for row in matches:
         event_id = str(row.get("event_id") or "")
@@ -461,6 +507,8 @@ def _build_social_around_club(social_skill_stats: dict[str, dict]) -> list[dict]
                     "event_name": "Club Social",
                     "event_type": "social_unrated",
                     "event_type_label": f"Social {skill_level}",
+                    "event_tags": {"skill_levels": [skill_level], "date_tags": []},
+                    "date_tags": [],
                     "highlights": highlights[:2],
                 }
             )

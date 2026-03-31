@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_registration_exports import build_registration_workbook
 from jupr_app.domain.tournament_registration_repo import (
     REGISTRATION_STATUS_OPTIONS,
@@ -164,6 +165,10 @@ def _update_tournament_shell(supabase, tournament_id: str, *, name: str, start_d
         "name": name.strip(),
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat() if end_date else None,
+        "event_tags": normalize_event_tags({
+            "skill_levels": [],
+            "date_tags": derive_default_date_tags(start_date=start_date, end_date=end_date),
+        }),
     }
     try:
         supabase.table("tournaments").update(payload).eq("id", tournament_id).execute()
