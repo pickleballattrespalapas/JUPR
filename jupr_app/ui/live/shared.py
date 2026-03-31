@@ -65,6 +65,7 @@ class LivePageConfig:
     allow_official: bool = False
     allow_tournament: bool = False
     show_official_context: bool = False
+    persistent_save_label: str | None = None
 
 
 def _default_state(config: LivePageConfig) -> dict:
@@ -75,6 +76,7 @@ def _default_state(config: LivePageConfig) -> dict:
         "event_name": "Saturday Event",
         "participant_count": 8,
         "participant_text": "",
+        "selected_existing_players": [],
         "league_rounds": 3,
         "official_league": "",
         "official_week_tag": "Week 1",
@@ -101,6 +103,16 @@ def _is_official(config: LivePageConfig) -> bool:
     return bool(config.allow_official)
 
 
+def _save_button_label(
+    config: LivePageConfig, callback_present: bool, *, default_non_official: str
+) -> str:
+    if _is_official(config):
+        return "Save official results"
+    if callback_present and config.persistent_save_label:
+        return str(config.persistent_save_label)
+    return default_non_official
+
+
 def inject_styles() -> None:
     st.markdown(
         """
@@ -119,10 +131,11 @@ def inject_styles() -> None:
             border-radius: 18px;
             padding: 0.9rem 1rem;
             background: #fff;
+            color: #0f172a;
             margin-bottom: 0.9rem;
         }
-        .jupr-live-team { font-weight: 700; font-size: 1rem; }
-        .jupr-live-vs { text-align: center; font-size: 0.9rem; font-weight: 700; color: #64748b; margin-top: 1.9rem; }
+        .jupr-live-team { color: #0f172a; font-weight: 700; font-size: 1rem; }
+        .jupr-live-vs { text-align: center; font-size: 0.9rem; font-weight: 700; color: #475569; margin-top: 1.9rem; }
         .jupr-live-actions button[kind="primary"] {
             min-height: 3rem;
             font-weight: 700;
@@ -141,10 +154,11 @@ def inject_styles() -> None:
             font-size: 0.72rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            color: #64748b;
+            color: #475569;
             margin-bottom: 0.15rem;
         }
         .jupr-live-slot-name {
+            color: #0f172a;
             font-weight: 700;
             font-size: 0.98rem;
             line-height: 1.3;
@@ -195,6 +209,26 @@ def _participant_lines(value: str) -> list[str]:
         if normalize_name(x)
     ]
 
+
+def _dedupe_names(names: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for raw_name in names:
+        clean = normalize_name(raw_name)
+        if not clean:
+            continue
+        key = clean.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(clean)
+    return deduped
+
+
+def _merge_participant_text(participant_text: str, selected_names: list[str]) -> str:
+    existing_lines = _participant_lines(participant_text)
+    merged_lines = _dedupe_names(existing_lines + list(selected_names or []))
+    return "\n".join(merged_lines)
 
 def _team_entry_lines(value: str) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
@@ -355,12 +389,33 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             help_text = "League / Ladder currently requires an exact 4-player / 5-player court fit."
         placeholder = "Amy\nBrooke\nChris\nDana"
     st.caption(help_text)
+    player_options, _ = _player_directory(ctx)
+    selected_players_key = f"{config.state_key}_selected_existing_players"
+    participants_key = f"{config.state_key}_participants"
+    if selected_players_key not in st.session_state:
+        st.session_state[selected_players_key] = state.get("selected_existing_players", [])
+    selected_existing_players = st.multiselect(
+        "Add from current players",
+        options=player_options,
+        key=selected_players_key,
+        help="Search and select existing player names to quickly add them to the roster.",
+    )
+    state["selected_existing_players"] = list(selected_existing_players)
+    st.caption(
+        "Search current players to add them quickly. You can still type guest names below."
+    )
+    merged_participant_text = _merge_participant_text(
+        state["participant_text"], state["selected_existing_players"]
+    )
+    if merged_participant_text != state["participant_text"]:
+        state["participant_text"] = merged_participant_text
+        st.session_state[participants_key] = merged_participant_text
     state["participant_text"] = st.text_area(
         "Names or roster entry",
         value=state["participant_text"],
         height=180,
         placeholder=placeholder,
-        key=f"{config.state_key}_participants",
+        key=participants_key,
     )
     if state["type_label"] == "League / Ladder":
         state["league_rounds"] = int(
@@ -968,10 +1023,10 @@ def _render_rr_scoring(
                 st.caption(str(match.get("desc") or ""))
                 st.markdown("</div>", unsafe_allow_html=True)
             st.divider()
-        submit_label = (
-            "Save official results"
-            if _is_official(config)
-            else "Update live standings"
+        submit_label = _save_button_label(
+            config,
+            on_save_rr is not None,
+            default_non_official="Update live standings",
         )
         submitted = st.button(
             submit_label,
@@ -997,8 +1052,8 @@ def _render_rr_scoring(
                         update_round_robin_score(event, match["id"], None, None)
                     else:
                         update_round_robin_score(event, match["id"], a_val, b_val)
-            if _is_official(config) and on_save_rr is not None:
-                if not bool(getattr(ctx, "admin_logged_in", False)):
+            if on_save_rr is not None:
+                if _is_official(config) and not bool(getattr(ctx, "admin_logged_in", False)):
                     st.error("Admin login required to save official results.")
                 else:
                     on_save_rr(ctx, state, event)
@@ -1188,13 +1243,9 @@ def _render_league_scoring(
                 key=f"{config.state_key}_next_round_{current_round_number}",
             ):
                 try:
-                    if _is_official(config) and on_save_league is not None:
-                        if not bool(getattr(ctx, "admin_logged_in", False)):
-                            raise ValueError(
-                                "Admin login required to save official round results."
-                            )
-                        if on_save_league(ctx, state, event) is False:
-                            st.stop()
+                    _maybe_save_league_before_advance(
+                        ctx, state, event, config, on_save_league
+                    )
                     if current_round_number < total_rounds:
                         start_next_league_round(event)
                         st.success(f"Round {current_round_number} finalized.")
@@ -1229,6 +1280,21 @@ def _render_league_scoring(
                 f"Court {int(court_info['courtNumber'])} standings",
             )
         _render_standings_table(aggregate, "Cumulative ladder standings")
+
+
+def _maybe_save_league_before_advance(
+    ctx,
+    state: dict,
+    event: dict,
+    config: LivePageConfig,
+    on_save_league: SaveCallback | None,
+) -> None:
+    if on_save_league is None:
+        return
+    if _is_official(config) and not bool(getattr(ctx, "admin_logged_in", False)):
+        raise ValueError("Admin login required to save official round results.")
+    if on_save_league(ctx, state, event) is False:
+        st.stop()
 
 
 def _render_tournament_scoring(

@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from jupr_app.data.sb_safe import safe_execute
+from jupr_app.domain.event_tags import (
+    SKILL_LEVEL_OPTIONS,
+    derive_default_date_tags,
+    get_event_date_tags,
+    get_event_skill_levels,
+)
 from jupr_app.domain.match_filters import is_popup_event_match, is_tournament_match
 
 
@@ -26,21 +33,26 @@ MAX_FEATURED_PER_CATEGORY = 3
 DEFAULT_SPOTLIGHT_DESCRIPTIONS = {
     "TOP_PERFORMER_WEEK": "Best overall performance in the selected date range.",
     "BIGGEST_JUMP_WEEK": "Largest positive JUPR rating movement.",
+    "COMMUNITY_STANDOUT_WEEK": "Best social/community performance in the selected date range.",
     "GIANT_SLAYER_WEEK": "Biggest upset by JUPR gap.",
     "GRIND_WEEK": "Most total matches played.",
+    "SOCIAL_GRIND_WEEK": "Most total social matches played.",
     "PERFECT_RUN": "Undefeated performance.",
 }
 SPOTLIGHT_DEFAULT_ORDER = [
     "TOP_PERFORMER_WEEK",
     "BIGGEST_JUMP_WEEK",
+    "COMMUNITY_STANDOUT_WEEK",
     "GIANT_SLAYER_WEEK",
     "GRIND_WEEK",
+    "SOCIAL_GRIND_WEEK",
     "PERFECT_RUN",
 ]
 RECAP_CATEGORY_CONFIG = {
     "TOP_PERFORMER": {"label": "Top Performer", "max_featured": MAX_FEATURED_PER_CATEGORY},
     "BIGGEST_JUMP": {"label": "Biggest Jump", "max_featured": MAX_FEATURED_PER_CATEGORY},
 }
+SOCIAL_SKILL_BUCKETS = tuple(SKILL_LEVEL_OPTIONS)
 
 
 def normalize_date_range(start_date: date, end_date: date) -> tuple[date, date]:
@@ -100,6 +112,55 @@ def _within_bounds(match_date: date, start_date: date, end_date: date) -> bool:
     return start_date <= match_date <= end_date
 
 
+
+
+def _identity_token(identity: tuple[str, int | str]) -> str:
+    return f"{identity[0]}:{identity[1]}"
+
+
+def _coerce_uuid(value: object) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return str(UUID(raw))
+    except Exception:
+        return raw
+
+
+def _social_identity_from_row(row: dict) -> tuple[str, int | str] | None:
+    linked = _safe_int(row.get("linked_player_id"))
+    if linked is not None:
+        return ("player", linked)
+    club_person_id = _coerce_uuid(row.get("club_person_id"))
+    if club_person_id is None:
+        return None
+    return ("person", club_person_id)
+
+
+def _social_display_name(row: dict, id_to_name: dict[int, str]) -> str:
+    linked = _safe_int(row.get("linked_player_id"))
+    if linked is not None:
+        return id_to_name.get(linked) or str(row.get("display_name_snapshot") or f"#{linked}").strip() or f"#{linked}"
+    return str(row.get("display_name_snapshot") or "Community Player").strip() or "Community Player"
+
+
+def social_event_skill_levels(event_row: dict) -> list[str]:
+    summary_json = event_row.get("summary_json") if isinstance(event_row, dict) else {}
+    levels = get_event_skill_levels(summary_json if isinstance(summary_json, dict) else {}, default_all=True)
+    return levels or ["All"]
+
+
+def social_event_date_tags(event_row: dict) -> list[str]:
+    summary_json = event_row.get("summary_json") if isinstance(event_row, dict) else {}
+    date_tags = get_event_date_tags(summary_json if isinstance(summary_json, dict) else {})
+    if date_tags:
+        return date_tags
+    return derive_default_date_tags(event_date=event_row.get("event_date"))
+
+
 def _compute_weekly_recap_payload(
     ctx,
     start_date: date,
@@ -134,12 +195,27 @@ def _compute_weekly_recap_payload(
         df_week, rating_map
     )
 
+    social_data = _load_social_live_data(supabase, club_id, start_date, end_date)
+    social_stats, social_skill_stats, social_meta = _compute_social_stats(social_data, id_to_name)
+
     spotlight_candidates = _build_spotlight_candidates(
         stats, giant_slayer_candidates, id_to_name
     )
+    spotlight_candidates.update(_build_social_spotlight_candidates(social_stats))
     spotlight = _select_spotlight_items(spotlight_candidates)
 
-    numbers = _build_numbers(df_week, stats, event_meta, supabase, club_id, start_dt_utc, end_dt_utc)
+    numbers = _build_numbers(
+        df_week,
+        stats,
+        event_meta,
+        supabase,
+        club_id,
+        start_dt_utc,
+        end_dt_utc,
+        social_match_count=social_meta["social_match_count"],
+        social_event_count=social_meta["social_event_count"],
+        social_canonical_identities=social_meta["canonical_identities"],
+    )
 
     around_club = _build_around_club(
         event_stats,
@@ -147,6 +223,9 @@ def _compute_weekly_recap_payload(
         id_to_name,
         supabase,
     )
+    community_events = _build_social_around_club(social_skill_stats)
+    around_club["community_events"] = community_events
+    around_club["social_round_robins"] = community_events
 
     tournaments_section = _build_tournament_section(
         supabase,
@@ -162,6 +241,7 @@ def _compute_weekly_recap_payload(
         "end_date": end_date.isoformat(),
         "display_range": f"{start_date.isoformat()} – {end_date.isoformat()}",
         "numbers": numbers,
+        "numbers_cards": _build_numbers_cards(numbers),
         "top_performers": _build_top_performers(stats, id_to_name),
         "category_sections": _build_category_sections(stats, id_to_name),
         "spotlight": spotlight,
@@ -174,6 +254,266 @@ def _compute_weekly_recap_payload(
         },
     }
     return recap, spotlight_candidates
+
+
+def _load_social_live_data(supabase, club_id: str, start_date: date, end_date: date) -> dict:
+    if supabase is None:
+        return {"events": [], "participants": [], "matches": []}
+
+    events_response = safe_execute(
+        supabase.table("live_events")
+        .select("id,name,event_type,event_date,status,result_mode,summary_json")
+        .eq("club_id", club_id)
+        .eq("result_mode", "social_unrated")
+        .eq("status", "saved")
+        .gte("event_date", start_date.isoformat())
+        .lte("event_date", end_date.isoformat())
+    )
+    events = events_response.data or []
+    event_ids = [str(row.get("id")) for row in events if row.get("id")]
+    if not event_ids:
+        return {"events": events, "participants": [], "matches": []}
+
+    participants_response = safe_execute(
+        supabase.table("live_event_participants")
+        .select("id,event_id,club_person_id,linked_player_id,display_name_snapshot")
+        .in_("event_id", event_ids)
+    )
+    matches_response = safe_execute(
+        supabase.table("live_event_matches")
+        .select("event_id,played_on,t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,score_t1,score_t2")
+        .in_("event_id", event_ids)
+    )
+    return {
+        "events": events,
+        "participants": participants_response.data or [],
+        "matches": matches_response.data or [],
+    }
+
+
+def _compute_social_stats(social_data: dict, id_to_name: dict[int, str]) -> tuple[dict, dict, dict]:
+    events = social_data.get("events") or []
+    participants = social_data.get("participants") or []
+    matches = social_data.get("matches") or []
+
+    event_lookup = {str(event.get("id")): event for event in events if event.get("id")}
+    participant_lookup = {str(row.get("id")): row for row in participants if row.get("id")}
+    event_tags_by_id: dict[str, dict[str, list[str]]] = {}
+    for event_id, event_row in event_lookup.items():
+        levels = social_event_skill_levels(event_row)
+        date_tags = social_event_date_tags(event_row)
+        event_tags_by_id[event_id] = {"skill_levels": levels, "date_tags": date_tags}
+
+    stats: dict[tuple[str, int | str], dict] = {}
+    skill_stats: dict[str, dict[tuple[str, int | str], dict]] = {}
+
+    def ensure_identity(identity: tuple[str, int | str], display_name: str, event_id: str) -> None:
+        if identity not in stats:
+            stats[identity] = {
+                "identity": identity,
+                "display_name": display_name,
+                "games": 0,
+                "wins": 0,
+                "losses": 0,
+                "points_for": 0,
+                "points_against": 0,
+                "differential": 0,
+                "event_ids": set(),
+                "event_tags": {"skill_levels": ["All"], "date_tags": []},
+                "date_tags": [],
+            }
+        stats[identity]["event_ids"].add(event_id)
+        event_tags = event_tags_by_id.get(event_id, {"skill_levels": ["All"], "date_tags": []})
+        existing_date_tags = list(stats[identity].get("date_tags") or [])
+        merged_date_tags = [*existing_date_tags, *(event_tags.get("date_tags") or [])]
+        deduped_date_tags = []
+        for tag in merged_date_tags:
+            if tag and tag not in deduped_date_tags:
+                deduped_date_tags.append(tag)
+        stats[identity]["date_tags"] = deduped_date_tags
+        stats[identity]["event_tags"] = {"skill_levels": ["All"], "date_tags": deduped_date_tags}
+
+    def apply_match(identity: tuple[str, int | str], display_name: str, *, event_id: str, won: bool, pf: int, pa: int) -> None:
+        overall = stats[identity]
+        ensure_identity(identity, display_name, event_id)
+        event_tags = event_tags_by_id.get(event_id, {"skill_levels": ["All"], "date_tags": []})
+        event_levels = event_tags.get("skill_levels") or ["All"]
+        target_skill_levels = ["All"] if event_levels == ["All"] else [level for level in event_levels if level != "All"]
+        for skill_level in target_skill_levels:
+            by_skill = skill_stats.setdefault(skill_level, {})
+            if identity not in by_skill:
+                by_skill[identity] = {
+                    "identity": identity,
+                    "display_name": display_name,
+                    "games": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "points_for": 0,
+                    "points_against": 0,
+                    "differential": 0,
+                    "event_tags": {"skill_levels": [skill_level], "date_tags": []},
+                    "date_tags": [],
+                }
+        event_date_tags = event_tags.get("date_tags") or []
+
+        overall["games"] += 1
+        overall["wins"] += int(bool(won))
+        overall["losses"] += int(not won)
+        overall["points_for"] += pf
+        overall["points_against"] += pa
+        overall["differential"] = overall["points_for"] - overall["points_against"]
+        overall_tags = []
+        for tag in [*(overall.get("date_tags") or []), *event_date_tags]:
+            if tag and tag not in overall_tags:
+                overall_tags.append(tag)
+        overall["date_tags"] = overall_tags
+        overall["event_tags"] = {"skill_levels": ["All"], "date_tags": overall_tags}
+
+        for skill_level in target_skill_levels:
+            target = skill_stats[skill_level][identity]
+            target["games"] += 1
+            target["wins"] += int(bool(won))
+            target["losses"] += int(not won)
+            target["points_for"] += pf
+            target["points_against"] += pa
+            target["differential"] = target["points_for"] - target["points_against"]
+            level_tags = []
+            for tag in [*(target.get("date_tags") or []), *event_date_tags]:
+                if tag and tag not in level_tags:
+                    level_tags.append(tag)
+            target["date_tags"] = level_tags
+            target["event_tags"] = {"skill_levels": [skill_level], "date_tags": level_tags}
+
+    for row in matches:
+        event_id = str(row.get("event_id") or "")
+        if not event_id:
+            continue
+        s1 = _safe_int(row.get("score_t1")) or 0
+        s2 = _safe_int(row.get("score_t2")) or 0
+        if (s1 + s2) <= 0 or s1 == s2:
+            continue
+
+        participant_ids = [
+            str(row.get("t1_p1_participant_id") or ""),
+            str(row.get("t1_p2_participant_id") or ""),
+            str(row.get("t2_p1_participant_id") or ""),
+            str(row.get("t2_p2_participant_id") or ""),
+        ]
+        participants_for_match = [participant_lookup.get(pid) for pid in participant_ids]
+        if any(item is None for item in participants_for_match):
+            continue
+
+        team1_won = s1 > s2
+        for idx, participant in enumerate(participants_for_match):
+            identity = _social_identity_from_row(participant)
+            if identity is None:
+                continue
+            display_name = _social_display_name(participant, id_to_name)
+            ensure_identity(identity, display_name, event_id)
+            if idx < 2:
+                apply_match(identity, display_name, event_id=event_id, won=team1_won, pf=s1, pa=s2)
+            else:
+                apply_match(identity, display_name, event_id=event_id, won=not team1_won, pf=s2, pa=s1)
+
+    canonical_identities = set(stats.keys())
+    return stats, skill_stats, {
+        "events": event_lookup,
+        "social_match_count": int(sum(1 for row in matches if (_safe_int(row.get("score_t1")) or 0) + (_safe_int(row.get("score_t2")) or 0) > 0)),
+        "social_event_count": len(event_lookup),
+        "canonical_identities": canonical_identities,
+    }
+
+
+def _build_social_spotlight_candidates(social_stats: dict[tuple[str, int | str], dict]) -> dict[str, list[SpotlightCandidate]]:
+    candidates: dict[str, list[SpotlightCandidate]] = {
+        "COMMUNITY_STANDOUT_WEEK": [],
+        "SOCIAL_GRIND_WEEK": [],
+    }
+
+    for identity, entry in social_stats.items():
+        games = int(entry.get("games", 0))
+        wins = int(entry.get("wins", 0))
+        losses = int(entry.get("losses", 0))
+        differential = int(entry.get("differential", 0))
+        points_for = int(entry.get("points_for", 0))
+        display_name = str(entry.get("display_name") or "Community Player")
+        candidate_id = _identity_token(identity)
+
+        if games >= 4:
+            candidates["COMMUNITY_STANDOUT_WEEK"].append(
+                SpotlightCandidate(
+                    candidate_id=candidate_id,
+                    key="COMMUNITY_STANDOUT_WEEK",
+                    label="Community Standout",
+                    display=f"{display_name} — {wins}-{losses} ({differential:+d})",
+                    player_ids=[int(identity[1])] if identity[0] == "player" else [],
+                    event_key=None,
+                    value_json={"wins": wins, "losses": losses, "games": games, "differential": differential, "points_for": points_for},
+                )
+            )
+
+        candidates["SOCIAL_GRIND_WEEK"].append(
+            SpotlightCandidate(
+                candidate_id=candidate_id,
+                key="SOCIAL_GRIND_WEEK",
+                label="Social Grinder",
+                display=f"{display_name} — {games} games",
+                player_ids=[int(identity[1])] if identity[0] == "player" else [],
+                event_key=None,
+                value_json={"games": games, "wins": wins, "differential": differential},
+            )
+        )
+
+    candidates["COMMUNITY_STANDOUT_WEEK"].sort(
+        key=lambda item: (
+            -(item.value_json.get("wins", 0) - item.value_json.get("losses", 0)),
+            -item.value_json.get("differential", 0),
+            -item.value_json.get("points_for", 0),
+            item.value_json.get("losses", 0),
+            item.display.casefold(),
+            item.candidate_id,
+        )
+    )
+    candidates["SOCIAL_GRIND_WEEK"].sort(
+        key=lambda item: (
+            -item.value_json.get("games", 0),
+            -item.value_json.get("wins", 0),
+            -item.value_json.get("differential", 0),
+            item.display.casefold(),
+            item.candidate_id,
+        )
+    )
+    return candidates
+
+
+def _build_social_around_club(social_skill_stats: dict[str, dict]) -> list[dict]:
+    rows: list[dict] = []
+    for skill_level in SOCIAL_SKILL_BUCKETS:
+        skill_players = social_skill_stats.get(skill_level) or {}
+        if not skill_players:
+            continue
+        candidates = _build_social_spotlight_candidates(skill_players)
+        highlights: list[dict] = []
+        standout = (candidates.get("COMMUNITY_STANDOUT_WEEK") or [])[:1]
+        grinder = (candidates.get("SOCIAL_GRIND_WEEK") or [])[:1]
+        if standout:
+            highlights.append({"key": "COMMUNITY_STANDOUT_WEEK", "display": f"Community Standout: {standout[0].display}"})
+        if grinder and (not standout or grinder[0].candidate_id != standout[0].candidate_id):
+            highlights.append({"key": "SOCIAL_GRIND_WEEK", "display": f"Social Grinder: {grinder[0].display}"})
+        if highlights:
+            rows.append(
+                {
+                    "skill_level": skill_level,
+                    "event_name": "Club Social",
+                    "event_type": "social_unrated",
+                    "event_type_label": f"Social {skill_level}",
+                    "event_tags": {"skill_levels": [skill_level], "date_tags": []},
+                    "date_tags": [],
+                    "highlights": highlights[:2],
+                }
+            )
+    return rows
+
 
 
 def _load_matches(
@@ -942,6 +1282,10 @@ def _build_numbers(
     club_id: str,
     start_dt: datetime,
     end_dt: datetime,
+    *,
+    social_match_count: int = 0,
+    social_event_count: int = 0,
+    social_canonical_identities: set[tuple[str, int | str]] | None = None,
 ) -> dict:
     match_count = int(len(df_week)) if df_week is not None else 0
     player_ids = list(stats.keys())
@@ -950,13 +1294,33 @@ def _build_numbers(
 
     new_faces = _compute_new_faces(supabase, club_id, player_ids, start_dt, end_dt)
 
+    canonical_identities: set[tuple[str, int | str]] = {("player", pid) for pid in player_ids}
+    canonical_identities.update(social_canonical_identities or set())
+
     return {
-        "matches": match_count,
-        "players": len(player_ids),
+        "matches": match_count + int(social_match_count or 0),
+        "players": len(canonical_identities),
         "leagues": league_count,
         "round_robins": rr_count,
+        "community_events": int(social_event_count or 0),
+        "social_round_robins": int(social_event_count or 0),
         "new_faces": len(new_faces),
     }
+
+
+def _build_numbers_cards(numbers: dict) -> list[dict]:
+    return [
+        {"key": "matches", "label": "Matches", "value": int(numbers.get("matches", 0) or 0)},
+        {"key": "players", "label": "Players", "value": int(numbers.get("players", 0) or 0)},
+        {"key": "leagues", "label": "Leagues", "value": int(numbers.get("leagues", 0) or 0)},
+        {"key": "round_robins", "label": "Pop-Ups", "value": int(numbers.get("round_robins", 0) or 0)},
+        {
+            "key": "community_events",
+            "label": "Community Events",
+            "value": int(numbers.get("community_events", numbers.get("social_round_robins", 0)) or 0),
+        },
+        {"key": "new_faces", "label": "New Faces", "value": int(numbers.get("new_faces", 0) or 0)},
+    ]
 
 
 def _compute_new_faces(

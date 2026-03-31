@@ -16,6 +16,10 @@ from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue,
     process_badge_eval_queue_until_empty,
 )
+from jupr_app.domain.live_social import (
+    list_social_submissions_for_review,
+    moderate_social_submission,
+)
 from jupr_app.ui.layout import page_shell
 
 def _get_api_error_code(exc: APIError) -> str | None:
@@ -415,6 +419,9 @@ def render(ctx):
                 st.dataframe(summary, use_container_width=True, hide_index=True)
 
     st.divider()
+    _render_club_social_review(ctx)
+
+    st.divider()
 
     # -------------------------
     # Badge State Controls
@@ -477,6 +484,90 @@ def render(ctx):
                 except Exception as exc:
                     st.error("Failed to update badge state.")
                     st.exception(exc)
+
+
+def _render_club_social_review(ctx) -> None:
+    st.subheader("🧾 Club Social Review")
+    st.caption("Review pending club social submissions for this club context.")
+    status_filter = st.selectbox(
+        "Queue",
+        ["pending", "saved", "rejected"],
+        index=0,
+        key="club_social_review_status_filter",
+    )
+    try:
+        rows = list_social_submissions_for_review(ctx, status=status_filter, limit=100)
+    except Exception as exc:
+        st.error("Unable to load Club Social review queue.")
+        st.exception(exc)
+        return
+    if not rows:
+        st.info(f"No {status_filter} Club Social submissions found.")
+        return
+
+    for row in rows:
+        summary = row.get("summary_json") or {}
+        leader = summary.get("leader") if isinstance(summary, dict) else None
+        leader_text = ""
+        if isinstance(leader, dict) and leader.get("name"):
+            leader_text = (
+                f" • Leader: {leader.get('name')} "
+                f"({int(leader.get('wins') or 0)}W, diff {int(leader.get('differential') or 0)})"
+            )
+        st.markdown(
+            f"**{row.get('name') or 'Untitled'}** ({row.get('event_type')}) — {row.get('event_date')}  \n"
+            f"Submitted by: `{row.get('submitted_by_name') or 'unknown'}` "
+            f"({row.get('submission_mode') or 'unknown'}) • "
+            f"Participants: {int(summary.get('participant_count') or 0)} • "
+            f"Matches: {int(summary.get('match_count') or 0)}{leader_text}  \n"
+            f"Created: {row.get('created_at') or '—'} • Updated: {row.get('updated_at') or '—'}"
+        )
+        if row.get("status") == "rejected" and row.get("rejection_reason"):
+            st.caption(f"Rejection reason: {row.get('rejection_reason')}")
+
+        action_cols = st.columns([1.2, 1.2, 3])
+        rejection_reason = action_cols[2].text_input(
+            "Rejection reason",
+            key=f"club_social_reject_reason_{row.get('id')}",
+        )
+        if action_cols[0].button(
+            "Approve",
+            key=f"club_social_approve_{row.get('id')}",
+            disabled=row.get("status") == "saved",
+        ):
+            try:
+                moderate_social_submission(
+                    ctx,
+                    event_id=str(row.get("id")),
+                    action="approve",
+                )
+                st.session_state["force_data_refresh"] = True
+                st.success("Submission approved.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Approve failed: {exc}")
+        if action_cols[1].button(
+            "Reject",
+            key=f"club_social_reject_{row.get('id')}",
+            disabled=row.get("status") == "rejected",
+        ):
+            try:
+                moderate_social_submission(
+                    ctx,
+                    event_id=str(row.get("id")),
+                    action="reject",
+                    rejection_reason=str(rejection_reason or ""),
+                )
+                st.session_state["force_data_refresh"] = True
+                st.success("Submission rejected.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Reject failed: {exc}")
+        with st.expander("View summary_json", expanded=False):
+            st.json(summary)
+        with st.expander("View raw_event_json", expanded=False):
+            st.json(row.get("raw_event_json") or {})
+        st.divider()
 
 
 
