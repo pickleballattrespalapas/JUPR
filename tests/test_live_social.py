@@ -7,6 +7,7 @@ from jupr_app.domain.live_social import (
     auto_link_exact_matches,
     find_exact_player_link_candidates,
     list_social_submissions_for_review,
+    is_missing_social_tables_error,
     moderate_social_submission,
     normalized_player_name_map,
     resolve_or_create_club_person,
@@ -567,3 +568,18 @@ def test_social_person_rollup_rows_counts_events_and_matches():
     rows = social_person_rollup_rows(supabase, "club-1")
     assert rows[0]["social_event_count"] == 2
     assert rows[0]["social_match_count"] == 1
+
+
+class _MissingTableError(Exception):
+    def __init__(self):
+        super().__init__("PGRST205: Could not find the table 'public.club_people' in the schema cache")
+        self.code = "PGRST205"
+
+
+def test_detects_missing_social_tables_error_codes():
+    assert is_missing_social_tables_error(_MissingTableError()) is True
+
+
+def test_ignores_unrelated_errors_for_social_table_detection():
+    err = RuntimeError("network timeout")
+    assert is_missing_social_tables_error(err) is False

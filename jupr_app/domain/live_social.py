@@ -20,6 +20,47 @@ from jupr_app.domain.live_beta_engine import (
 )
 
 SOCIAL_SKILL_LEVEL_OPTIONS = SKILL_LEVEL_OPTIONS
+SOCIAL_TABLES_INSTALL_MESSAGE = (
+    "Club Social tables are not installed in Supabase yet. Apply the social live events migration first."
+)
+_SOCIAL_TABLE_NAMES = ("club_people", "live_events", "live_event_participants", "live_event_matches")
+
+
+class SocialTablesNotInstalledError(RuntimeError):
+    """Raised when Club Social persistence tables are missing in Supabase."""
+
+
+def _error_payload_text(exc: Exception) -> str:
+    pieces = [str(exc)]
+    for attr in ("code", "message", "details", "hint"):
+        value = getattr(exc, attr, None)
+        if value:
+            pieces.append(str(value))
+    response = getattr(exc, "response", None)
+    if response is not None:
+        for attr in ("text",):
+            value = getattr(response, attr, None)
+            if value:
+                pieces.append(str(value))
+        json_fn = getattr(response, "json", None)
+        if callable(json_fn):
+            try:
+                payload = json_fn()
+            except Exception:
+                payload = None
+            if payload:
+                pieces.append(str(payload))
+    return " | ".join(pieces).lower()
+
+
+def is_missing_social_tables_error(exc: Exception) -> bool:
+    payload = _error_payload_text(exc)
+    if not payload:
+        return False
+    has_missing_code = "pgrst205" in payload or "42p01" in payload
+    has_table_marker = "table" in payload or "relation" in payload
+    mentions_social_table = any(table in payload for table in _SOCIAL_TABLE_NAMES)
+    return has_missing_code and has_table_marker and mentions_social_table
 
 
 def normalize_person_name(value: object) -> str:
@@ -456,136 +497,141 @@ def save_social_live_event(
     linked_existing_players_count = 0
     participant_rows: list[dict] = []
 
-    for participant in participants:
-        display_name = str(participant.get("name") or participant.get("id") or "")
-        club_person, created_new, matched_player = resolve_or_create_club_person(
-            ctx,
-            display_name=display_name,
-            event_date=event_date,
-            club_id=club_id,
-        )
-        created_people_count += int(bool(created_new))
-        linked_existing_players_count += int(bool(matched_player))
-        participant_rows.append(
-            {
-                "participant_key": str(participant.get("id")),
-                "club_person_id": club_person["id"],
-                "linked_player_id": club_person.get("linked_player_id"),
-                "display_name_snapshot": display_name,
-                "seed": participant.get("seed"),
-            }
-        )
-
-    match_rows = (
-        social_round_robin_match_rows_from_event(event)
-        if event_type == "round_robin"
-        else social_league_match_rows_from_event(event)
-    )
-    default_date_tags = derive_default_date_tags(event_date=event_date)
-    normalized_event_tags = merge_event_tags(
-        event.get("event_tags"),
-        {
-            "skill_levels": skill_levels if skill_levels is not None else None,
-            "date_tags": [*(event.get("event_tags") or {}).get("date_tags", []), *default_date_tags],
-        },
-        default_skill_all=True,
-    )
-    summary_json = build_social_event_summary(
-        event,
-        match_count=len(match_rows),
-        event_tags=normalized_event_tags,
-    )
-    normalized_submission_mode = str(submission_mode or "").strip().lower() or "public"
-    status = _status_for_submission_mode(normalized_submission_mode)
-    submitted_by = normalize_name(host_name) or ("admin" if status == "saved" else "guest")
-    moderated_at = datetime.now(timezone.utc).isoformat() if status == "saved" else None
-    moderated_by = _moderated_by(ctx) if status == "saved" else None
-
-    upsert_payload = {
-        "club_id": club_id,
-        "source_event_uid": source_event_uid,
-        "name": str(event.get("name") or "JUPR Live Club Social"),
-        "event_type": event_type,
-        "result_mode": "social_unrated",
-        "event_date": event_date,
-        "status": status,
-        "submission_mode": normalized_submission_mode,
-        "submitted_by_name": submitted_by,
-        "moderated_at": moderated_at,
-        "moderated_by": moderated_by,
-        "rejection_reason": None,
-        "raw_event_json": {**event, "event_tags": normalized_event_tags},
-        "summary_json": summary_json,
-    }
-
-    supabase.table("live_events").upsert(
-        upsert_payload,
-        on_conflict="club_id,source_event_uid",
-    ).execute()
-
-    event_rows = (
-        supabase.table("live_events")
-        .select("id")
-        .eq("club_id", club_id)
-        .eq("source_event_uid", source_event_uid)
-        .execute()
-        .data
-        or []
-    )
-    if not event_rows:
-        raise RuntimeError("Unable to resolve saved live_events row.")
-    event_id = str(event_rows[0]["id"])
-
-    supabase.table("live_event_matches").delete().eq("event_id", event_id).execute()
-    supabase.table("live_event_participants").delete().eq("event_id", event_id).execute()
-
-    if participant_rows:
-        supabase.table("live_event_participants").insert(
-            [{**row, "event_id": event_id} for row in participant_rows]
-        ).execute()
-
-    participants_saved = (
-        supabase.table("live_event_participants")
-        .select("id,participant_key")
-        .eq("event_id", event_id)
-        .execute()
-        .data
-        or []
-    )
-    participant_key_to_id = {str(row["participant_key"]): str(row["id"]) for row in participants_saved}
-
-    if match_rows:
-        payloads = []
-        for row in match_rows:
-            payloads.append(
+    try:
+        for participant in participants:
+            display_name = str(participant.get("name") or participant.get("id") or "")
+            club_person, created_new, matched_player = resolve_or_create_club_person(
+                ctx,
+                display_name=display_name,
+                event_date=event_date,
+                club_id=club_id,
+            )
+            created_people_count += int(bool(created_new))
+            linked_existing_players_count += int(bool(matched_player))
+            participant_rows.append(
                 {
-                    "event_id": event_id,
-                    "match_key": row["match_key"],
-                    "played_on": row["played_on"],
-                    "round_number": row["round_number"],
-                    "court_number": row["court_number"],
-                    "mini_round_number": row["mini_round_number"],
-                    "t1_p1_participant_id": participant_key_to_id[row["t1_p1_key"]],
-                    "t1_p2_participant_id": participant_key_to_id[row["t1_p2_key"]],
-                    "t2_p1_participant_id": participant_key_to_id[row["t2_p1_key"]],
-                    "t2_p2_participant_id": participant_key_to_id[row["t2_p2_key"]],
-                    "score_t1": row["score_t1"],
-                    "score_t2": row["score_t2"],
+                    "participant_key": str(participant.get("id")),
+                    "club_person_id": club_person["id"],
+                    "linked_player_id": club_person.get("linked_player_id"),
+                    "display_name_snapshot": display_name,
+                    "seed": participant.get("seed"),
                 }
             )
-        supabase.table("live_event_matches").insert(payloads).execute()
 
-    return {
-        "event_id": event_id,
-        "status": status,
-        "submission_mode": normalized_submission_mode,
-        "submitted_by_name": submitted_by,
-        "saved_rounds": _saved_rounds(event),
-        "participant_count": len(participant_rows),
-        "match_count": len(match_rows),
-        "created_people_count": created_people_count,
-        "linked_existing_players_count": linked_existing_players_count,
-    }
+        match_rows = (
+            social_round_robin_match_rows_from_event(event)
+            if event_type == "round_robin"
+            else social_league_match_rows_from_event(event)
+        )
+        default_date_tags = derive_default_date_tags(event_date=event_date)
+        normalized_event_tags = merge_event_tags(
+            event.get("event_tags"),
+            {
+                "skill_levels": skill_levels if skill_levels is not None else None,
+                "date_tags": [*(event.get("event_tags") or {}).get("date_tags", []), *default_date_tags],
+            },
+            default_skill_all=True,
+        )
+        summary_json = build_social_event_summary(
+            event,
+            match_count=len(match_rows),
+            event_tags=normalized_event_tags,
+        )
+        normalized_submission_mode = str(submission_mode or "").strip().lower() or "public"
+        status = _status_for_submission_mode(normalized_submission_mode)
+        submitted_by = normalize_name(host_name) or ("admin" if status == "saved" else "guest")
+        moderated_at = datetime.now(timezone.utc).isoformat() if status == "saved" else None
+        moderated_by = _moderated_by(ctx) if status == "saved" else None
+
+        upsert_payload = {
+            "club_id": club_id,
+            "source_event_uid": source_event_uid,
+            "name": str(event.get("name") or "JUPR Live Club Social"),
+            "event_type": event_type,
+            "result_mode": "social_unrated",
+            "event_date": event_date,
+            "status": status,
+            "submission_mode": normalized_submission_mode,
+            "submitted_by_name": submitted_by,
+            "moderated_at": moderated_at,
+            "moderated_by": moderated_by,
+            "rejection_reason": None,
+            "raw_event_json": {**event, "event_tags": normalized_event_tags},
+            "summary_json": summary_json,
+        }
+
+        supabase.table("live_events").upsert(
+            upsert_payload,
+            on_conflict="club_id,source_event_uid",
+        ).execute()
+
+        event_rows = (
+            supabase.table("live_events")
+            .select("id")
+            .eq("club_id", club_id)
+            .eq("source_event_uid", source_event_uid)
+            .execute()
+            .data
+            or []
+        )
+        if not event_rows:
+            raise RuntimeError("Unable to resolve saved live_events row.")
+        event_id = str(event_rows[0]["id"])
+
+        supabase.table("live_event_matches").delete().eq("event_id", event_id).execute()
+        supabase.table("live_event_participants").delete().eq("event_id", event_id).execute()
+
+        if participant_rows:
+            supabase.table("live_event_participants").insert(
+                [{**row, "event_id": event_id} for row in participant_rows]
+            ).execute()
+
+        participants_saved = (
+            supabase.table("live_event_participants")
+            .select("id,participant_key")
+            .eq("event_id", event_id)
+            .execute()
+            .data
+            or []
+        )
+        participant_key_to_id = {str(row["participant_key"]): str(row["id"]) for row in participants_saved}
+
+        if match_rows:
+            payloads = []
+            for row in match_rows:
+                payloads.append(
+                    {
+                        "event_id": event_id,
+                        "match_key": row["match_key"],
+                        "played_on": row["played_on"],
+                        "round_number": row["round_number"],
+                        "court_number": row["court_number"],
+                        "mini_round_number": row["mini_round_number"],
+                        "t1_p1_participant_id": participant_key_to_id[row["t1_p1_key"]],
+                        "t1_p2_participant_id": participant_key_to_id[row["t1_p2_key"]],
+                        "t2_p1_participant_id": participant_key_to_id[row["t2_p1_key"]],
+                        "t2_p2_participant_id": participant_key_to_id[row["t2_p2_key"]],
+                        "score_t1": row["score_t1"],
+                        "score_t2": row["score_t2"],
+                    }
+                )
+            supabase.table("live_event_matches").insert(payloads).execute()
+
+        return {
+            "event_id": event_id,
+            "status": status,
+            "submission_mode": normalized_submission_mode,
+            "submitted_by_name": submitted_by,
+            "saved_rounds": _saved_rounds(event),
+            "participant_count": len(participant_rows),
+            "match_count": len(match_rows),
+            "created_people_count": created_people_count,
+            "linked_existing_players_count": linked_existing_players_count,
+        }
+    except Exception as exc:
+        if is_missing_social_tables_error(exc):
+            raise SocialTablesNotInstalledError(SOCIAL_TABLES_INSTALL_MESSAGE) from exc
+        raise
 
 
 def save_social_round_robin(ctx, event: dict, *, saved_by: str = "admin") -> dict:

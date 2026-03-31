@@ -4,6 +4,8 @@ import streamlit as st
 
 from jupr_app.domain.live_social import (
     SOCIAL_SKILL_LEVEL_OPTIONS,
+    SOCIAL_TABLES_INSTALL_MESSAGE,
+    SocialTablesNotInstalledError,
     normalize_skill_levels,
     save_social_live_event,
 )
@@ -89,14 +91,18 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
 
     skill_levels = normalize_skill_levels(st.session_state.get(SOCIAL_SKILL_LEVELS_KEY))
     submission_mode = "admin" if admin_logged_in else "public"
-    result = save_social_live_event(
-        ctx,
-        event,
-        target_club_id=club_id,
-        submission_mode=submission_mode,
-        host_name=host_name,
-        skill_levels=skill_levels,
-    )
+    try:
+        result = save_social_live_event(
+            ctx,
+            event,
+            target_club_id=club_id,
+            submission_mode=submission_mode,
+            host_name=host_name,
+            skill_levels=skill_levels,
+        )
+    except SocialTablesNotInstalledError:
+        st.error(SOCIAL_TABLES_INSTALL_MESSAGE)
+        return False
     state["last_saved_rounds"] = list(result.get("saved_rounds") or [])
     event["saved_rounds"] = list(result.get("saved_rounds") or [])
     st.session_state["force_data_refresh"] = True
