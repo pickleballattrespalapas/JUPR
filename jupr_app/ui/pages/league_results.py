@@ -212,46 +212,61 @@ def _summarize_player_stats(df: pd.DataFrame, group_cols: list[str]) -> pd.DataF
     return grouped
 
 
-def _build_league_standings(ctx, league_name: str) -> pd.DataFrame:
-    df_leagues = getattr(ctx, "df_leagues", None)
-    id_to_name = getattr(ctx, "id_to_name", {})
-    active_ids = None
-    df_players_active = getattr(ctx, "df_players_active", None)
-    if df_players_active is not None and not df_players_active.empty and "id" in df_players_active.columns:
-        active_ids = set(df_players_active["id"].astype(int).tolist())
-    if df_leagues is None or df_leagues.empty or "league_name" not in df_leagues.columns:
+def _build_scoped_league_standings(
+    overall_stats: pd.DataFrame,
+    replay_df: pd.DataFrame,
+    id_to_name: dict[int, str],
+) -> pd.DataFrame:
+    if replay_df is None or replay_df.empty or overall_stats is None or overall_stats.empty:
         return pd.DataFrame()
 
-    league_df = df_leagues.copy()
-    league_df["league_name"] = league_df["league_name"].fillna("").astype(str).str.strip()
-    league_df = league_df[league_df["league_name"] == str(league_name).strip()].copy()
-    if league_df.empty:
+    data = replay_df.copy()
+    if "date_dt" not in data.columns:
+        data["date_dt"] = pd.NaT
+    if "match_id" not in data.columns:
+        data["match_id"] = 0
+    data = data.sort_values(["date_dt", "match_id"], ascending=[True, True]).copy()
+
+    start_col = "starting_rating" if "starting_rating" in data.columns else "start_rating"
+    end_col = "rating" if "rating" in data.columns else "end_rating"
+    if start_col not in data.columns or end_col not in data.columns:
         return pd.DataFrame()
 
-    league_df["player_id"] = league_df["player_id"].astype(int)
-    if active_ids is not None:
-        league_df = league_df[league_df["player_id"].isin(active_ids)].copy()
-        if league_df.empty:
-            return pd.DataFrame()
-    league_df["name"] = league_df["player_id"].map(id_to_name)
-    league_df["rating"] = pd.to_numeric(league_df.get("rating", 0), errors="coerce").fillna(0.0)
-    league_df["starting_rating"] = pd.to_numeric(
-        league_df.get("starting_rating", league_df["rating"]), errors="coerce"
-    ).fillna(league_df["rating"])
-    for col in ["wins", "losses", "matches_played"]:
-        league_df[col] = pd.to_numeric(league_df.get(col, 0), errors="coerce").fillna(0).astype(int)
+    first = data.groupby("player_id", as_index=False).first()[["player_id", start_col]].rename(
+        columns={start_col: "starting_rating"}
+    )
+    last = data.groupby("player_id", as_index=False).last()[["player_id", end_col]].rename(
+        columns={end_col: "rating"}
+    )
+    ratings = first.merge(last, on="player_id", how="inner")
+    if ratings.empty:
+        return pd.DataFrame()
 
-    league_df["JUPR"] = league_df["rating"].astype(float) / 400.0
-    league_df["rating_delta"] = (league_df["rating"] - league_df["starting_rating"]).astype(float) / 400.0
-    league_df["win_pct"] = league_df.apply(
-        lambda r: (float(r["wins"]) / float(r["matches_played"]) * 100.0)
-        if int(r["matches_played"]) > 0
-        else pd.NA,
+    standings = overall_stats.copy().merge(ratings, on="player_id", how="inner")
+    if standings.empty:
+        return pd.DataFrame()
+
+    standings["player_name"] = standings["player_name"].where(
+        standings["player_name"].notna() & (standings["player_name"].astype(str).str.strip() != ""),
+        standings["player_id"].map(id_to_name),
+    )
+    standings["rating"] = pd.to_numeric(standings["rating"], errors="coerce")
+    standings["starting_rating"] = pd.to_numeric(standings["starting_rating"], errors="coerce")
+    standings["games"] = pd.to_numeric(standings["games"], errors="coerce").fillna(0).astype(int)
+    standings["wins"] = pd.to_numeric(standings["wins"], errors="coerce").fillna(0).astype(int)
+    standings["losses"] = pd.to_numeric(standings["losses"], errors="coerce").fillna(0).astype(int)
+    standings["win_pct"] = standings.apply(
+        lambda r: (float(r["wins"]) / float(r["games"]) * 100.0) if int(r["games"]) > 0 else pd.NA,
         axis=1,
     )
-    league_df = league_df.sort_values(["rating", "matches_played"], ascending=[False, False]).copy()
-    league_df["rank"] = range(1, len(league_df) + 1)
-    return league_df
+    standings["JUPR"] = standings["rating"].astype(float) / 400.0
+    standings["rating_delta"] = (standings["rating"] - standings["starting_rating"]).astype(float) / 400.0
+    standings = standings.sort_values(
+        ["rating", "games", "wins", "player_name"],
+        ascending=[False, False, False, True],
+    ).copy()
+    standings["rank"] = range(1, len(standings) + 1)
+    return standings
 
 
 def _render_html_table(headers: list[str], rows: list[list[str]]) -> None:
@@ -505,12 +520,16 @@ def render(ctx):
         if player_frame.empty:
             st.info("No active players found for this league.")
             return
+    scoped_player_ids = set(player_frame["player_id"].astype(int).tolist())
 
     overall_stats = _summarize_player_stats(player_frame, ["player_id", "player_name"])
     weekly_stats = _summarize_player_stats(player_frame, ["player_id", "player_name", "week_num"]) if not player_frame.empty else pd.DataFrame()
 
     replay_df = _replay_league_ratings(league_matches, league_name, df_meta, df_players_all)
+    if not replay_df.empty and scoped_player_ids:
+        replay_df = replay_df[replay_df["player_id"].astype(int).isin(scoped_player_ids)].copy()
     weekly_rating = _weekly_rating_summary(replay_df)
+    standings = _build_scoped_league_standings(overall_stats, replay_df, getattr(ctx, "id_to_name", {}))
     weeks_df = _build_league_weeks(df_meta, league_name, league_matches)
     league_week_nums = weeks_df["week_num"].tolist() if not weeks_df.empty else []
 
@@ -518,13 +537,12 @@ def render(ctx):
 
     with tabs[0]:
         st.subheader("Current Standings")
-        standings = _build_league_standings(ctx, league_name)
         if standings.empty:
             st.info("No league rating data found yet.")
         else:
             table_rows = []
             for _, row in standings.iterrows():
-                player_link = _build_player_link(row["player_id"], row["name"], PUBLIC_MODE, ctx)
+                player_link = _build_player_link(row["player_id"], row["player_name"], PUBLIC_MODE, ctx)
                 win_pct = f"{float(row['win_pct']):.1f}%" if pd.notna(row["win_pct"]) else "—"
                 rating_delta = row.get("rating_delta")
                 rating_delta_display = f"{float(rating_delta):+.3f}" if pd.notna(rating_delta) else "—"
@@ -533,7 +551,7 @@ def render(ctx):
                         str(int(row["rank"])),
                         player_link,
                         f"{float(row['JUPR']):.3f}",
-                        str(int(row["matches_played"])),
+                        str(int(row["games"])),
                         str(int(row["wins"])),
                         str(int(row["losses"])),
                         win_pct,
@@ -546,7 +564,7 @@ def render(ctx):
                 table_rows,
             )
 
-        st.markdown("### Cumulative Performance (League Only)")
+        st.markdown("### League Match Totals")
         if overall_stats.empty:
             st.info("No cumulative stats available yet.")
         else:
