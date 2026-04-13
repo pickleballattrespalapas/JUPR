@@ -100,10 +100,22 @@ def render(ctx):
     with st.form("edit_player_form"):
         new_name = st.text_input("Name", value=str(row.get("name", "")))
         new_rating = st.number_input("Overall JUPR", 1.0, 7.0, float(row.get("rating", 1200.0) or 1200.0) / 400.0, step=0.01)
+        new_starting_rating = st.number_input(
+            "Starting JUPR",
+            1.0,
+            7.0,
+            float(row.get("starting_rating", row.get("rating", 1200.0)) or row.get("rating", 1200.0) or 1200.0) / 400.0,
+            step=0.01,
+        )
         active = st.checkbox("Active", value=bool(row.get("active", True)))
         if st.form_submit_button("Save Player"):
             supabase.table("players").update(
-                {"name": new_name.strip(), "rating": float(new_rating) * 400.0, "active": bool(active)}
+                {
+                    "name": new_name.strip(),
+                    "rating": float(new_rating) * 400.0,
+                    "starting_rating": float(new_starting_rating) * 400.0,
+                    "active": bool(active),
+                }
             ).eq("club_id", club_id).eq("id", pid).execute()
             st.success("Saved. Use Refresh in sidebar if leaderboards still show old values.")
             time.sleep(0.4)
