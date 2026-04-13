@@ -587,7 +587,7 @@ def _dedupe_matches(df: pd.DataFrame) -> pd.DataFrame:
         with_id = deduped.loc[has_id].copy()
         without_id = deduped.loc[~has_id].copy()
         if not with_id.empty:
-            with_id.loc[:, "id"] = id_str.loc[has_id]
+            with_id = with_id.assign(id=id_str.loc[has_id].astype("string"))
             with_id = with_id.drop_duplicates(subset=["id"], keep="last")
     else:
         with_id = deduped.iloc[0:0].copy()
