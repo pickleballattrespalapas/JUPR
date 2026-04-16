@@ -40,6 +40,14 @@ def _normalize_email(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
+def _query_param_text(key: str) -> str:
+    """Read a query param as text while tolerating list-like values."""
+    value = st.query_params.get(key, "")
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
 def load_admin_allowlist() -> set[str]:
     """
     Load allowlisted admin emails from either:
@@ -140,6 +148,100 @@ def login_admin(email: str, password: str) -> dict:
     st.session_state[_AUTH_USER_KEY] = user
     st.session_state[_AUTH_SESSION_KEY] = session
     return {"user": user, "session": session}
+
+
+def get_recovery_query_params() -> dict[str, str]:
+    """
+    Collect Supabase recovery-related params from URL query params.
+    Supports both token pair and PKCE code flows.
+    """
+    fields = (
+        "access_token",
+        "refresh_token",
+        "type",
+        "code",
+        "token_hash",
+        "error",
+        "error_code",
+        "error_description",
+    )
+    params: dict[str, str] = {}
+    for key in fields:
+        value = _query_param_text(key)
+        if value:
+            params[key] = value
+    return params
+
+
+def is_recovery_flow_query(params: dict[str, str] | None = None) -> bool:
+    """Return True when query params look like a Supabase password recovery callback."""
+    query = params or get_recovery_query_params()
+    flow_type = str(query.get("type", "")).strip().lower()
+    if flow_type == "recovery":
+        return True
+
+    return any(
+        key in query for key in ("access_token", "refresh_token", "code", "token_hash")
+    )
+
+
+def establish_recovery_session(client, params: dict[str, str] | None = None) -> bool:
+    """
+    Exchange callback params into an auth session for password update.
+    Returns True when a usable auth session is present.
+    """
+    query = params or get_recovery_query_params()
+
+    try:
+        if client.auth.get_session() is not None:
+            return True
+    except Exception:
+        pass
+
+    if query.get("error") or query.get("error_code"):
+        return False
+
+    access_token = query.get("access_token", "")
+    refresh_token = query.get("refresh_token", "")
+    if access_token and refresh_token:
+        try:
+            response = client.auth.set_session(access_token, refresh_token)
+        except Exception:
+            return False
+        return bool(getattr(response, "session", None))
+
+    auth_code = query.get("code", "")
+    if auth_code:
+        try:
+            response = client.auth.exchange_code_for_session({"auth_code": auth_code})
+        except Exception:
+            return False
+        return bool(getattr(response, "session", None))
+
+    return False
+
+
+def update_recovered_user_password(client, new_password: str) -> None:
+    """Update password for the currently recovered/authenticated user session."""
+    if not str(new_password or ""):
+        raise AdminAuthError("Enter a new password.")
+
+    try:
+        response = client.auth.update_user({"password": new_password})
+    except Exception:
+        raise AdminAuthError(
+            "Unable to update password. This password reset link may be invalid or expired. Request a new reset email."
+        )
+
+    if getattr(response, "user", None) is None:
+        raise AdminAuthError(
+            "Unable to update password. This password reset link may be invalid or expired. Request a new reset email."
+        )
+
+
+def clear_local_admin_auth_state() -> None:
+    """Clear local Streamlit auth state after password reset success."""
+    logout_admin()
 
 
 def logout_admin() -> None:

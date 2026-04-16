@@ -17,6 +17,7 @@ from jupr_app.ui.admin_auth import (
     bootstrap_admin_auth,
     get_current_admin_user,
     is_allowed_admin_email,
+    is_recovery_flow_query,
     load_admin_allowlist,
     login_admin,
     logout_admin,
@@ -24,6 +25,7 @@ from jupr_app.ui.admin_auth import (
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.page_registry import (
     ADMIN_ONLY_LABELS,
+    HIDDEN_PAGE_LABELS,
     LABEL_TO_PAGE_KEY,
     PAGE_KEY_TO_LABEL,
     PUBLIC_NAV_KEYS,
@@ -304,6 +306,7 @@ def main():
             moneyball,
             player_editor,
             players,
+            reset_password,
             theme_gallery,
             top_players_printable,
             tournament_manager,
@@ -343,6 +346,8 @@ def main():
             "🤝 Partner Board": tournament_partner_board,
             "🗞️ Weekly Recap": weekly_recap,
             "🧾 Top Active Players PDF": top_players_printable,
+            # Hidden deep-link page
+            "🔐 Reset Password": reset_password,
             # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
         }
@@ -360,6 +365,9 @@ def main():
         # Deep link resolution
         # -------------------------
         deep_page_key = qp_get("page", "").strip().lower()
+        if not deep_page_key and is_recovery_flow_query():
+            deep_page_key = "reset_password"
+
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
         if PUBLIC_MODE:
@@ -367,28 +375,37 @@ def main():
             if deep_label in ADMIN_ONLY_LABELS:
                 deep_label = ""
 
-            current_label = (
-                deep_label
-                if deep_label in public_labels_in_order
-                else public_labels_in_order[0]
-            )
-            sel = render_public_top_nav(
-                labels_in_order=public_labels_in_order,
-                current_label=current_label,
-            )
+            if deep_label in HIDDEN_PAGE_LABELS:
+                sel = deep_label
+            else:
+                current_label = (
+                    deep_label
+                    if deep_label in public_labels_in_order
+                    else public_labels_in_order[0]
+                )
+                sel = render_public_top_nav(
+                    labels_in_order=public_labels_in_order,
+                    current_label=current_label,
+                )
 
         else:
-            # Apply deep link once (only if that page is visible)
+            visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
+
+            # Recovery links should always land on reset_password when detected.
+            if deep_label in HIDDEN_PAGE_LABELS and is_recovery_flow_query():
+                st.session_state["main_nav"] = deep_label
+
+            # Apply deep link once (including hidden pages like reset_password)
             if (not bool(st.session_state.get("deep_link_applied", False))) and (
-                deep_label in visible_labels
+                deep_label in visible_labels or deep_label in HIDDEN_PAGE_LABELS
             ):
                 st.session_state["main_nav"] = deep_label
                 st.session_state["deep_link_applied"] = True
 
-            # Ensure valid selection
+            current_nav = st.session_state.get("main_nav")
             if (
                 "main_nav" not in st.session_state
-                or st.session_state["main_nav"] not in visible_labels
+                or (current_nav not in visible_labels and current_nav not in HIDDEN_PAGE_LABELS)
             ):
                 st.session_state["main_nav"] = visible_labels[0]
 
@@ -404,9 +421,12 @@ def main():
                     pass
                 st.rerun()
 
-            sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
+            if st.session_state.get("main_nav") in HIDDEN_PAGE_LABELS:
+                sel = st.session_state["main_nav"]
+            else:
+                sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
 
-            if sel not in visible_labels:
+            if sel not in visible_labels and sel not in HIDDEN_PAGE_LABELS:
                 sel = visible_labels[0]
                 st.session_state["main_nav"] = sel
 
