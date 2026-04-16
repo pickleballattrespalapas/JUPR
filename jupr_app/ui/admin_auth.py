@@ -386,6 +386,7 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
                 break
 
     last_exc: Exception | None = None
+    primary_auth_exc: Exception | None = None
 
     for signature, attempt, uses_redirect in ordered_attempts:
         logger.info(
@@ -403,6 +404,8 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
             return
         except Exception as exc:
             last_exc = exc
+            if type(exc).__name__ == "AuthApiError" and primary_auth_exc is None:
+                primary_auth_exc = exc
             logger.warning(
                 "Supabase password reset attempt failed: %s | redirect_to=%s | exc=%r",
                 signature,
@@ -411,13 +414,15 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
             )
             continue
 
-    if last_exc is not None:
+    preferred_exc = primary_auth_exc or last_exc
+
+    if preferred_exc is not None:
         logger.error(
             "Supabase password reset email failed after all variants. redirect_to=%s methods=%s last_exc=%r",
             redirect_to,
             method_flags,
-            last_exc,
-            exc_info=(type(last_exc), last_exc, last_exc.__traceback__),
+            preferred_exc,
+            exc_info=(type(preferred_exc), preferred_exc, preferred_exc.__traceback__),
         )
     else:
         logger.error(
@@ -425,6 +430,12 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
             redirect_to,
             method_flags,
         )
+
+    if preferred_exc is not None and type(preferred_exc).__name__ == "AuthApiError":
+        if "email rate limit exceeded" in str(preferred_exc).lower():
+            raise AdminAuthError(
+                "Too many reset emails have been requested. Please wait a few minutes and try again."
+            )
 
     raise AdminAuthError("Unable to send reset email right now. Please try again.")
 
@@ -578,6 +589,7 @@ def update_recovered_user_password(client, new_password: str) -> None:
             logger.warning("Re-attaching recovery session before password update failed: %r", exc)
 
     last_exc: Exception | None = None
+    primary_auth_exc: Exception | None = None
 
     logger.info("update_user attempt started (variant: dict positional)")
     try:
@@ -588,6 +600,8 @@ def update_recovered_user_password(client, new_password: str) -> None:
     except Exception as exc:
         logger.warning("update_user failed (variant: dict positional): %r", exc)
         last_exc = exc
+        if type(exc).__name__ == "AuthApiError" and primary_auth_exc is None:
+            primary_auth_exc = exc
 
     logger.info("update_user attempt started (variant: attributes kwarg dict)")
     try:
@@ -598,13 +612,28 @@ def update_recovered_user_password(client, new_password: str) -> None:
     except Exception as exc:
         logger.warning("update_user failed (variant: attributes kwarg dict): %r", exc)
         last_exc = exc
+        if type(exc).__name__ == "AuthApiError" and primary_auth_exc is None:
+            primary_auth_exc = exc
 
     logger.info("update_user attempt started (variant: UserAttributes positional)")
     try:
         try:
             from gotrue.types import UserAttributes
-        except Exception:
-            from gotrue import UserAttributes
+        except Exception as import_exc_types:
+            logger.warning(
+                "UserAttributes import from gotrue.types failed (variant: UserAttributes positional): %r",
+                import_exc_types,
+            )
+            try:
+                from gotrue import UserAttributes
+            except Exception as import_exc:
+                logger.warning(
+                    "Skipping UserAttributes positional variant because gotrue import failed: %r",
+                    import_exc,
+                )
+                if primary_auth_exc is None:
+                    last_exc = import_exc
+                raise
 
         response = client.auth.update_user(UserAttributes(password=new_password))
         if getattr(response, "user", None) is not None:
@@ -612,14 +641,33 @@ def update_recovered_user_password(client, new_password: str) -> None:
             return
     except Exception as exc:
         logger.warning("update_user failed (variant: UserAttributes positional): %r", exc)
-        last_exc = exc
+        if isinstance(exc, ModuleNotFoundError) and "gotrue" in str(exc).lower():
+            if primary_auth_exc is None:
+                last_exc = exc
+        else:
+            last_exc = exc
+            if type(exc).__name__ == "AuthApiError" and primary_auth_exc is None:
+                primary_auth_exc = exc
 
     logger.info("update_user attempt started (variant: attributes kwarg UserAttributes)")
     try:
         try:
             from gotrue.types import UserAttributes
-        except Exception:
-            from gotrue import UserAttributes
+        except Exception as import_exc_types:
+            logger.warning(
+                "UserAttributes import from gotrue.types failed (variant: attributes kwarg UserAttributes): %r",
+                import_exc_types,
+            )
+            try:
+                from gotrue import UserAttributes
+            except Exception as import_exc:
+                logger.warning(
+                    "Skipping attributes kwarg UserAttributes variant because gotrue import failed: %r",
+                    import_exc,
+                )
+                if primary_auth_exc is None:
+                    last_exc = import_exc
+                raise
 
         response = client.auth.update_user(
             attributes=UserAttributes(password=new_password)
@@ -629,13 +677,30 @@ def update_recovered_user_password(client, new_password: str) -> None:
             return
     except Exception as exc:
         logger.warning("update_user failed (variant: attributes kwarg UserAttributes): %r", exc)
-        last_exc = exc
+        if isinstance(exc, ModuleNotFoundError) and "gotrue" in str(exc).lower():
+            if primary_auth_exc is None:
+                last_exc = exc
+        else:
+            last_exc = exc
+            if type(exc).__name__ == "AuthApiError" and primary_auth_exc is None:
+                primary_auth_exc = exc
+
+    preferred_exc = primary_auth_exc or last_exc
 
     logger.error(
         "Supabase password update failed during recovery flow: %r",
-        last_exc,
-        exc_info=(type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None,
+        preferred_exc,
+        exc_info=(
+            (type(preferred_exc), preferred_exc, preferred_exc.__traceback__)
+            if preferred_exc
+            else None
+        ),
     )
+    if preferred_exc is not None and "new password should be different from the old password" in str(
+        preferred_exc
+    ).lower():
+        raise AdminAuthError("New password must be different from your current password.")
+
     raise AdminAuthError(
         "Unable to update password. This password reset link may be invalid or expired. Request a new reset email."
     )
