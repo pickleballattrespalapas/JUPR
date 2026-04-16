@@ -150,6 +150,25 @@ def login_admin(email: str, password: str) -> dict:
     return {"user": user, "session": session}
 
 
+def send_password_reset_email(email: str, *, redirect_to: str) -> None:
+    """
+    Send a password reset email via Supabase Auth without leaking account existence.
+    Raises AdminAuthError only for malformed input or operational failures.
+    """
+    clean_email = _normalize_email(email)
+    if not clean_email:
+        raise AdminAuthError("Enter your email address.")
+
+    client = make_supabase_auth_client()
+    try:
+        client.auth.reset_password_email(
+            clean_email,
+            options={"redirect_to": redirect_to},
+        )
+    except Exception:
+        raise AdminAuthError("Unable to send reset email right now. Please try again.")
+
+
 def get_recovery_query_params() -> dict[str, str]:
     """
     Collect Supabase recovery-related params from URL query params.
