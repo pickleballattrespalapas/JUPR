@@ -61,6 +61,12 @@ def _parse_optional_date(value: Any) -> str | None:
     return text or None
 
 
+def _go_to_tournament_manager(tournament_id: Any) -> None:
+    st.query_params["page"] = "tournament_manager"
+    st.query_params["tournament_id"] = tournament_id
+    st.rerun()
+
+
 
 
 def _tournament_date_window_text(tournament: dict[str, Any]) -> str | None:
@@ -332,7 +338,8 @@ def render(ctx):
             st.success("Tournament shell created.")
             st.info("Next step: open Tournament Manager and build the days → event families → divisions schedule.")
             if created_row:
-                st.link_button("Configure Registration", f"?page=tournament_manager&tournament_id={created_row.get('id')}")
+                if st.button("Configure Registration", key=f"configure_registration_create_{created_row.get('id')}"):
+                    _go_to_tournament_manager(created_row.get("id"))
             st.rerun()
 
     st.divider()
@@ -389,7 +396,8 @@ def render(ctx):
         st.caption(f"Tournament date window: {date_window}. Tournament Manager can auto-generate day rows from this range.")
     else:
         st.info("This tournament has no saved start/end dates yet. Add dates in Tournament Manager to auto-generate the default day schedule.")
-    st.link_button("Open Tournament Manager", f"?page=tournament_manager&tournament_id={tournament_id}")
+    if st.button("Open Tournament Manager", key=f"open_tournament_manager_{tournament_id}"):
+        _go_to_tournament_manager(tournament_id)
 
     draws = _list_draws(supabase, tournament_id)
     modern_mode = bool((registration_bridge or {}).get("events"))
@@ -1250,7 +1258,8 @@ def _render_registration_bridge(tournament: dict[str, Any], registration_bridge:
     if not registration_bridge:
         st.warning("Registration has not been configured for this tournament yet.")
         st.info("Use Tournament Manager to define days, event families, divisions, and public registration links.")
-        st.link_button("Configure Registration", f"?page=tournament_manager&tournament_id={tournament.get('id')}")
+        if st.button("Configure Registration", key=f"configure_registration_bridge_{tournament.get('id')}"):
+            _go_to_tournament_manager(tournament.get("id"))
         return
 
     settings = registration_bridge.get("settings") or {}
