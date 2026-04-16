@@ -9,7 +9,14 @@ import streamlit as st
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.match_processing import process_matches
+from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
+from jupr_app.domain.tournament_results_import import (
+    STAGE_OPTIONS,
+    build_draw_import_payload,
+    parse_dupr_results_csv,
+    suggest_player_matches,
+)
 from jupr_app.domain.tournaments import (
     SUPPORTED_TEAM_COUNTS,
     build_playoff_games,
@@ -749,6 +756,339 @@ def render(ctx):
                             _update_ops_field(supabase, tournament_id, selected_draw_id, "team_count", final_slot)
                         st.success("Bulk upload saved.")
                         st.rerun()
+
+            with st.expander("Import Results into This Draw"):
+                st.caption(
+                    f"Selected tournament: {_safe_text(tournament.get('name'))} • division: {_safe_text((selected_event or {}).get('division_name') or (selected_event or {}).get('label') or '—')} • draw: {_safe_text((selected_draw or {}).get('name') or selected_draw_id)}. "
+                    "This workflow writes teams and matches to this draw scope only."
+                )
+                import_scope_key = f"{tournament_id}_{selected_draw_id or 'legacy'}"
+                bundle_state_key = f"draw_results_bundle_{import_scope_key}"
+                mapping_state_key = f"draw_results_mapping_{import_scope_key}"
+                review_state_key = f"draw_results_match_review_{import_scope_key}"
+                mode_state_key = f"draw_results_mode_{import_scope_key}"
+                podium_state_key = f"draw_results_podium_{import_scope_key}"
+
+                upload_file = st.file_uploader(
+                    "Upload DUPR-style results CSV",
+                    type=["csv"],
+                    key=f"draw_results_csv_{import_scope_key}",
+                )
+                if st.button("Parse uploaded results", key=f"draw_results_parse_{import_scope_key}", disabled=upload_file is None):
+                    if upload_file is None:
+                        st.error("Upload a CSV file first.")
+                    else:
+                        parsed_bundle = parse_dupr_results_csv(upload_file.getvalue())
+                        existing_players = []
+                        for _, prow in df_players_all.iterrows():
+                            existing_players.append(
+                                {
+                                    "id": prow.get("id"),
+                                    "name": _safe_text(prow.get("name")),
+                                    "dupr_id": prow.get("dupr_id") or prow.get("duprId") or prow.get("dupr"),
+                                }
+                            )
+                        suggestions = suggest_player_matches(parsed_bundle.get("players") or [], existing_players)
+                        initial_mapping = {}
+                        for imported in parsed_bundle.get("players") or []:
+                            import_key = str(imported.get("import_key"))
+                            suggested = suggestions.get(import_key) or {}
+                            if suggested.get("suggested_player_id"):
+                                initial_mapping[import_key] = {
+                                    "action": "use_existing",
+                                    "player_id": suggested.get("suggested_player_id"),
+                                }
+                            else:
+                                initial_mapping[import_key] = {"action": "unresolved", "player_id": None}
+                        initial_reviews = {
+                            str(row.get("source_row")): {"include": True, "stage": "PLAYOFF"}
+                            for row in (parsed_bundle.get("matches") or [])
+                        }
+                        st.session_state[bundle_state_key] = {**parsed_bundle, "suggestions": suggestions}
+                        st.session_state[mapping_state_key] = initial_mapping
+                        st.session_state[review_state_key] = initial_reviews
+                        st.session_state[mode_state_key] = "Replace"
+                        st.session_state[podium_state_key] = {}
+
+                bundle = st.session_state.get(bundle_state_key)
+                if not bundle:
+                    st.info("Upload and parse a DUPR-style CSV to start the draw-scoped import wizard.")
+                else:
+                    for err in bundle.get("errors") or []:
+                        st.error(err)
+                    for warn in bundle.get("warnings") or []:
+                        st.warning(warn)
+                    if bundle.get("errors"):
+                        st.stop()
+
+                    st.markdown("#### 1) Player mapping review")
+                    mapping_decisions = st.session_state.get(mapping_state_key, {})
+                    suggestions = bundle.get("suggestions") or {}
+                    duplicate_existing_ids: dict[str, int] = {}
+                    for imported in bundle.get("players") or []:
+                        import_key = str(imported.get("import_key"))
+                        suggested = suggestions.get(import_key) or {}
+                        current = mapping_decisions.get(import_key) or {"action": "unresolved", "player_id": None}
+                        with st.container(border=True):
+                            cols = st.columns([3, 2, 3])
+                            cols[0].markdown(
+                                f"**{_safe_text(imported.get('display_name') or 'Unknown')}**  \nDUPR ID: `{_safe_text(imported.get('dupr_id') or '—')}`"
+                            )
+                            cols[1].caption(
+                                "Suggested match: "
+                                + (
+                                    f"{id_to_name.get(suggested.get('suggested_player_id'), suggested.get('suggested_player_id'))} ({_safe_text(suggested.get('reason'))})"
+                                    if suggested.get("suggested_player_id")
+                                    else _safe_text(suggested.get("reason") or "none")
+                                )
+                            )
+                            action_choice = cols[2].selectbox(
+                                "Action",
+                                ["unresolved", "use_existing", "create_new"],
+                                index=["unresolved", "use_existing", "create_new"].index(
+                                    current.get("action") if current.get("action") in {"unresolved", "use_existing", "create_new"} else "unresolved"
+                                ),
+                                format_func=lambda v: {"unresolved": "Unresolved", "use_existing": "Use existing player", "create_new": "Create new player"}[v],
+                                key=f"map_action_{import_scope_key}_{import_key}",
+                            )
+                            mapped_id = current.get("player_id")
+                            if action_choice == "use_existing":
+                                options = [None, *sorted(id_to_name.keys(), key=lambda pid: _safe_text(id_to_name.get(pid)))]
+                                default_idx = options.index(mapped_id) if mapped_id in options else (options.index(suggested.get("suggested_player_id")) if suggested.get("suggested_player_id") in options else 0)
+                                mapped_id = st.selectbox(
+                                    "Choose existing JUPR player",
+                                    options,
+                                    index=default_idx,
+                                    format_func=lambda pid: id_to_name.get(pid, "Select player") if pid else "Select player",
+                                    key=f"map_existing_{import_scope_key}_{import_key}",
+                                )
+                            else:
+                                mapped_id = None
+                            mapping_decisions[import_key] = {"action": action_choice, "player_id": mapped_id}
+                            if action_choice == "use_existing" and mapped_id is not None:
+                                dup_key = str(mapped_id)
+                                duplicate_existing_ids[dup_key] = duplicate_existing_ids.get(dup_key, 0) + 1
+
+                    st.session_state[mapping_state_key] = mapping_decisions
+                    duplicate_warning_ids = [pid for pid, count in duplicate_existing_ids.items() if count > 1]
+                    allow_duplicate_mapping = st.checkbox(
+                        "Allow duplicate mapping of multiple imported players to the same existing JUPR player (not recommended)",
+                        value=False,
+                        key=f"allow_dup_map_{import_scope_key}",
+                    )
+                    if duplicate_warning_ids:
+                        duplicate_names = ", ".join(_safe_text(id_to_name.get(pid, pid)) for pid in duplicate_warning_ids)
+                        st.warning(f"Duplicate existing-player mappings detected: {duplicate_names}.")
+
+                    st.markdown("#### 2) Match review and stage assignment")
+                    review_map = st.session_state.get(review_state_key, {})
+                    match_rows = []
+                    for row in bundle.get("matches") or []:
+                        source_row = str(row.get("source_row"))
+                        review = review_map.get(source_row, {"include": True, "stage": "PLAYOFF"})
+                        team_a = row.get("team_a_key")
+                        team_b = row.get("team_b_key")
+                        match_rows.append(
+                            {
+                                "source_row": int(row.get("source_row") or 0),
+                                "team_a": team_a,
+                                "team_b": team_b,
+                                "score_summary": _safe_text(row.get("score_summary") or "—"),
+                                "winner": _safe_text(row.get("winner_side") or "—"),
+                                "stage": review.get("stage") or "PLAYOFF",
+                                "include": bool(review.get("include", True)),
+                            }
+                        )
+                    review_df = st.data_editor(
+                        pd.DataFrame(match_rows),
+                        key=f"draw_results_match_editor_{import_scope_key}",
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "stage": st.column_config.SelectboxColumn("stage", options=STAGE_OPTIONS, required=True),
+                            "include": st.column_config.CheckboxColumn("include"),
+                        },
+                    )
+                    bulk_cols = st.columns(2)
+                    if bulk_cols[0].button("Set all to PLAYOFF", key=f"draw_results_bulk_playoff_{import_scope_key}"):
+                        review_df["stage"] = "PLAYOFF"
+                    if bulk_cols[1].button("Set all to ROUND_ROBIN", key=f"draw_results_bulk_rr_{import_scope_key}"):
+                        review_df["stage"] = "ROUND_ROBIN"
+                    st.session_state[review_state_key] = {
+                        str(int(row["source_row"])): {"include": bool(row.get("include", True)), "stage": _safe_text(row.get("stage") or "PLAYOFF")}
+                        for _, row in review_df.iterrows()
+                    }
+
+                    import_mode = st.radio(
+                        "Import mode",
+                        ["Replace", "Append"],
+                        horizontal=True,
+                        index=0 if st.session_state.get(mode_state_key, "Replace") == "Replace" else 1,
+                        key=f"draw_results_mode_radio_{import_scope_key}",
+                    )
+                    st.session_state[mode_state_key] = import_mode
+                    payload_preview = build_draw_import_payload(
+                        bundle=bundle,
+                        mapping_decisions=mapping_decisions,
+                        match_reviews=st.session_state.get(review_state_key, {}),
+                    )
+                    for warn in payload_preview.get("warnings") or []:
+                        st.warning(warn)
+                    for err in payload_preview.get("errors") or []:
+                        st.error(err)
+
+                    st.markdown("#### 3) Podium review (tournament context)")
+                    if modern_mode:
+                        st.caption("Podium save uses current tournament podium infrastructure; this section reflects the selected draw import review.")
+                    team_ref_options = [row.get("team_ref") for row in (payload_preview.get("teams") or [])]
+                    team_ref_labels = {}
+                    for team_row in payload_preview.get("teams") or []:
+                        p1 = _safe_text(team_row.get("p1_ref"))
+                        p2 = _safe_text(team_row.get("p2_ref"))
+                        team_ref_labels[team_row.get("team_ref")] = f"{p1} / {p2}" if p2 else p1
+                    defaults = payload_preview.get("podium_candidates") or []
+                    podium_choices = st.session_state.get(podium_state_key, {})
+                    podium_choices["1"] = st.selectbox("1st place", [None, *team_ref_options], index=([None, *team_ref_options].index(podium_choices.get("1")) if podium_choices.get("1") in [None, *team_ref_options] else ([None, *team_ref_options].index(defaults[0]) if len(defaults) > 0 and defaults[0] in [None, *team_ref_options] else 0)), format_func=lambda value: team_ref_labels.get(value, "Select team"), key=f"draw_import_podium_1_{import_scope_key}")
+                    podium_choices["2"] = st.selectbox("2nd place", [None, *team_ref_options], index=([None, *team_ref_options].index(podium_choices.get("2")) if podium_choices.get("2") in [None, *team_ref_options] else ([None, *team_ref_options].index(defaults[1]) if len(defaults) > 1 and defaults[1] in [None, *team_ref_options] else 0)), format_func=lambda value: team_ref_labels.get(value, "Select team"), key=f"draw_import_podium_2_{import_scope_key}")
+                    podium_choices["3"] = st.selectbox("3rd place", [None, *team_ref_options], index=([None, *team_ref_options].index(podium_choices.get("3")) if podium_choices.get("3") in [None, *team_ref_options] else ([None, *team_ref_options].index(defaults[2]) if len(defaults) > 2 and defaults[2] in [None, *team_ref_options] else 0)), format_func=lambda value: team_ref_labels.get(value, "Select team"), key=f"draw_import_podium_3_{import_scope_key}")
+                    st.session_state[podium_state_key] = podium_choices
+
+                    with st.form(key=f"draw_results_commit_form_{import_scope_key}"):
+                        st.markdown("#### 4) Final commit")
+                        replace_confirm = st.text_input("If Replace mode is selected, type REPLACE to confirm scoped delete.")
+                        submit_import = st.form_submit_button("Commit import into selected draw", type="primary")
+                        if submit_import:
+                            if duplicate_warning_ids and not allow_duplicate_mapping:
+                                st.error("Duplicate existing-player mappings are present. Either resolve them or explicitly allow them.")
+                                st.stop()
+                            final_payload = build_draw_import_payload(
+                                bundle=bundle,
+                                mapping_decisions=st.session_state.get(mapping_state_key, {}),
+                                match_reviews=st.session_state.get(review_state_key, {}),
+                            )
+                            if final_payload.get("errors"):
+                                st.error("Import blocked due to validation errors.")
+                                st.stop()
+                            if import_mode == "Replace" and replace_confirm.strip().upper() != "REPLACE":
+                                st.error("Replace mode requires typing REPLACE for confirmation.")
+                                st.stop()
+
+                            players_resp = supabase.table("players").select("id,name").eq("club_id", str(club_id)).execute()
+                            players_rows = players_resp.data or []
+                            players_by_norm: dict[str, Any] = {}
+                            for prow in players_rows:
+                                norm_name = _normalize_name(prow.get("name"))
+                                if norm_name and norm_name not in players_by_norm:
+                                    players_by_norm[norm_name] = prow.get("id")
+
+                            player_id_by_ref: dict[str, Any] = {}
+                            imported_by_key = {str(row.get("import_key")): row for row in (bundle.get("players") or [])}
+                            for import_key, ref in (final_payload.get("mapped_player_refs") or {}).items():
+                                if str(ref).startswith("existing:"):
+                                    player_id_by_ref[ref] = str(ref).split("existing:", 1)[1]
+                                    continue
+                                imported = imported_by_key.get(import_key) or {}
+                                display_name = _safe_text(imported.get("display_name"))
+                                norm_name = _normalize_name(display_name)
+                                existing_id = players_by_norm.get(norm_name)
+                                if existing_id:
+                                    player_id_by_ref[ref] = existing_id
+                                    continue
+                                ok, err = safe_add_player(
+                                    supabase=supabase,
+                                    club_id=str(club_id),
+                                    name=display_name,
+                                    rating_jupr=10.0,
+                                )
+                                if not ok:
+                                    st.error(f"Failed creating player {display_name}: {err}")
+                                    st.stop()
+                                refresh_resp = supabase.table("players").select("id,name").eq("club_id", str(club_id)).execute()
+                                refresh_rows = refresh_resp.data or []
+                                for row in refresh_rows:
+                                    norm = _normalize_name(row.get("name"))
+                                    if norm and norm not in players_by_norm:
+                                        players_by_norm[norm] = row.get("id")
+                                if norm_name not in players_by_norm:
+                                    st.error(f"Could not resolve player id after create: {display_name}")
+                                    st.stop()
+                                player_id_by_ref[ref] = players_by_norm[norm_name]
+
+                            if import_mode == "Replace":
+                                _scoped_query(supabase.table("tournament_games").delete(), tournament_id, selected_draw_id).execute()
+                                _scoped_query(supabase.table("tournament_teams").delete(), tournament_id, selected_draw_id).execute()
+                                team_start_slot = 1
+                            else:
+                                team_start_slot = max(teams_by_number.keys(), default=0) + 1
+
+                            team_rows_to_write = []
+                            team_ref_to_number: dict[str, int] = {}
+                            for idx, team_row in enumerate(final_payload.get("teams") or [], start=0):
+                                team_number = team_start_slot + idx
+                                team_ref_to_number[team_row.get("team_ref")] = team_number
+                                team_rows_to_write.append(
+                                    {
+                                        "tournament_id": tournament_id,
+                                        "draw_id": selected_draw_id,
+                                        "event_option_id": selected_event_option_id,
+                                        "registration_day_id": selected_day_id,
+                                        "team_number": team_number,
+                                        "player1_id": player_id_by_ref.get(team_row.get("p1_ref")),
+                                        "player2_id": player_id_by_ref.get(team_row.get("p2_ref")) if team_row.get("p2_ref") else None,
+                                        "source": "BULK_UPLOAD",
+                                        "notes": "RESULTS_IMPORT",
+                                    }
+                                )
+                            if not team_rows_to_write:
+                                st.error("No teams to import.")
+                                st.stop()
+                            supabase.table("tournament_teams").upsert(team_rows_to_write, on_conflict="tournament_id,draw_id,team_number").execute()
+
+                            refreshed_teams = _scoped_query(supabase.table("tournament_teams").select("*"), tournament_id, selected_draw_id).order("team_number").execute().data or []
+                            team_id_by_number = {int(row.get("team_number")): row.get("id") for row in refreshed_teams if row.get("team_number") is not None}
+
+                            game_rows_to_write = []
+                            for match_row in final_payload.get("matches") or []:
+                                team_a_num = team_ref_to_number.get(match_row.get("team_a_ref"))
+                                team_b_num = team_ref_to_number.get(match_row.get("team_b_ref"))
+                                team_a_id = team_id_by_number.get(team_a_num) if team_a_num is not None else None
+                                team_b_id = team_id_by_number.get(team_b_num) if team_b_num is not None else None
+                                if not team_a_id or not team_b_id:
+                                    st.error(f"Unwriteable match payload for source row {match_row.get('source_row')}.")
+                                    st.stop()
+                                game_payload = {
+                                    "tournament_id": tournament_id,
+                                    "draw_id": selected_draw_id,
+                                    "event_option_id": selected_event_option_id,
+                                    "registration_day_id": selected_day_id,
+                                    "team_a_id": team_a_id,
+                                    "team_b_id": team_b_id,
+                                    "stage": match_row.get("stage") or "PLAYOFF",
+                                    "score_a": match_row.get("score_a"),
+                                    "score_b": match_row.get("score_b"),
+                                }
+                                if match_row.get("score_a") is not None and match_row.get("score_b") is not None:
+                                    game_payload.update(finalize_game(game_payload))
+                                game_rows_to_write.append(game_payload)
+                            if game_rows_to_write:
+                                supabase.table("tournament_games").insert(game_rows_to_write).execute()
+
+                            team_id_by_ref: dict[str, Any] = {}
+                            for team_ref, team_number in team_ref_to_number.items():
+                                team_id_by_ref[team_ref] = team_id_by_number.get(team_number)
+                            podium_refs = st.session_state.get(podium_state_key, {})
+                            placements = []
+                            for placement in [1, 2, 3]:
+                                team_ref = podium_refs.get(str(placement))
+                                team_id = team_id_by_ref.get(team_ref)
+                                if team_id:
+                                    placements.append({"placement": placement, "team_id": team_id})
+                            if placements:
+                                podium_payload = build_podium_payload(tournament_id, placements, source="DRAW_RESULTS_IMPORT")
+                                upsert_tournament_podium(supabase, tournament_id, podium_payload)
+
+                            st.success(f"Imported {len(team_rows_to_write)} teams and {len(game_rows_to_write)} matches into the selected draw.")
+                            st.rerun()
 
     with ops_tabs[1]:
         st.subheader("Round Robin")
