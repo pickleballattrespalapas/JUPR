@@ -5,6 +5,7 @@ import os
 from collections.abc import Mapping
 
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import create_client
 
 
@@ -13,6 +14,9 @@ logger = logging.getLogger(__name__)
 _AUTH_USER_KEY = "admin_auth_user"
 _AUTH_SESSION_KEY = "admin_auth_session"
 _RECOVERY_SESSION_KEY = "admin_recovery_session"
+_BROWSER_ACCESS_TOKEN_KEY = "jupr_admin_access_token"
+_BROWSER_REFRESH_TOKEN_KEY = "jupr_admin_refresh_token"
+_BROWSER_RESTORE_FLAG_KEY = "jupr_admin_restore_from_storage"
 
 
 class AdminAuthError(RuntimeError):
@@ -241,10 +245,8 @@ def bootstrap_admin_auth() -> None:
     """
     Initialize auth keys for this Streamlit session.
 
-    This app no longer uses shared admin passwords or cookie/HMAC session bridges.
-    Auth state is local to the current Streamlit session; browser refresh may require
-    logging in again. Durable browser auth would require Streamlit-native OIDC or a
-    dedicated frontend shell.
+    Auth state starts local to this Streamlit session but may be rehydrated from
+    browser localStorage using the lightweight JS bridge below.
     """
     st.session_state.setdefault(_AUTH_USER_KEY, None)
     st.session_state.setdefault(_AUTH_SESSION_KEY, None)
@@ -252,6 +254,142 @@ def bootstrap_admin_auth() -> None:
 
 def get_current_admin_user():
     return st.session_state.get(_AUTH_USER_KEY)
+
+
+def persist_admin_browser_session(access_token: str, refresh_token: str) -> None:
+    """Persist auth tokens into browser localStorage via a tiny JS bridge."""
+    access = str(access_token or "").strip()
+    refresh = str(refresh_token or "").strip()
+    if not access or not refresh:
+        return
+
+    components.html(
+        f"""
+        <script>
+        try {{
+          localStorage.setItem("{_BROWSER_ACCESS_TOKEN_KEY}", {access!r});
+          localStorage.setItem("{_BROWSER_REFRESH_TOKEN_KEY}", {refresh!r});
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+    logger.info("Admin login tokens persisted to browser storage")
+
+
+def _clear_sensitive_query_params() -> None:
+    sensitive = {
+        "jupr_admin_access_token",
+        "jupr_admin_refresh_token",
+        _BROWSER_RESTORE_FLAG_KEY,
+    }
+    current = dict(st.query_params)
+    sanitized = {k: v for k, v in current.items() if k not in sensitive}
+    st.query_params.clear()
+    st.query_params.update(sanitized)
+
+
+def restore_admin_browser_session() -> dict[str, str] | None:
+    """
+    Restore browser-persisted tokens via a one-time URL handshake.
+    Tokens are removed from URL immediately after they are read.
+    """
+    access = _query_param_text("jupr_admin_access_token")
+    refresh = _query_param_text("jupr_admin_refresh_token")
+    restore_flag = _query_param_text(_BROWSER_RESTORE_FLAG_KEY)
+
+    if access and refresh and restore_flag == "1":
+        _clear_sensitive_query_params()
+        return {"access_token": access, "refresh_token": refresh}
+
+    components.html(
+        f"""
+        <script>
+        try {{
+          const access = localStorage.getItem("{_BROWSER_ACCESS_TOKEN_KEY}") || "";
+          const refresh = localStorage.getItem("{_BROWSER_REFRESH_TOKEN_KEY}") || "";
+          const params = new URLSearchParams(window.location.search);
+          const hasHandshake = params.get("{_BROWSER_RESTORE_FLAG_KEY}") === "1";
+          if (access && refresh && !hasHandshake) {{
+            params.set("jupr_admin_access_token", access);
+            params.set("jupr_admin_refresh_token", refresh);
+            params.set("{_BROWSER_RESTORE_FLAG_KEY}", "1");
+            const next = `${{window.location.pathname}}?${{params.toString()}}${{window.location.hash}}`;
+            window.location.replace(next);
+          }}
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+    return None
+
+
+def clear_admin_browser_session() -> None:
+    components.html(
+        f"""
+        <script>
+        try {{
+          localStorage.removeItem("{_BROWSER_ACCESS_TOKEN_KEY}");
+          localStorage.removeItem("{_BROWSER_REFRESH_TOKEN_KEY}");
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+    logger.info("Persisted browser tokens cleared")
+
+
+def maybe_restore_admin_login_from_browser() -> bool:
+    """Try to restore allowlisted admin auth from browser storage when needed."""
+    bootstrap_admin_auth()
+
+    existing_user = get_current_admin_user()
+    if existing_user is not None:
+        existing_email = str(getattr(existing_user, "email", "") or "").strip().lower()
+        return bool(
+            existing_email and is_allowed_admin_email(existing_email, load_admin_allowlist())
+        )
+
+    logger.info("Browser token restore attempted")
+    stored_tokens = restore_admin_browser_session()
+    if not stored_tokens:
+        return False
+
+    try:
+        client = make_supabase_auth_client()
+        response = _set_auth_session(
+            client,
+            stored_tokens["access_token"],
+            stored_tokens["refresh_token"],
+        )
+
+        session = _extract_session(response)
+        if session is None:
+            existing = client.auth.get_session()
+            session = _extract_session(existing)
+
+        user = getattr(response, "user", None)
+        if user is None:
+            user_resp = client.auth.get_user()
+            user = getattr(user_resp, "user", None)
+
+        user_email = str(getattr(user, "email", "") or "").strip().lower()
+        if not session or not user or not is_allowed_admin_email(
+            user_email, load_admin_allowlist()
+        ):
+            clear_local_admin_auth_state()
+            logger.info("Browser token restore failed")
+            return False
+
+        st.session_state[_AUTH_USER_KEY] = user
+        st.session_state[_AUTH_SESSION_KEY] = session
+        logger.info("Browser token restore succeeded")
+        return True
+    except Exception as exc:
+        logger.warning("Browser token restore failed: %r", exc)
+        clear_local_admin_auth_state()
+        return False
 
 
 def is_allowed_admin_email(email: str, allowlist: set[str]) -> bool:
@@ -283,6 +421,10 @@ def login_admin(email: str, password: str) -> dict:
 
     st.session_state[_AUTH_USER_KEY] = user
     st.session_state[_AUTH_SESSION_KEY] = session
+    access_token = str(getattr(session, "access_token", "") or "").strip()
+    refresh_token = str(getattr(session, "refresh_token", "") or "").strip()
+    if access_token and refresh_token:
+        persist_admin_browser_session(access_token, refresh_token)
     return {"user": user, "session": session}
 
 
@@ -716,3 +858,4 @@ def logout_admin() -> None:
     """Clear only local Streamlit auth state for the current session."""
     st.session_state.pop(_AUTH_USER_KEY, None)
     st.session_state.pop(_AUTH_SESSION_KEY, None)
+    clear_admin_browser_session()
