@@ -8,6 +8,8 @@ import streamlit as st
 from supabase import create_client
 
 
+logger = logging.getLogger(__name__)
+
 _AUTH_USER_KEY = "admin_auth_user"
 _AUTH_SESSION_KEY = "admin_auth_session"
 
@@ -154,51 +156,86 @@ def login_admin(email: str, password: str) -> dict:
 def send_password_reset_email(email: str, *, redirect_to: str) -> None:
     """
     Send a password reset email via Supabase Auth without leaking account existence.
-    Raises AdminAuthError only for malformed input or operational failures.
+    Supports multiple Supabase client method/signature variants.
     """
     clean_email = _normalize_email(email)
     if not clean_email:
         raise AdminAuthError("Enter your email address.")
 
     client = make_supabase_auth_client()
-    auth_api = client.auth
-    logger = logging.getLogger(__name__)
-    last_exception: Exception | None = None
+    auth = getattr(client, "auth", None)
+    if auth is None:
+        logger.error("Supabase auth client missing .auth while sending password reset email")
+        raise AdminAuthError("Unable to send reset email right now. Please try again.")
 
-    if hasattr(auth_api, "reset_password_email"):
-        method = getattr(auth_api, "reset_password_email")
+    attempts = []
+
+    if hasattr(auth, "reset_password_email"):
+        attempts.append(
+            (
+                "reset_password_email positional options",
+                lambda: auth.reset_password_email(
+                    clean_email,
+                    {"redirect_to": redirect_to},
+                ),
+            )
+        )
+        attempts.append(
+            (
+                "reset_password_email keyword options",
+                lambda: auth.reset_password_email(
+                    clean_email,
+                    options={"redirect_to": redirect_to},
+                ),
+            )
+        )
+
+    if hasattr(auth, "reset_password_for_email"):
+        attempts.append(
+            (
+                "reset_password_for_email positional options",
+                lambda: auth.reset_password_for_email(
+                    clean_email,
+                    {"redirect_to": redirect_to},
+                ),
+            )
+        )
+        attempts.append(
+            (
+                "reset_password_for_email keyword options",
+                lambda: auth.reset_password_for_email(
+                    clean_email,
+                    options={"redirect_to": redirect_to},
+                ),
+            )
+        )
+
+    last_exc: Exception | None = None
+
+    for label, attempt in attempts:
         try:
-            method(clean_email, {"redirect_to": redirect_to})
+            attempt()
             return
-        except TypeError as exc:
-            last_exception = exc
-            try:
-                method(clean_email, options={"redirect_to": redirect_to})
-                return
-            except Exception as nested_exc:
-                last_exception = nested_exc
+        except (TypeError, AttributeError) as exc:
+            last_exc = exc
+            logger.warning("Supabase password reset attempt failed for %s: %s", label, exc)
+            continue
         except Exception as exc:
-            last_exception = exc
+            last_exc = exc
+            logger.warning("Supabase password reset attempt failed for %s: %s", label, exc)
+            continue
 
-    if hasattr(auth_api, "reset_password_for_email"):
-        method = getattr(auth_api, "reset_password_for_email")
-        try:
-            method(clean_email, {"redirect_to": redirect_to})
-            return
-        except TypeError as exc:
-            last_exception = exc
-            try:
-                method(clean_email, options={"redirect_to": redirect_to})
-                return
-            except Exception as nested_exc:
-                last_exception = nested_exc
-        except Exception as exc:
-            last_exception = exc
+    if last_exc is not None:
+        logger.error(
+            "Supabase password reset email failed after trying all supported client variants: %s",
+            last_exc,
+            exc_info=(type(last_exc), last_exc, last_exc.__traceback__),
+        )
+    else:
+        logger.error(
+            "Supabase password reset email failed because no supported reset method exists on the auth client"
+        )
 
-    logger.error(
-        "Failed to send password reset email via Supabase auth variants: %s",
-        str(last_exception) if last_exception else "no compatible reset method found",
-    )
     raise AdminAuthError("Unable to send reset email right now. Please try again.")
 
 
