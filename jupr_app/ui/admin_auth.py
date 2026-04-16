@@ -211,8 +211,18 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     """
     query = params or get_recovery_query_params()
 
+    def _response_has_session(response) -> bool:
+        return bool(getattr(response, "session", None))
+
+    def _has_usable_session() -> bool:
+        try:
+            existing = client.auth.get_session()
+        except Exception:
+            return False
+        return bool(getattr(existing, "session", None))
+
     try:
-        if client.auth.get_session() is not None:
+        if _has_usable_session():
             return True
     except Exception:
         pass
@@ -227,7 +237,21 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
             response = client.auth.set_session(access_token, refresh_token)
         except Exception:
             return False
-        return bool(getattr(response, "session", None))
+        return _response_has_session(response)
+
+    token_hash = query.get("token_hash", "")
+    otp_type = str(query.get("type", "")).strip().lower()
+    if token_hash and otp_type:
+        try:
+            response = client.auth.verify_otp(
+                {
+                    "token_hash": token_hash,
+                    "type": otp_type,
+                }
+            )
+        except Exception:
+            return False
+        return _response_has_session(response)
 
     auth_code = query.get("code", "")
     if auth_code:
@@ -235,7 +259,7 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
             response = client.auth.exchange_code_for_session({"auth_code": auth_code})
         except Exception:
             return False
-        return bool(getattr(response, "session", None))
+        return _response_has_session(response)
 
     return False
 
