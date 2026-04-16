@@ -413,13 +413,37 @@ def update_recovered_user_password(client, new_password: str) -> None:
         response = client.auth.update_user({"password": new_password})
         if getattr(response, "user", None) is not None:
             return
-    except TypeError as exc:
-        last_exc = exc
     except Exception as exc:
         last_exc = exc
 
     try:
         response = client.auth.update_user(attributes={"password": new_password})
+        if getattr(response, "user", None) is not None:
+            return
+    except Exception as exc:
+        last_exc = exc
+
+    try:
+        try:
+            from gotrue.types import UserAttributes
+        except Exception:
+            from gotrue import UserAttributes
+
+        response = client.auth.update_user(UserAttributes(password=new_password))
+        if getattr(response, "user", None) is not None:
+            return
+    except Exception as exc:
+        last_exc = exc
+
+    try:
+        try:
+            from gotrue.types import UserAttributes
+        except Exception:
+            from gotrue import UserAttributes
+
+        response = client.auth.update_user(
+            attributes=UserAttributes(password=new_password)
+        )
         if getattr(response, "user", None) is not None:
             return
     except Exception as exc:
