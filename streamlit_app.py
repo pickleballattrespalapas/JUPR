@@ -21,6 +21,7 @@ from jupr_app.ui.admin_auth import (
     load_admin_allowlist,
     login_admin,
     logout_admin,
+    maybe_restore_admin_login_from_browser,
     send_password_reset_email,
 )
 from jupr_app.ui.context import AppContext
@@ -148,12 +149,10 @@ def main():
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
 
-        # Admin auth upgraded from shared password + HMAC cookie sessions to
-        # authenticated Supabase users (email + password) with email allowlist.
-        # NOTE: This is Streamlit-session-local auth only; browser refresh may require
-        # re-login. Durable browser auth would require Streamlit-native OIDC or a
-        # dedicated frontend shell.
+        # Admin auth uses Supabase email/password + allowlist and can restore
+        # a previously persisted browser token pair after refresh.
         bootstrap_admin_auth()
+        maybe_restore_admin_login_from_browser()
 
         admin_allowlist = load_admin_allowlist()
         auth_config_error: str | None = None
