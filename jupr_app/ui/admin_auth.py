@@ -1,91 +1,28 @@
-
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
+try:
+    import extra_streamlit_components as stx
+except Exception:  # pragma: no cover
+    stx = None
+
+
 ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
-COOKIE_NAME = "jupr_admin_session"
-COOKIE_MANAGER_KEY = "jupr_admin_cookie_manager"
+ADMIN_SESSION_COOKIE_KEY = "jupr_admin_session"
 
 
-def _get_cookie_manager():
-    try:
-        import extra_streamlit_components as stx
-    except Exception:
+@st.cache_resource
+def get_cookie_manager():
+    if stx is None:
         return None
-
-    try:
-        return stx.CookieManager(key=COOKIE_MANAGER_KEY)
-    except Exception:
-        try:
-            return stx.CookieManager()
-        except Exception:
-            return None
-
-
-def _cookie_get(name: str) -> str | None:
-    manager = _get_cookie_manager()
-    if manager is None:
-        return None
-
-    try:
-        value = manager.get(name)
-    except TypeError:
-        try:
-            value = manager.get(cookie=name)
-        except Exception:
-            return None
-    except Exception:
-        return None
-
-    if value in (None, "", "null", "None"):
-        return None
-    return str(value)
-
-
-def _cookie_set(name: str, value: str, *, expires_at_epoch: int) -> None:
-    manager = _get_cookie_manager()
-    if manager is None:
-        return
-
-    expires_at = datetime.fromtimestamp(int(expires_at_epoch), tz=timezone.utc)
-    try:
-        manager.set(name, value, expires_at=expires_at, key=f"{name}_set")
-        return
-    except TypeError:
-        pass
-    except Exception:
-        return
-
-    try:
-        manager.set(cookie=name, val=value, expires_at=expires_at, key=f"{name}_set")
-    except Exception:
-        return
-
-
-def _cookie_delete(name: str) -> None:
-    manager = _get_cookie_manager()
-    if manager is None:
-        return
-
-    try:
-        manager.delete(name, key=f"{name}_delete")
-        return
-    except TypeError:
-        pass
-    except Exception:
-        return
-
-    try:
-        manager.delete(cookie=name, key=f"{name}_delete")
-    except Exception:
-        return
+    return stx.CookieManager()
 
 
 def _sign_admin_session(expires_at: int, secret: str) -> str:
@@ -93,43 +30,35 @@ def _sign_admin_session(expires_at: int, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
-def _session_payload(expires_at: int, token: str) -> dict[str, int | str]:
-    return {"exp": int(expires_at), "token": str(token)}
-
-
-def _normalize_session_payload(value: object) -> dict[str, int | str] | None:
-    if not isinstance(value, dict):
+def _get_cookie_value() -> str | None:
+    mgr = get_cookie_manager()
+    if mgr is None:
         return None
     try:
-        expires_at = int(value.get("exp", 0))
+        return mgr.get(ADMIN_SESSION_COOKIE_KEY)
     except Exception:
         return None
-    token = str(value.get("token", "") or "")
-    if expires_at <= 0 or not token:
-        return None
-    return _session_payload(expires_at, token)
 
 
-def _read_cookie_session() -> dict[str, int | str] | None:
-    raw = _cookie_get(COOKIE_NAME)
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return None
-    return _normalize_session_payload(parsed)
-
-
-def _write_cookie_session(data: dict[str, int | str]) -> None:
-    normalized = _normalize_session_payload(data)
-    if not normalized:
+def _set_cookie_value(data: dict, ttl_seconds: int) -> None:
+    mgr = get_cookie_manager()
+    if mgr is None:
         return
-    _cookie_set(
-        COOKIE_NAME,
-        json.dumps(normalized, separators=(",", ":")),
-        expires_at_epoch=int(normalized["exp"]),
-    )
+    try:
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(60, int(ttl_seconds)))
+        mgr.set(ADMIN_SESSION_COOKIE_KEY, json.dumps(data), expires_at=expires_at)
+    except Exception:
+        pass
+
+
+def _delete_cookie_value() -> None:
+    mgr = get_cookie_manager()
+    if mgr is None:
+        return
+    try:
+        mgr.delete(ADMIN_SESSION_COOKIE_KEY)
+    except Exception:
+        pass
 
 
 def create_admin_session(*, secret: str, ttl_seconds: int = ADMIN_SESSION_TTL_SECONDS) -> None:
@@ -141,31 +70,14 @@ def create_admin_session(*, secret: str, ttl_seconds: int = ADMIN_SESSION_TTL_SE
 
     expires_at = int(time.time()) + int(ttl_seconds)
     token = _sign_admin_session(expires_at, secret)
-    payload = _session_payload(expires_at, token)
-    st.session_state["admin_session"] = payload
-    _write_cookie_session(payload)
+    data = {"exp": expires_at, "token": token}
+    st.session_state["admin_session"] = data
+    _set_cookie_value(data, ttl_seconds)
 
 
 def clear_admin_session() -> None:
     st.session_state.pop("admin_session", None)
-    _cookie_delete(COOKIE_NAME)
-
-
-def restore_admin_session(*, secret: str) -> bool:
-    if "admin_session" in st.session_state:
-        return validate_admin_session(secret=secret)
-
-    if not secret:
-        clear_admin_session()
-        return False
-
-    payload = _read_cookie_session()
-    normalized = _normalize_session_payload(payload)
-    if not normalized:
-        return False
-
-    st.session_state["admin_session"] = normalized
-    return validate_admin_session(secret=secret)
+    _delete_cookie_value()
 
 
 def validate_admin_session(*, secret: str) -> bool:
@@ -173,24 +85,48 @@ def validate_admin_session(*, secret: str) -> bool:
         clear_admin_session()
         return False
 
-    data = _normalize_session_payload(st.session_state.get("admin_session"))
-    if not data:
-        cookie_payload = _read_cookie_session()
-        data = _normalize_session_payload(cookie_payload)
-        if not data:
-            return False
-        st.session_state["admin_session"] = data
+    data = st.session_state.get("admin_session")
+    if not isinstance(data, dict):
+        return False
 
-    expires_at = int(data["exp"])
+    try:
+        expires_at = int(data.get("exp", 0))
+    except Exception:
+        clear_admin_session()
+        return False
+
     if expires_at <= int(time.time()):
         clear_admin_session()
         return False
 
-    token = str(data["token"])
+    token = str(data.get("token", ""))
     expected = _sign_admin_session(expires_at, secret)
     if not hmac.compare_digest(token, expected):
         clear_admin_session()
         return False
 
-    _write_cookie_session(data)
     return True
+
+
+def restore_admin_session(*, secret: str) -> None:
+    current = st.session_state.get("admin_session")
+    if isinstance(current, dict) and validate_admin_session(secret=secret):
+        return
+
+    raw = _get_cookie_value()
+    if not raw:
+        return
+
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        clear_admin_session()
+        return
+
+    if not isinstance(data, dict):
+        clear_admin_session()
+        return
+
+    st.session_state["admin_session"] = data
+    if not validate_admin_session(secret=secret):
+        clear_admin_session()
