@@ -6,6 +6,7 @@ import uuid
 import streamlit as st
 
 from jupr_app.domain.tournament_registration_repo import (
+    build_registration_state,
     build_public_urls,
     get_public_tournament_bundle,
     list_open_public_tournaments,
@@ -297,6 +298,37 @@ def render(ctx):
                     st.stop()
 
         try:
+            state_before_submit = build_registration_state(supabase, tournament, settings, days, event_options)
+        except Exception:
+            state_before_submit = {}
+        event_lookup = {str(row.get("id")): row for row in event_options}
+        roster_lookup = {str(row.get("event_option_id")): row for row in (state_before_submit.get("event_rosters") or [])}
+        at_capacity_warnings: list[str] = []
+        for selection in selections:
+            event_option_id = str(selection.get("event_option_id") or "")
+            event = event_lookup.get(event_option_id) or {}
+            capacity = event.get("capacity_teams")
+            if not capacity:
+                continue
+            try:
+                cap_value = int(capacity)
+            except Exception:
+                continue
+            entries = (roster_lookup.get(event_option_id) or {}).get("entries") or []
+            occupied_slots = sum(
+                1
+                for row in entries
+                if _safe_text(row.get("status")).upper() not in {"NEEDS_PARTNER", "PARTNER_MISSING"}
+            )
+            if occupied_slots >= cap_value:
+                at_capacity_warnings.append(_safe_text(event.get("division_name") or event.get("label") or event_option_id))
+        if at_capacity_warnings:
+            st.warning(
+                "Heads up: these divisions appear full and this registration will likely be waitlisted: "
+                + ", ".join(sorted(set(at_capacity_warnings)))
+            )
+
+        try:
             result = save_registration(
                 supabase,
                 tournament_id=str(tournament.get("id")),
@@ -318,7 +350,7 @@ def render(ctx):
                 },
             )
             st.success(
-                f"Registration saved. Confirmation record: {result.get('registration_id')}. Submitting again with the same email updates your registration."
+                f"Registration saved. Confirmation record: {result.get('registration_id')}. Submitting again with the same email updates your registration. Final placement may still change after partner matching and waitlist review."
             )
             st.link_button("Open partner board", public_urls["partner_board"])
         except Exception as exc:

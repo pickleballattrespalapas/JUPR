@@ -13,6 +13,8 @@ REGISTRATION_STATUS_OPTIONS = ["draft", "open", "closed"]
 EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
 GENDER_RESTRICTION_OPTIONS = ["ANY", "MEN", "WOMEN", "MIXED"]
 PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
+ADMIN_REGISTRATION_STATUS_OPTIONS = ["pending", "confirmed", "waitlist", "cancelled"]
+ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 
 
 
@@ -65,11 +67,22 @@ def _now_iso() -> str:
 
 
 def registration_feature_available(supabase) -> tuple[bool, str | None]:
-    try:
-        supabase.table("tournament_registration_settings").select("id").limit(1).execute()
-        return True, None
-    except Exception as exc:
-        return False, str(exc)
+    required_tables = [
+        "tournament_registration_settings",
+        "tournament_registration_days",
+        "tournament_event_options",
+        "tournament_registrations",
+        "tournament_registration_selections",
+    ]
+    failures: list[str] = []
+    for table_name in required_tables:
+        try:
+            supabase.table(table_name).select("id").limit(1).execute()
+        except Exception as exc:
+            failures.append(f"{table_name}: {exc}")
+    if failures:
+        return False, "Registration tables unavailable: " + " | ".join(failures)
+    return True, None
 
 
 def list_existing_tournaments(supabase, club_id: str) -> list[dict[str, Any]]:
@@ -195,31 +208,63 @@ def replace_registration_configuration(
             "This tournament already has registrations. Freeze the current registration form or create a new tournament before replacing days and events."
         )
 
-    (
-        supabase.table("tournament_event_options")
-        .delete()
-        .eq("tournament_id", str(tournament_id))
-        .execute()
-    )
-    (
-        supabase.table("tournament_registration_days")
-        .delete()
-        .eq("tournament_id", str(tournament_id))
-        .execute()
-    )
+    day_ids: set[str] = set()
+    for idx, day in enumerate(days, start=1):
+        day_id = str(day.get("id") or "").strip()
+        day_tournament_id = str(day.get("tournament_id") or "").strip()
+        if not day_id:
+            raise ValueError(f"Invalid day payload at row {idx}: missing id.")
+        if not day_tournament_id:
+            raise ValueError(f"Invalid day payload at row {idx}: missing tournament_id.")
+        if day_tournament_id != str(tournament_id):
+            raise ValueError(f"Invalid day payload at row {idx}: tournament_id mismatch.")
+        day_ids.add(day_id)
 
-    if days:
-        (
-            supabase.table("tournament_registration_days")
-            .insert(days)
-            .execute()
-        )
-    if event_options:
+    for idx, event in enumerate(event_options, start=1):
+        event_id = str(event.get("id") or "").strip()
+        event_tournament_id = str(event.get("tournament_id") or "").strip()
+        registration_day_id = str(event.get("registration_day_id") or "").strip()
+        if not event_id:
+            raise ValueError(f"Invalid event payload at row {idx}: missing id.")
+        if not event_tournament_id:
+            raise ValueError(f"Invalid event payload at row {idx}: missing tournament_id.")
+        if event_tournament_id != str(tournament_id):
+            raise ValueError(f"Invalid event payload at row {idx}: tournament_id mismatch.")
+        if not registration_day_id:
+            raise ValueError(f"Invalid event payload at row {idx}: missing registration_day_id.")
+        if registration_day_id not in day_ids:
+            raise ValueError(
+                f"Invalid event payload at row {idx}: registration_day_id '{registration_day_id}' is not present in day payload."
+            )
+
+    try:
         (
             supabase.table("tournament_event_options")
-            .insert(event_options)
+            .delete()
+            .eq("tournament_id", str(tournament_id))
             .execute()
         )
+        (
+            supabase.table("tournament_registration_days")
+            .delete()
+            .eq("tournament_id", str(tournament_id))
+            .execute()
+        )
+
+        if days:
+            (
+                supabase.table("tournament_registration_days")
+                .insert(days)
+                .execute()
+            )
+        if event_options:
+            (
+                supabase.table("tournament_event_options")
+                .insert(event_options)
+                .execute()
+            )
+    except Exception as exc:
+        raise ValueError(f"Failed to replace registration configuration for tournament {tournament_id}: {exc}") from exc
 
 
 def list_registrations(supabase, tournament_id: str) -> list[dict[str, Any]]:
@@ -231,6 +276,39 @@ def list_registrations(supabase, tournament_id: str) -> list[dict[str, Any]]:
         .execute()
     )
     return _safe_data(resp)
+
+
+def update_registration_admin_fields(
+    supabase,
+    *,
+    tournament_id: str,
+    registration_id: str,
+    status: str,
+    payment_status: str,
+) -> dict[str, Any]:
+    clean_status = str(status or "").strip().lower()
+    clean_payment_status = str(payment_status or "").strip().lower()
+    if clean_status not in ADMIN_REGISTRATION_STATUS_OPTIONS:
+        raise ValueError(f"Invalid registration status: {status}")
+    if clean_payment_status not in ADMIN_PAYMENT_STATUS_OPTIONS:
+        raise ValueError(f"Invalid payment status: {payment_status}")
+
+    payload = {
+        "status": clean_status,
+        "payment_status": clean_payment_status,
+        "updated_at": _now_iso(),
+    }
+    resp = (
+        supabase.table("tournament_registrations")
+        .update(payload)
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", str(registration_id))
+        .execute()
+    )
+    updated = _safe_first(resp)
+    if not updated:
+        raise ValueError("Registration not found for this tournament.")
+    return updated
 
 
 def list_registration_selections(supabase, tournament_id: str) -> list[dict[str, Any]]:

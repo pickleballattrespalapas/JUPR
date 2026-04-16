@@ -11,6 +11,8 @@ import streamlit as st
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_registration_exports import build_registration_workbook
 from jupr_app.domain.tournament_registration_repo import (
+    ADMIN_PAYMENT_STATUS_OPTIONS,
+    ADMIN_REGISTRATION_STATUS_OPTIONS,
     REGISTRATION_STATUS_OPTIONS,
     build_public_urls,
     build_registration_state,
@@ -19,9 +21,11 @@ from jupr_app.domain.tournament_registration_repo import (
     get_tournament_record,
     list_event_options,
     list_existing_tournaments,
+    list_registrations,
     list_registration_days,
     registration_feature_available,
     replace_registration_configuration,
+    update_registration_admin_fields,
     upsert_registration_settings,
 )
 from jupr_app.ui.layout import page_shell
@@ -292,6 +296,8 @@ def _sync_days_with_date_range(
 def _clear_tournament_manager_state(tournament_id: str) -> None:
     stale_keys = [
         f"tm_days_seed_{tournament_id}",
+        f"tm_events_seed_{tournament_id}",
+        f"tm_divisions_seed_{tournament_id}",
         f"tm_days_editor_{tournament_id}",
         f"tm_events_editor_{tournament_id}",
         f"tm_divisions_editor_{tournament_id}",
@@ -333,6 +339,37 @@ def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
             "default_partner_board",
         ],
     )
+
+
+def _standard_event_templates_df() -> pd.DataFrame:
+    rows = [{"id": _uid("evt"), **row} for row in STANDARD_EVENT_TEMPLATES]
+    return _df_with_hidden_ids(
+        rows,
+        "id",
+        [
+            "event_family",
+            "participant_type",
+            "gender_restriction",
+            "default_format",
+            "default_scoring",
+            "default_waitlist",
+            "default_partner_board",
+        ],
+    )
+
+
+def _sanitize_divisions_for_event_families(divisions_df: pd.DataFrame, event_families: list[str]) -> pd.DataFrame:
+    if divisions_df.empty:
+        return divisions_df
+    valid_families = [_safe_text(family) for family in event_families if _safe_text(family)]
+    if not valid_families:
+        return divisions_df
+    fallback = valid_families[0]
+    out = divisions_df.copy()
+    out["event_family"] = out["event_family"].apply(
+        lambda value: value if _safe_text(value) in valid_families else fallback
+    )
+    return out
 
 
 def _parse_age_rules(raw_value: Any) -> dict[str, Any]:
@@ -810,6 +847,9 @@ def render(ctx):
     days_seed_key = f"tm_days_seed_{tournament_id}"
     if days_seed_key not in st.session_state:
         st.session_state[days_seed_key] = _seed_days(days, tournament)
+    events_seed_key = f"tm_events_seed_{tournament_id}"
+    if events_seed_key not in st.session_state:
+        st.session_state[events_seed_key] = _seed_event_templates(event_options)
 
     with tabs[1]:
         st.subheader("Days")
@@ -840,14 +880,13 @@ def render(ctx):
                 st.session_state[days_seed_key] = generated
             st.rerun()
 
-    event_seed_df = _seed_event_templates(event_options)
     with tabs[2]:
         st.subheader("Event Families")
         st.caption("Create the event families first. These hold the default format, scoring, and partner settings that the divisions inherit.")
         if structure_locked:
             st.caption("Event families are view-only because registrations already exist.")
         events_df = st.data_editor(
-            event_seed_df,
+            st.session_state[events_seed_key],
             hide_index=True,
             num_rows="dynamic",
             key=f"tm_events_editor_{tournament_id}",
@@ -863,12 +902,27 @@ def render(ctx):
             },
             use_container_width=True,
         )
+        st.session_state[events_seed_key] = events_df.copy()
         if st.button("Reset to standard event families", disabled=structure_locked):
+            st.session_state[events_seed_key] = _standard_event_templates_df()
+            existing_divisions = st.session_state.get(f"tm_divisions_seed_{tournament_id}")
+            if isinstance(existing_divisions, pd.DataFrame):
+                st.session_state[f"tm_divisions_seed_{tournament_id}"] = _sanitize_divisions_for_event_families(
+                    existing_divisions,
+                    [row.get("event_family") for row in STANDARD_EVENT_TEMPLATES],
+                )
             st.session_state.pop(f"tm_events_editor_{tournament_id}", None)
             st.rerun()
         st.caption("Typical default: all doubles divisions can inherit Round Robin + Playoff and Games to 15, while individual divisions override only when needed.")
 
-    divisions_seed_df = _seed_divisions(days_df, events_df, event_options)
+    divisions_seed_key = f"tm_divisions_seed_{tournament_id}"
+    if divisions_seed_key not in st.session_state:
+        st.session_state[divisions_seed_key] = _seed_divisions(days_df, events_df, event_options)
+    divisions_seed_df = _sanitize_divisions_for_event_families(
+        st.session_state[divisions_seed_key],
+        [family for family in events_df["event_family"].tolist() if _safe_text(family)],
+    )
+    st.session_state[divisions_seed_key] = divisions_seed_df.copy()
     day_label_options = [label for label in days_df[days_df["enabled"] == True]["label"].tolist()] or days_df["label"].tolist() or ["Day 1"]
     event_family_options = [family for family in events_df["event_family"].tolist() if _safe_text(family)] or ["Men's Doubles"]
     with tabs[3]:
@@ -906,6 +960,7 @@ def render(ctx):
             },
             use_container_width=True,
         )
+        st.session_state[divisions_seed_key] = divisions_df.copy()
         for mode, help_text in AGE_MODE_HELP.items():
             st.caption(f"**{mode.replace('_', ' ').title()}** — {help_text}")
 
@@ -961,6 +1016,7 @@ def render(ctx):
         )
         registrations = state.get("registrations", [])
         issues = state.get("issues", [])
+        summary = state.get("summary", {})
         st.metric("Registrations received", len(registrations))
         if issues:
             st.caption(f"Current registration issues: {len(issues)}")
@@ -972,3 +1028,87 @@ def render(ctx):
                 file_name=f"{_safe_text(tournament.get('name') or 'tournament').replace(' ', '_')}_registration.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+        st.divider()
+        st.markdown("#### Registration issues and roster status")
+        st.caption(f"Issue count: {summary.get('issue_count', 0)}")
+        if issues:
+            issue_rows = [
+                {
+                    "Severity": row.get("severity"),
+                    "Type": row.get("issue_type"),
+                    "Message": row.get("message"),
+                    "Event Option ID": row.get("event_option_id"),
+                    "Registration ID": row.get("registration_id"),
+                }
+                for row in issues
+            ]
+            st.dataframe(pd.DataFrame(issue_rows), hide_index=True, use_container_width=True)
+        else:
+            st.success("No derived registration issues right now.")
+
+        status_rows: list[dict[str, Any]] = []
+        for roster in state.get("event_rosters", []):
+            status_counts = {"CONFIRMED": 0, "REVIEW": 0, "WAITLIST": 0, "NEEDS_PARTNER": 0, "PARTNER_MISSING": 0}
+            for entry in roster.get("entries", []):
+                status = _safe_text(entry.get("status")).upper()
+                if status in status_counts:
+                    status_counts[status] += 1
+            status_rows.append(
+                {
+                    "Event": roster.get("event_label"),
+                    "Division": roster.get("event_label"),
+                    "Confirmed": status_counts["CONFIRMED"],
+                    "Review": status_counts["REVIEW"],
+                    "Waitlist": status_counts["WAITLIST"],
+                    "Needs Partner": status_counts["NEEDS_PARTNER"],
+                    "Partner Missing": status_counts["PARTNER_MISSING"],
+                }
+            )
+        if status_rows:
+            st.dataframe(pd.DataFrame(status_rows), hide_index=True, use_container_width=True)
+
+        st.divider()
+        st.markdown("#### Registration admin review")
+        raw_regs = list_registrations(supabase, tournament_id)
+        if not raw_regs:
+            st.info("No registration submissions to review yet.")
+        else:
+            options = {
+                f"{_safe_text(row.get('display_name') or row.get('email') or row.get('id'))} · {_safe_text(row.get('status'))}/{_safe_text(row.get('payment_status'))} · {row.get('submitted_at') or 'no timestamp'}": row
+                for row in raw_regs
+            }
+            selected_label = st.selectbox("Select registration to review", list(options.keys()), key=f"tm_admin_pick_{tournament_id}")
+            selected_reg = options[selected_label]
+            with st.form(f"tm_admin_review_{tournament_id}"):
+                st.text_input("Display name", value=_safe_text(selected_reg.get("display_name")), disabled=True)
+                st.text_input("Email", value=_safe_text(selected_reg.get("email")), disabled=True)
+                admin_status = st.selectbox(
+                    "Registration status",
+                    ADMIN_REGISTRATION_STATUS_OPTIONS,
+                    index=ADMIN_REGISTRATION_STATUS_OPTIONS.index(_safe_text(selected_reg.get("status")).lower())
+                    if _safe_text(selected_reg.get("status")).lower() in ADMIN_REGISTRATION_STATUS_OPTIONS
+                    else 0,
+                )
+                admin_payment_status = st.selectbox(
+                    "Payment status",
+                    ADMIN_PAYMENT_STATUS_OPTIONS,
+                    index=ADMIN_PAYMENT_STATUS_OPTIONS.index(_safe_text(selected_reg.get("payment_status")).lower())
+                    if _safe_text(selected_reg.get("payment_status")).lower() in ADMIN_PAYMENT_STATUS_OPTIONS
+                    else 0,
+                )
+                save_admin = st.form_submit_button("Save registration admin fields", use_container_width=True)
+            if save_admin:
+                try:
+                    update_registration_admin_fields(
+                        supabase,
+                        tournament_id=tournament_id,
+                        registration_id=str(selected_reg.get("id")),
+                        status=admin_status,
+                        payment_status=admin_payment_status,
+                    )
+                    st.success("Registration admin fields updated.")
+                    st.session_state[f"tm_refresh_{tournament_id}"] = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not update registration: {exc}")
