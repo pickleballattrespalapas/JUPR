@@ -176,18 +176,22 @@ def main():
                                 "Admin password is not configured in secrets (supabase.admin_password)."
                             )
                         elif pwd == expected:
+                            # Important: do not st.rerun() immediately here.
+                            # CookieManager writes complete at the end of the run.
                             create_admin_session(
                                 secret=admin_session_secret,
                                 ttl_seconds=ADMIN_SESSION_TTL_SECONDS,
                             )
-                            st.rerun()
+                            st.sidebar.success("Admin login saved.")
                         else:
                             st.error("Incorrect password.")
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
+                    # Important: do not st.rerun() immediately here.
+                    # Let the browser receive the cookie delete first.
                     clear_admin_session()
-                    st.rerun()
+                    st.sidebar.info("Logged out.")
 
         # Canonical admin flag (never true in public mode)
         admin_logged_in = (not PUBLIC_MODE) and validate_admin_session(
