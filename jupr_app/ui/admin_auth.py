@@ -160,13 +160,51 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
         raise AdminAuthError("Enter your email address.")
 
     client = make_supabase_auth_client()
-    try:
-        client.auth.reset_password_email(
-            clean_email,
-            options={"redirect_to": redirect_to},
-        )
-    except Exception:
-        raise AdminAuthError("Unable to send reset email right now. Please try again.")
+    auth_api = client.auth
+
+    call_variants = (
+        (
+            "reset_password_email",
+            lambda method: method(clean_email, {"redirect_to": redirect_to}),
+        ),
+        (
+            "reset_password_email",
+            lambda method: method(
+                clean_email, options={"redirect_to": redirect_to}
+            ),
+        ),
+        (
+            "reset_password_for_email",
+            lambda method: method(clean_email, {"redirect_to": redirect_to}),
+        ),
+        (
+            "reset_password_for_email",
+            lambda method: method(
+                clean_email, options={"redirect_to": redirect_to}
+            ),
+        ),
+    )
+
+    last_exception_text = ""
+    for method_name, invoke in call_variants:
+        if not hasattr(auth_api, method_name):
+            continue
+
+        method = getattr(auth_api, method_name)
+        try:
+            invoke(method)
+            return
+        except (TypeError, AttributeError) as exc:
+            last_exception_text = str(exc)
+            continue
+        except Exception as exc:
+            last_exception_text = str(exc)
+            break
+
+    # Developer note: inspect `last_exception_text` in logs/debugging when all
+    # client auth variants fail, while keeping user-facing errors generic.
+    _ = last_exception_text
+    raise AdminAuthError("Unable to send reset email right now. Please try again.")
 
 
 def get_recovery_query_params() -> dict[str, str]:
