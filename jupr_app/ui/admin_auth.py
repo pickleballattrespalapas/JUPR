@@ -1,171 +1,148 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import time
-import urllib.parse
+import os
+from collections.abc import Mapping
 
 import streamlit as st
-import streamlit.components.v1 as components
+from supabase import create_client
 
 
-ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
-ADMIN_SESSION_COOKIE_KEY = "jupr_admin_session"
-PENDING_COOKIE_ACTION_KEY = "_jupr_admin_cookie_action"
+_AUTH_USER_KEY = "admin_auth_user"
+_AUTH_SESSION_KEY = "admin_auth_session"
 
 
-def _sign_admin_session(expires_at: int, secret: str) -> str:
-    msg = f"{expires_at}".encode("utf-8")
-    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+class AdminAuthError(RuntimeError):
+    """Raised for clean, operator-facing admin auth failures."""
 
 
-def _read_request_cookies() -> dict[str, str]:
+class AdminAuthConfigError(AdminAuthError):
+    """Raised when required auth config is missing."""
+
+
+def _get_secret(path: list[str], default=None):
+    """Safe nested secret getter that never raises KeyError."""
     try:
-        cookies = getattr(st.context, "cookies", None)
+        cur: object = st.secrets
     except Exception:
-        cookies = None
+        return default
 
-    if not cookies:
-        return {}
+    for key in path:
+        if not isinstance(cur, Mapping):
+            return default
+        if key not in cur:
+            return default
+        cur = cur[key]
 
-    try:
-        return {str(k): str(v) for k, v in dict(cookies).items()}
-    except Exception:
-        return {}
-
-
-def _get_cookie_value() -> str | None:
-    raw = _read_request_cookies().get(ADMIN_SESSION_COOKIE_KEY)
-    if not raw:
-        return None
-    try:
-        return urllib.parse.unquote(raw)
-    except Exception:
-        return raw
+    return cur
 
 
-def _queue_set_cookie(data: dict, ttl_seconds: int) -> None:
-    st.session_state[PENDING_COOKIE_ACTION_KEY] = {
-        "mode": "set",
-        "value": json.dumps(data, separators=(",", ":")),
-        "ttl_seconds": max(60, int(ttl_seconds)),
-        "nonce": str(int(time.time() * 1000)),
-    }
+def _normalize_email(value: str | None) -> str:
+    return str(value or "").strip().lower()
 
 
-def _queue_delete_cookie() -> None:
-    st.session_state[PENDING_COOKIE_ACTION_KEY] = {
-        "mode": "delete",
-        "nonce": str(int(time.time() * 1000)),
-    }
-
-
-def create_admin_session(*, secret: str, ttl_seconds: int = ADMIN_SESSION_TTL_SECONDS) -> None:
-    if not secret:
-        st.error(
-            "Admin session secret is missing. Set supabase.admin_session_secret in secrets."
-        )
-        st.stop()
-
-    expires_at = int(time.time()) + int(ttl_seconds)
-    token = _sign_admin_session(expires_at, secret)
-    data = {"exp": expires_at, "token": token}
-    st.session_state["admin_session"] = data
-    _queue_set_cookie(data, ttl_seconds)
-
-
-def clear_admin_session() -> None:
-    st.session_state.pop("admin_session", None)
-    _queue_delete_cookie()
-
-
-def validate_admin_session(*, secret: str) -> bool:
-    if not secret:
-        st.session_state.pop("admin_session", None)
-        return False
-
-    data = st.session_state.get("admin_session")
-    if not isinstance(data, dict):
-        return False
-
-    try:
-        expires_at = int(data.get("exp", 0))
-    except Exception:
-        st.session_state.pop("admin_session", None)
-        return False
-
-    if expires_at <= int(time.time()):
-        st.session_state.pop("admin_session", None)
-        return False
-
-    token = str(data.get("token", ""))
-    expected = _sign_admin_session(expires_at, secret)
-    if not hmac.compare_digest(token, expected):
-        st.session_state.pop("admin_session", None)
-        return False
-
-    return True
-
-
-def restore_admin_session(*, secret: str) -> None:
-    current = st.session_state.get("admin_session")
-    if isinstance(current, dict) and validate_admin_session(secret=secret):
-        return
-
-    raw = _get_cookie_value()
-    if not raw:
-        return
-
-    try:
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
-        st.session_state.pop("admin_session", None)
-        return
-
-    if not isinstance(data, dict):
-        st.session_state.pop("admin_session", None)
-        return
-
-    st.session_state["admin_session"] = data
-    if not validate_admin_session(secret=secret):
-        st.session_state.pop("admin_session", None)
-
-
-def flush_admin_cookie_action() -> bool:
-    action = st.session_state.pop(PENDING_COOKIE_ACTION_KEY, None)
-    if not isinstance(action, dict):
-        return False
-
-    mode = str(action.get("mode") or "").strip().lower()
-    if mode not in {"set", "delete"}:
-        return False
-
-    if mode == "set":
-        raw_value = str(action.get("value") or "")
-        cookie_value = urllib.parse.quote(raw_value, safe="")
-        ttl_seconds = max(60, int(action.get("ttl_seconds") or ADMIN_SESSION_TTL_SECONDS))
-        cookie_stmt = (
-            f'document.cookie = "{ADMIN_SESSION_COOKIE_KEY}={cookie_value}; '
-            f'path=/; max-age={ttl_seconds}; SameSite=Lax";'
-        )
-    else:
-        cookie_stmt = (
-            f'document.cookie = "{ADMIN_SESSION_COOKIE_KEY}=; '
-            f'path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";'
-        )
-
-    html = f"""
-    <script>
-    (function() {{
-        try {{
-            {cookie_stmt}
-        }} catch (e) {{}}
-        setTimeout(function() {{
-            window.location.reload();
-        }}, 60);
-    }})();
-    </script>
+def load_admin_allowlist() -> set[str]:
     """
-    components.html(html, height=0, width=0)
-    return True
+    Load allowlisted admin emails from either:
+    - [admin].allowed_emails = ["a@x.com", "b@y.com"]
+    - ADMIN_ALLOWED_EMAILS = "a@x.com,b@y.com"
+    """
+    allowed = _get_secret(["admin", "allowed_emails"], None)
+    if allowed is None:
+        allowed = st.secrets.get("ADMIN_ALLOWED_EMAILS")
+    if allowed is None:
+        allowed = os.getenv("ADMIN_ALLOWED_EMAILS")
+
+    normalized: set[str] = set()
+    if isinstance(allowed, (list, tuple, set)):
+        for raw in allowed:
+            email = _normalize_email(str(raw))
+            if email:
+                normalized.add(email)
+    elif isinstance(allowed, str):
+        for raw in allowed.split(","):
+            email = _normalize_email(raw)
+            if email:
+                normalized.add(email)
+
+    return normalized
+
+
+def _get_supabase_auth_config() -> tuple[str, str]:
+    url = str(
+        st.secrets.get("SUPABASE_URL")
+        or _get_secret(["supabase", "url"], "")
+        or os.getenv("SUPABASE_URL", "")
+    ).strip()
+    anon_key = str(
+        st.secrets.get("SUPABASE_ANON_KEY")
+        or _get_secret(["supabase", "anon_key"], "")
+        or os.getenv("SUPABASE_ANON_KEY", "")
+    ).strip()
+
+    if not url or not anon_key:
+        raise AdminAuthConfigError(
+            "Supabase auth is not configured. Set SUPABASE_URL, SUPABASE_ANON_KEY, and admin.allowed_emails."
+        )
+
+    return url, anon_key
+
+
+def make_supabase_auth_client():
+    """Build a dedicated auth client using Supabase URL + anon key only."""
+    url, anon_key = _get_supabase_auth_config()
+    return create_client(url, anon_key)
+
+
+def bootstrap_admin_auth() -> None:
+    """
+    Initialize auth keys for this Streamlit session.
+
+    This app no longer uses shared admin passwords or cookie/HMAC session bridges.
+    Auth state is local to the current Streamlit session; browser refresh may require
+    logging in again. Durable browser auth would require Streamlit-native OIDC or a
+    dedicated frontend shell.
+    """
+    st.session_state.setdefault(_AUTH_USER_KEY, None)
+    st.session_state.setdefault(_AUTH_SESSION_KEY, None)
+
+
+def get_current_admin_user():
+    return st.session_state.get(_AUTH_USER_KEY)
+
+
+def is_allowed_admin_email(email: str, allowlist: set[str]) -> bool:
+    return _normalize_email(email) in allowlist
+
+
+def login_admin(email: str, password: str) -> dict:
+    bootstrap_admin_auth()
+
+    clean_email = _normalize_email(email)
+    if not clean_email or not str(password or ""):
+        raise AdminAuthError("Enter both email and password.")
+
+    client = make_supabase_auth_client()
+
+    try:
+        response = client.auth.sign_in_with_password(
+            {"email": clean_email, "password": password}
+        )
+    except AdminAuthConfigError:
+        raise
+    except Exception:
+        raise AdminAuthError("Login failed. Check your email/password and try again.")
+
+    user = getattr(response, "user", None)
+    session = getattr(response, "session", None)
+    if not user or not session:
+        raise AdminAuthError("Login failed. Check your email/password and try again.")
+
+    st.session_state[_AUTH_USER_KEY] = user
+    st.session_state[_AUTH_SESSION_KEY] = session
+    return {"user": user, "session": session}
+
+
+def logout_admin() -> None:
+    """Clear only local Streamlit auth state for the current session."""
+    st.session_state.pop(_AUTH_USER_KEY, None)
+    st.session_state.pop(_AUTH_SESSION_KEY, None)

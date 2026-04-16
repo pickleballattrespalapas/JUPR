@@ -12,12 +12,14 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.admin_auth import (
-    ADMIN_SESSION_TTL_SECONDS,
-    clear_admin_session,
-    create_admin_session,
-    flush_admin_cookie_action,
-    restore_admin_session,
-    validate_admin_session,
+    AdminAuthConfigError,
+    AdminAuthError,
+    bootstrap_admin_auth,
+    get_current_admin_user,
+    is_allowed_admin_email,
+    load_admin_allowlist,
+    login_admin,
+    logout_admin,
 )
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.page_registry import (
@@ -65,17 +67,6 @@ def get_secret(path: list[str], default=None):
 
 
 # -------------------------
-# Admin session helpers
-# -------------------------
-def _get_admin_session_secret() -> str:
-    return str(
-        get_secret(["supabase", "admin_session_secret"], "")
-        or get_secret(["admin_session_secret"], "")
-        or ""
-    )
-
-
-# -------------------------
 # Supabase + data loading
 # -------------------------
 @st.cache_resource
@@ -86,8 +77,6 @@ def get_supabase():
     [supabase]
     url = "https://....supabase.co"
     anon_key = "..."   # OR key = "..." (either is accepted)
-    admin_password = "..."  # your chosen admin login password
-    admin_session_secret = "..."  # used to sign short-lived admin sessions
     """
     url = st.secrets.get("SUPABASE_URL") or get_secret(["supabase", "url"])
 
@@ -155,8 +144,15 @@ def main():
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
 
-        admin_session_secret = _get_admin_session_secret()
-        restore_admin_session(secret=admin_session_secret)
+        # Admin auth upgraded from shared password + HMAC cookie sessions to
+        # authenticated Supabase users (email + password) with email allowlist.
+        # NOTE: This is Streamlit-session-local auth only; browser refresh may require
+        # re-login. Durable browser auth would require Streamlit-native OIDC or a
+        # dedicated frontend shell.
+        bootstrap_admin_auth()
+
+        admin_allowlist = load_admin_allowlist()
+        auth_config_error: str | None = None
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
@@ -164,38 +160,57 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not validate_admin_session(secret=admin_session_secret):
+            user = get_current_admin_user()
+            user_email = ""
+            if user is not None:
+                user_email = str(getattr(user, "email", "") or "").strip().lower()
+
+            authenticated = bool(user and user_email)
+            authorized = authenticated and is_allowed_admin_email(user_email, admin_allowlist)
+
+            if authenticated and not authorized:
+                logout_admin()
+                user = None
+                user_email = ""
+                authenticated = False
+                st.sidebar.error("Authenticated but not authorized for admin access.")
+
+            if not authenticated:
                 with st.sidebar.expander("🔒 Admin Login"):
-                    pwd = st.text_input("Password", type="password", key="admin_pwd")
+                    email = st.text_input("Email", key="admin_email")
+                    password = st.text_input("Password", type="password", key="admin_pwd")
 
                     if st.button("Login", key="admin_login_btn"):
-                        expected = str(
-                            get_secret(["supabase", "admin_password"], "") or ""
-                        )
-                        if not expected:
-                            st.error(
-                                "Admin password is not configured in secrets (supabase.admin_password)."
-                            )
-                        elif pwd == expected:
-                            create_admin_session(
-                                secret=admin_session_secret,
-                                ttl_seconds=ADMIN_SESSION_TTL_SECONDS,
-                            )
+                        if not admin_allowlist:
+                            auth_config_error = "Supabase auth is not configured. Set SUPABASE_URL, SUPABASE_ANON_KEY, and admin.allowed_emails."
                         else:
-                            st.error("Incorrect password.")
-            else:
-                st.sidebar.success("Logged In: Admin")
-                if st.sidebar.button("Log Out", key="admin_logout_btn"):
-                    clear_admin_session()
+                            try:
+                                result = login_admin(email=email, password=password)
+                                login_user = result.get("user")
+                                login_email = str(getattr(login_user, "email", "") or "").strip().lower()
+                                if not is_allowed_admin_email(login_email, admin_allowlist):
+                                    logout_admin()
+                                    st.sidebar.error("Authenticated but not authorized for admin access.")
+                                else:
+                                    st.rerun()
+                            except AdminAuthConfigError as exc:
+                                auth_config_error = str(exc)
+                            except AdminAuthError as exc:
+                                st.sidebar.error(str(exc))
 
-        if flush_admin_cookie_action():
-            st.info("Syncing admin session...")
-            st.stop()
+                if auth_config_error:
+                    st.sidebar.error(auth_config_error)
+            else:
+                st.sidebar.success(f"Logged In: {user_email}")
+                if st.sidebar.button("Log Out", key="admin_logout_btn"):
+                    logout_admin()
+                    st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and validate_admin_session(
-            secret=admin_session_secret
-        )
+        current_admin = get_current_admin_user()
+        current_admin_email = str(getattr(current_admin, "email", "") or "").strip().lower()
+        authenticated_and_allowlisted = bool(current_admin and is_allowed_admin_email(current_admin_email, admin_allowlist))
+        admin_logged_in = (not PUBLIC_MODE) and authenticated_and_allowlisted
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
