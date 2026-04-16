@@ -19,11 +19,18 @@ from jupr_app.ui.layout import page_shell
 _MIN_PASSWORD_LENGTH = 8
 
 
-def _inject_hash_to_query_bridge() -> None:
+def _query_param_text(key: str) -> str:
+    value = st.query_params.get(key, "")
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def _inject_hash_to_query_probe_bridge() -> None:
     """
     Supabase recovery links can return tokens in URL hash fragment.
-    Streamlit server code can't read hash values, so this tiny bridge moves
-    recovery fields into query params once, removes the hash, and reloads.
+    Streamlit server code can't read hash values, so this probe marks when
+    hash inspection happened and moves recovery fields into query params once.
     """
     components.html(
         """
@@ -31,24 +38,28 @@ def _inject_hash_to_query_bridge() -> None:
         (function () {
           const appWindow = window.parent || window;
           const currentUrl = new URL(appWindow.location.href);
-          const hash = appWindow.location.hash || "";
-          if (!hash || hash.length <= 1) return;
-
-          const hashParams = new URLSearchParams(hash.substring(1));
           const recoveryKeys = ["access_token", "refresh_token", "type", "code", "token_hash"];
-          const hasRecoveryFields = recoveryKeys
-            .some((k) => !!hashParams.get(k));
-          if (!hasRecoveryFields) return;
+          const hasRecoveryQuery = recoveryKeys.some((k) => !!currentUrl.searchParams.get(k));
+          const probeReady = currentUrl.searchParams.get("_recovery_probe") === "1";
+          if (hasRecoveryQuery || probeReady) return;
 
-          if (currentUrl.searchParams.get("_recovery_hash_bridge") === "1") return;
+          const hash = appWindow.location.hash || "";
+          const hashParams = hash && hash.length > 1
+            ? new URLSearchParams(hash.substring(1))
+            : new URLSearchParams();
 
-          recoveryKeys.forEach((key) => {
-            const value = hashParams.get(key);
-            if (value && !currentUrl.searchParams.get(key)) {
-              currentUrl.searchParams.set(key, value);
-            }
-          });
-          currentUrl.searchParams.set("_recovery_hash_bridge", "1");
+          const hasRecoveryHash = recoveryKeys.some((k) => !!hashParams.get(k));
+
+          if (hasRecoveryHash) {
+            recoveryKeys.forEach((key) => {
+              const value = hashParams.get(key);
+              if (value && !currentUrl.searchParams.get(key)) {
+                currentUrl.searchParams.set(key, value);
+              }
+            });
+          }
+
+          currentUrl.searchParams.set("_recovery_probe", "1");
           currentUrl.hash = "";
 
           appWindow.location.replace(currentUrl.toString());
@@ -59,6 +70,10 @@ def _inject_hash_to_query_bridge() -> None:
     )
 
 
+def _should_wait_for_probe(has_recovery_query: bool, recovery_probe: str) -> bool:
+    return (not has_recovery_query) and recovery_probe != "1"
+
+
 def render(ctx):
     page_shell(
         "🔐 Reset Password",
@@ -66,7 +81,7 @@ def render(ctx):
         mode_label="Public",
     )
 
-    _inject_hash_to_query_bridge()
+    _inject_hash_to_query_probe_bridge()
 
     try:
         client = make_supabase_auth_client()
@@ -75,7 +90,13 @@ def render(ctx):
         st.stop()
 
     recovery_params = get_recovery_query_params()
+    recovery_probe = _query_param_text("_recovery_probe")
     has_recovery_query = is_recovery_flow_query(recovery_params)
+
+    if _should_wait_for_probe(has_recovery_query, recovery_probe):
+        st.info("Preparing reset link...")
+        st.stop()
+
     recovery_session_ready = establish_recovery_session(client, recovery_params)
 
     if not has_recovery_query or not recovery_session_ready:
