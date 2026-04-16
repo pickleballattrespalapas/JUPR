@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _AUTH_USER_KEY = "admin_auth_user"
 _AUTH_SESSION_KEY = "admin_auth_session"
+_RECOVERY_SESSION_KEY = "admin_recovery_session"
 
 
 class AdminAuthError(RuntimeError):
@@ -49,6 +50,52 @@ def _query_param_text(key: str) -> str:
     if isinstance(value, list):
         value = value[0] if value else ""
     return str(value or "").strip()
+
+
+def _extract_session(obj):
+    if obj is None:
+        return None
+
+    nested = getattr(obj, "session", None)
+    if nested is not None:
+        return nested
+
+    access_token = getattr(obj, "access_token", None)
+    refresh_token = getattr(obj, "refresh_token", None)
+    if access_token and refresh_token:
+        return obj
+
+    return None
+
+
+def _stash_recovery_session(session_obj) -> None:
+    session = _extract_session(session_obj)
+    if session is None:
+        return
+
+    access_token = getattr(session, "access_token", None)
+    refresh_token = getattr(session, "refresh_token", None)
+    if access_token and refresh_token:
+        st.session_state[_RECOVERY_SESSION_KEY] = {
+            "access_token": str(access_token),
+            "refresh_token": str(refresh_token),
+        }
+
+
+def _get_stashed_recovery_session() -> dict[str, str] | None:
+    raw = st.session_state.get(_RECOVERY_SESSION_KEY)
+    if not isinstance(raw, dict):
+        return None
+
+    access_token = str(raw.get("access_token") or "").strip()
+    refresh_token = str(raw.get("refresh_token") or "").strip()
+    if not access_token or not refresh_token:
+        return None
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+    }
 
 
 def load_admin_allowlist() -> set[str]:
@@ -282,14 +329,22 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     query = params or get_recovery_query_params()
 
     def _response_has_session(response) -> bool:
-        return bool(getattr(response, "session", None))
+        session = _extract_session(response)
+        if session is not None:
+            _stash_recovery_session(session)
+            return True
+        return False
 
     def _has_usable_session() -> bool:
         try:
             existing = client.auth.get_session()
         except Exception:
             return False
-        return bool(getattr(existing, "session", None))
+        session = _extract_session(existing)
+        if session is not None:
+            _stash_recovery_session(session)
+            return True
+        return False
 
     try:
         if _has_usable_session():
@@ -305,7 +360,8 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     if access_token and refresh_token:
         try:
             response = client.auth.set_session(access_token, refresh_token)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Recovery set_session failed: %s", exc)
             return False
         return _response_has_session(response)
 
@@ -319,7 +375,8 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
                     "type": otp_type,
                 }
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Recovery verify_otp failed: %s", exc)
             return False
         return _response_has_session(response)
 
@@ -327,7 +384,8 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     if auth_code:
         try:
             response = client.auth.exchange_code_for_session({"auth_code": auth_code})
-        except Exception:
+        except Exception as exc:
+            logger.warning("Recovery exchange_code_for_session failed: %s", exc)
             return False
         return _response_has_session(response)
 
@@ -339,22 +397,48 @@ def update_recovered_user_password(client, new_password: str) -> None:
     if not str(new_password or ""):
         raise AdminAuthError("Enter a new password.")
 
+    recovery_session = _get_stashed_recovery_session()
+    if recovery_session:
+        try:
+            client.auth.set_session(
+                recovery_session["access_token"],
+                recovery_session["refresh_token"],
+            )
+        except Exception as exc:
+            logger.warning("Re-attaching recovery session before password update failed: %s", exc)
+
+    last_exc: Exception | None = None
+
     try:
         response = client.auth.update_user({"password": new_password})
-    except Exception:
-        raise AdminAuthError(
-            "Unable to update password. This password reset link may be invalid or expired. Request a new reset email."
-        )
+        if getattr(response, "user", None) is not None:
+            return
+    except TypeError as exc:
+        last_exc = exc
+    except Exception as exc:
+        last_exc = exc
 
-    if getattr(response, "user", None) is None:
-        raise AdminAuthError(
-            "Unable to update password. This password reset link may be invalid or expired. Request a new reset email."
-        )
+    try:
+        response = client.auth.update_user(attributes={"password": new_password})
+        if getattr(response, "user", None) is not None:
+            return
+    except Exception as exc:
+        last_exc = exc
+
+    logger.error(
+        "Supabase password update failed during recovery flow: %s",
+        last_exc,
+        exc_info=(type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None,
+    )
+    raise AdminAuthError(
+        "Unable to update password. This password reset link may be invalid or expired. Request a new reset email."
+    )
 
 
 def clear_local_admin_auth_state() -> None:
     """Clear local Streamlit auth state after password reset success."""
     logout_admin()
+    st.session_state.pop(_RECOVERY_SESSION_KEY, None)
 
 
 def logout_admin() -> None:
