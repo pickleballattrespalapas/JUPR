@@ -9,6 +9,7 @@ class PageDefinition:
     label: str
     public: bool = False
     admin_only: bool = False
+    show_in_nav: bool = True
 
 
 PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
@@ -43,6 +44,7 @@ PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("weekly_recap", "🗞️ Weekly Recap", public=True),
     PageDefinition("top_players_printable", "🧾 Top Active Players PDF", admin_only=True),
     PageDefinition("weekly_recap_admin", "🗞️ Weekly Recap Admin", admin_only=True),
+    PageDefinition("reset_password", "🔐 Reset Password", show_in_nav=False),
 )
 
 PAGE_KEY_TO_LABEL = {page.key: page.label for page in PAGE_DEFINITIONS}
@@ -52,6 +54,10 @@ ADMIN_ONLY_PAGE_KEYS = frozenset(
 )
 ADMIN_ONLY_LABELS = frozenset(
     page.label for page in PAGE_DEFINITIONS if page.admin_only
+)
+HIDDEN_PAGE_KEYS = frozenset(page.key for page in PAGE_DEFINITIONS if not page.show_in_nav)
+HIDDEN_PAGE_LABELS = frozenset(
+    page.label for page in PAGE_DEFINITIONS if not page.show_in_nav
 )
 PUBLIC_NAV_KEYS = (
     "leaderboards",
