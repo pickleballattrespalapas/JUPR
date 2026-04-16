@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from jupr_app.ui import admin_auth
 from jupr_app.ui.admin_auth import _exchange_auth_code_for_session, _set_auth_session
 
 
@@ -27,6 +28,22 @@ class _ExchangeCodeAuth:
         if len(self.calls) < self._succeed_on:
             raise TypeError(f"attempt {len(self.calls)} failed")
         return {"ok": True, "attempt": len(self.calls)}
+
+
+class _ResetEmailAuth:
+    def __init__(self):
+        self.calls = []
+
+    def reset_password_email(self, *args, **kwargs):
+        self.calls.append(("reset_password_email", args, kwargs))
+        if len(args) == 1 and not kwargs:
+            return {"ok": True}
+        raise TypeError("redirect signature rejected")
+
+
+class _ResetClient:
+    def __init__(self, auth):
+        self.auth = auth
 
 
 def test_set_auth_session_falls_back_in_order():
@@ -75,3 +92,28 @@ def test_exchange_auth_code_for_session_raises_last_exception_if_all_attempts_fa
         _exchange_auth_code_for_session(client, "abc123")
 
     assert len(auth.calls) == 3
+
+
+def test_send_password_reset_email_falls_back_to_no_redirect(monkeypatch):
+    auth = _ResetEmailAuth()
+    client = _ResetClient(auth)
+    monkeypatch.setattr(admin_auth, "make_supabase_auth_client", lambda: client)
+
+    admin_auth.send_password_reset_email(
+        "Admin@Example.com",
+        redirect_to="https://example.com/reset",
+    )
+
+    assert auth.calls == [
+        (
+            "reset_password_email",
+            ("admin@example.com", {"redirect_to": "https://example.com/reset"}),
+            {},
+        ),
+        (
+            "reset_password_email",
+            ("admin@example.com",),
+            {"options": {"redirect_to": "https://example.com/reset"}},
+        ),
+        ("reset_password_email", ("admin@example.com",), {}),
+    ]

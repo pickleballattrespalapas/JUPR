@@ -44,6 +44,14 @@ def _normalize_email(value: str | None) -> str:
     return str(value or "").strip().lower()
 
 
+def _safe_auth_method_names(auth) -> dict[str, bool]:
+    """Return availability of auth methods used by recovery + reset flows."""
+    return {
+        "reset_password_email": hasattr(auth, "reset_password_email"),
+        "reset_password_for_email": hasattr(auth, "reset_password_for_email"),
+    }
+
+
 def _query_param_text(key: str) -> str:
     """Read a query param as text while tolerating list-like values."""
     value = st.query_params.get(key, "")
@@ -135,7 +143,7 @@ def _set_auth_session(client, access_token: str, refresh_token: str):
             return attempt()
         except Exception as exc:
             last_exc = exc
-            logger.warning("Supabase auth %s failed: %s", label, exc)
+            logger.warning("Supabase auth %s failed: %r", label, exc)
 
     if last_exc is not None:
         raise last_exc
@@ -169,7 +177,7 @@ def _exchange_auth_code_for_session(client, auth_code: str):
             return attempt()
         except Exception as exc:
             last_exc = exc
-            logger.warning("Supabase auth %s failed: %s", label, exc)
+            logger.warning("Supabase auth %s failed: %r", label, exc)
 
     if last_exc is not None:
         raise last_exc
@@ -287,78 +295,135 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
     if not clean_email:
         raise AdminAuthError("Enter your email address.")
 
+    logger.info("Entering forgot-password flow for admin sidebar")
+    logger.info(
+        "Sending reset email attempt started for normalized email with redirect_to=%s",
+        redirect_to,
+    )
+
     client = make_supabase_auth_client()
     auth = getattr(client, "auth", None)
     if auth is None:
         logger.error("Supabase auth client missing .auth while sending password reset email")
         raise AdminAuthError("Unable to send reset email right now. Please try again.")
 
+    method_flags = _safe_auth_method_names(auth)
+    logger.info(
+        "Forgot-password auth method availability: %s (redirect_to=%s)",
+        method_flags,
+        redirect_to,
+    )
+
     attempts = []
 
-    if hasattr(auth, "reset_password_email"):
-        attempts.append(
-            (
-                "reset_password_email positional options",
-                lambda: auth.reset_password_email(
-                    clean_email,
-                    {"redirect_to": redirect_to},
+    if method_flags["reset_password_email"]:
+        attempts.extend(
+            [
+                (
+                    "reset_password_email(clean_email, {'redirect_to': redirect_to})",
+                    lambda: auth.reset_password_email(
+                        clean_email,
+                        {"redirect_to": redirect_to},
+                    ),
+                    True,
                 ),
-            )
-        )
-        attempts.append(
-            (
-                "reset_password_email keyword options",
-                lambda: auth.reset_password_email(
-                    clean_email,
-                    options={"redirect_to": redirect_to},
+                (
+                    "reset_password_email(clean_email, options={'redirect_to': redirect_to})",
+                    lambda: auth.reset_password_email(
+                        clean_email,
+                        options={"redirect_to": redirect_to},
+                    ),
+                    True,
                 ),
-            )
+                (
+                    "reset_password_email(clean_email)",
+                    lambda: auth.reset_password_email(clean_email),
+                    False,
+                ),
+            ]
         )
 
-    if hasattr(auth, "reset_password_for_email"):
-        attempts.append(
-            (
-                "reset_password_for_email positional options",
-                lambda: auth.reset_password_for_email(
-                    clean_email,
-                    {"redirect_to": redirect_to},
+    if method_flags["reset_password_for_email"]:
+        attempts.extend(
+            [
+                (
+                    "reset_password_for_email(clean_email, {'redirect_to': redirect_to})",
+                    lambda: auth.reset_password_for_email(
+                        clean_email,
+                        {"redirect_to": redirect_to},
+                    ),
+                    True,
                 ),
-            )
-        )
-        attempts.append(
-            (
-                "reset_password_for_email keyword options",
-                lambda: auth.reset_password_for_email(
-                    clean_email,
-                    options={"redirect_to": redirect_to},
+                (
+                    "reset_password_for_email(clean_email, options={'redirect_to': redirect_to})",
+                    lambda: auth.reset_password_for_email(
+                        clean_email,
+                        options={"redirect_to": redirect_to},
+                    ),
+                    True,
                 ),
-            )
+                (
+                    "reset_password_for_email(clean_email)",
+                    lambda: auth.reset_password_for_email(clean_email),
+                    False,
+                ),
+            ]
         )
+
+    ordered_attempts = []
+    desired_order = [
+        "reset_password_email(clean_email, {'redirect_to': redirect_to})",
+        "reset_password_email(clean_email, options={'redirect_to': redirect_to})",
+        "reset_password_for_email(clean_email, {'redirect_to': redirect_to})",
+        "reset_password_for_email(clean_email, options={'redirect_to': redirect_to})",
+        "reset_password_email(clean_email)",
+        "reset_password_for_email(clean_email)",
+    ]
+    for signature in desired_order:
+        for attempt in attempts:
+            if attempt[0] == signature:
+                ordered_attempts.append(attempt)
+                break
 
     last_exc: Exception | None = None
 
-    for label, attempt in attempts:
+    for signature, attempt, uses_redirect in ordered_attempts:
+        logger.info(
+            "Supabase password reset attempt started: %s (redirect_to=%s)",
+            signature,
+            redirect_to,
+        )
         try:
             attempt()
+            if not uses_redirect:
+                logger.warning(
+                    "Supabase password reset succeeded only without redirect_to; redirect URL is likely invalid or unsupported. redirect_to=%s",
+                    redirect_to,
+                )
             return
-        except (TypeError, AttributeError) as exc:
-            last_exc = exc
-            logger.warning("Supabase password reset attempt failed for %s: %s", label, exc)
-            continue
         except Exception as exc:
             last_exc = exc
-            logger.warning("Supabase password reset attempt failed for %s: %s", label, exc)
+            logger.warning(
+                "Supabase password reset attempt failed: %s | redirect_to=%s | exc=%r",
+                signature,
+                redirect_to,
+                exc,
+            )
             continue
 
     if last_exc is not None:
         logger.error(
-            "Supabase password reset email failed after trying all supported client variants: %s",
+            "Supabase password reset email failed after all variants. redirect_to=%s methods=%s last_exc=%r",
+            redirect_to,
+            method_flags,
             last_exc,
             exc_info=(type(last_exc), last_exc, last_exc.__traceback__),
         )
     else:
         logger.error(
-            "Supabase password reset email failed because no supported reset method exists on the auth client"
+            "Supabase password reset email failed because no supported reset method exists on the auth client. redirect_to=%s methods=%s",
+            redirect_to,
+            method_flags,
         )
 
     raise AdminAuthError("Unable to send reset email right now. Please try again.")
@@ -426,12 +491,14 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
 
     try:
         if _has_usable_session():
+            logger.info("Recovery session established from existing auth session")
             return True
     except Exception:
         pass
 
     recovery_session = _get_stashed_recovery_session()
     if recovery_session:
+        logger.info("Attempting to restore recovery session from stashed session state")
         try:
             response = _set_auth_session(
                 client,
@@ -439,9 +506,10 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
                 recovery_session["refresh_token"],
             )
         except Exception as exc:
-            logger.warning("Recovery stashed session rehydrate failed: %s", exc)
+            logger.warning("Recovery stashed session rehydrate failed: %r", exc)
         else:
-            if _response_has_session(response):
+            if _response_has_session(response) and _has_usable_session():
+                logger.info("Recovery session established from stashed session")
                 return True
 
     if query.get("error") or query.get("error_code"):
@@ -453,9 +521,12 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
         try:
             response = _set_auth_session(client, access_token, refresh_token)
         except Exception as exc:
-            logger.warning("Recovery set_session failed: %s", exc)
+            logger.warning("Recovery set_session failed: %r", exc)
             return False
-        return _response_has_session(response)
+        if _response_has_session(response) and _has_usable_session():
+            logger.info("Recovery session established from access/refresh query params")
+            return True
+        return False
 
     token_hash = query.get("token_hash", "")
     otp_type = str(query.get("type", "")).strip().lower()
@@ -468,18 +539,24 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
                 }
             )
         except Exception as exc:
-            logger.warning("Recovery verify_otp failed: %s", exc)
+            logger.warning("Recovery verify_otp failed: %r", exc)
             return False
-        return _response_has_session(response)
+        if _response_has_session(response) and _has_usable_session():
+            logger.info("Recovery session established from token_hash verify_otp")
+            return True
+        return False
 
     auth_code = query.get("code", "")
     if auth_code:
         try:
             response = _exchange_auth_code_for_session(client, auth_code)
         except Exception as exc:
-            logger.warning("Recovery exchange_code_for_session failed: %s", exc)
+            logger.warning("Recovery exchange_code_for_session failed: %r", exc)
             return False
-        return _response_has_session(response)
+        if _response_has_session(response) and _has_usable_session():
+            logger.info("Recovery session established from auth code exchange")
+            return True
+        return False
 
     return False
 
@@ -498,24 +575,31 @@ def update_recovered_user_password(client, new_password: str) -> None:
                 recovery_session["refresh_token"],
             )
         except Exception as exc:
-            logger.warning("Re-attaching recovery session before password update failed: %s", exc)
+            logger.warning("Re-attaching recovery session before password update failed: %r", exc)
 
     last_exc: Exception | None = None
 
+    logger.info("update_user attempt started (variant: dict positional)")
     try:
         response = client.auth.update_user({"password": new_password})
         if getattr(response, "user", None) is not None:
+            logger.info("update_user success (variant: dict positional)")
             return
     except Exception as exc:
+        logger.warning("update_user failed (variant: dict positional): %r", exc)
         last_exc = exc
 
+    logger.info("update_user attempt started (variant: attributes kwarg dict)")
     try:
         response = client.auth.update_user(attributes={"password": new_password})
         if getattr(response, "user", None) is not None:
+            logger.info("update_user success (variant: attributes kwarg dict)")
             return
     except Exception as exc:
+        logger.warning("update_user failed (variant: attributes kwarg dict): %r", exc)
         last_exc = exc
 
+    logger.info("update_user attempt started (variant: UserAttributes positional)")
     try:
         try:
             from gotrue.types import UserAttributes
@@ -524,10 +608,13 @@ def update_recovered_user_password(client, new_password: str) -> None:
 
         response = client.auth.update_user(UserAttributes(password=new_password))
         if getattr(response, "user", None) is not None:
+            logger.info("update_user success (variant: UserAttributes positional)")
             return
     except Exception as exc:
+        logger.warning("update_user failed (variant: UserAttributes positional): %r", exc)
         last_exc = exc
 
+    logger.info("update_user attempt started (variant: attributes kwarg UserAttributes)")
     try:
         try:
             from gotrue.types import UserAttributes
@@ -538,12 +625,14 @@ def update_recovered_user_password(client, new_password: str) -> None:
             attributes=UserAttributes(password=new_password)
         )
         if getattr(response, "user", None) is not None:
+            logger.info("update_user success (variant: attributes kwarg UserAttributes)")
             return
     except Exception as exc:
+        logger.warning("update_user failed (variant: attributes kwarg UserAttributes): %r", exc)
         last_exc = exc
 
     logger.error(
-        "Supabase password update failed during recovery flow: %s",
+        "Supabase password update failed during recovery flow: %r",
         last_exc,
         exc_info=(type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None,
     )

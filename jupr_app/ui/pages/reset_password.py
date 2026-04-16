@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -17,6 +19,7 @@ from jupr_app.ui.layout import page_shell
 
 
 _MIN_PASSWORD_LENGTH = 8
+logger = logging.getLogger(__name__)
 
 
 def _query_param_text(key: str) -> str:
@@ -81,8 +84,6 @@ def render(ctx):
         mode_label="Public",
     )
 
-    _inject_hash_to_query_probe_bridge()
-
     try:
         client = make_supabase_auth_client()
     except AdminAuthConfigError as exc:
@@ -92,14 +93,34 @@ def render(ctx):
     recovery_params = get_recovery_query_params()
     recovery_probe = _query_param_text("_recovery_probe")
     has_recovery_query = is_recovery_flow_query(recovery_params)
+    recovery_keys = sorted(recovery_params.keys())
+
+    if recovery_keys:
+        logger.info("Recovery params detected keys only: %s", recovery_keys)
+    logger.info(
+        "Reset page probe state: has_recovery_query=%s _recovery_probe=%s",
+        has_recovery_query,
+        recovery_probe or "<empty>",
+    )
 
     if _should_wait_for_probe(has_recovery_query, recovery_probe):
+        _inject_hash_to_query_probe_bridge()
         st.info("Preparing reset link...")
         st.stop()
 
     recovery_session_ready = establish_recovery_session(client, recovery_params)
+    if recovery_session_ready:
+        logger.info("Recovery session established on reset page")
 
-    if not has_recovery_query or not recovery_session_ready:
+    if (not has_recovery_query) and recovery_probe == "1":
+        st.error(
+            "This password reset link is invalid or expired. Request a new reset email."
+        )
+        error_hint = recovery_params.get("error_description") or recovery_params.get("error")
+        if error_hint:
+            st.caption(f"Supabase returned: {error_hint}")
+        st.stop()
+    if not recovery_session_ready:
         st.error(
             "This password reset link is invalid or expired. Request a new reset email."
         )
