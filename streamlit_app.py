@@ -1,21 +1,25 @@
+
 # jupr/streamlit_app.py
 from __future__ import annotations
 
-import hashlib
-import hmac
-import time
 import traceback
 from collections.abc import Mapping
 
-import streamlit as st
 import pandas as pd  # kept because pages may rely on it
+import streamlit as st
 
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.ui.admin_auth import (
+    ADMIN_SESSION_TTL_SECONDS,
+    clear_admin_session,
+    create_admin_session,
+    restore_admin_session,
+    validate_admin_session,
+)
 from jupr_app.ui.context import AppContext
-from jupr_app.ui.public_nav import render_public_top_nav
 from jupr_app.ui.page_registry import (
     ADMIN_ONLY_LABELS,
     LABEL_TO_PAGE_KEY,
@@ -23,6 +27,7 @@ from jupr_app.ui.page_registry import (
     PUBLIC_NAV_KEYS,
     labels_for_keys,
 )
+from jupr_app.ui.public_nav import render_public_top_nav
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
@@ -62,66 +67,12 @@ def get_secret(path: list[str], default=None):
 # -------------------------
 # Admin session helpers
 # -------------------------
-ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
-
-
 def _get_admin_session_secret() -> str:
     return str(
         get_secret(["supabase", "admin_session_secret"], "")
         or get_secret(["admin_session_secret"], "")
         or ""
     )
-
-
-def _sign_admin_session(expires_at: int, secret: str) -> str:
-    msg = f"{expires_at}".encode("utf-8")
-    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
-
-
-def _create_admin_session() -> None:
-    secret = _get_admin_session_secret()
-    if not secret:
-        st.error(
-            "Admin session secret is missing. Set supabase.admin_session_secret in secrets."
-        )
-        st.stop()
-
-    expires_at = int(time.time()) + int(ADMIN_SESSION_TTL_SECONDS)
-    token = _sign_admin_session(expires_at, secret)
-    st.session_state["admin_session"] = {"exp": expires_at, "token": token}
-
-
-def _clear_admin_session() -> None:
-    st.session_state.pop("admin_session", None)
-
-
-def _validate_admin_session() -> bool:
-    secret = _get_admin_session_secret()
-    if not secret:
-        _clear_admin_session()
-        return False
-
-    data = st.session_state.get("admin_session")
-    if not isinstance(data, dict):
-        return False
-
-    try:
-        expires_at = int(data.get("exp", 0))
-    except Exception:
-        _clear_admin_session()
-        return False
-
-    if expires_at <= int(time.time()):
-        _clear_admin_session()
-        return False
-
-    token = str(data.get("token", ""))
-    expected = _sign_admin_session(expires_at, secret)
-    if not hmac.compare_digest(token, expected):
-        _clear_admin_session()
-        return False
-
-    return True
 
 
 # -------------------------
@@ -204,13 +155,16 @@ def main():
         # ---- Session defaults ----
         st.session_state.setdefault("deep_link_applied", False)
 
+        admin_session_secret = _get_admin_session_secret()
+        restore_admin_session(secret=admin_session_secret)
+
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
             hide_sidebar_and_header_for_public()
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            if not _validate_admin_session():
+            if not validate_admin_session(secret=admin_session_secret):
                 with st.sidebar.expander("🔒 Admin Login"):
                     pwd = st.text_input("Password", type="password", key="admin_pwd")
 
@@ -223,18 +177,23 @@ def main():
                                 "Admin password is not configured in secrets (supabase.admin_password)."
                             )
                         elif pwd == expected:
-                            _create_admin_session()
+                            create_admin_session(
+                                secret=admin_session_secret,
+                                ttl_seconds=ADMIN_SESSION_TTL_SECONDS,
+                            )
                             st.rerun()
                         else:
                             st.error("Incorrect password.")
             else:
                 st.sidebar.success("Logged In: Admin")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
-                    _clear_admin_session()
+                    clear_admin_session()
                     st.rerun()
 
         # Canonical admin flag (never true in public mode)
-        admin_logged_in = (not PUBLIC_MODE) and _validate_admin_session()
+        admin_logged_in = (not PUBLIC_MODE) and validate_admin_session(
+            secret=admin_session_secret
+        )
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
@@ -309,33 +268,33 @@ def main():
         # LAZY IMPORT PAGES (prevents import-time KeyError crashes)
         # -------------------------
         from jupr_app.ui.pages import (
-            leaderboards,
-            league_results,
-            league_printout,
-            match_explorer,
-            faqs,
-            players,
+            admin_guide,
+            admin_tools,
             badge_codex,
             badge_debug,
             challenge_ladder,
             challenge_ladder_admin,
-            match_uploader,
-            league_manager,
-            match_log,
-            player_editor,
-            admin_tools,
-            admin_guide,
-            moneyball,
+            faqs,
             jupr_live,
             jupr_live_admin,
+            leaderboards,
+            league_manager,
+            league_printout,
+            league_results,
+            match_explorer,
+            match_log,
+            match_uploader,
+            moneyball,
+            player_editor,
+            players,
             theme_gallery,
-            tournaments,
+            top_players_printable,
             tournament_manager,
-            tournament_registration,
             tournament_partner_board,
+            tournament_registration,
+            tournaments,
             weekly_recap,
             weekly_recap_admin,
-            top_players_printable,
         )
 
         # ---- Router ----
