@@ -16,13 +16,29 @@ except Exception:  # pragma: no cover
 
 ADMIN_SESSION_TTL_SECONDS = 60 * 60  # 1 hour
 ADMIN_SESSION_COOKIE_KEY = "jupr_admin_session"
+COOKIE_MANAGER_SESSION_KEY = "_jupr_cookie_manager"
 
 
-@st.cache_resource
 def get_cookie_manager():
+    """
+    Do not cache this with st.cache_*.
+    CookieManager is a Streamlit component/widget, and caching it triggers
+    CachedWidgetWarning on cache misses.
+    """
     if stx is None:
         return None
-    return stx.CookieManager()
+
+    mgr = st.session_state.get(COOKIE_MANAGER_SESSION_KEY)
+    if mgr is not None:
+        return mgr
+
+    try:
+        mgr = stx.CookieManager(key="jupr_admin_cookie_manager")
+    except TypeError:
+        mgr = stx.CookieManager()
+
+    st.session_state[COOKIE_MANAGER_SESSION_KEY] = mgr
+    return mgr
 
 
 def _sign_admin_session(expires_at: int, secret: str) -> str:
@@ -36,6 +52,11 @@ def _get_cookie_value() -> str | None:
         return None
     try:
         return mgr.get(ADMIN_SESSION_COOKIE_KEY)
+    except TypeError:
+        try:
+            return mgr.get(cookie=ADMIN_SESSION_COOKIE_KEY)
+        except Exception:
+            return None
     except Exception:
         return None
 
@@ -46,7 +67,10 @@ def _set_cookie_value(data: dict, ttl_seconds: int) -> None:
         return
     try:
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(60, int(ttl_seconds)))
-        mgr.set(ADMIN_SESSION_COOKIE_KEY, json.dumps(data), expires_at=expires_at)
+        try:
+            mgr.set(ADMIN_SESSION_COOKIE_KEY, json.dumps(data), expires_at=expires_at)
+        except TypeError:
+            mgr.set(cookie=ADMIN_SESSION_COOKIE_KEY, val=json.dumps(data), expires_at=expires_at)
     except Exception:
         pass
 
@@ -56,7 +80,10 @@ def _delete_cookie_value() -> None:
     if mgr is None:
         return
     try:
-        mgr.delete(ADMIN_SESSION_COOKIE_KEY)
+        try:
+            mgr.delete(ADMIN_SESSION_COOKIE_KEY)
+        except TypeError:
+            mgr.delete(cookie=ADMIN_SESSION_COOKIE_KEY)
     except Exception:
         pass
 
