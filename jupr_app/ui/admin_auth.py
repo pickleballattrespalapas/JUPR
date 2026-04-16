@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 
@@ -161,49 +162,43 @@ def send_password_reset_email(email: str, *, redirect_to: str) -> None:
 
     client = make_supabase_auth_client()
     auth_api = client.auth
+    logger = logging.getLogger(__name__)
+    last_exception: Exception | None = None
 
-    call_variants = (
-        (
-            "reset_password_email",
-            lambda method: method(clean_email, {"redirect_to": redirect_to}),
-        ),
-        (
-            "reset_password_email",
-            lambda method: method(
-                clean_email, options={"redirect_to": redirect_to}
-            ),
-        ),
-        (
-            "reset_password_for_email",
-            lambda method: method(clean_email, {"redirect_to": redirect_to}),
-        ),
-        (
-            "reset_password_for_email",
-            lambda method: method(
-                clean_email, options={"redirect_to": redirect_to}
-            ),
-        ),
-    )
-
-    last_exception_text = ""
-    for method_name, invoke in call_variants:
-        if not hasattr(auth_api, method_name):
-            continue
-
-        method = getattr(auth_api, method_name)
+    if hasattr(auth_api, "reset_password_email"):
+        method = getattr(auth_api, "reset_password_email")
         try:
-            invoke(method)
+            method(clean_email, {"redirect_to": redirect_to})
             return
-        except (TypeError, AttributeError) as exc:
-            last_exception_text = str(exc)
-            continue
+        except TypeError as exc:
+            last_exception = exc
+            try:
+                method(clean_email, options={"redirect_to": redirect_to})
+                return
+            except Exception as nested_exc:
+                last_exception = nested_exc
         except Exception as exc:
-            last_exception_text = str(exc)
-            break
+            last_exception = exc
 
-    # Developer note: inspect `last_exception_text` in logs/debugging when all
-    # client auth variants fail, while keeping user-facing errors generic.
-    _ = last_exception_text
+    if hasattr(auth_api, "reset_password_for_email"):
+        method = getattr(auth_api, "reset_password_for_email")
+        try:
+            method(clean_email, {"redirect_to": redirect_to})
+            return
+        except TypeError as exc:
+            last_exception = exc
+            try:
+                method(clean_email, options={"redirect_to": redirect_to})
+                return
+            except Exception as nested_exc:
+                last_exception = nested_exc
+        except Exception as exc:
+            last_exception = exc
+
+    logger.error(
+        "Failed to send password reset email via Supabase auth variants: %s",
+        str(last_exception) if last_exception else "no compatible reset method found",
+    )
     raise AdminAuthError("Unable to send reset email right now. Please try again.")
 
 
