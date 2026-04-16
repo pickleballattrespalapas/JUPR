@@ -98,6 +98,84 @@ def _get_stashed_recovery_session() -> dict[str, str] | None:
     }
 
 
+def _set_auth_session(client, access_token: str, refresh_token: str):
+    """Set auth session across Supabase client signature variants."""
+    auth = getattr(client, "auth", None)
+    if auth is None:
+        raise AttributeError("Supabase client is missing auth")
+
+    attempts = (
+        (
+            "set_session(access_token, refresh_token)",
+            lambda: auth.set_session(access_token, refresh_token),
+        ),
+        (
+            "set_session({access_token, refresh_token})",
+            lambda: auth.set_session(
+                {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                }
+            ),
+        ),
+        (
+            "set_session(session={access_token, refresh_token})",
+            lambda: auth.set_session(
+                session={
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                }
+            ),
+        ),
+    )
+
+    last_exc: Exception | None = None
+    for label, attempt in attempts:
+        try:
+            return attempt()
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Supabase auth %s failed: %s", label, exc)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Unable to set auth session")
+
+
+def _exchange_auth_code_for_session(client, auth_code: str):
+    """Exchange auth code for session across Supabase client signature variants."""
+    auth = getattr(client, "auth", None)
+    if auth is None:
+        raise AttributeError("Supabase client is missing auth")
+
+    attempts = (
+        (
+            "exchange_code_for_session({auth_code})",
+            lambda: auth.exchange_code_for_session({"auth_code": auth_code}),
+        ),
+        (
+            "exchange_code_for_session(auth_code)",
+            lambda: auth.exchange_code_for_session(auth_code),
+        ),
+        (
+            "exchange_code_for_session(code=auth_code)",
+            lambda: auth.exchange_code_for_session(code=auth_code),
+        ),
+    )
+
+    last_exc: Exception | None = None
+    for label, attempt in attempts:
+        try:
+            return attempt()
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Supabase auth %s failed: %s", label, exc)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Unable to exchange auth code for session")
+
+
 def load_admin_allowlist() -> set[str]:
     """
     Load allowlisted admin emails from either:
@@ -352,6 +430,20 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     except Exception:
         pass
 
+    recovery_session = _get_stashed_recovery_session()
+    if recovery_session:
+        try:
+            response = _set_auth_session(
+                client,
+                recovery_session["access_token"],
+                recovery_session["refresh_token"],
+            )
+        except Exception as exc:
+            logger.warning("Recovery stashed session rehydrate failed: %s", exc)
+        else:
+            if _response_has_session(response):
+                return True
+
     if query.get("error") or query.get("error_code"):
         return False
 
@@ -359,7 +451,7 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     refresh_token = query.get("refresh_token", "")
     if access_token and refresh_token:
         try:
-            response = client.auth.set_session(access_token, refresh_token)
+            response = _set_auth_session(client, access_token, refresh_token)
         except Exception as exc:
             logger.warning("Recovery set_session failed: %s", exc)
             return False
@@ -383,7 +475,7 @@ def establish_recovery_session(client, params: dict[str, str] | None = None) -> 
     auth_code = query.get("code", "")
     if auth_code:
         try:
-            response = client.auth.exchange_code_for_session({"auth_code": auth_code})
+            response = _exchange_auth_code_for_session(client, auth_code)
         except Exception as exc:
             logger.warning("Recovery exchange_code_for_session failed: %s", exc)
             return False
@@ -400,7 +492,8 @@ def update_recovered_user_password(client, new_password: str) -> None:
     recovery_session = _get_stashed_recovery_session()
     if recovery_session:
         try:
-            client.auth.set_session(
+            _set_auth_session(
+                client,
                 recovery_session["access_token"],
                 recovery_session["refresh_token"],
             )

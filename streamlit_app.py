@@ -44,7 +44,7 @@ CLUB_ID = "tres_palapas"
 
 # Public base URL used for share links + link buttons (Streamlit Cloud)
 PUBLIC_BASE_URL = "https://juprtrespalapas.streamlit.app"
-RESET_PASSWORD_REDIRECT_URL = f"{PUBLIC_BASE_URL}/?page=reset_password"
+RESET_PASSWORD_REDIRECT_URL = f"{PUBLIC_BASE_URL}/?page=reset_password&public=1"
 
 
 # -------------------------
