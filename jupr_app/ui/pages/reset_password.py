@@ -29,25 +29,29 @@ def _inject_hash_to_query_bridge() -> None:
         """
         <script>
         (function () {
-          const hash = window.location.hash || "";
+          const appWindow = window.parent || window;
+          const currentUrl = new URL(appWindow.location.href);
+          const hash = appWindow.location.hash || "";
           if (!hash || hash.length <= 1) return;
 
           const hashParams = new URLSearchParams(hash.substring(1));
-          const hasRecoveryFields = ["access_token", "refresh_token", "type", "code", "token_hash"]
+          const recoveryKeys = ["access_token", "refresh_token", "type", "code", "token_hash"];
+          const hasRecoveryFields = recoveryKeys
             .some((k) => !!hashParams.get(k));
           if (!hasRecoveryFields) return;
 
-          const url = new URL(window.location.href);
-          if (url.searchParams.get("_recovery_hash_bridge") === "1") return;
+          if (currentUrl.searchParams.get("_recovery_hash_bridge") === "1") return;
 
-          hashParams.forEach((value, key) => {
-            if (value && !url.searchParams.get(key)) {
-              url.searchParams.set(key, value);
+          recoveryKeys.forEach((key) => {
+            const value = hashParams.get(key);
+            if (value && !currentUrl.searchParams.get(key)) {
+              currentUrl.searchParams.set(key, value);
             }
           });
-          url.searchParams.set("_recovery_hash_bridge", "1");
+          currentUrl.searchParams.set("_recovery_hash_bridge", "1");
+          currentUrl.hash = "";
 
-          window.location.replace(url.pathname + "?" + url.searchParams.toString());
+          appWindow.location.replace(currentUrl.toString());
         })();
         </script>
         """,
