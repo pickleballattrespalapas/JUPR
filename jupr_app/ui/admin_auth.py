@@ -17,6 +17,8 @@ _RECOVERY_SESSION_KEY = "admin_recovery_session"
 _BROWSER_ACCESS_TOKEN_KEY = "jupr_admin_access_token"
 _BROWSER_REFRESH_TOKEN_KEY = "jupr_admin_refresh_token"
 _BROWSER_RESTORE_FLAG_KEY = "jupr_admin_restore_from_storage"
+_BROWSER_SYNC_PAYLOAD_KEY = "_admin_browser_sync_payload"
+_BROWSER_CLEAR_PENDING_KEY = "_admin_browser_clear_pending"
 
 
 class AdminAuthError(RuntimeError):
@@ -257,24 +259,67 @@ def get_current_admin_user():
 
 
 def persist_admin_browser_session(access_token: str, refresh_token: str) -> None:
-    """Persist auth tokens into browser localStorage via a tiny JS bridge."""
+    """Queue browser token persistence for render-time JS bridge execution."""
     access = str(access_token or "").strip()
     refresh = str(refresh_token or "").strip()
     if not access or not refresh:
+        return
+
+    st.session_state[_BROWSER_SYNC_PAYLOAD_KEY] = {
+        "access_token": access,
+        "refresh_token": refresh,
+        "action": "persist",
+    }
+    st.session_state.pop(_BROWSER_CLEAR_PENDING_KEY, None)
+    logger.info("Pending browser token persist queued")
+
+
+def render_admin_browser_session_bridge() -> None:
+    """Render browser storage bridge once per pending persist/clear action."""
+    payload = st.session_state.get(_BROWSER_SYNC_PAYLOAD_KEY)
+    clear_pending = bool(st.session_state.get(_BROWSER_CLEAR_PENDING_KEY))
+
+    persist_access = ""
+    persist_refresh = ""
+    persist_requested = False
+    if isinstance(payload, dict) and str(payload.get("action", "")).strip() == "persist":
+        persist_access = str(payload.get("access_token", "")).strip()
+        persist_refresh = str(payload.get("refresh_token", "")).strip()
+        persist_requested = bool(persist_access and persist_refresh)
+
+    if not persist_requested and not clear_pending:
         return
 
     components.html(
         f"""
         <script>
         try {{
-          localStorage.setItem("{_BROWSER_ACCESS_TOKEN_KEY}", {access!r});
-          localStorage.setItem("{_BROWSER_REFRESH_TOKEN_KEY}", {refresh!r});
+          const appWindow = window.parent || window;
+          const persistRequested = {str(persist_requested).lower()};
+          const clearPending = {str(clear_pending).lower()};
+
+          if (persistRequested) {{
+            appWindow.localStorage.setItem("{_BROWSER_ACCESS_TOKEN_KEY}", {persist_access!r});
+            appWindow.localStorage.setItem("{_BROWSER_REFRESH_TOKEN_KEY}", {persist_refresh!r});
+          }}
+
+          if (clearPending) {{
+            appWindow.localStorage.removeItem("{_BROWSER_ACCESS_TOKEN_KEY}");
+            appWindow.localStorage.removeItem("{_BROWSER_REFRESH_TOKEN_KEY}");
+          }}
         }} catch (e) {{}}
         </script>
         """,
         height=0,
     )
-    logger.info("Admin login tokens persisted to browser storage")
+
+    if persist_requested:
+        logger.info("Browser token persist bridge rendered")
+        st.session_state.pop(_BROWSER_SYNC_PAYLOAD_KEY, None)
+
+    if clear_pending:
+        logger.info("Browser token clear bridge rendered")
+        st.session_state.pop(_BROWSER_CLEAR_PENDING_KEY, None)
 
 
 def _clear_sensitive_query_params() -> None:
@@ -306,16 +351,17 @@ def restore_admin_browser_session() -> dict[str, str] | None:
         f"""
         <script>
         try {{
-          const access = localStorage.getItem("{_BROWSER_ACCESS_TOKEN_KEY}") || "";
-          const refresh = localStorage.getItem("{_BROWSER_REFRESH_TOKEN_KEY}") || "";
-          const params = new URLSearchParams(window.location.search);
+          const appWindow = window.parent || window;
+          const access = appWindow.localStorage.getItem("{_BROWSER_ACCESS_TOKEN_KEY}") || "";
+          const refresh = appWindow.localStorage.getItem("{_BROWSER_REFRESH_TOKEN_KEY}") || "";
+          const appUrl = new URL(appWindow.location.href);
+          const params = appUrl.searchParams;
           const hasHandshake = params.get("{_BROWSER_RESTORE_FLAG_KEY}") === "1";
           if (access && refresh && !hasHandshake) {{
             params.set("jupr_admin_access_token", access);
             params.set("jupr_admin_refresh_token", refresh);
             params.set("{_BROWSER_RESTORE_FLAG_KEY}", "1");
-            const next = `${{window.location.pathname}}?${{params.toString()}}${{window.location.hash}}`;
-            window.location.replace(next);
+            appWindow.location.replace(appUrl.toString());
           }}
         }} catch (e) {{}}
         </script>
@@ -326,18 +372,9 @@ def restore_admin_browser_session() -> dict[str, str] | None:
 
 
 def clear_admin_browser_session() -> None:
-    components.html(
-        f"""
-        <script>
-        try {{
-          localStorage.removeItem("{_BROWSER_ACCESS_TOKEN_KEY}");
-          localStorage.removeItem("{_BROWSER_REFRESH_TOKEN_KEY}");
-        }} catch (e) {{}}
-        </script>
-        """,
-        height=0,
-    )
-    logger.info("Persisted browser tokens cleared")
+    st.session_state[_BROWSER_CLEAR_PENDING_KEY] = True
+    st.session_state.pop(_BROWSER_SYNC_PAYLOAD_KEY, None)
+    logger.info("Browser token clear queued")
 
 
 def maybe_restore_admin_login_from_browser() -> bool:
