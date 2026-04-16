@@ -21,6 +21,7 @@ from jupr_app.ui.admin_auth import (
     load_admin_allowlist,
     login_admin,
     logout_admin,
+    send_password_reset_email,
 )
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.page_registry import (
@@ -43,6 +44,7 @@ CLUB_ID = "tres_palapas"
 
 # Public base URL used for share links + link buttons (Streamlit Cloud)
 PUBLIC_BASE_URL = "https://juprtrespalapas.streamlit.app"
+RESET_PASSWORD_REDIRECT_URL = f"{PUBLIC_BASE_URL}/?page=reset_password"
 
 
 # -------------------------
@@ -181,6 +183,7 @@ def main():
                 with st.sidebar.expander("🔒 Admin Login"):
                     email = st.text_input("Email", key="admin_email")
                     password = st.text_input("Password", type="password", key="admin_pwd")
+                    show_forgot_password = st.session_state.get("show_forgot_password", False)
 
                     if st.button("Login", key="admin_login_btn"):
                         if not admin_allowlist:
@@ -199,6 +202,27 @@ def main():
                                 auth_config_error = str(exc)
                             except AdminAuthError as exc:
                                 st.sidebar.error(str(exc))
+
+                    if st.button("Forgot password?", key="admin_forgot_password_btn"):
+                        st.session_state["show_forgot_password"] = not show_forgot_password
+                        st.rerun()
+
+                    if st.session_state.get("show_forgot_password", False):
+                        reset_email = st.text_input("Email for reset link", key="admin_reset_email")
+                        if st.button("Send reset email", key="admin_send_reset_email_btn"):
+                            try:
+                                send_password_reset_email(
+                                    reset_email,
+                                    redirect_to=RESET_PASSWORD_REDIRECT_URL,
+                                )
+                            except AdminAuthConfigError as exc:
+                                auth_config_error = str(exc)
+                            except AdminAuthError as exc:
+                                st.sidebar.error(str(exc))
+                            else:
+                                st.sidebar.success(
+                                    "If that email exists, a reset link has been sent."
+                                )
 
                 if auth_config_error:
                     st.sidebar.error(auth_config_error)
