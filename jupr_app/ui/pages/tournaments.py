@@ -531,9 +531,23 @@ def render(ctx):
                         event_option_id=_safe_text(selected_event_option_id),
                         registration_day_id=_safe_text(selected_day_id),
                     ) or {}
-                    entries = [row for row in (roster.get("entries") or []) if _safe_text(row.get("status")) == "CONFIRMED"]
+                    roster_entries = roster.get("entries") or []
+                    entries = [row for row in roster_entries if _safe_text(row.get("status")) == "CONFIRMED"]
                     if not entries:
-                        st.info("No confirmed registration entries are ready for this division.")
+                        unresolved_partner_count = sum(
+                            1
+                            for row in roster_entries
+                            if _safe_text(row.get("status")).upper() in {"REVIEW", "NEEDS_PARTNER", "PARTNER_MISSING"}
+                        )
+                        if not roster_entries:
+                            st.info("No registration entries exist for this division yet.")
+                        elif unresolved_partner_count:
+                            st.warning(
+                                "No confirmed roster entries are ready yet because partner/roster issues still need admin review."
+                            )
+                            st.caption("Hint: Open Tournament Manager → Publish & QA → Registration admin review to resolve statuses.")
+                        else:
+                            st.info("No confirmed roster entries are ready for this division.")
                     else:
                         if import_mode == "Replace":
                             _scoped_query(supabase.table("tournament_teams").delete(), tournament_id, selected_draw_id).execute()
@@ -564,7 +578,8 @@ def render(ctx):
                                 }
                             )
                         if unresolved_names:
-                            st.error("Some registration names could not be matched to JUPR players: " + ", ".join(sorted(set(unresolved_names))))
+                            st.error("Some confirmed registration names could not be matched to JUPR players: " + ", ".join(sorted(set(unresolved_names))))
+                            st.caption("Hint: fix display names or player mappings first, then rerun this import.")
                         else:
                             supabase.table("tournament_teams").upsert(payload, on_conflict="tournament_id,draw_id,team_number").execute()
                             total_slots = max(draw_size, start_slot + len(payload) - 1)
