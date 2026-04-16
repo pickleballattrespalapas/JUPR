@@ -22,6 +22,7 @@ from jupr_app.ui.admin_auth import (
     login_admin,
     logout_admin,
     maybe_restore_admin_login_from_browser,
+    render_admin_browser_session_bridge,
     send_password_reset_email,
 )
 from jupr_app.ui.context import AppContext
@@ -152,6 +153,7 @@ def main():
         # Admin auth uses Supabase email/password + allowlist and can restore
         # a previously persisted browser token pair after refresh.
         bootstrap_admin_auth()
+        render_admin_browser_session_bridge()
         maybe_restore_admin_login_from_browser()
 
         admin_allowlist = load_admin_allowlist()
