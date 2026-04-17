@@ -17,6 +17,8 @@ from jupr_app.domain.live_social import (
     social_person_rollup_rows,
     social_round_robin_match_rows_from_event,
 )
+from jupr_app.domain.live_social_submit import save_resolved_social_live_event
+from jupr_app.ui.pages.players import fetch_player_social_event_history
 import pandas as pd
 
 
@@ -34,6 +36,8 @@ class _TableQuery:
         self._payload = None
 
     def select(self, _cols: str):
+        if any(col in str(_cols) for col in self.store.get("__missing_select_columns__", set())):
+            raise Exception(f"PGRST204: Could not find requested column in schema cache: {_cols}")
         self._op = "select"
         return self
 
@@ -116,12 +120,25 @@ class _TableQuery:
             inserted = []
             for row in payload:
                 record = dict(row)
-                record.setdefault("id", str(uuid4()))
+                if "id" not in record:
+                    if self.name == "players":
+                        existing_ids = [
+                            int(existing.get("id"))
+                            for existing in rows
+                            if str(existing.get("id") or "").isdigit()
+                        ]
+                        record["id"] = (max(existing_ids) + 1) if existing_ids else 1
+                    else:
+                        record["id"] = str(uuid4())
                 rows.append(record)
                 inserted.append(dict(record))
             return _Resp(inserted)
         if self._op == "upsert":
             payload, on_conflict = self._payload
+            missing_write_columns = self.store.get("__missing_write_columns__", set())
+            if any(col in payload for col in missing_write_columns):
+                col = next(col for col in missing_write_columns if col in payload)
+                raise Exception(f"PGRST204: Could not find the '{col}' column of '{self.name}' in the schema cache")
             keys = [k.strip() for k in on_conflict.split(",")]
             match = None
             for row in rows:
@@ -405,6 +422,182 @@ def test_social_save_does_not_write_public_matches_table():
         host_name="Host",
     )
     assert "matches" not in supabase.calls
+
+
+def test_resolved_social_save_handles_submitted_by_schema_drift():
+    supabase = _FakeSupabase()
+    supabase.store["__missing_write_columns__"] = {"submitted_by"}
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    result = save_resolved_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    assert result["status"] == "saved"
+    assert len(supabase.store["live_events"]) == 1
+    assert supabase.store["live_events"][0]["submitted_by_name"] == "admin"
+
+
+def test_resolved_save_preserves_explicit_existing_player_linkage():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    event = _sample_event()
+    event["participants"][0]["name"] = "Alias Name"
+    event["participants"][0]["player_id"] = 77
+    event["participants"][0]["match_status"] = "matched_existing"
+    save_resolved_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    saved = supabase.store["live_event_participants"]
+    linked_row = [row for row in saved if row["participant_key"] == "p-1"][0]
+    assert linked_row["linked_player_id"] == 77
+
+
+def test_resolved_save_creates_new_rated_player_and_links_participant():
+    supabase = _FakeSupabase()
+    supabase.store["players"] = [
+        {"id": 101, "club_id": "club-1", "name": "Alice", "rating": 1600.0, "starting_rating": 1600.0},
+        {"id": 102, "club_id": "club-1", "name": "Bob", "rating": 1200.0, "starting_rating": 1200.0},
+    ]
+    ctx = _Ctx(
+        supabase=supabase,
+        club_id="club-1",
+        name_to_id={},
+    )
+    ctx.admin_logged_in = True
+    ctx.df_players_all = pd.DataFrame(
+        [
+            {"id": 101, "name": "Alice", "rating": 1600.0},
+            {"id": 102, "name": "Bob", "rating": 1200.0},
+        ]
+    )
+    event = _sample_event()
+    event["participants"] = [
+        {"id": "p-1", "name": "Alice", "player_id": 101, "seed": 1, "match_status": "matched_existing"},
+        {"id": "p-2", "name": "Bob", "player_id": 102, "seed": 2, "match_status": "matched_existing"},
+        {"id": "p-3", "name": "New Rated", "player_id": None, "seed": 3, "match_status": "create_rated"},
+        {"id": "p-4", "name": "Drew", "player_id": None, "seed": 4, "match_status": "new_social"},
+    ]
+    result = save_resolved_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    assert result["created_rated_players_count"] == 1
+    created_players = [row for row in supabase.store["players"] if row["name"] == "New Rated"]
+    assert len(created_players) == 1
+    created = created_players[0]
+    assert created["rating"] == 1400.0
+    unchanged_alice = [row for row in supabase.store["players"] if row["id"] == 101][0]
+    unchanged_bob = [row for row in supabase.store["players"] if row["id"] == 102][0]
+    assert unchanged_alice["rating"] == 1600.0
+    assert unchanged_bob["rating"] == 1200.0
+    participants = supabase.store["live_event_participants"]
+    created_participant = [row for row in participants if row["participant_key"] == "p-3"][0]
+    assert created_participant["linked_player_id"] == created["id"]
+
+
+def test_resolved_save_falls_back_to_default_provisional_seed_without_other_rated_players():
+    supabase = _FakeSupabase()
+    supabase.store["players"] = []
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    ctx.admin_logged_in = True
+    ctx.df_players_all = pd.DataFrame()
+    event = _sample_event()
+    for participant in event["participants"]:
+        participant["player_id"] = None
+        participant["match_status"] = "create_rated"
+    save_resolved_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    created = [row for row in supabase.store["players"] if row["club_id"] == "club-1"]
+    assert all(float(row["rating"]) == 1400.0 for row in created)
+
+
+def test_resolved_save_detects_strong_duplicate_and_blocks_creation():
+    supabase = _FakeSupabase()
+    supabase.store["players"] = [
+        {"id": 55, "club_id": "club-1", "name": "Jon Snow", "rating": 1500.0, "starting_rating": 1500.0}
+    ]
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    ctx.admin_logged_in = True
+    ctx.df_players_all = pd.DataFrame([{"id": 55, "name": "Jon Snow", "rating": 1500.0}])
+    event = _sample_event()
+    event["participants"][0]["name"] = "John Snow"
+    event["participants"][0]["player_id"] = None
+    event["participants"][0]["match_status"] = "create_rated"
+    try:
+        save_resolved_social_live_event(
+            ctx,
+            event,
+            target_club_id="club-1",
+            submission_mode="admin",
+            host_name="admin",
+        )
+    except ValueError as exc:
+        assert "Duplicate warning" in str(exc)
+    else:
+        raise AssertionError("Expected duplicate warning ValueError")
+
+
+def test_social_history_falls_back_to_legacy_submitted_by_column():
+    fetch_player_social_event_history.clear()
+    supabase = _FakeSupabase()
+    supabase.store["__missing_select_columns__"] = {"submitted_by_name"}
+    supabase.store["live_events"] = [
+        {
+            "id": "evt-1",
+            "club_id": "club-1",
+            "name": "Social Night",
+            "event_type": "round_robin",
+            "event_date": "2026-03-29",
+            "submitted_by": "Legacy Host",
+            "status": "saved",
+            "result_mode": "social_unrated",
+            "summary_json": {},
+        }
+    ]
+    supabase.store["live_event_participants"] = [
+        {"id": "lep-1", "event_id": "evt-1", "club_person_id": "cp-1", "linked_player_id": 12}
+    ]
+    supabase.store["live_event_matches"] = []
+    df = fetch_player_social_event_history(supabase, "club-1", 12, limit=20)
+    assert len(df) == 1
+    assert df.iloc[0]["Submitted By"] == "Legacy Host"
+
+
+def test_resolved_save_status_admin_vs_public():
+    supabase = _FakeSupabase()
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    ctx.admin_logged_in = True
+    admin_result = save_resolved_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    assert admin_result["status"] == "saved"
+    public_result = save_resolved_social_live_event(
+        ctx,
+        _sample_event(),
+        target_club_id="club-1",
+        submission_mode="public",
+        host_name="Host",
+    )
+    assert public_result["status"] == "pending"
 
 
 def test_approve_moves_pending_to_saved():

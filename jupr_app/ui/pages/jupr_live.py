@@ -120,9 +120,9 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
         pass
     status = str(result.get("status") or "")
     if status == "saved":
-        title = "Club Social results saved (admin)"
+        title = "Club Social results saved"
     else:
-        title = "Club Social results submitted (public) — pending admin approval"
+        title = "Club Social results submitted and awaiting approval"
     created_rated = int(result.get("created_rated_players_count") or 0)
     created_names = [
         str(name).strip()
@@ -130,7 +130,8 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
         if str(name).strip()
     ]
     detail = (
-        f"{title} ({result['participant_count']} participants, {result['match_count']} matches, final status: {status})."
+        f"{title} ({result['participant_count']} participants, "
+        f"{result['match_count']} matches, final status: {status})."
     )
     if created_rated > 0:
         created_suffix = ", ".join(created_names[:6])

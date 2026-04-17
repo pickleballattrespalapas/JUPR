@@ -63,6 +63,35 @@ def is_missing_social_tables_error(exc: Exception) -> bool:
     return has_missing_code and has_table_marker and mentions_social_table
 
 
+def submitted_by_name_from_row(row: dict) -> str:
+    return normalize_name((row or {}).get("submitted_by_name") or (row or {}).get("submitted_by"))
+
+
+def _upsert_live_event_row(supabase, payload: dict) -> None:
+    attempts = [dict(payload)]
+    if "submitted_by" in payload:
+        attempts.append({k: v for k, v in payload.items() if k != "submitted_by"})
+    if "submitted_by_name" in payload:
+        attempts.append({k: v for k, v in payload.items() if k != "submitted_by_name"})
+    last_exc: Exception | None = None
+    for attempt in attempts:
+        try:
+            supabase.table("live_events").upsert(
+                attempt,
+                on_conflict="club_id,source_event_uid",
+            ).execute()
+            return
+        except Exception as exc:
+            payload_text = _error_payload_text(exc)
+            if "submitted_by" in payload_text or "submitted_by_name" in payload_text or "schema cache" in payload_text:
+                last_exc = exc
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Unable to upsert live_events row.")
+
+
 def normalize_person_name(value: object) -> str:
     return normalize_name(value).casefold()
 
@@ -575,10 +604,7 @@ def save_social_live_event(
             "summary_json": summary_json,
         }
 
-        supabase.table("live_events").upsert(
-            upsert_payload,
-            on_conflict="club_id,source_event_uid",
-        ).execute()
+        _upsert_live_event_row(supabase, upsert_payload)
 
         event_rows = (
             supabase.table("live_events")
@@ -666,22 +692,45 @@ def list_social_submissions_for_review(
     limit: int = 100,
 ) -> list[dict]:
     club_id = str(ctx.club_id)
-    rows = (
-        ctx.supabase.table("live_events")
-        .select(
-            "id,name,event_type,event_date,status,submitted_by_name,submission_mode,"
-            "summary_json,raw_event_json,created_at,updated_at,rejection_reason,moderated_at,moderated_by"
-        )
-        .eq("club_id", club_id)
-        .eq("result_mode", "social_unrated")
-        .eq("status", status)
-        .order("updated_at", desc=True)
-        .limit(int(limit))
-        .execute()
-        .data
-        or []
+    base_select = (
+        "id,name,event_type,event_date,status,submission_mode,"
+        "summary_json,raw_event_json,created_at,updated_at,rejection_reason,moderated_at,moderated_by"
     )
-    return [dict(row) for row in rows]
+    try:
+        rows = (
+            ctx.supabase.table("live_events")
+            .select(f"{base_select},submitted_by_name")
+            .eq("club_id", club_id)
+            .eq("result_mode", "social_unrated")
+            .eq("status", status)
+            .order("updated_at", desc=True)
+            .limit(int(limit))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        payload = _error_payload_text(exc)
+        if "submitted_by_name" not in payload or "schema cache" not in payload:
+            raise
+        rows = (
+            ctx.supabase.table("live_events")
+            .select(f"{base_select},submitted_by")
+            .eq("club_id", club_id)
+            .eq("result_mode", "social_unrated")
+            .eq("status", status)
+            .order("updated_at", desc=True)
+            .limit(int(limit))
+            .execute()
+            .data
+            or []
+        )
+    normalized_rows = []
+    for row in rows:
+        payload = dict(row)
+        payload["submitted_by_name"] = submitted_by_name_from_row(payload)
+        normalized_rows.append(payload)
+    return normalized_rows
 
 
 def moderate_social_submission(
