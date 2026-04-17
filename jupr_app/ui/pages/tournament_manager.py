@@ -796,9 +796,6 @@ def render(ctx):
                     start_date=start_date,
                     end_date=end_date,
                 )
-                persisted_tournament = get_tournament_record(supabase, tournament_id) or {}
-                persisted_start = _parse_date(persisted_tournament.get("start_date"))
-                persisted_end = _parse_date(persisted_tournament.get("end_date"))
                 upsert_registration_settings(
                     supabase,
                     {
@@ -819,8 +816,8 @@ def render(ctx):
                 if dates_changed and not structure_locked:
                     synced_days, synced_events = _sync_days_with_date_range(
                         tournament_id,
-                        persisted_start,
-                        persisted_end,
+                        start_date,
+                        end_date,
                         days,
                         event_options,
                     )
