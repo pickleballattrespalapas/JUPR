@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -22,6 +23,7 @@ from jupr_app.domain.live_social import (
 from jupr_app.domain.player_ops import safe_add_player
 
 DEFAULT_PROVISIONAL_SEED_ELO = 1400.0
+STRONG_DUPLICATE_THRESHOLD = 0.94
 
 
 def _error_payload_text(exc: Exception) -> str:
@@ -160,10 +162,51 @@ def _ensure_rated_player_from_social(
     return created, True
 
 
+def _normalized_name(value: object) -> str:
+    return normalize_name(value).casefold()
+
+
+def _best_fuzzy_score(target: str, candidate: str) -> float:
+    if not target or not candidate:
+        return 0.0
+    return float(difflib.SequenceMatcher(None, target, candidate).ratio())
+
+
+def _find_strong_duplicate_candidates(ctx, *, display_name: str) -> list[dict]:
+    players_df = _players_frame(ctx)
+    if players_df.empty:
+        return []
+    target = _normalized_name(display_name)
+    if not target:
+        return []
+    scored: list[tuple[float, dict]] = []
+    for _, row in players_df.iterrows():
+        candidate_name = str(row.get("name") or "")
+        normalized_candidate = _normalized_name(candidate_name)
+        if not normalized_candidate:
+            continue
+        score = float(_best_fuzzy_score(target, normalized_candidate))
+        if score < STRONG_DUPLICATE_THRESHOLD:
+            continue
+        scored.append(
+            (
+                score,
+                {
+                    "id": int(row.get("id")),
+                    "name": candidate_name,
+                    "score": score,
+                },
+            )
+        )
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in scored[:3]]
+
+
 def _upsert_live_event_row(supabase, payload: dict) -> None:
     attempts = [dict(payload)]
-    if "submitted_by_name" in payload and "submitted_by" in payload:
+    if "submitted_by" in payload:
         attempts.append({k: v for k, v in payload.items() if k != "submitted_by"})
+    if "submitted_by_name" in payload:
         attempts.append({k: v for k, v in payload.items() if k != "submitted_by_name"})
     last_exc: Exception | None = None
     for attempt in attempts:
@@ -225,8 +268,20 @@ def save_resolved_social_live_event(
             if (
                 explicit_player_id is None
                 and admin_logged_in
-                and match_status in {"new_social", "new social person", "create_rated", "create rated"}
+                and match_status in {"create_rated", "create rated"}
             ):
+                duplicate_candidates = _find_strong_duplicate_candidates(
+                    ctx,
+                    display_name=display_name,
+                )
+                if duplicate_candidates:
+                    top = duplicate_candidates[0]
+                    if _normalized_name(top.get("name")) != _normalized_name(display_name):
+                        raise ValueError(
+                            "Duplicate warning: "
+                            f"'{display_name}' is very close to existing rated player '{top.get('name')}'. "
+                            "Select the existing player in roster confirmation to continue."
+                        )
                 rated_player, created_rated = _ensure_rated_player_from_social(
                     ctx,
                     club_id=club_id,
@@ -298,7 +353,6 @@ def save_resolved_social_live_event(
             "status": status,
             "submission_mode": normalized_submission_mode,
             "submitted_by_name": submitted_by_name,
-            "submitted_by": submitted_by_name,
             "moderated_at": moderated_at,
             "moderated_by": moderated_by,
             "rejection_reason": None,

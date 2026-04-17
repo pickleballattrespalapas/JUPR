@@ -346,19 +346,38 @@ def _social_skill_levels_from_summary(summary_json: object) -> list[str]:
     return skill_levels
 
 
+def _social_submitter_name(row: dict) -> str:
+    return str(row.get("submitted_by_name") or row.get("submitted_by") or "").strip()
+
+
 @st.cache_data(ttl=60)
 def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: int = 100) -> pd.DataFrame:
     try:
-        events_resp = (
-            _supabase.table("live_events")
-            .select("id,name,event_type,event_date,submitted_by_name,status,result_mode,summary_json")
-            .eq("club_id", str(club_id))
-            .eq("result_mode", "social_unrated")
-            .eq("status", "saved")
-            .order("event_date", desc=True)
-            .limit(max(int(limit), 1))
-            .execute()
-        )
+        try:
+            events_resp = (
+                _supabase.table("live_events")
+                .select("id,name,event_type,event_date,submitted_by_name,status,result_mode,summary_json")
+                .eq("club_id", str(club_id))
+                .eq("result_mode", "social_unrated")
+                .eq("status", "saved")
+                .order("event_date", desc=True)
+                .limit(max(int(limit), 1))
+                .execute()
+            )
+        except Exception as exc:
+            text = str(exc).lower()
+            if "submitted_by_name" not in text and "schema cache" not in text:
+                raise
+            events_resp = (
+                _supabase.table("live_events")
+                .select("id,name,event_type,event_date,submitted_by,status,result_mode,summary_json")
+                .eq("club_id", str(club_id))
+                .eq("result_mode", "social_unrated")
+                .eq("status", "saved")
+                .order("event_date", desc=True)
+                .limit(max(int(limit), 1))
+                .execute()
+            )
     except Exception as exc:
         if is_missing_social_tables_error(exc):
             return pd.DataFrame([{"_missing_social_tables": True, "_social_message": SOCIAL_TABLES_INSTALL_MESSAGE}])
@@ -434,7 +453,7 @@ def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: 
                 "Wins": 0,
                 "Losses": 0,
                 "Diff": 0,
-                "Submitted By": str(event_row.get("submitted_by_name") or "").strip(),
+                "Submitted By": _social_submitter_name(event_row),
             }
         )
 
