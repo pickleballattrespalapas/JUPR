@@ -4,12 +4,171 @@ from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime
 from typing import Any
+import math
+import re
 import uuid
 
 
 DoublesTypes = {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
 
 
+
+
+def _coerce_skill(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _parse_skill_anchor(skill_label: str) -> float | None:
+    text = str(skill_label or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        return None
+    try:
+        anchor = float(match.group(1))
+    except Exception:
+        return None
+    return round(math.floor(anchor * 2.0) / 2.0, 2)
+
+
+def _next_half_step(value: float) -> float:
+    return round(value + 0.5, 2)
+
+
+def _skill_band_for_label(skill_label: Any) -> tuple[float, float] | None:
+    floor = _parse_skill_anchor(str(skill_label or ""))
+    if floor is None:
+        return None
+    return floor, _next_half_step(floor)
+
+
+def _rating_in_band(rating: float | None, floor: float, ceiling_exclusive: float) -> bool:
+    return rating is not None and rating >= floor and rating < ceiling_exclusive
+
+
+def _rating_above_band(rating: float | None, ceiling_exclusive: float) -> bool:
+    return rating is not None and rating >= ceiling_exclusive
+
+
+def _recommended_anchor_for_rating(rating: float | None) -> float | None:
+    if rating is None:
+        return None
+    return round(math.floor(rating * 2.0) / 2.0, 1)
+
+
+def _format_skill(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _effective_singles_skill(player: dict[str, Any]) -> float | None:
+    singles = _coerce_skill(player.get("singles_skill"))
+    if singles is not None:
+        return singles
+    return _coerce_skill(player.get("doubles_skill"))
+
+
+def _effective_doubles_skill(player: dict[str, Any]) -> float | None:
+    doubles = _coerce_skill(player.get("doubles_skill"))
+    if doubles is not None:
+        return doubles
+    return _coerce_skill(player.get("singles_skill"))
+
+
+def _validate_singles_selection_against_skill(event: dict[str, Any], player: dict[str, Any]) -> tuple[bool, str | None]:
+    band = _skill_band_for_label(event.get("skill_label"))
+    if not band:
+        return True, None
+
+    floor, ceiling = band
+    rating = _effective_singles_skill(player)
+    if rating is None:
+        return False, "This division requires a rating to verify eligibility. Please enter your rating."
+    if _rating_in_band(rating, floor, ceiling):
+        return True, None
+    if _rating_above_band(rating, ceiling):
+        recommended = _recommended_anchor_for_rating(rating)
+        return False, (
+            f"Your rating is {_format_skill(rating)}, so you are not eligible for {_format_skill(floor)}. "
+            f"Please register for a {_format_skill(recommended)} division."
+        )
+    return False, f"Your rating is {_format_skill(rating)}, so you are not eligible for {_format_skill(floor)}."
+
+
+def _validate_doubles_selection_against_skill(
+    event: dict[str, Any],
+    player: dict[str, Any],
+    partner: dict[str, Any] | None,
+    *,
+    allow_missing_partner_for_preview: bool = False,
+) -> tuple[bool, str | None]:
+    band = _skill_band_for_label(event.get("skill_label"))
+    if not band:
+        return True, None
+
+    floor, ceiling = band
+    player_rating = _effective_doubles_skill(player)
+    partner_rating = _effective_doubles_skill(partner or {}) if partner else None
+
+    if player_rating is None:
+        return False, "This division requires a rating to verify eligibility. Please enter your rating."
+
+    if partner is None and allow_missing_partner_for_preview:
+        if _rating_in_band(player_rating, floor, ceiling):
+            return True, None
+        if _rating_above_band(player_rating, ceiling):
+            recommended = _recommended_anchor_for_rating(player_rating)
+            return False, (
+                f"Your rating is {_format_skill(player_rating)}, so you are not eligible for {_format_skill(floor)}. "
+                f"Please register for a {_format_skill(recommended)} division."
+            )
+        return False, f"Your rating is {_format_skill(player_rating)}, so you are not eligible for {_format_skill(floor)}."
+
+    if partner_rating is None:
+        return False, "This division requires a rating to verify eligibility. Please enter your rating."
+
+    ratings = [player_rating, partner_rating]
+    if any(_rating_above_band(value, ceiling) for value in ratings):
+        highest = max(ratings)
+        recommended = _recommended_anchor_for_rating(highest)
+        return False, (
+            f"Your team is not eligible for {_format_skill(floor)} because one player is rated above that division. "
+            f"Please register for a {_format_skill(recommended)} division."
+        )
+
+    if not any(_rating_in_band(value, floor, ceiling) for value in ratings):
+        return False, f"Your team is not eligible for {_format_skill(floor)} because neither player is in the {_format_skill(floor)} skill band."
+
+    return True, None
+
+
+def validate_selection_against_skill(
+    *,
+    event: dict[str, Any],
+    selection: dict[str, Any],
+    player: dict[str, Any],
+    partner: dict[str, Any] | None = None,
+    allow_missing_partner_for_preview: bool = False,
+) -> tuple[bool, str | None]:
+    if _is_doubles_event(event):
+        partner_mode = str(selection.get("partner_mode") or "NONE").upper()
+        resolved_partner = partner
+        if partner_mode == "NEEDS_PARTNER" and allow_missing_partner_for_preview:
+            resolved_partner = None
+        return _validate_doubles_selection_against_skill(
+            event,
+            player,
+            resolved_partner,
+            allow_missing_partner_for_preview=allow_missing_partner_for_preview,
+        )
+    return _validate_singles_selection_against_skill(event, player)
 def _uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 

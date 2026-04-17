@@ -7,7 +7,7 @@ import uuid
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 
-from .tournament_registration_compiler import compile_tournament_registration_state
+from .tournament_registration_compiler import compile_tournament_registration_state, validate_selection_against_skill
 
 REGISTRATION_STATUS_OPTIONS = ["draft", "open", "closed"]
 EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
@@ -447,11 +447,18 @@ def list_registration_selections(supabase, tournament_id: str) -> list[dict[str,
 
 
 def _get_existing_registration_by_email(supabase, tournament_id: str, email: str) -> dict[str, Any] | None:
+    return _get_registration_by_email(supabase, tournament_id, email)
+
+
+def _get_registration_by_email(supabase, tournament_id: str, email: str) -> dict[str, Any] | None:
+    clean_email = _normalize_email(email)
+    if not clean_email:
+        return None
     resp = (
         supabase.table("tournament_registrations")
         .select("*")
         .eq("tournament_id", str(tournament_id))
-        .eq("email", _normalize_email(email))
+        .eq("email", clean_email)
         .limit(1)
         .execute()
     )
@@ -497,6 +504,68 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) 
         "updated_at": submitted_at,
     }
 
+    event_lookup = {str(row.get("id")): row for row in list_event_options(supabase, str(tournament_id))}
+
+    rows: list[dict[str, Any]] = []
+    for index, selection in enumerate(payload.get("selections") or []):
+        if not selection.get("event_option_id"):
+            continue
+
+        event_option_id = str(selection.get("event_option_id"))
+        event = event_lookup.get(event_option_id)
+        if not event:
+            raise ValueError(f"Selected division {event_option_id} is no longer available.")
+
+        partner_email = _normalize_email(selection.get("partner_email")) or None
+        partner_payload = {
+            "display_name": str(selection.get("partner_name") or "").strip() or None,
+            "email": partner_email,
+            "doubles_skill": selection.get("partner_skill"),
+            "singles_skill": selection.get("partner_skill"),
+            "age": selection.get("partner_age"),
+        }
+        if partner_payload.get("doubles_skill") in (None, "") and partner_email:
+            partner_registration = _get_registration_by_email(supabase, tournament_id, partner_email)
+            if partner_registration:
+                partner_payload["doubles_skill"] = partner_registration.get("doubles_skill")
+                partner_payload["singles_skill"] = partner_registration.get("singles_skill")
+        partner_mode = str(selection.get("partner_mode") or "NONE").upper()
+        partner_for_validation = None
+        if partner_mode == "HAS_PARTNER":
+            partner_for_validation = partner_payload
+
+        eligible, message = validate_selection_against_skill(
+            event=event,
+            selection=selection,
+            player=reg_row,
+            partner=partner_for_validation,
+            allow_missing_partner_for_preview=False,
+        )
+        if not eligible:
+            division_label = str(event.get("division_name") or event.get("label") or event_option_id)
+            raise ValueError(f"{division_label}: {message or 'Skill eligibility requirements were not met.'}")
+
+        rows.append(
+            {
+                "id": str(selection.get("id") or _uid("sel")),
+                "tournament_id": str(tournament_id),
+                "registration_id": registration_id,
+                "registration_day_id": str(selection.get("registration_day_id")),
+                "event_option_id": event_option_id,
+                "partner_mode": partner_mode,
+                "partner_name": str(selection.get("partner_name") or "").strip() or None,
+                "partner_email": partner_email,
+                "partner_phone": str(selection.get("partner_phone") or "").strip() or None,
+                "partner_dupr_id": str(selection.get("partner_dupr_id") or "").strip() or None,
+                "partner_skill": selection.get("partner_skill"),
+                "partner_age": selection.get("partner_age"),
+                "partner_note": str(selection.get("partner_note") or "").strip() or None,
+                "show_on_partner_board": _coerce_bool(selection.get("show_on_partner_board", False)),
+                "sort_order": index,
+                "created_at": submitted_at,
+            }
+        )
+
     (
         supabase.table("tournament_registrations")
         .upsert(reg_row, on_conflict="id")
@@ -509,31 +578,6 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) 
         .eq("registration_id", registration_id)
         .execute()
     )
-
-    rows: list[dict[str, Any]] = []
-    for index, selection in enumerate(payload.get("selections") or []):
-        if not selection.get("event_option_id"):
-            continue
-        rows.append(
-            {
-                "id": str(selection.get("id") or _uid("sel")),
-                "tournament_id": str(tournament_id),
-                "registration_id": registration_id,
-                "registration_day_id": str(selection.get("registration_day_id")),
-                "event_option_id": str(selection.get("event_option_id")),
-                "partner_mode": str(selection.get("partner_mode") or "NONE").upper(),
-                "partner_name": str(selection.get("partner_name") or "").strip() or None,
-                "partner_email": _normalize_email(selection.get("partner_email")) or None,
-                "partner_phone": str(selection.get("partner_phone") or "").strip() or None,
-                "partner_dupr_id": str(selection.get("partner_dupr_id") or "").strip() or None,
-                "partner_skill": selection.get("partner_skill"),
-                "partner_age": selection.get("partner_age"),
-                "partner_note": str(selection.get("partner_note") or "").strip() or None,
-                "show_on_partner_board": _coerce_bool(selection.get("show_on_partner_board", False)),
-                "sort_order": index,
-                "created_at": submitted_at,
-            }
-        )
 
     if rows:
         (
