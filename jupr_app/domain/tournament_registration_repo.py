@@ -65,6 +65,28 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_missing_column_error(exc: Exception, column_name: str, table_name: str) -> bool:
+    text = str(exc or "")
+    return (
+        "PGRST204" in text
+        and f"'{column_name}'" in text
+        and f"'{table_name}'" in text
+    )
+
+
+def _insert_registration_days(supabase, days: list[dict[str, Any]]) -> None:
+    if not days:
+        return
+    try:
+        supabase.table("tournament_registration_days").insert(days).execute()
+        return
+    except Exception as exc:
+        if not _is_missing_column_error(exc, "enabled", "tournament_registration_days"):
+            raise
+    stripped_days = [{k: v for k, v in row.items() if k != "enabled"} for row in days]
+    supabase.table("tournament_registration_days").insert(stripped_days).execute()
+
+
 def registration_feature_available(supabase) -> tuple[bool, str | None]:
     required_tables = [
         "tournament_registration_settings",
@@ -283,12 +305,7 @@ def replace_registration_configuration(
             .execute()
         )
 
-        if days:
-            (
-                supabase.table("tournament_registration_days")
-                .insert(days)
-                .execute()
-            )
+        _insert_registration_days(supabase, days)
         if event_options:
             (
                 supabase.table("tournament_event_options")
