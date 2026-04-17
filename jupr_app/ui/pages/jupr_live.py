@@ -119,9 +119,9 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
         pass
     status = str(result.get("status") or "")
     if status == "saved":
-        title = "Club Social results saved"
+        title = "Club Social results saved (admin)"
     else:
-        title = "Club Social results submitted and awaiting approval"
+        title = "Club Social results submitted (public) — pending admin approval"
     st.success(
         f"{title} ({result['participant_count']} participants, {result['match_count']} matches, final status: {status})."
     )

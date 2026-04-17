@@ -554,7 +554,7 @@ def save_social_live_event(
         )
         normalized_submission_mode = str(submission_mode or "").strip().lower() or "public"
         status = _status_for_submission_mode(normalized_submission_mode)
-        submitted_by = normalize_name(host_name) or ("admin" if status == "saved" else "guest")
+        submitted_by_name = normalize_name(host_name) or ("admin" if status == "saved" else "guest")
         moderated_at = datetime.now(timezone.utc).isoformat() if status == "saved" else None
         moderated_by = _moderated_by(ctx) if status == "saved" else None
 
@@ -567,8 +567,7 @@ def save_social_live_event(
             "event_date": event_date,
             "status": status,
             "submission_mode": normalized_submission_mode,
-            "submitted_by": submitted_by,
-            "submitted_by_name": submitted_by,
+            "submitted_by_name": submitted_by_name,
             "moderated_at": moderated_at,
             "moderated_by": moderated_by,
             "rejection_reason": None,
@@ -637,8 +636,7 @@ def save_social_live_event(
             "event_id": event_id,
             "status": status,
             "submission_mode": normalized_submission_mode,
-            "submitted_by": submitted_by,
-            "submitted_by_name": submitted_by,
+            "submitted_by_name": submitted_by_name,
             "saved_rounds": _saved_rounds(event),
             "participant_count": len(participant_rows),
             "match_count": len(match_rows),
