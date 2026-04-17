@@ -39,6 +39,7 @@ CLUB_SOCIAL_CONFIG = LivePageConfig(
     allow_tournament=False,
     show_official_context=False,
     persistent_save_label="Submit club social results",
+    requires_roster_resolution=True,
 )
 
 MODE_OPTIONS = ("Quick Session", "Club Social")
@@ -106,9 +107,23 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
     state["last_saved_rounds"] = list(result.get("saved_rounds") or [])
     event["saved_rounds"] = list(result.get("saved_rounds") or [])
     st.session_state["force_data_refresh"] = True
+    try:
+        from jupr_app.ui.pages.players import (
+            fetch_player_social_event_history,
+            fetch_player_social_participation,
+        )
+
+        fetch_player_social_event_history.clear()
+        fetch_player_social_participation.clear()
+    except Exception:
+        pass
+    status = str(result.get("status") or "")
+    if status == "saved":
+        title = "Club Social results saved"
+    else:
+        title = "Club Social results submitted and awaiting approval"
     st.success(
-        "Club Social results submitted "
-        f"({result['match_count']} matches, {result['participant_count']} participants, status: {result['status']})."
+        f"{title} ({result['participant_count']} participants, {result['match_count']} matches, final status: {status})."
     )
     return True
 
