@@ -59,6 +59,14 @@ def _normalize_name(value: object) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
 
+def _coerce_date(value: Any, fallback: date) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return fallback
+
+
 def _parse_optional_date(value: Any) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
@@ -281,8 +289,23 @@ def render(ctx):
     c1, c2 = st.columns(2)
     with c1:
         tournament_name = st.text_input("Tournament name *", key="tourney_create_name")
-        start_date = st.date_input("Start date", value=date.today(), key="tourney_create_start")
-        end_date = st.date_input("End date", value=date.today(), min_value=start_date, key="tourney_create_end")
+
+        start_state = st.session_state.get("tourney_create_start", date.today())
+        start_default = _coerce_date(start_state, date.today())
+        if "tourney_create_start" in st.session_state and st.session_state.get("tourney_create_start") != start_default:
+            st.session_state["tourney_create_start"] = start_default
+        start_date = st.date_input("Start date", value=start_default, key="tourney_create_start")
+
+        end_state = st.session_state.get("tourney_create_end", date.today())
+        end_default = _coerce_date(end_state, date.today())
+        if end_default < start_date:
+            end_default = start_date
+        if "tourney_create_end" in st.session_state and st.session_state.get("tourney_create_end") != end_default:
+            st.session_state["tourney_create_end"] = end_default
+        elif "tourney_create_end" not in st.session_state:
+            st.session_state["tourney_create_end"] = end_default
+        end_date = st.date_input("End date", value=end_default, min_value=start_date, key="tourney_create_end")
+
         registration_enabled = st.checkbox("Registration enabled", value=True, key="tourney_create_reg_enabled")
     with c2:
         status = st.selectbox("Status", TOURNAMENT_STATUS_OPTIONS, index=0, key="tourney_create_status")
