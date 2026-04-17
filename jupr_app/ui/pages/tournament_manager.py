@@ -36,6 +36,7 @@ AGE_MODES = ["ALL_AGES", "FIXED_AGE_BRACKET", "AUTO_AGE_SPLIT", "SPLIT_AGE"]
 PARTICIPANT_TYPES = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
 GENDER_RESTRICTIONS = ["ANY", "MEN", "WOMEN", "MIXED"]
 DIVISION_STATUSES = ["draft", "open", "tentative", "confirmed", "closed"]
+SKILL_LABEL_OPTIONS = ["Open", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"]
 
 STANDARD_EVENT_TEMPLATES = [
     {
@@ -819,8 +820,16 @@ def _render_division_form(
                 disabled=disabled,
             )
             division_name = st.text_input("Division name", value=_safe_text(defaults.get("division_name")), disabled=disabled)
-            skill_label = st.text_input("Skill label", value=_safe_text(defaults.get("skill_label") or "Open"), disabled=disabled)
-            st.caption("Skill labels are enforced as half-step bands (example: 3.5 means 3.5 to <4.0). Doubles teams play to the higher-rated player: at least one player must be in-band and no player may be above the band.")
+            saved_skill_label = _safe_text(defaults.get("skill_label") or "Open")
+            skill_label = st.selectbox(
+                "Skill level",
+                SKILL_LABEL_OPTIONS,
+                index=SKILL_LABEL_OPTIONS.index(saved_skill_label) if saved_skill_label in SKILL_LABEL_OPTIONS else 0,
+                disabled=disabled,
+            )
+            st.caption(
+                "Skill level is a controlled division band. Open has no skill restriction. For rated divisions, doubles teams play to the higher-rated player: at least one player must be in-band and no player may be above the band."
+            )
             age_mode = st.selectbox(
                 "Age mode",
                 AGE_MODES,

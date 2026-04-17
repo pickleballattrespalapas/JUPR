@@ -5,11 +5,11 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 import math
-import re
 import uuid
 
 
 DoublesTypes = {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
+CONTROLLED_SKILL_LABELS = {"3.0", "3.5", "4.0", "4.5", "5.0", "5.5"}
 
 
 
@@ -25,13 +25,12 @@ def _coerce_skill(value: Any) -> float | None:
 
 def _parse_skill_anchor(skill_label: str) -> float | None:
     text = str(skill_label or "").strip()
-    if not text:
+    if not text or text.lower() == "open":
         return None
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
-    if not match:
+    if text not in CONTROLLED_SKILL_LABELS:
         return None
     try:
-        anchor = float(match.group(1))
+        anchor = float(text)
     except Exception:
         return None
     return round(math.floor(anchor * 2.0) / 2.0, 2)
