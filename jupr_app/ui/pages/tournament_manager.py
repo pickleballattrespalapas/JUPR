@@ -714,15 +714,21 @@ def render(ctx):
             st.caption(detail)
         st.stop()
 
-    tournaments = list_existing_tournaments(supabase, str(club_id))
+    st.subheader("Select Tournament")
+    show_archived = st.checkbox("Show archived", value=False, key="tournament_manager_show_archived")
+    st.caption("Archived tournaments are hidden from default selectors and public registration.")
+    tournaments = list_existing_tournaments(supabase, str(club_id), include_archived=show_archived)
     if not tournaments:
-        st.info("Create a tournament shell on the Tournaments page first.")
+        st.info("Create a tournament shell on the Tournaments page first, or enable Show archived.")
         st.stop()
 
-    st.subheader("Select Tournament")
     st.caption("Choose which tournament shell to manage before editing metadata, days, events, and divisions.")
     requested_id = _safe_text(st.query_params.get("tournament_id"))
-    labels = [f"{row.get('name')} ({row.get('status')})" for row in tournaments]
+    labels = []
+    for row in tournaments:
+        status = _safe_text(row.get('status') or 'DRAFT')
+        status_label = 'ARCHIVED' if status.upper() == 'ARCHIVED' else status
+        labels.append(f"{row.get('name')} ({status_label})")
     default_index = 0
     if requested_id:
         for idx, row in enumerate(tournaments):

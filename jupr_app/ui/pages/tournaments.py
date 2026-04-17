@@ -30,18 +30,23 @@ from jupr_app.domain.tournaments import (
 )
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
 from jupr_app.domain.tournament_registration_repo import (
+    archive_tournament,
     build_public_urls,
     build_registration_state,
+    delete_unused_draft_tournament,
     get_registration_settings,
     list_event_options as list_registration_event_options,
+    list_existing_tournaments,
     list_registration_days,
     registration_feature_available,
+    tournament_can_be_deleted,
+    unarchive_tournament,
     upsert_registration_settings,
 )
 from jupr_app.ui.layout import page_shell
 
 LEGACY_DEFAULT_TEAM_COUNT = 4
-TOURNAMENT_STATUS_OPTIONS = ["DRAFT", "REGISTRATION", "REGISTRATION_OPEN", "REGISTRATION_CLOSED"]
+TOURNAMENT_STATUS_OPTIONS = ["DRAFT", "REGISTRATION", "REGISTRATION_OPEN", "REGISTRATION_CLOSED", "ARCHIVED"]
 TOURNAMENT_LOCALE_OPTIONS = ["en", "es", "bilingual"]
 IMPORT_SOURCE_OPTIONS = ["REGISTRATION", "MANUAL", "BULK_UPLOAD"]
 
@@ -344,21 +349,22 @@ def render(ctx):
 
     st.divider()
 
-    tournaments_resp = (
-        supabase.table("tournaments")
-        .select("*")
-        .eq("club_id", str(club_id))
-        .order("created_at", desc=True)
-        .execute()
-    )
-    tournaments = tournaments_resp.data or []
+    st.subheader("Tournament List")
+    show_archived = st.checkbox("Show archived", value=False, key="tournaments_show_archived")
+    st.caption("Archived tournaments are hidden from default selectors and public registration.")
+
+    tournaments = list_existing_tournaments(supabase, str(club_id), include_archived=show_archived)
 
     if not tournaments:
-        st.info("No tournaments created yet.")
+        st.info("No tournaments available for this filter.")
         st.stop()
 
     preselected = _safe_text(st.query_params.get("tournament_id"))
-    tournament_labels = [f"{row['name']} ({row['status']})" for row in tournaments]
+    tournament_labels = []
+    for row in tournaments:
+        status = _safe_text(row.get("status") or "DRAFT")
+        status_label = "ARCHIVED" if status.upper() == "ARCHIVED" else status
+        tournament_labels.append(f"{row['name']} ({status_label})")
     default_index = 0
     if preselected:
         for idx, row in enumerate(tournaments):
@@ -398,6 +404,37 @@ def render(ctx):
         st.info("This tournament has no saved start/end dates yet. Add dates in Tournament Manager to auto-generate the default day schedule.")
     if st.button("Open Tournament Manager", key=f"open_tournament_manager_{tournament_id}"):
         _go_to_tournament_manager(tournament_id)
+
+    st.markdown("#### Admin Actions")
+    st.caption("Delete Draft is only available for empty draft shells with no registrations, draws, teams, games, or podium.")
+    action_cols = st.columns(2)
+    if _safe_text(tournament.get("status")).upper() == "ARCHIVED":
+        action_cols[0].caption("Unarchive restores this tournament as DRAFT; you can change status afterward if needed.")
+        if action_cols[0].button("Unarchive Tournament", key=f"unarchive_tournament_{tournament_id}"):
+            unarchive_tournament(supabase, tournament_id)
+            st.success("Tournament unarchived and restored to DRAFT.")
+            st.rerun()
+    else:
+        if action_cols[0].button("Archive Tournament", key=f"archive_tournament_{tournament_id}"):
+            archive_tournament(supabase, tournament_id)
+            st.success("Tournament archived and hidden from default selectors and public registration.")
+            st.rerun()
+
+    can_delete, usage_summary, delete_reason = tournament_can_be_deleted(supabase, tournament)
+    if can_delete:
+        delete_confirm = action_cols[1].text_input("Type DELETE to confirm draft deletion", key=f"delete_draft_confirm_{tournament_id}")
+        if action_cols[1].button("Delete Draft", key=f"delete_draft_tournament_{tournament_id}"):
+            if delete_confirm != "DELETE":
+                st.error("Type DELETE exactly to confirm draft deletion.")
+            else:
+                delete_unused_draft_tournament(supabase, tournament)
+                st.success("Draft tournament shell deleted.")
+                st.query_params.pop("tournament_id", None)
+                st.rerun()
+    else:
+        usage_bits = [f"{label}: {usage_summary.get(key, 0)}" for key, label in [("registrations", "registrations"), ("registration_selections", "selections"), ("event_draws", "draws"), ("teams", "teams"), ("games", "games"), ("podium", "podium")]]
+        action_cols[1].warning(delete_reason or "This tournament has existing operational/history records. Archive it instead of deleting.")
+        action_cols[1].caption("Usage summary — " + ", ".join(usage_bits))
 
     draws = _list_draws(supabase, tournament_id)
     modern_mode = bool((registration_bridge or {}).get("events"))

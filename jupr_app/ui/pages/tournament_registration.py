@@ -146,6 +146,8 @@ def render(ctx):
     )
 
     if not tournament:
+        if qp_tournament_id or qp_slug:
+            st.warning("This tournament is unavailable for public registration.")
         tournament, settings, days, event_options = _show_tournament_picker(ctx, supabase)
         if not tournament:
             st.stop()
