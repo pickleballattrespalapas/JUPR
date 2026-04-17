@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import difflib
 import re
 from typing import Callable
 
@@ -66,6 +67,7 @@ class LivePageConfig:
     allow_tournament: bool = False
     show_official_context: bool = False
     persistent_save_label: str | None = None
+    requires_roster_resolution: bool = False
 
 
 def _default_state(config: LivePageConfig) -> dict:
@@ -82,6 +84,11 @@ def _default_state(config: LivePageConfig) -> dict:
         "official_week_tag": "Week 1",
         "last_saved_rounds": [],
         "editing_substitution_id": None,
+        "parsed_roster_lines": [],
+        "roster_candidates": [],
+        "confirmed_roster_rows": [],
+        "roster_confirmed": False,
+        "resolved_roster_ids": {},
     }
 
 
@@ -229,6 +236,130 @@ def _merge_participant_text(participant_text: str, selected_names: list[str]) ->
     existing_lines = _participant_lines(participant_text)
     merged_lines = _dedupe_names(existing_lines + list(selected_names or []))
     return "\n".join(merged_lines)
+
+
+def _normalized_person_key(value: object) -> str:
+    return normalize_name(value).casefold()
+
+
+def _best_fuzzy_score(target: str, candidate: str) -> float:
+    if not target or not candidate:
+        return 0.0
+    return float(difflib.SequenceMatcher(None, target, candidate).ratio())
+
+
+def _build_roster_candidate_rows(
+    participant_names: list[str],
+    player_name_to_id: dict[str, int],
+    *,
+    suggestion_cap: int = 5,
+) -> list[dict]:
+    normalized_to_names: dict[str, list[str]] = {}
+    for player_name in player_name_to_id.keys():
+        key = _normalized_person_key(player_name)
+        if not key:
+            continue
+        normalized_to_names.setdefault(key, []).append(str(player_name))
+    normalized_keys = list(normalized_to_names.keys())
+
+    rows: list[dict] = []
+    for pasted_name in participant_names:
+        normalized_pasted = _normalized_person_key(pasted_name)
+        exact_names = normalized_to_names.get(normalized_pasted, [])
+        candidate_names: list[str] = []
+        if exact_names:
+            candidate_names.extend(exact_names)
+        else:
+            close_keys = difflib.get_close_matches(
+                normalized_pasted,
+                normalized_keys,
+                n=max(1, int(suggestion_cap)),
+                cutoff=0.65,
+            )
+            for key in close_keys:
+                for match_name in normalized_to_names.get(key, []):
+                    if match_name not in candidate_names:
+                        candidate_names.append(match_name)
+        candidate_names = candidate_names[: max(1, int(suggestion_cap))]
+        top_score = 0.0
+        if candidate_names:
+            top_score = max(
+                _best_fuzzy_score(normalized_pasted, _normalized_person_key(name))
+                for name in candidate_names
+            )
+        if exact_names:
+            status = "exact match"
+        elif candidate_names:
+            status = "suggested match"
+        else:
+            status = "new social person"
+
+        new_social_token = f"new::{normalized_pasted or pasted_name}"
+        options: list[dict[str, str | int | None]] = [
+            {"token": f"player::{int(player_name_to_id[name])}", "label": str(name)}
+            for name in candidate_names
+        ]
+        options.append(
+            {
+                "token": new_social_token,
+                "label": f"Use as new social player: {normalize_name(pasted_name)}",
+            }
+        )
+        default_token = new_social_token
+        if exact_names:
+            default_token = f"player::{int(player_name_to_id[exact_names[0]])}"
+        elif candidate_names and top_score >= 0.86:
+            default_token = f"player::{int(player_name_to_id[candidate_names[0]])}"
+        rows.append(
+            {
+                "original": str(pasted_name),
+                "normalized": normalize_name(pasted_name),
+                "status": status,
+                "default_token": default_token,
+                "options": options,
+            }
+        )
+    return rows
+
+
+def _resolved_participants_from_confirmation(
+    confirmed_rows: list[dict],
+    player_name_to_id: dict[str, int],
+) -> tuple[list[str], dict[str, int], list[dict]]:
+    id_to_name = {int(pid): str(name) for name, pid in player_name_to_id.items()}
+    names: list[str] = []
+    resolved_ids: dict[str, int] = {}
+    resolved_rows: list[dict] = []
+    for row in confirmed_rows:
+        selected_token = str(row.get("selection") or "")
+        original = normalize_name(row.get("original"))
+        if selected_token.startswith("player::"):
+            player_id = int(selected_token.split("::", 1)[1])
+            canonical = normalize_name(id_to_name.get(player_id, original))
+            if canonical:
+                names.append(canonical)
+                resolved_ids[canonical] = int(player_id)
+                resolved_rows.append(
+                    {
+                        "name": canonical,
+                        "player_id": int(player_id),
+                        "source_name": original,
+                        "match_status": "matched_existing",
+                    }
+                )
+            continue
+        social_name = original
+        if social_name:
+            names.append(social_name)
+            resolved_rows.append(
+                {
+                    "name": social_name,
+                    "player_id": None,
+                    "source_name": original,
+                    "match_status": "new_social",
+                }
+            )
+    return names, resolved_ids, resolved_rows
 
 def _team_entry_lines(value: str) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
@@ -433,6 +564,20 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     if config.show_official_context:
         official_context, can_create = _official_context_ui(ctx, state)
     participant_names = _participant_lines(state["participant_text"])
+    roster_requires_resolution = bool(config.requires_roster_resolution) and state["type_label"] in {
+        "Round Robin",
+        "League / Ladder",
+    }
+    player_options, player_name_to_id = _player_directory(ctx)
+    if roster_requires_resolution:
+        if state.get("parsed_roster_lines") != participant_names:
+            state["parsed_roster_lines"] = list(participant_names)
+            state["roster_candidates"] = _build_roster_candidate_rows(
+                participant_names,
+                player_name_to_id,
+            )
+            state["confirmed_roster_rows"] = []
+            state["roster_confirmed"] = False
     team_entries: list[dict[str, str]] = []
     team_parse_error: str | None = None
     if state["type_label"] == "Tournament":
@@ -455,30 +600,124 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             f"You entered {len(participant_names)} name(s); count is set to {int(state['participant_count'])}."
         )
         can_create = False
+    if roster_requires_resolution and participant_names:
+        roster_candidates = list(state.get("roster_candidates") or [])
+        st.markdown("#### Review roster matches")
+        st.caption(
+            "Confirm each pasted name once. Exact or suggested matches use canonical current-player names; "
+            "or choose the explicit new social player option."
+        )
+        with st.form(f"{config.state_key}_roster_resolution_form"):
+            confirmed_rows: list[dict] = []
+            for idx, row in enumerate(roster_candidates):
+                status_col, selector_col = st.columns([1.3, 3.7])
+                status_col.caption(f"**{row.get('original', '')}**")
+                status_col.caption(f"Status: {row.get('status', 'new social person')}")
+                options = list(row.get("options") or [])
+                labels = [str(opt.get("label") or "") for opt in options]
+                tokens = [str(opt.get("token") or "") for opt in options]
+                default_token = str(row.get("default_token") or "")
+                default_index = tokens.index(default_token) if default_token in tokens else max(len(tokens) - 1, 0)
+                selected_label = selector_col.selectbox(
+                    f"Match choice {idx + 1}",
+                    options=labels,
+                    index=default_index,
+                    key=f"{config.state_key}_roster_choice_{idx}",
+                    label_visibility="collapsed",
+                )
+                selected_token = tokens[labels.index(selected_label)] if selected_label in labels else default_token
+                confirmed_rows.append(
+                    {
+                        "original": str(row.get("original") or ""),
+                        "selection": selected_token,
+                        "status": str(row.get("status") or ""),
+                    }
+                )
+            confirmed = st.form_submit_button("Confirm roster", type="primary")
+        if confirmed:
+            canonical_names, resolved_ids, resolved_rows = _resolved_participants_from_confirmation(
+                confirmed_rows,
+                player_name_to_id,
+            )
+            if len(canonical_names) != int(state["participant_count"]):
+                st.error(
+                    f"Confirmed roster has {len(canonical_names)} entries; expected {int(state['participant_count'])}."
+                )
+            else:
+                state["confirmed_roster_rows"] = resolved_rows
+                state["roster_confirmed"] = True
+                state["participant_text"] = "\n".join(canonical_names)
+                state["resolved_roster_ids"] = resolved_ids
+                st.success("Roster confirmed. You can now create the event.")
+                st.rerun()
+        if state.get("roster_confirmed"):
+            confirmed_rows = list(state.get("confirmed_roster_rows") or [])
+            matched_rows = [row for row in confirmed_rows if row.get("player_id") is not None]
+            new_rows = [row for row in confirmed_rows if row.get("player_id") is None]
+            st.caption(
+                f"Confirmed roster: {len(matched_rows)} matched existing players, {len(new_rows)} new social players."
+            )
+            if matched_rows:
+                st.caption("Matched: " + ", ".join(str(row.get("name") or "") for row in matched_rows))
+            if new_rows:
+                st.caption("New social: " + ", ".join(str(row.get("name") or "") for row in new_rows))
+
     action_cols = st.columns([1, 1, 3])
+    create_disabled = not can_create or (roster_requires_resolution and not bool(state.get("roster_confirmed")))
     if action_cols[0].button(
         "Create event",
         type="primary",
-        disabled=not can_create,
+        disabled=create_disabled,
         key=f"{config.state_key}_create_btn",
     ):
         try:
+            create_participant_names = list(participant_names)
+            create_resolved_ids: dict[str, int] | None = None
+            confirmed_roster_rows = list(state.get("confirmed_roster_rows") or [])
+            if roster_requires_resolution and confirmed_roster_rows:
+                create_participant_names, create_resolved_ids, resolved_rows = _resolved_participants_from_confirmation(
+                    [
+                        {
+                            "original": row.get("source_name") or row.get("name"),
+                            "selection": (
+                                f"player::{int(row.get('player_id'))}"
+                                if row.get("player_id") is not None
+                                else f"new::{_normalized_person_key(row.get('name'))}"
+                            ),
+                        }
+                        for row in confirmed_roster_rows
+                    ],
+                    player_name_to_id,
+                )
             if state["type_label"] == "Round Robin":
                 resolved_ids = None
                 if _is_official(config):
                     resolved_ids, missing = _resolved_ids_for_official(
-                        participant_names, getattr(ctx, "name_to_id", {})
+                        create_participant_names, getattr(ctx, "name_to_id", {})
                     )
                     if missing:
                         raise ValueError(
                             "Official mode could not resolve: " + ", ".join(missing)
                         )
+                elif create_resolved_ids:
+                    resolved_ids = dict(create_resolved_ids)
                 state["event"] = create_round_robin_event(
                     name=state["event_name"],
-                    participant_names=participant_names,
+                    participant_names=create_participant_names,
                     resolved_ids=resolved_ids,
                     official_context=official_context,
                 )
+                if roster_requires_resolution and confirmed_roster_rows:
+                    participant_by_name = {
+                        str(p.get("name") or ""): p for p in (state["event"].get("participants") or [])
+                    }
+                    for row in confirmed_roster_rows:
+                        participant = participant_by_name.get(str(row.get("name") or ""))
+                        if not participant:
+                            continue
+                        participant["social_resolution"] = dict(row)
+                        participant["match_status"] = str(row.get("match_status") or "")
+                        participant["source_name"] = str(row.get("source_name") or "")
             elif state["type_label"] == "Tournament":
                 if _is_official(config):
                     resolved_team_entries: list[dict[str, str | int]] = []
@@ -528,20 +767,33 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 resolved_ids = None
                 if _is_official(config):
                     resolved_ids, missing = _resolved_ids_for_official(
-                        participant_names, getattr(ctx, "name_to_id", {})
+                        create_participant_names, getattr(ctx, "name_to_id", {})
                     )
                     if missing:
                         raise ValueError(
                             "Official mode could not resolve: " + ", ".join(missing)
                         )
+                elif create_resolved_ids:
+                    resolved_ids = dict(create_resolved_ids)
                 state["event"] = create_league_event(
                     name=state["event_name"],
-                    participant_names=participant_names,
+                    participant_names=create_participant_names,
                     total_rounds=int(state["league_rounds"]),
                     resolved_ids=resolved_ids,
                     court_sizes=exact_sizes,
                     official_context=official_context,
                 )
+                if roster_requires_resolution and confirmed_roster_rows:
+                    participant_by_name = {
+                        str(p.get("name") or ""): p for p in (state["event"].get("participants") or [])
+                    }
+                    for row in confirmed_roster_rows:
+                        participant = participant_by_name.get(str(row.get("name") or ""))
+                        if not participant:
+                            continue
+                        participant["social_resolution"] = dict(row)
+                        participant["match_status"] = str(row.get("match_status") or "")
+                        participant["source_name"] = str(row.get("source_name") or "")
             state["last_saved_rounds"] = []
             st.success("Event created.")
             st.rerun()

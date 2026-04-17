@@ -236,6 +236,8 @@ def resolve_or_create_club_person(
     display_name: str,
     event_date: str,
     club_id: str | None = None,
+    explicit_linked_player_id: int | None = None,
+    allow_name_auto_link: bool = True,
 ) -> tuple[dict, bool, bool]:
     """Returns (club_person_row, created_new, matched_competitive_player)."""
     supabase = ctx.supabase
@@ -245,8 +247,12 @@ def resolve_or_create_club_person(
     if not normalized:
         raise ValueError("Participant display name is required.")
 
-    player_map = _normalized_name_to_player_id(getattr(ctx, "name_to_id", {}))
-    linked_player_id = player_map.get(normalized)
+    linked_player_id = None
+    if explicit_linked_player_id is not None:
+        linked_player_id = int(explicit_linked_player_id)
+    elif allow_name_auto_link:
+        player_map = _normalized_name_to_player_id(getattr(ctx, "name_to_id", {}))
+        linked_player_id = player_map.get(normalized)
 
     if linked_player_id is not None:
         linked_rows = (
@@ -500,11 +506,20 @@ def save_social_live_event(
     try:
         for participant in participants:
             display_name = str(participant.get("name") or participant.get("id") or "")
+            explicit_player_id = participant.get("player_id")
+            match_status = str(participant.get("match_status") or "").strip().lower()
+            auto_link_enabled = match_status not in {"new_social", "new social person"}
             club_person, created_new, matched_player = resolve_or_create_club_person(
                 ctx,
                 display_name=display_name,
                 event_date=event_date,
                 club_id=club_id,
+                explicit_linked_player_id=(
+                    int(explicit_player_id)
+                    if explicit_player_id is not None and str(explicit_player_id).strip() != ""
+                    else None
+                ),
+                allow_name_auto_link=auto_link_enabled,
             )
             created_people_count += int(bool(created_new))
             linked_existing_players_count += int(bool(matched_player))
@@ -552,6 +567,7 @@ def save_social_live_event(
             "event_date": event_date,
             "status": status,
             "submission_mode": normalized_submission_mode,
+            "submitted_by": submitted_by,
             "submitted_by_name": submitted_by,
             "moderated_at": moderated_at,
             "moderated_by": moderated_by,
@@ -621,6 +637,7 @@ def save_social_live_event(
             "event_id": event_id,
             "status": status,
             "submission_mode": normalized_submission_mode,
+            "submitted_by": submitted_by,
             "submitted_by_name": submitted_by,
             "saved_rounds": _saved_rounds(event),
             "participant_count": len(participant_rows),
