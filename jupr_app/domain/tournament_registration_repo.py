@@ -254,6 +254,87 @@ def upsert_registration_settings(supabase, payload: dict[str, Any]) -> dict[str,
     return _safe_first(resp) or clean
 
 
+def build_builder_draft_payload(
+    *,
+    days: list[dict[str, Any]],
+    event_families: list[dict[str, Any]],
+    divisions: list[dict[str, Any]],
+    saved_step: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "saved_at": _now_iso(),
+        "saved_step": str(saved_step or "").strip() or None,
+        "days": list(days or []),
+        "event_families": list(event_families or []),
+        "divisions": list(divisions or []),
+    }
+
+
+def get_builder_draft(supabase, tournament_id: str) -> dict[str, Any] | None:
+    settings = get_registration_settings(supabase, str(tournament_id))
+    raw_draft = settings.get("builder_draft_json")
+    if isinstance(raw_draft, dict):
+        return raw_draft
+    return None
+
+
+def save_builder_draft(
+    supabase,
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_families: list[dict[str, Any]],
+    divisions: list[dict[str, Any]],
+    saved_step: str | None = None,
+) -> dict[str, Any]:
+    settings = get_registration_settings(supabase, str(tournament_id))
+    payload = build_builder_draft_payload(
+        days=days,
+        event_families=event_families,
+        divisions=divisions,
+        saved_step=saved_step,
+    )
+    update_payload = {
+        "id": str(settings.get("id") or _uid("regset")),
+        "tournament_id": str(tournament_id),
+        "builder_draft_json": payload,
+        "builder_draft_updated_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    try:
+        (
+            supabase.table("tournament_registration_settings")
+            .upsert(update_payload, on_conflict="tournament_id")
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_column_error(exc, "builder_draft_json", "tournament_registration_settings"):
+            raise ValueError("Builder draft columns are missing. Run the latest migrations.") from exc
+        raise
+    return payload
+
+
+def clear_builder_draft(supabase, tournament_id: str) -> None:
+    try:
+        (
+            supabase.table("tournament_registration_settings")
+            .update(
+                {
+                    "builder_draft_json": None,
+                    "builder_draft_updated_at": None,
+                    "updated_at": _now_iso(),
+                }
+            )
+            .eq("tournament_id", str(tournament_id))
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_column_error(exc, "builder_draft_json", "tournament_registration_settings"):
+            return
+        raise
+
+
 def list_registration_days(supabase, tournament_id: str) -> list[dict[str, Any]]:
     resp = (
         supabase.table("tournament_registration_days")

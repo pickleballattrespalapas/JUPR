@@ -17,6 +17,7 @@ from jupr_app.domain.tournament_registration_repo import (
     build_public_urls,
     build_registration_state,
     count_tournament_registrations,
+    get_builder_draft,
     get_registration_settings,
     get_tournament_record,
     list_event_options,
@@ -25,6 +26,7 @@ from jupr_app.domain.tournament_registration_repo import (
     list_registration_days,
     registration_feature_available,
     replace_registration_configuration,
+    save_builder_draft,
     update_registration_admin_fields,
     upsert_registration_settings,
 )
@@ -395,6 +397,20 @@ def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
     )
 
 
+def _draft_rows_to_df(rows: list[dict[str, Any]], columns: list[str], id_key: str = "id") -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    normalized_rows: list[dict[str, Any]] = []
+    for row in rows:
+        normalized_rows.append(
+            {
+                id_key: str((row or {}).get(id_key) or _uid(id_key)),
+                **{column: (row or {}).get(column) for column in columns},
+            }
+        )
+    return _df_with_hidden_ids(normalized_rows, id_key, columns)
+
+
 def _empty_event_templates_df() -> pd.DataFrame:
     return pd.DataFrame(columns=EVENT_TEMPLATE_COLUMNS)
 
@@ -729,6 +745,19 @@ def _schedule_preview_rows(days_df: pd.DataFrame, divisions_df: pd.DataFrame) ->
     return grouped_rows
 
 
+def _df_to_draft_rows(df: pd.DataFrame, columns: list[str], id_key: str = "id") -> list[dict[str, Any]]:
+    out = _ensure_editor_columns(df, columns)
+    rows: list[dict[str, Any]] = []
+    for row_id, row in out.iterrows():
+        rows.append(
+            {
+                id_key: str(row_id or _uid(id_key)),
+                **{column: row.get(column) for column in columns},
+            }
+        )
+    return rows
+
+
 def _render_event_family_form(
     *,
     form_key: str,
@@ -988,6 +1017,7 @@ def render(ctx):
     settings = get_registration_settings(supabase, tournament_id, tournament_name=_safe_text(tournament.get("name")))
     days = list_registration_days(supabase, tournament_id)
     event_options = list_event_options(supabase, tournament_id)
+    persisted_builder_draft = get_builder_draft(supabase, tournament_id)
     registration_count = count_tournament_registrations(supabase, tournament_id)
 
     if st.session_state.pop(f"tm_refresh_{tournament_id}", False):
@@ -995,12 +1025,13 @@ def render(ctx):
         settings = get_registration_settings(supabase, tournament_id, tournament_name=_safe_text(tournament.get("name")))
         days = list_registration_days(supabase, tournament_id)
         event_options = list_event_options(supabase, tournament_id)
+        persisted_builder_draft = get_builder_draft(supabase, tournament_id)
         registration_count = count_tournament_registrations(supabase, tournament_id)
 
     structure_locked = bool(registration_count)
     if structure_locked:
         st.warning(
-            "This tournament already has registrations. Structural changes to days, events, and divisions are locked to protect submitted data."
+            "This tournament already has registrations. Structural draft edits are locked."
         )
     else:
         st.info(
@@ -1156,6 +1187,30 @@ def render(ctx):
         st.caption("Admin-only actions are kept separate from the main save form.")
 
     days_seed_key = f"tm_days_seed_{tournament_id}"
+    draft_loaded_key = f"tm_draft_loaded_{tournament_id}"
+    draft_last_saved_notice_key = f"tm_draft_notice_{tournament_id}"
+    draft_last_saved_step_key = f"tm_draft_saved_step_{tournament_id}"
+    draft_last_saved_at_key = f"tm_draft_saved_at_{tournament_id}"
+    if draft_loaded_key not in st.session_state:
+        st.session_state[draft_loaded_key] = False
+    if not st.session_state[draft_loaded_key]:
+        if isinstance(persisted_builder_draft, dict):
+            st.session_state[days_seed_key] = _draft_rows_to_df(
+                persisted_builder_draft.get("days") or [],
+                DAYS_EDITOR_COLUMNS,
+            )
+            st.session_state[f"tm_events_seed_{tournament_id}"] = _draft_rows_to_df(
+                persisted_builder_draft.get("event_families") or [],
+                EVENT_TEMPLATE_COLUMNS,
+            )
+            st.session_state[f"tm_divisions_seed_{tournament_id}"] = _draft_rows_to_df(
+                persisted_builder_draft.get("divisions") or [],
+                DIVISION_EDITOR_COLUMNS,
+            )
+            st.session_state[draft_last_saved_at_key] = _safe_text(persisted_builder_draft.get("saved_at"))
+            st.session_state[draft_last_saved_step_key] = _safe_text(persisted_builder_draft.get("saved_step"))
+        st.session_state[draft_loaded_key] = True
+
     if days_seed_key not in st.session_state:
         st.session_state[days_seed_key] = _seed_days(days, tournament)
     events_seed_key = f"tm_events_seed_{tournament_id}"
@@ -1176,6 +1231,18 @@ def render(ctx):
         st.session_state[division_edit_id_key] = None
     if load_templates_confirm_key not in st.session_state:
         st.session_state[load_templates_confirm_key] = False
+
+    if st.session_state.get(draft_last_saved_notice_key):
+        st.success("Draft progress saved.")
+        st.caption("This step is saved to your tournament draft.")
+        st.caption("Final Save Builder Changes is still required before publishing or sharing links.")
+        st.session_state[draft_last_saved_notice_key] = False
+
+    if _safe_text(st.session_state.get(draft_last_saved_at_key)):
+        saved_step = _safe_text(st.session_state.get(draft_last_saved_step_key))
+        step_suffix = f" · Step: {saved_step}" if saved_step else ""
+        st.caption(f"Draft last saved: {_safe_text(st.session_state.get(draft_last_saved_at_key))}{step_suffix}")
+        st.caption("Draft progress is saved, but final builder changes have not yet been published.")
 
     with tabs[1]:
         st.subheader("Days")
@@ -1205,6 +1272,19 @@ def render(ctx):
                 st.warning("Cannot regenerate days yet. Save both start and end dates first.")
             else:
                 st.session_state[days_seed_key] = generated
+            st.rerun()
+        if st.button("Save Days Draft", disabled=structure_locked, key=f"tm_save_days_draft_{tournament_id}"):
+            saved_payload = save_builder_draft(
+                supabase,
+                tournament_id=tournament_id,
+                days=_df_to_draft_rows(st.session_state[days_seed_key], DAYS_EDITOR_COLUMNS),
+                event_families=_df_to_draft_rows(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS),
+                divisions=_df_to_draft_rows(st.session_state.get(f"tm_divisions_seed_{tournament_id}"), DIVISION_EDITOR_COLUMNS),
+                saved_step="Days",
+            )
+            st.session_state[draft_last_saved_notice_key] = True
+            st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
+            st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
             st.rerun()
 
     with tabs[2]:
@@ -1307,6 +1387,19 @@ def render(ctx):
                         st.success(f"Deleted event family '{name}'.")
                         st.rerun()
         st.caption("No defaults are auto-created. Use Load standard event families only when you explicitly want templates.")
+        if st.button("Save Event Families Draft", disabled=structure_locked, key=f"tm_save_events_draft_{tournament_id}"):
+            saved_payload = save_builder_draft(
+                supabase,
+                tournament_id=tournament_id,
+                days=_df_to_draft_rows(st.session_state[days_seed_key], DAYS_EDITOR_COLUMNS),
+                event_families=_df_to_draft_rows(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS),
+                divisions=_df_to_draft_rows(st.session_state.get(f"tm_divisions_seed_{tournament_id}"), DIVISION_EDITOR_COLUMNS),
+                saved_step="Event Families",
+            )
+            st.session_state[draft_last_saved_notice_key] = True
+            st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
+            st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
+            st.rerun()
 
     divisions_seed_key = f"tm_divisions_seed_{tournament_id}"
     if divisions_seed_key not in st.session_state:
@@ -1426,6 +1519,19 @@ def render(ctx):
                         st.rerun()
         for mode, help_text in AGE_MODE_HELP.items():
             st.caption(f"**{mode.replace('_', ' ').title()}** — {help_text}")
+        if st.button("Save Divisions Draft", disabled=structure_locked, key=f"tm_save_divisions_draft_{tournament_id}"):
+            saved_payload = save_builder_draft(
+                supabase,
+                tournament_id=tournament_id,
+                days=_df_to_draft_rows(st.session_state[days_seed_key], DAYS_EDITOR_COLUMNS),
+                event_families=_df_to_draft_rows(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS),
+                divisions=_df_to_draft_rows(st.session_state[divisions_seed_key], DIVISION_EDITOR_COLUMNS),
+                saved_step="Divisions",
+            )
+            st.session_state[draft_last_saved_notice_key] = True
+            st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
+            st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
+            st.rerun()
 
     with tabs[4]:
         st.subheader("Schedule Preview")
@@ -1467,6 +1573,16 @@ def render(ctx):
                     days=days_payload,
                     event_options=event_payload,
                 )
+                saved_payload = save_builder_draft(
+                    supabase,
+                    tournament_id=tournament_id,
+                    days=_df_to_draft_rows(days_df, DAYS_EDITOR_COLUMNS),
+                    event_families=_df_to_draft_rows(events_df, EVENT_TEMPLATE_COLUMNS),
+                    divisions=_df_to_draft_rows(divisions_df, DIVISION_EDITOR_COLUMNS),
+                    saved_step="Publish & QA",
+                )
+                st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
+                st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
                 st.success("Tournament schedule, events, and divisions saved.")
                 st.rerun()
 
