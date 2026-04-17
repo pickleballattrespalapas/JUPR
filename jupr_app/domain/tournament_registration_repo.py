@@ -106,15 +106,90 @@ def registration_feature_available(supabase) -> tuple[bool, str | None]:
     return True, None
 
 
-def list_existing_tournaments(supabase, club_id: str) -> list[dict[str, Any]]:
-    resp = (
+def list_existing_tournaments(supabase, club_id: str, *, include_archived: bool = False) -> list[dict[str, Any]]:
+    query = (
         supabase.table("tournaments")
         .select("*")
         .eq("club_id", str(club_id))
-        .order("created_at", desc=True)
+    )
+    if not include_archived:
+        query = query.neq("status", "ARCHIVED")
+    resp = query.order("created_at", desc=True).execute()
+    return [_with_normalized_event_tags(row) or row for row in _safe_data(resp)]
+
+
+def _count_table_rows(supabase, table_name: str, tournament_id: str) -> int:
+    resp = (
+        supabase.table(table_name)
+        .select("id", count="exact")
+        .eq("tournament_id", str(tournament_id))
         .execute()
     )
-    return [_with_normalized_event_tags(row) or row for row in _safe_data(resp)]
+    try:
+        return int(resp.count or 0)
+    except Exception:
+        return len(_safe_data(resp))
+
+
+def get_tournament_usage_summary(supabase, tournament_id: str) -> dict[str, int]:
+    tournament_id = str(tournament_id)
+    return {
+        "registrations": _count_table_rows(supabase, "tournament_registrations", tournament_id),
+        "registration_selections": _count_table_rows(supabase, "tournament_registration_selections", tournament_id),
+        "event_draws": _count_table_rows(supabase, "tournament_event_draws", tournament_id),
+        "teams": _count_table_rows(supabase, "tournament_teams", tournament_id),
+        "games": _count_table_rows(supabase, "tournament_games", tournament_id),
+        "podium": _count_table_rows(supabase, "tournament_podium", tournament_id),
+    }
+
+
+def tournament_can_be_deleted(supabase, tournament: dict[str, Any]) -> tuple[bool, dict[str, int], str | None]:
+    status = str((tournament or {}).get("status") or "").upper()
+    tournament_id = str((tournament or {}).get("id") or "").strip()
+    summary = get_tournament_usage_summary(supabase, tournament_id) if tournament_id else {}
+    if status != "DRAFT":
+        return False, summary, "Delete Draft is only available when tournament status is DRAFT."
+    if any(int(summary.get(key) or 0) > 0 for key in ["registrations", "registration_selections", "event_draws", "teams", "games", "podium"]):
+        return False, summary, "This tournament has existing operational/history records. Archive it instead of deleting."
+    return True, summary, None
+
+
+def archive_tournament(supabase, tournament_id: str) -> None:
+    supabase.table("tournaments").update({"status": "ARCHIVED"}).eq("id", str(tournament_id)).execute()
+
+
+def unarchive_tournament(supabase, tournament_id: str) -> None:
+    supabase.table("tournaments").update({"status": "DRAFT"}).eq("id", str(tournament_id)).execute()
+
+
+def delete_unused_draft_tournament(supabase, tournament: dict[str, Any]) -> None:
+    tournament_id = str((tournament or {}).get("id") or "").strip()
+    if not tournament_id:
+        raise ValueError("Tournament id is required.")
+
+    can_delete, _, reason = tournament_can_be_deleted(supabase, tournament)
+    if not can_delete:
+        raise ValueError(reason or "Tournament cannot be deleted.")
+
+    (
+        supabase.table("tournament_registration_settings")
+        .delete()
+        .eq("tournament_id", tournament_id)
+        .execute()
+    )
+    (
+        supabase.table("tournament_event_options")
+        .delete()
+        .eq("tournament_id", tournament_id)
+        .execute()
+    )
+    (
+        supabase.table("tournament_registration_days")
+        .delete()
+        .eq("tournament_id", tournament_id)
+        .execute()
+    )
+    supabase.table("tournaments").delete().eq("id", tournament_id).execute()
 
 
 def get_tournament_record(supabase, tournament_id: str) -> dict[str, Any] | None:
@@ -501,6 +576,8 @@ def get_public_tournament_bundle(
     tournament = get_tournament_record(supabase, str(tournament_id))
     if not tournament or str(tournament.get("club_id")) != str(club_id):
         return None, None, [], []
+    if str(tournament.get("status") or "").upper() == "ARCHIVED":
+        return None, None, [], []
 
     days = list_registration_days(supabase, str(tournament_id))
     event_options = list_event_options(supabase, str(tournament_id))
@@ -517,6 +594,8 @@ def list_open_public_tournaments(supabase, club_id: str) -> list[dict[str, Any]]
         if not tournament:
             continue
         if str(tournament.get("club_id")) != str(club_id):
+            continue
+        if str(tournament.get("status") or "").upper() == "ARCHIVED":
             continue
         out.append({"tournament": tournament, "settings": settings})
     out.sort(key=lambda row: str(row.get("tournament", {}).get("created_at") or ""), reverse=True)
