@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Iterable
 from uuid import uuid4
 
 import pandas as pd
@@ -765,3 +766,225 @@ def moderate_social_submission(
     if not rows:
         raise RuntimeError("Unable to moderate social submission for this club.")
     return dict(rows[0])
+
+
+def list_social_match_log_rows(
+    supabase,
+    *,
+    club_id: str,
+    limit: int = 1000,
+) -> pd.DataFrame:
+    club_id = str(club_id)
+    event_rows = (
+        supabase.table("live_events")
+        .select("id,name,event_date,status,submission_mode")
+        .eq("club_id", club_id)
+        .eq("result_mode", "social_unrated")
+        .order("event_date", desc=True)
+        .limit(max(int(limit), 1))
+        .execute()
+        .data
+        or []
+    )
+    if not event_rows:
+        return pd.DataFrame()
+
+    event_map = {str(row["id"]): dict(row) for row in event_rows if row.get("id")}
+    event_ids = list(event_map.keys())
+    if not event_ids:
+        return pd.DataFrame()
+
+    participant_rows = (
+        supabase.table("live_event_participants")
+        .select("id,event_id,club_person_id,participant_key")
+        .in_("event_id", event_ids)
+        .execute()
+        .data
+        or []
+    )
+    participant_to_person_id: dict[str, str] = {}
+    club_person_ids: set[str] = set()
+    for row in participant_rows:
+        participant_id = row.get("id")
+        person_id = row.get("club_person_id")
+        if participant_id is None or person_id is None:
+            continue
+        participant_to_person_id[str(participant_id)] = str(person_id)
+        club_person_ids.add(str(person_id))
+
+    person_name_map: dict[str, str] = {}
+    if club_person_ids:
+        people_rows = (
+            supabase.table("club_people")
+            .select("id,display_name")
+            .in_("id", list(club_person_ids))
+            .execute()
+            .data
+            or []
+        )
+        person_name_map = {
+            str(row["id"]): normalize_name(row.get("display_name"))
+            for row in people_rows
+            if row.get("id") is not None
+        }
+
+    match_rows = (
+        supabase.table("live_event_matches")
+        .select(
+            "id,event_id,match_key,played_on,round_number,court_number,mini_round_number,"
+            "status,submission_mode,"
+            "t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,"
+            "score_t1,score_t2"
+        )
+        .in_("event_id", event_ids)
+        .order("played_on", desc=True)
+        .limit(max(int(limit), 1))
+        .execute()
+        .data
+        or []
+    )
+
+    def _participant_name(participant_id: object) -> str:
+        if participant_id is None:
+            return ""
+        person_id = participant_to_person_id.get(str(participant_id))
+        if person_id is None:
+            return ""
+        return person_name_map.get(person_id, "")
+
+    rows: list[dict] = []
+    for row in match_rows:
+        event_id = str(row.get("event_id") or "")
+        event = event_map.get(event_id, {})
+        rows.append(
+            {
+                "source_type": "social",
+                "source_label": "Club Social (Unrated)",
+                "id": row.get("id"),
+                "social_match_id": row.get("id"),
+                "event_id": event_id,
+                "event_name": normalize_name(event.get("name")),
+                "date": row.get("played_on") or event.get("event_date"),
+                "played_on": row.get("played_on") or event.get("event_date"),
+                "round_number": row.get("round_number"),
+                "court_number": row.get("court_number"),
+                "mini_round_number": row.get("mini_round_number"),
+                "status": row.get("status") or event.get("status"),
+                "submission_mode": row.get("submission_mode") or event.get("submission_mode"),
+                "match_key": row.get("match_key"),
+                "t1_p1": _participant_name(row.get("t1_p1_participant_id")),
+                "t1_p2": _participant_name(row.get("t1_p2_participant_id")),
+                "t2_p1": _participant_name(row.get("t2_p1_participant_id")),
+                "t2_p2": _participant_name(row.get("t2_p2_participant_id")),
+                "score_t1": row.get("score_t1"),
+                "score_t2": row.get("score_t2"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def update_social_match_row(
+    supabase,
+    *,
+    club_id: str,
+    social_match_id: str,
+    patch: dict,
+) -> dict:
+    club_id = str(club_id)
+    social_match_id = str(social_match_id)
+    match_rows = (
+        supabase.table("live_event_matches")
+        .select("id,event_id")
+        .eq("id", social_match_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not match_rows:
+        raise RuntimeError("Social match not found.")
+    event_id = str(match_rows[0].get("event_id") or "")
+    if not event_id:
+        raise RuntimeError("Social match is missing event linkage.")
+
+    event_rows = (
+        supabase.table("live_events")
+        .select("id")
+        .eq("id", event_id)
+        .eq("club_id", club_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not event_rows:
+        raise RuntimeError("Social match does not belong to this club.")
+
+    allowed_match_fields = {
+        "played_on",
+        "score_t1",
+        "score_t2",
+        "round_number",
+        "court_number",
+        "mini_round_number",
+    }
+    match_payload = {k: v for k, v in (patch or {}).items() if k in allowed_match_fields}
+    if match_payload:
+        supabase.table("live_event_matches").update(match_payload).eq("id", social_match_id).execute()
+
+    event_name = (patch or {}).get("event_name")
+    if event_name is not None:
+        supabase.table("live_events").update({"name": normalize_name(event_name)}).eq("id", event_id).eq(
+            "club_id", club_id
+        ).execute()
+
+    return {
+        "social_match_id": social_match_id,
+        "event_id": event_id,
+        "updated_match_fields": sorted(match_payload.keys()),
+        "updated_event_name": event_name is not None,
+    }
+
+
+def delete_social_matches(
+    supabase,
+    *,
+    club_id: str,
+    social_match_ids: Iterable[str],
+) -> int:
+    club_id = str(club_id)
+    ids = [str(v) for v in (social_match_ids or []) if str(v).strip()]
+    if not ids:
+        return 0
+
+    rows = (
+        supabase.table("live_event_matches")
+        .select("id,event_id")
+        .in_("id", ids)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return 0
+
+    event_ids = [str(r.get("event_id")) for r in rows if r.get("event_id")]
+    allowed_events = set()
+    if event_ids:
+        allowed_rows = (
+            supabase.table("live_events")
+            .select("id")
+            .eq("club_id", club_id)
+            .in_("id", event_ids)
+            .execute()
+            .data
+            or []
+        )
+        allowed_events = {str(r["id"]) for r in allowed_rows if r.get("id")}
+
+    allowed_ids = [str(r["id"]) for r in rows if str(r.get("event_id")) in allowed_events]
+    if not allowed_ids:
+        return 0
+
+    supabase.table("live_event_matches").delete().in_("id", allowed_ids).execute()
+    return len(allowed_ids)

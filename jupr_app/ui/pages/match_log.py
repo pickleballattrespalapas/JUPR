@@ -3,6 +3,12 @@ import pandas as pd
 
 from jupr_app.domain.dupes import canonical_dup_key
 from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
+from jupr_app.domain.live_social import (
+    SocialTablesNotInstalledError,
+    delete_social_matches,
+    list_social_match_log_rows,
+    update_social_match_row,
+)
 from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.replay_history import replay_history
@@ -23,6 +29,31 @@ def render(ctx):
         st.stop()
 
     df = df_matches.copy()
+    df["source_type"] = "rated"
+    df["source_label"] = "Rated"
+
+    st.markdown("### Match Sources")
+    source_mode = st.radio(
+        "Choose what to show",
+        ["Rated only", "Include Club Social"],
+        horizontal=True,
+        key="match_log_source_mode",
+    )
+    include_social = source_mode == "Include Club Social"
+
+    social_df = pd.DataFrame()
+    social_error = None
+    if include_social:
+        try:
+            social_df = list_social_match_log_rows(
+                ctx.supabase,
+                club_id=str(ctx.club_id),
+                limit=5000,
+            )
+        except SocialTablesNotInstalledError as exc:
+            social_error = str(exc)
+        except Exception as exc:
+            social_error = f"Unable to load Club Social rows: {exc}"
 
     # Basic filters
     c1, c2, c3 = st.columns([2, 2, 2])
@@ -42,6 +73,158 @@ def render(ctx):
         df = df[df["id"].astype(int) == int(id_filter)].copy()
 
     df = df.head(int(limit_rows)).copy()
+
+    if include_social and social_error:
+        st.warning(social_error)
+
+    if include_social and social_df is not None and not social_df.empty:
+        social_df = social_df.head(int(limit_rows)).copy()
+        combined_df = pd.concat([df, social_df], ignore_index=True, sort=False)
+    else:
+        combined_df = df.copy()
+
+    st.subheader("📋 Match Log Rows")
+    show_cols = [
+        c
+        for c in [
+            "source_label",
+            "id",
+            "event_name",
+            "date",
+            "played_on",
+            "league",
+            "week_tag",
+            "match_type",
+            "match_key",
+            "round_number",
+            "court_number",
+            "mini_round_number",
+            "status",
+            "submission_mode",
+            "t1_p1",
+            "t1_p2",
+            "t2_p1",
+            "t2_p2",
+            "score_t1",
+            "score_t2",
+        ]
+        if c in combined_df.columns
+    ]
+    if not combined_df.empty:
+        st.dataframe(combined_df[show_cols], use_container_width=True, hide_index=True)
+    else:
+        st.info("No rows for current filter/settings.")
+
+    if include_social and social_df is not None and not social_df.empty:
+        st.divider()
+        st.subheader("🎾 Club Social Editor")
+        st.caption(
+            "Edit/delete unrated Club Social rows here. This updates only live_event_matches (and optionally live_events name)."
+        )
+
+        social_view = social_df.copy()
+        social_view.insert(0, "Update", False)
+        social_view.insert(1, "Delete", False)
+
+        edit_cols = [
+            c
+            for c in [
+                "Update",
+                "Delete",
+                "source_label",
+                "social_match_id",
+                "event_id",
+                "event_name",
+                "played_on",
+                "round_number",
+                "court_number",
+                "mini_round_number",
+                "score_t1",
+                "score_t2",
+                "status",
+                "submission_mode",
+                "match_key",
+                "t1_p1",
+                "t1_p2",
+                "t2_p1",
+                "t2_p2",
+            ]
+            if c in social_view.columns
+        ]
+
+        edited_social = st.data_editor(
+            social_view[edit_cols],
+            hide_index=True,
+            use_container_width=True,
+            key="social_match_editor",
+            column_config={
+                "Update": st.column_config.CheckboxColumn(default=False),
+                "Delete": st.column_config.CheckboxColumn(default=False),
+                "played_on": st.column_config.DateColumn("played_on"),
+                "event_name": st.column_config.TextColumn("event_name"),
+            },
+            disabled=["source_label", "social_match_id", "event_id", "status", "submission_mode", "match_key", "t1_p1", "t1_p2", "t2_p1", "t2_p2"],
+        )
+
+        def _as_date_text(value):
+            if pd.isna(value):
+                return None
+            ts = pd.to_datetime(value, errors="coerce")
+            if pd.isna(ts):
+                return None
+            return ts.date().isoformat()
+
+        original_by_id = social_df.set_index("social_match_id", drop=False)
+        update_rows = edited_social[edited_social["Update"] == True] if "Update" in edited_social.columns else pd.DataFrame()
+        delete_rows = edited_social[edited_social["Delete"] == True] if "Delete" in edited_social.columns else pd.DataFrame()
+
+        c_save, c_delete = st.columns([1, 1])
+        with c_save:
+            if st.button("Save selected social edits", type="primary", key="social_save_btn"):
+                updated_count = 0
+                for _, row in update_rows.iterrows():
+                    sid = str(row.get("social_match_id") or "").strip()
+                    if not sid or sid not in original_by_id.index:
+                        continue
+                    before = original_by_id.loc[sid]
+                    patch = {}
+                    for fld in ("score_t1", "score_t2", "round_number", "court_number", "mini_round_number"):
+                        old_v = None if pd.isna(before.get(fld)) else int(before.get(fld))
+                        new_v = None if pd.isna(row.get(fld)) else int(row.get(fld))
+                        if new_v != old_v:
+                            patch[fld] = new_v
+                    old_played = _as_date_text(before.get("played_on"))
+                    new_played = _as_date_text(row.get("played_on"))
+                    if new_played != old_played and new_played is not None:
+                        patch["played_on"] = new_played
+                    old_name = str(before.get("event_name") or "").strip()
+                    new_name = str(row.get("event_name") or "").strip()
+                    if new_name != old_name:
+                        patch["event_name"] = new_name
+                    if patch:
+                        update_social_match_row(
+                            ctx.supabase,
+                            club_id=str(ctx.club_id),
+                            social_match_id=sid,
+                            patch=patch,
+                        )
+                        updated_count += 1
+                if updated_count:
+                    st.success(f"Updated {updated_count} Club Social match row(s).")
+                    st.rerun()
+                st.info("No social row edits detected.")
+        with c_delete:
+            if st.button("Delete selected social rows", key="social_delete_btn"):
+                delete_ids = delete_rows["social_match_id"].dropna().astype(str).tolist() if not delete_rows.empty else []
+                deleted = delete_social_matches(
+                    ctx.supabase,
+                    club_id=str(ctx.club_id),
+                    social_match_ids=delete_ids,
+                )
+                if deleted:
+                    st.success(f"Deleted {deleted} Club Social match row(s).")
+                    st.rerun()
+                st.info("No social rows deleted.")
 
     st.divider()
 
