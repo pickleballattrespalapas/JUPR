@@ -364,7 +364,7 @@ def render(ctx):
                     except Exception:
                         pass
             st.success("Tournament shell created.")
-            st.info("Next step: open Tournament Manager and build the days → event families → divisions schedule.")
+            st.info("Next step: open Tournament Manager and build the days → events → divisions schedule.")
             if created_row:
                 if st.button("Configure Registration", key=f"configure_registration_create_{created_row.get('id')}"):
                     _go_to_tournament_manager(created_row.get("id"))
@@ -522,7 +522,7 @@ def render(ctx):
         if action_cols[2].button("Refresh draw list", key=f"refresh_draws_{tournament_id}"):
             st.rerun()
     else:
-        st.info("This tournament has not been configured in Tournament Manager yet. Create days, event families, and divisions there first.")
+        st.info("This tournament has not been configured in Tournament Manager yet. Create days, events, and divisions there first.")
 
     _render_registration_bridge(tournament, registration_bridge)
 
@@ -1317,7 +1317,7 @@ def _render_registration_bridge(tournament: dict[str, Any], registration_bridge:
     st.subheader("Registration Bridge")
     if not registration_bridge:
         st.warning("Registration has not been configured for this tournament yet.")
-        st.info("Use Tournament Manager to define days, event families, divisions, and public registration links.")
+        st.info("Use Tournament Manager to define days, events, divisions, and public registration links.")
         if st.button("Configure Registration", key=f"configure_registration_bridge_{tournament.get('id')}"):
             _go_to_tournament_manager(tournament.get("id"))
         return

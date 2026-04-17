@@ -49,6 +49,9 @@ STANDARD_EVENT_TEMPLATES = [
         "default_scoring": "GAME_TO_15",
         "default_waitlist": True,
         "default_partner_board": True,
+        "default_capacity_teams": 16,
+        "default_price_usd": 0.0,
+        "default_status": "draft",
     },
     {
         "event_family": "Women's Doubles",
@@ -58,6 +61,9 @@ STANDARD_EVENT_TEMPLATES = [
         "default_scoring": "GAME_TO_15",
         "default_waitlist": True,
         "default_partner_board": True,
+        "default_capacity_teams": 16,
+        "default_price_usd": 0.0,
+        "default_status": "draft",
     },
     {
         "event_family": "Mixed Doubles",
@@ -67,6 +73,9 @@ STANDARD_EVENT_TEMPLATES = [
         "default_scoring": "GAME_TO_15",
         "default_waitlist": True,
         "default_partner_board": True,
+        "default_capacity_teams": 16,
+        "default_price_usd": 0.0,
+        "default_status": "draft",
     },
     {
         "event_family": "Men's Singles",
@@ -76,6 +85,9 @@ STANDARD_EVENT_TEMPLATES = [
         "default_scoring": "GAME_TO_15",
         "default_waitlist": True,
         "default_partner_board": False,
+        "default_capacity_teams": 16,
+        "default_price_usd": 0.0,
+        "default_status": "draft",
     },
     {
         "event_family": "Women's Singles",
@@ -85,6 +97,9 @@ STANDARD_EVENT_TEMPLATES = [
         "default_scoring": "GAME_TO_15",
         "default_waitlist": True,
         "default_partner_board": False,
+        "default_capacity_teams": 16,
+        "default_price_usd": 0.0,
+        "default_status": "draft",
     },
 ]
 
@@ -104,6 +119,16 @@ EVENT_TEMPLATE_COLUMNS = [
     "default_scoring",
     "default_waitlist",
     "default_partner_board",
+    "default_capacity_teams",
+    "default_price_usd",
+    "default_status",
+    "generator_selected_days",
+    "generator_selected_skill_levels",
+    "generator_age_mode",
+    "generator_age_labels",
+    "generator_format_override",
+    "generator_scoring_override",
+    "generator_notes_default",
 ]
 DIVISION_EDITOR_COLUMNS = [
     "event_family",
@@ -123,6 +148,7 @@ DIVISION_EDITOR_COLUMNS = [
     "division_format",
     "division_scoring",
     "notes",
+    "generated_from_event",
 ]
 
 
@@ -408,6 +434,16 @@ def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
                 "default_scoring": row.get("scoring_default") or "GAME_TO_15",
                 "default_waitlist": bool(row.get("waitlist_enabled", True)),
                 "default_partner_board": bool(row.get("partner_board_enabled", row.get("public_partner_board", True))),
+                "default_capacity_teams": _coerce_int(row.get("capacity_teams")) or 16,
+                "default_price_usd": _coerce_float(row.get("price_usd")) or 0.0,
+                "default_status": _safe_text(row.get("status") or "draft"),
+                "generator_selected_days": [],
+                "generator_selected_skill_levels": ["Open"],
+                "generator_age_mode": "ALL_AGES",
+                "generator_age_labels": [],
+                "generator_format_override": "",
+                "generator_scoring_override": "",
+                "generator_notes_default": "",
             },
         )
     rows = list(grouped.values())
@@ -518,6 +554,134 @@ def _sanitize_divisions_for_event_families(divisions_df: pd.DataFrame, event_fam
     return out
 
 
+def _coerce_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [_safe_text(item) for item in value if _safe_text(item)]
+    text = _safe_text(value)
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [_safe_text(item) for item in parsed if _safe_text(item)]
+    except Exception:
+        pass
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _compose_division_name(event_name: str, skill_label: str, age_mode: str, age_label: str) -> str:
+    parts = [_safe_text(event_name), _safe_text(skill_label)]
+    if _safe_text(age_mode) == "FIXED_AGE_BRACKET" and _safe_text(age_label):
+        parts.append(_safe_text(age_label))
+    return " ".join(part for part in parts if part).strip()
+
+
+def _division_generation_preview_count(event_row: pd.Series) -> int:
+    days = _coerce_list(event_row.get("generator_selected_days"))
+    skills = _coerce_list(event_row.get("generator_selected_skill_levels")) or ["Open"]
+    age_mode = _safe_text(event_row.get("generator_age_mode") or "ALL_AGES")
+    age_labels = _coerce_list(event_row.get("generator_age_labels"))
+    age_variants = 1
+    if age_mode == "FIXED_AGE_BRACKET":
+        age_variants = max(1, len(age_labels))
+    return len(days) * len(skills) * age_variants
+
+
+def _generate_division_rows_for_event(
+    *,
+    event_row: pd.Series,
+    current_divisions_df: pd.DataFrame,
+    generation_mode: str,
+) -> tuple[pd.DataFrame, int, int]:
+    out = _ensure_editor_columns(current_divisions_df, DIVISION_EDITOR_COLUMNS).copy()
+    event_name = _safe_text(event_row.get("event_family"))
+    days = _coerce_list(event_row.get("generator_selected_days"))
+    skills = _coerce_list(event_row.get("generator_selected_skill_levels")) or ["Open"]
+    age_mode = _safe_text(event_row.get("generator_age_mode") or "ALL_AGES")
+    age_labels = _coerce_list(event_row.get("generator_age_labels"))
+
+    if not event_name or not days or not skills:
+        return out, 0, 0
+
+    age_variants = ["All Ages"]
+    if age_mode == "FIXED_AGE_BRACKET":
+        age_variants = age_labels or ["All Ages"]
+    elif age_mode == "AUTO_AGE_SPLIT":
+        age_variants = ["Auto Age Split"]
+    elif age_mode == "SPLIT_AGE":
+        age_variants = ["Split Age"]
+
+    generation_keys: list[tuple[str, str, str, str]] = []
+    for day in days:
+        for skill in skills:
+            for age_label in age_variants:
+                generation_keys.append((event_name.lower(), _safe_text(day).lower(), _safe_text(skill).lower(), _safe_text(age_label).lower()))
+
+    if generation_mode == "replace_generated_set":
+        keep_rows: list[pd.Series] = []
+        for _, row in out.iterrows():
+            existing_key = (
+                _safe_text(row.get("event_family")).lower(),
+                _safe_text(row.get("assigned_day")).lower(),
+                _safe_text(row.get("skill_label")).lower(),
+                _safe_text(row.get("age_label")).lower(),
+            )
+            generated = bool(row.get("generated_from_event", False))
+            if generated and existing_key in set(generation_keys):
+                continue
+            keep_rows.append(row)
+        if keep_rows:
+            out = pd.DataFrame(keep_rows).reset_index(drop=True)
+            out.index = [_uid("div") for _ in range(len(out))]
+        else:
+            out = _empty_divisions_df()
+
+    existing_keys = {
+        (
+            _safe_text(row.get("event_family")).lower(),
+            _safe_text(row.get("assigned_day")).lower(),
+            _safe_text(row.get("skill_label")).lower(),
+            _safe_text(row.get("age_label")).lower(),
+        )
+        for _, row in out.iterrows()
+    }
+
+    created = 0
+    skipped = 0
+    for day in days:
+        for skill in skills:
+            for age_label in age_variants:
+                key = (event_name.lower(), _safe_text(day).lower(), _safe_text(skill).lower(), _safe_text(age_label).lower())
+                if key in existing_keys:
+                    skipped += 1
+                    continue
+                payload = {
+                    "event_family": event_name,
+                    "division_name": _compose_division_name(event_name, skill, age_mode, age_label),
+                    "skill_label": _safe_text(skill) or "Open",
+                    "age_mode": age_mode or "ALL_AGES",
+                    "age_label": _safe_text(age_label) or "All Ages",
+                    "age_ranges": "",
+                    "min_teams_per_age_group": _coerce_int(event_row.get("min_teams_per_age_group")) if age_mode == "AUTO_AGE_SPLIT" else None,
+                    "split_age_threshold": 50 if age_mode == "SPLIT_AGE" else None,
+                    "assigned_day": _safe_text(day),
+                    "capacity_teams": _coerce_int(event_row.get("default_capacity_teams")) or 16,
+                    "price_usd": _coerce_float(event_row.get("default_price_usd")) or 0.0,
+                    "waitlist_enabled": bool(event_row.get("default_waitlist", True)),
+                    "partner_board_enabled": bool(event_row.get("default_partner_board", True)),
+                    "status": _safe_text(event_row.get("default_status") or "draft"),
+                    "division_format": _safe_text(event_row.get("generator_format_override")),
+                    "division_scoring": _safe_text(event_row.get("generator_scoring_override")),
+                    "notes": _safe_text(event_row.get("generator_notes_default")),
+                    "generated_from_event": True,
+                }
+                out = _add_division_row(out, payload)
+                existing_keys.add(key)
+                created += 1
+
+    return _ensure_editor_columns(out, DIVISION_EDITOR_COLUMNS), created, skipped
+
+
 def _parse_age_rules(raw_value: Any) -> dict[str, Any]:
     text = _safe_text(raw_value)
     if not text:
@@ -557,6 +721,7 @@ def _seed_divisions(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, eve
                 "division_format": _safe_text(row.get("event_format_override") or ""),
                 "division_scoring": _safe_text(row.get("scoring_override") or ""),
                 "notes": _safe_text(age_rules.get("notes")),
+                "generated_from_event": False,
             }
         )
 
@@ -622,14 +787,14 @@ def _validate_builder(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, d
         errors.append("Enable at least one tournament day.")
 
     if event_templates_df.empty:
-        errors.append("Create at least one event family.")
+        errors.append("Create at least one event.")
     else:
         families = [_safe_text(v) for v in event_templates_df["event_family"].tolist()]
         blank_count = sum(1 for v in families if not v)
         if blank_count:
-            errors.append("Every event family needs a name.")
+            errors.append("Every event needs a name.")
         if len({v.lower() for v in families if v}) != len([v for v in families if v]):
-            errors.append("Event family names must be unique.")
+            errors.append("Event names must be unique.")
 
     if divisions_df.empty:
         errors.append("Create at least one division.")
@@ -641,7 +806,7 @@ def _validate_builder(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, d
             assigned_day = _safe_text(row.get("assigned_day"))
             division_name = _display_division_name(row)
             if event_family not in family_options:
-                errors.append(f"Division '{division_name}' references an event family that is not defined.")
+                errors.append(f"Division '{division_name}' references an event that is not defined.")
             if assigned_day not in day_labels:
                 errors.append(f"Division '{division_name}' must be assigned to an enabled day.")
             if _safe_text(row.get("age_mode")) == "AUTO_AGE_SPLIT" and _coerce_int(row.get("min_teams_per_age_group")) is None:
@@ -788,10 +953,13 @@ def _render_event_family_form(
     disabled: bool,
 ) -> tuple[bool, bool, dict[str, Any]]:
     defaults = defaults or {}
+    days_default = _coerce_list(defaults.get("generator_selected_days"))
+    skills_default = _coerce_list(defaults.get("generator_selected_skill_levels")) or ["Open"]
+    age_labels_default = _coerce_list(defaults.get("generator_age_labels"))
     with st.form(form_key):
         col1, col2 = st.columns(2)
         with col1:
-            event_family = st.text_input("Event family name", value=_safe_text(defaults.get("event_family")), disabled=disabled)
+            event_family = st.text_input("Event name", value=_safe_text(defaults.get("event_family")), disabled=disabled)
             participant_type = st.selectbox(
                 "Participant type",
                 PARTICIPANT_TYPES,
@@ -831,8 +999,87 @@ def _render_event_family_form(
                 value=bool(defaults.get("default_partner_board", True)),
                 disabled=disabled,
             )
+            default_capacity_teams = st.number_input(
+                "Default capacity",
+                min_value=1,
+                step=1,
+                value=int(_coerce_int(defaults.get("default_capacity_teams")) or 16),
+                disabled=disabled,
+            )
+            default_price_usd = st.number_input(
+                "Default price",
+                min_value=0.0,
+                step=1.0,
+                value=float(_coerce_float(defaults.get("default_price_usd")) or 0.0),
+                disabled=disabled,
+            )
+            default_status = st.selectbox(
+                "Default status",
+                DIVISION_STATUSES,
+                index=DIVISION_STATUSES.index(_safe_text(defaults.get("default_status") or "draft"))
+                if _safe_text(defaults.get("default_status") or "draft") in DIVISION_STATUSES
+                else 0,
+                disabled=disabled,
+            )
+
+        st.markdown("##### Division Generator")
+        gen_col1, gen_col2 = st.columns(2)
+        with gen_col1:
+            generator_selected_days = st.multiselect(
+                "Selected days",
+                options=st.session_state.get("_tm_day_generator_options", []),
+                default=days_default,
+                disabled=disabled,
+            )
+            generator_selected_skill_levels = st.multiselect(
+                "Selected skill levels",
+                options=SKILL_LABEL_OPTIONS,
+                default=[skill for skill in skills_default if skill in SKILL_LABEL_OPTIONS] or ["Open"],
+                disabled=disabled,
+            )
+            generator_age_mode = st.selectbox(
+                "Age mode",
+                AGE_MODES,
+                index=AGE_MODES.index(_safe_text(defaults.get("generator_age_mode") or "ALL_AGES"))
+                if _safe_text(defaults.get("generator_age_mode") or "ALL_AGES") in AGE_MODES
+                else 0,
+                disabled=disabled,
+            )
+            if generator_age_mode == "FIXED_AGE_BRACKET":
+                generator_age_labels = st.multiselect(
+                    "Age labels",
+                    options=["18+", "35+", "50+", "60+", "70+"],
+                    default=age_labels_default,
+                    disabled=disabled,
+                )
+            else:
+                generator_age_labels = []
+        with gen_col2:
+            generator_format_override = st.selectbox(
+                "Generated division format override",
+                [""] + COMPETITION_FORMATS,
+                index=([""] + COMPETITION_FORMATS).index(_safe_text(defaults.get("generator_format_override")))
+                if _safe_text(defaults.get("generator_format_override")) in [""] + COMPETITION_FORMATS
+                else 0,
+                disabled=disabled,
+            )
+            generator_scoring_override = st.selectbox(
+                "Generated division scoring override",
+                [""] + SCORING_OPTIONS,
+                index=([""] + SCORING_OPTIONS).index(_safe_text(defaults.get("generator_scoring_override")))
+                if _safe_text(defaults.get("generator_scoring_override")) in [""] + SCORING_OPTIONS
+                else 0,
+                disabled=disabled,
+            )
+            generator_notes_default = st.text_area(
+                "Notes default",
+                value=_safe_text(defaults.get("generator_notes_default")),
+                height=100,
+                disabled=disabled,
+            )
         submit_col, cancel_col = st.columns(2)
-        submitted = submit_col.form_submit_button(submit_label, type="primary", disabled=disabled)
+        submitted = submit_col.form_submit_button("Save Event Only", type="primary", disabled=disabled)
+        submitted_and_generate = submit_col.form_submit_button("Save Event + Generate Divisions", disabled=disabled)
         canceled = cancel_col.form_submit_button("Cancel")
 
     payload = {
@@ -843,8 +1090,19 @@ def _render_event_family_form(
         "default_scoring": default_scoring,
         "default_waitlist": bool(default_waitlist),
         "default_partner_board": bool(default_partner_board),
+        "default_capacity_teams": _coerce_int(default_capacity_teams) or 16,
+        "default_price_usd": _coerce_float(default_price_usd) or 0.0,
+        "default_status": _safe_text(default_status) or "draft",
+        "generator_selected_days": generator_selected_days,
+        "generator_selected_skill_levels": generator_selected_skill_levels or ["Open"],
+        "generator_age_mode": _safe_text(generator_age_mode) or "ALL_AGES",
+        "generator_age_labels": generator_age_labels,
+        "generator_format_override": _safe_text(generator_format_override),
+        "generator_scoring_override": _safe_text(generator_scoring_override),
+        "generator_notes_default": _safe_text(generator_notes_default),
+        "_generate_divisions": bool(submitted_and_generate),
     }
-    return submitted, canceled, payload
+    return submitted or submitted_and_generate, canceled, payload
 
 
 def _render_division_form(
@@ -862,7 +1120,7 @@ def _render_division_form(
         col1, col2 = st.columns(2)
         with col1:
             event_family = st.selectbox(
-                "Event family",
+                "Event",
                 event_family_options,
                 index=event_family_options.index(_safe_text(defaults.get("event_family")))
                 if _safe_text(defaults.get("event_family")) in event_family_options
@@ -1077,7 +1335,7 @@ def render(ctx):
         )
     else:
         st.info(
-            "Recommended setup order: 1) save tournament info and dates, 2) review days, 3) define event families and defaults, 4) add divisions and assign each division to one day, 5) publish links."
+            "Recommended setup order: 1) save tournament info and dates, 2) review days, 3) define events and defaults, 4) review generated divisions, 5) publish links."
         )
 
     metrics = st.columns(4)
@@ -1089,7 +1347,7 @@ def render(ctx):
     tabs = st.tabs([
         "1. Tournament Info",
         "2. Days",
-        "3. Event Families",
+        "3. Events",
         "4. Divisions",
         "5. Schedule Preview",
         "6. Publish & QA",
@@ -1345,23 +1603,35 @@ def render(ctx):
             st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
             st.rerun()
 
+    divisions_seed_key = f"tm_divisions_seed_{tournament_id}"
+    days_df = _ensure_editor_columns(st.session_state[days_seed_key], DAYS_EDITOR_COLUMNS)
+    events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
+    if divisions_seed_key not in st.session_state:
+        st.session_state[divisions_seed_key] = _ensure_editor_columns(
+            _seed_divisions(days_df, events_df, event_options),
+            DIVISION_EDITOR_COLUMNS,
+        )
+    day_label_options = [label for label in days_df[days_df["enabled"] == True]["label"].tolist() if _safe_text(label)] or [
+        label for label in days_df["label"].tolist() if _safe_text(label)
+    ]
+
     with tabs[2]:
-        st.subheader("Event Families")
-        st.caption("Create event families first, then create divisions that inherit these defaults.")
+        st.subheader("Events")
+        st.caption("Define event defaults and division-generation rules in this step.")
         if structure_locked:
-            st.caption("Event families are view-only because registrations already exist.")
+            st.caption("Events are view-only because registrations already exist.")
         events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
         st.session_state[events_seed_key] = events_df.copy()
 
         action_col1, action_col2 = st.columns([1, 1])
-        if action_col1.button("Create Event Family", type="primary", disabled=structure_locked):
+        if action_col1.button("Create Event", type="primary", disabled=structure_locked):
             st.session_state[event_form_mode_key] = "create"
             st.session_state[event_edit_id_key] = None
             st.rerun()
-        if action_col2.button("Load standard event families", disabled=structure_locked):
+        if action_col2.button("Load standard events", disabled=structure_locked):
             if not events_df.empty and not st.session_state.get(load_templates_confirm_key):
                 st.session_state[load_templates_confirm_key] = True
-                st.warning("Existing event families found. Click again to append missing standard templates.")
+                st.warning("Existing events found. Click again to append missing standard templates.")
             else:
                 current = events_df.copy()
                 for template in STANDARD_EVENT_TEMPLATES:
@@ -1369,7 +1639,7 @@ def render(ctx):
                         current = _add_event_family_row(current, template)
                 st.session_state[events_seed_key] = _ensure_editor_columns(current, EVENT_TEMPLATE_COLUMNS)
                 st.session_state[load_templates_confirm_key] = False
-                st.success("Standard event families loaded.")
+                st.success("Standard events loaded.")
                 st.rerun()
 
         event_mode = st.session_state.get(event_form_mode_key)
@@ -1378,12 +1648,13 @@ def render(ctx):
             defaults: dict[str, Any] | None = None
             if event_mode == "edit" and event_edit_id is not None and str(event_edit_id) in {str(idx) for idx in events_df.index.tolist()}:
                 defaults = events_df.loc[event_edit_id].to_dict()
-            st.markdown("#### Edit Event Family" if event_mode == "edit" else "#### Add Event Family")
+            st.markdown("#### Edit Event" if event_mode == "edit" else "#### Add Event")
+            st.session_state["_tm_day_generator_options"] = day_label_options
             submitted, canceled, payload = _render_event_family_form(
                 form_key=f"tm_event_family_form_{tournament_id}_{event_mode}",
                 mode=event_mode,
                 defaults=defaults,
-                submit_label="Save Event Family" if event_mode == "edit" else "Add Event Family",
+                submit_label="Save Event" if event_mode == "edit" else "Add Event",
                 disabled=structure_locked,
             )
             if canceled:
@@ -1393,9 +1664,16 @@ def render(ctx):
             if submitted:
                 errors: list[str] = []
                 if not payload["event_family"]:
-                    errors.append("Event family name is required.")
+                    errors.append("Event name is required.")
                 if _event_family_name_exists(events_df, payload["event_family"], exclude_id=event_edit_id if event_mode == "edit" else None):
-                    errors.append("Event family name must be unique.")
+                    errors.append("Event name must be unique.")
+                if payload.get("_generate_divisions"):
+                    if not _coerce_list(payload.get("generator_selected_days")):
+                        errors.append("Select at least one day for division generation.")
+                    if not _coerce_list(payload.get("generator_selected_skill_levels")):
+                        errors.append("Select at least one skill level for division generation.")
+                    if payload.get("generator_age_mode") == "FIXED_AGE_BRACKET" and not _coerce_list(payload.get("generator_age_labels")):
+                        errors.append("Fixed Age Brackets requires at least one age label.")
                 if errors:
                     for error in errors:
                         st.error(error)
@@ -1404,32 +1682,59 @@ def render(ctx):
                         st.session_state[events_seed_key] = _update_event_family_row(events_df, str(event_edit_id), payload)
                     else:
                         st.session_state[events_seed_key] = _add_event_family_row(events_df, payload)
+                    if payload.get("_generate_divisions"):
+                        saved_events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
+                        candidate = saved_events_df[saved_events_df["event_family"].apply(lambda value: _safe_text(value) == payload["event_family"])]
+                        if not candidate.empty:
+                            generation_mode = _safe_text(st.session_state.get(f"tm_generation_mode_{tournament_id}") or "create_missing_only")
+                            divisions_df_current = _ensure_editor_columns(st.session_state[divisions_seed_key], DIVISION_EDITOR_COLUMNS)
+                            next_divisions, created_count, skipped_count = _generate_division_rows_for_event(
+                                event_row=candidate.iloc[0],
+                                current_divisions_df=divisions_df_current,
+                                generation_mode=generation_mode,
+                            )
+                            st.session_state[divisions_seed_key] = next_divisions
+                            st.session_state[f"tm_generation_result_{tournament_id}"] = (
+                                f"Generated {created_count} division(s). Skipped {skipped_count} duplicate(s)."
+                            )
                     st.session_state[event_form_mode_key] = None
                     st.session_state[event_edit_id_key] = None
                     st.rerun()
 
         events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
         if events_df.empty:
-            st.info("No event families yet. Click Create Event Family to start.")
+            st.info("No events yet. Click Create Event to start.")
         else:
             preview = events_df.reset_index(drop=True).rename(
                 columns={
-                    "event_family": "Event Family",
+                    "event_family": "Event",
                     "participant_type": "Participant Type",
                     "gender_restriction": "Gender",
                     "default_format": "Default Format",
                     "default_scoring": "Default Scoring",
                     "default_waitlist": "Default Waitlist",
                     "default_partner_board": "Default Partner Board",
+                    "default_capacity_teams": "Default Capacity",
+                    "default_price_usd": "Default Price",
+                    "default_status": "Default Status",
                 }
             )
             st.dataframe(preview, hide_index=True, use_container_width=True)
-            st.markdown("##### Manage Event Families")
+            st.markdown("##### Manage Events")
+            st.radio(
+                "Duplicate handling for Save Event + Generate Divisions",
+                options=["create_missing_only", "replace_generated_set"],
+                format_func=lambda value: "Create missing only" if value == "create_missing_only" else "Replace generated set",
+                key=f"tm_generation_mode_{tournament_id}",
+                disabled=structure_locked,
+                horizontal=True,
+            )
             divisions_snapshot = _ensure_editor_columns(st.session_state.get(f"tm_divisions_seed_{tournament_id}"), DIVISION_EDITOR_COLUMNS)
             for event_id, row in events_df.iterrows():
-                name = _safe_text(row.get("event_family") or "Unnamed Event Family")
+                name = _safe_text(row.get("event_family") or "Unnamed Event")
+                preview_count = _division_generation_preview_count(row)
                 row_cols = st.columns([4, 1, 1])
-                row_cols[0].markdown(f"**{name}** · {_safe_text(row.get('participant_type'))} · {_safe_text(row.get('gender_restriction'))}")
+                row_cols[0].markdown(f"**{name}** · {_safe_text(row.get('participant_type'))} · {_safe_text(row.get('gender_restriction'))} · Preview divisions: **{preview_count}**")
                 if row_cols[1].button("Edit", key=f"tm_evt_edit_{tournament_id}_{event_id}", disabled=structure_locked):
                     st.session_state[event_form_mode_key] = "edit"
                     st.session_state[event_edit_id_key] = str(event_id)
@@ -1442,17 +1747,20 @@ def render(ctx):
                         st.error(f"Cannot delete '{name}' because divisions are attached. Delete those divisions first.")
                     else:
                         st.session_state[events_seed_key] = _delete_event_family_row(events_df, str(event_id))
-                        st.success(f"Deleted event family '{name}'.")
+                        st.success(f"Deleted event '{name}'.")
                         st.rerun()
-        st.caption("No defaults are auto-created. Use Load standard event families only when you explicitly want templates.")
-        if st.button("Save Event Families Draft", disabled=structure_locked, key=f"tm_save_events_draft_{tournament_id}"):
+        st.caption("Events define defaults and generation rules. Divisions can still be edited one-off on the Divisions tab.")
+        if _safe_text(st.session_state.get(f"tm_generation_result_{tournament_id}")):
+            st.success(_safe_text(st.session_state.get(f"tm_generation_result_{tournament_id}")))
+            st.session_state[f"tm_generation_result_{tournament_id}"] = ""
+        if st.button("Save Events Draft", disabled=structure_locked, key=f"tm_save_events_draft_{tournament_id}"):
             saved_payload = save_builder_draft(
                 supabase,
                 tournament_id=tournament_id,
                 days=_df_to_draft_rows(st.session_state[days_seed_key], DAYS_EDITOR_COLUMNS),
                 event_families=_df_to_draft_rows(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS),
                 divisions=_df_to_draft_rows(st.session_state.get(f"tm_divisions_seed_{tournament_id}"), DIVISION_EDITOR_COLUMNS),
-                saved_step="Event Families",
+                saved_step="Events",
             )
             st.session_state[draft_last_saved_notice_key] = True
             st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
@@ -1476,7 +1784,7 @@ def render(ctx):
     event_family_options = [family for family in events_df["event_family"].tolist() if _safe_text(family)]
     with tabs[3]:
         st.subheader("Divisions")
-        st.caption("Create divisions after event families. Assign each division to one day.")
+        st.caption("Review, edit, and remove generated divisions. Manual one-off additions are optional.")
         if structure_locked:
             st.caption("Divisions are view-only because registrations already exist.")
         create_disabled = structure_locked or not event_family_options or not day_label_options
@@ -1485,7 +1793,7 @@ def render(ctx):
             st.session_state[division_edit_id_key] = None
             st.rerun()
         if not event_family_options:
-            st.info("Create an event family first before adding divisions.")
+            st.info("Create an event first before adding divisions.")
         if event_family_options and not day_label_options:
             st.info("Enable at least one tournament day before adding divisions.")
 
@@ -1541,40 +1849,47 @@ def render(ctx):
             for family in sorted({ _safe_text(v) for v in divisions_df["event_family"].tolist() if _safe_text(v) }):
                 family_df = divisions_df[divisions_df["event_family"].apply(lambda value: _safe_text(value) == family)]
                 st.markdown(f"**{family}**")
-                display = family_df[[
-                    "division_name",
-                    "skill_label",
-                    "age_mode",
-                    "age_label",
-                    "assigned_day",
-                    "status",
-                    "capacity_teams",
-                    "price_usd",
-                ]].rename(
-                    columns={
-                        "division_name": "Division",
-                        "skill_label": "Skill",
-                        "age_mode": "Age Mode",
-                        "age_label": "Age",
-                        "assigned_day": "Day",
-                        "status": "Status",
-                        "capacity_teams": "Capacity",
-                        "price_usd": "Price USD",
-                    }
-                )
-                st.dataframe(display, hide_index=True, use_container_width=True)
-                for division_id, row in family_df.iterrows():
-                    division_name = _display_division_name(row)
-                    row_cols = st.columns([4, 1, 1])
-                    row_cols[0].markdown(f"- {division_name} · {_safe_text(row.get('assigned_day'))}")
-                    if row_cols[1].button("Edit", key=f"tm_div_edit_{tournament_id}_{division_id}", disabled=structure_locked):
-                        st.session_state[division_form_mode_key] = "edit"
-                        st.session_state[division_edit_id_key] = str(division_id)
-                        st.rerun()
-                    if row_cols[2].button("Delete", key=f"tm_div_del_{tournament_id}_{division_id}", disabled=structure_locked):
-                        st.session_state[divisions_seed_key] = _delete_division_row(divisions_df, str(division_id))
-                        st.success(f"Deleted division '{division_name}'.")
-                        st.rerun()
+                for day in sorted({ _safe_text(v) for v in family_df["assigned_day"].tolist() if _safe_text(v) }):
+                    day_df = family_df[family_df["assigned_day"].apply(lambda value: _safe_text(value) == day)]
+                    st.caption(f"Day: {day}")
+                    display = day_df[[
+                        "division_name",
+                        "skill_label",
+                        "age_mode",
+                        "age_label",
+                        "status",
+                        "capacity_teams",
+                        "price_usd",
+                        "division_format",
+                        "division_scoring",
+                        "notes",
+                    ]].rename(
+                        columns={
+                            "division_name": "Division",
+                            "skill_label": "Skill",
+                            "age_mode": "Age Mode",
+                            "age_label": "Age",
+                            "status": "Status",
+                            "capacity_teams": "Capacity",
+                            "price_usd": "Price USD",
+                            "division_format": "Format Override",
+                            "division_scoring": "Scoring Override",
+                            "notes": "Notes",
+                        }
+                    )
+                    st.dataframe(display, hide_index=True, use_container_width=True)
+                    for division_id, row in day_df.iterrows():
+                        division_name = _display_division_name(row)
+                        row_cols = st.columns([4, 1, 1])
+                        row_cols[0].markdown(f"- {division_name}")
+                        if row_cols[1].button("Edit", key=f"tm_div_edit_{tournament_id}_{division_id}", disabled=structure_locked):
+                            st.session_state[division_form_mode_key] = "edit"
+                            st.session_state[division_edit_id_key] = str(division_id)
+                            st.rerun()
+                        if row_cols[2].button("Delete", key=f"tm_div_del_{tournament_id}_{division_id}", disabled=structure_locked):
+                            st.session_state[divisions_seed_key] = _delete_division_row(divisions_df, str(division_id))
+                            st.success(f"Deleted division '{division_name}'.")
+                            st.rerun()
         for mode, help_text in AGE_MODE_HELP.items():
             st.caption(f"**{mode.replace('_', ' ').title()}** — {help_text}")
         if st.button("Save Divisions Draft", disabled=structure_locked, key=f"tm_save_divisions_draft_{tournament_id}"):
