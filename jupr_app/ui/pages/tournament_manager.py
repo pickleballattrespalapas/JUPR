@@ -120,14 +120,33 @@ def _fmt_dt(value: Any) -> str:
     return text[:-1][:16] if text.endswith("Z") else text[:16]
 
 
-def _parse_local_dt(value: str) -> str | None:
+def _parse_datetime_value(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+    text = _safe_text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except Exception:
+        return None
+
+
+def _parse_local_dt(value: Any) -> str | None:
+    parsed = _parse_datetime_value(value)
+    if parsed is not None:
+        return parsed.isoformat()
     text = _safe_text(value)
     if not text:
         return None
     try:
         return datetime.fromisoformat(text).isoformat()
     except Exception:
-        return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).isoformat()
+        except Exception:
+            return None
 
 
 def _date_rows(start_date: Any, end_date: Any) -> list[dict[str, Any]]:
@@ -738,6 +757,10 @@ def render(ctx):
         start_default = _parse_date(tournament.get("start_date")) or date.today()
         end_default = _parse_date(tournament.get("end_date")) or start_default
         safe_end_default = end_default if end_default >= start_default else start_default
+        reg_open_default = _parse_datetime_value(settings.get("registration_open_at"))
+        reg_close_default = _parse_datetime_value(settings.get("registration_close_at"))
+        default_open_dt = reg_open_default or datetime.combine(start_default, datetime.min.time())
+        default_close_dt = reg_close_default or datetime.combine(safe_end_default, datetime.min.time())
 
         st.caption(
             f"Current tournament: **{_safe_text(tournament.get('name') or 'Untitled Tournament')}** · "
@@ -766,8 +789,26 @@ def render(ctx):
                     if _safe_text(settings.get("registration_status") or "draft") in REGISTRATION_STATUS_OPTIONS
                     else 0,
                 )
-                reg_open = st.text_input("Registration opens (YYYY-MM-DDTHH:MM)", value=_fmt_dt(settings.get("registration_open_at")))
-                reg_close = st.text_input("Registration closes (YYYY-MM-DDTHH:MM)", value=_fmt_dt(settings.get("registration_close_at")))
+                reg_open_enabled = st.checkbox(
+                    "Set registration open time",
+                    value=reg_open_default is not None,
+                )
+                reg_open = st.datetime_input(
+                    "Registration opens",
+                    value=default_open_dt,
+                    disabled=not reg_open_enabled,
+                )
+                reg_close_enabled = st.checkbox(
+                    "Set registration close time",
+                    value=reg_close_default is not None,
+                )
+                reg_close_min = reg_open if reg_open_enabled else default_open_dt
+                reg_close = st.datetime_input(
+                    "Registration closes",
+                    value=default_close_dt if default_close_dt >= reg_close_min else reg_close_min,
+                    min_value=reg_close_min,
+                    disabled=not reg_close_enabled,
+                )
                 sponsor = st.text_area("Sponsor / callout text", value=_safe_text(settings.get("sponsor_markdown")), height=90)
                 refund = st.text_area("Refund policy", value=_safe_text(settings.get("refund_policy_markdown")), height=90)
             notes = st.text_area("Rules / registration notes", value=_safe_text(settings.get("rules_markdown")), height=140)
@@ -780,6 +821,8 @@ def render(ctx):
                 errors.append("Tournament name cannot be blank.")
             if end_date and start_date and end_date < start_date:
                 errors.append("End date cannot be before start date.")
+            if reg_open_enabled and reg_close_enabled and reg_close < reg_open:
+                errors.append("Registration close cannot be before registration open.")
 
             if errors:
                 for error in errors:
@@ -804,8 +847,8 @@ def render(ctx):
                         "registration_slug": slug or None,
                         "locale": locale,
                         "registration_status": status,
-                        "registration_open_at": _parse_local_dt(reg_open),
-                        "registration_close_at": _parse_local_dt(reg_close),
+                        "registration_open_at": _parse_local_dt(reg_open) if reg_open_enabled else None,
+                        "registration_close_at": _parse_local_dt(reg_close) if reg_close_enabled else None,
                         "sponsor_markdown": sponsor,
                         "refund_policy_markdown": refund,
                         "rules_markdown": notes,
