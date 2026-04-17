@@ -17,7 +17,6 @@ ADMIN_REGISTRATION_STATUS_OPTIONS = ["pending", "confirmed", "waitlist", "cancel
 ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 
 
-
 def _with_normalized_event_tags(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
         return row
@@ -194,6 +193,25 @@ def count_tournament_registrations(supabase, tournament_id: str) -> int:
         return len(rows)
 
 
+def _legacy_day_aliases(days: list[dict[str, Any]]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for idx, day in enumerate(days, start=1):
+        day_id = str(day.get("id") or "").strip()
+        if not day_id:
+            continue
+
+        aliases[f"day_{idx}"] = day_id
+
+        sort_order = day.get("sort_order")
+        try:
+            if sort_order not in (None, ""):
+                aliases[f"day_{int(sort_order)}"] = day_id
+        except Exception:
+            pass
+
+    return aliases
+
+
 def replace_registration_configuration(
     supabase,
     *,
@@ -219,6 +237,20 @@ def replace_registration_configuration(
         if day_tournament_id != str(tournament_id):
             raise ValueError(f"Invalid day payload at row {idx}: tournament_id mismatch.")
         day_ids.add(day_id)
+
+    legacy_day_aliases = _legacy_day_aliases(days)
+
+    normalized_event_options: list[dict[str, Any]] = []
+    for event in event_options:
+        registration_day_id = str(event.get("registration_day_id") or "").strip()
+        if registration_day_id not in day_ids and registration_day_id in legacy_day_aliases:
+            event = {
+                **event,
+                "registration_day_id": legacy_day_aliases[registration_day_id],
+            }
+        normalized_event_options.append(event)
+
+    event_options = normalized_event_options
 
     for idx, event in enumerate(event_options, start=1):
         event_id = str(event.get("id") or "").strip()
