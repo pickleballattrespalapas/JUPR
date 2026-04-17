@@ -92,6 +92,36 @@ AGE_MODE_HELP = {
     "SPLIT_AGE": "Use a partner rule such as one player 50+ and one player under 50.",
 }
 
+DAYS_EDITOR_COLUMNS = ["event_date", "label", "enabled"]
+EVENT_TEMPLATE_COLUMNS = [
+    "event_family",
+    "participant_type",
+    "gender_restriction",
+    "default_format",
+    "default_scoring",
+    "default_waitlist",
+    "default_partner_board",
+]
+DIVISION_EDITOR_COLUMNS = [
+    "event_family",
+    "division_name",
+    "skill_label",
+    "age_mode",
+    "age_label",
+    "age_ranges",
+    "min_teams_per_age_group",
+    "split_age_threshold",
+    "assigned_day",
+    "capacity_teams",
+    "price_usd",
+    "waitlist_enabled",
+    "partner_board_enabled",
+    "status",
+    "division_format",
+    "division_scoring",
+    "notes",
+]
+
 
 def _uid(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
@@ -183,6 +213,7 @@ def _date_window_message(start_date: Any, end_date: Any) -> tuple[str, str]:
     day_count = (end - start).days + 1
     return ("info", f"Date window: {start.isoformat()} → {end.isoformat()} ({day_count} day{'s' if day_count != 1 else ''}).")
 
+
 def _update_tournament_shell(supabase, tournament_id: str, *, name: str, start_date: date | None, end_date: date | None) -> None:
     payload = {
         "name": name.strip(),
@@ -199,6 +230,7 @@ def _update_tournament_shell(supabase, tournament_id: str, *, name: str, start_d
     except Exception:
         pass
     supabase.table("tournaments").update({"name": name.strip()}).eq("id", tournament_id).execute()
+
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -229,13 +261,23 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
+def _ensure_editor_columns(df: pd.DataFrame | None, columns: list[str]) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame):
+        return pd.DataFrame(columns=columns)
+    out = df.copy()
+    for column in columns:
+        if column not in out.columns:
+            out[column] = pd.Series([None] * len(out), index=out.index)
+    return out[columns]
+
+
 def _df_with_hidden_ids(rows: list[dict[str, Any]], id_key: str, ordered_columns: list[str]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=ordered_columns)
     df = pd.DataFrame(rows)
     if id_key in df.columns:
         df = df.set_index(id_key)
-    return df[ordered_columns]
+    return _ensure_editor_columns(df[ordered_columns], ordered_columns)
 
 
 def _seed_days(days: list[dict[str, Any]], tournament: dict[str, Any]) -> pd.DataFrame:
@@ -249,13 +291,13 @@ def _seed_days(days: list[dict[str, Any]], tournament: dict[str, Any]) -> pd.Dat
             }
             for row in days
         ]
-        return _df_with_hidden_ids(rows, "id", ["event_date", "label", "enabled"])
+        return _df_with_hidden_ids(rows, "id", DAYS_EDITOR_COLUMNS)
 
     generated = _date_rows(tournament.get("start_date"), tournament.get("end_date"))
     if not generated:
-        return pd.DataFrame(columns=["event_date", "label", "enabled"])
+        return pd.DataFrame(columns=DAYS_EDITOR_COLUMNS)
     rows = [{"id": _uid("day"), **row} for row in generated]
-    return _df_with_hidden_ids(rows, "id", ["event_date", "label", "enabled"])
+    return _df_with_hidden_ids(rows, "id", DAYS_EDITOR_COLUMNS)
 
 
 def _sync_days_with_date_range(
@@ -348,15 +390,7 @@ def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
     return _df_with_hidden_ids(
         rows,
         "id",
-        [
-            "event_family",
-            "participant_type",
-            "gender_restriction",
-            "default_format",
-            "default_scoring",
-            "default_waitlist",
-            "default_partner_board",
-        ],
+        EVENT_TEMPLATE_COLUMNS,
     )
 
 
@@ -365,19 +399,12 @@ def _standard_event_templates_df() -> pd.DataFrame:
     return _df_with_hidden_ids(
         rows,
         "id",
-        [
-            "event_family",
-            "participant_type",
-            "gender_restriction",
-            "default_format",
-            "default_scoring",
-            "default_waitlist",
-            "default_partner_board",
-        ],
+        EVENT_TEMPLATE_COLUMNS,
     )
 
 
 def _sanitize_divisions_for_event_families(divisions_df: pd.DataFrame, event_families: list[str]) -> pd.DataFrame:
+    divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
     if divisions_df.empty:
         return divisions_df
     valid_families = [_safe_text(family) for family in event_families if _safe_text(family)]
@@ -403,6 +430,8 @@ def _parse_age_rules(raw_value: Any) -> dict[str, Any]:
 
 
 def _seed_divisions(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, event_options: list[dict[str, Any]]) -> pd.DataFrame:
+    days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
+    event_templates_df = _ensure_editor_columns(event_templates_df, EVENT_TEMPLATE_COLUMNS)
     day_lookup = {str(idx): _safe_text(row.get("label") or idx) for idx, row in days_df.to_dict("index").items()}
     default_event_family = next(iter(event_templates_df["event_family"].tolist()), "Men's Doubles") if not event_templates_df.empty else "Men's Doubles"
     rows: list[dict[str, Any]] = []
@@ -458,25 +487,7 @@ def _seed_divisions(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, eve
     return _df_with_hidden_ids(
         rows,
         "id",
-        [
-            "event_family",
-            "division_name",
-            "skill_label",
-            "age_mode",
-            "age_label",
-            "age_ranges",
-            "min_teams_per_age_group",
-            "split_age_threshold",
-            "assigned_day",
-            "capacity_teams",
-            "price_usd",
-            "waitlist_enabled",
-            "partner_board_enabled",
-            "status",
-            "division_format",
-            "division_scoring",
-            "notes",
-        ],
+        DIVISION_EDITOR_COLUMNS,
     )
 
 
@@ -525,8 +536,12 @@ def _display_division_name(row: pd.Series) -> str:
 
 
 def _validate_builder(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, divisions_df: pd.DataFrame) -> list[str]:
+    days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
+    event_templates_df = _ensure_editor_columns(event_templates_df, EVENT_TEMPLATE_COLUMNS)
+    divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
+
     errors: list[str] = []
-    enabled_days = days_df[days_df["enabled"].fillna(False).astype(bool)] if not days_df.empty else pd.DataFrame()
+    enabled_days = days_df[days_df["enabled"].fillna(False).astype(bool)] if not days_df.empty else pd.DataFrame(columns=DAYS_EDITOR_COLUMNS)
     if enabled_days.empty:
         errors.append("Enable at least one tournament day.")
 
@@ -566,6 +581,10 @@ def _build_payloads(
     event_templates_df: pd.DataFrame,
     divisions_df: pd.DataFrame,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
+    event_templates_df = _ensure_editor_columns(event_templates_df, EVENT_TEMPLATE_COLUMNS)
+    divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
+
     day_payload: list[dict[str, Any]] = []
     day_label_to_id: dict[str, str] = {}
     for sort_order, (day_id, row) in enumerate(days_df.iterrows(), start=1):
@@ -632,6 +651,8 @@ def _build_payloads(
 
 
 def _schedule_preview_rows(days_df: pd.DataFrame, divisions_df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
+    divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
     grouped_rows: list[tuple[str, pd.DataFrame]] = []
     if days_df.empty or divisions_df.empty:
         return grouped_rows
@@ -911,6 +932,7 @@ def render(ctx):
             },
             use_container_width=True,
         )
+        days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
         st.session_state[days_seed_key] = days_df.copy()
         if st.button("Regenerate days from tournament dates", disabled=structure_locked):
             generated = _seed_days([], tournament)
@@ -942,6 +964,7 @@ def render(ctx):
             },
             use_container_width=True,
         )
+        events_df = _ensure_editor_columns(events_df, EVENT_TEMPLATE_COLUMNS)
         st.session_state[events_seed_key] = events_df.copy()
         if st.button("Reset to standard event families", disabled=structure_locked):
             st.session_state[events_seed_key] = _standard_event_templates_df()
@@ -957,13 +980,16 @@ def render(ctx):
 
     divisions_seed_key = f"tm_divisions_seed_{tournament_id}"
     if divisions_seed_key not in st.session_state:
-        st.session_state[divisions_seed_key] = _seed_divisions(days_df, events_df, event_options)
+        st.session_state[divisions_seed_key] = _ensure_editor_columns(
+            _seed_divisions(days_df, events_df, event_options),
+            DIVISION_EDITOR_COLUMNS,
+        )
     divisions_seed_df = _sanitize_divisions_for_event_families(
-        st.session_state[divisions_seed_key],
+        _ensure_editor_columns(st.session_state[divisions_seed_key], DIVISION_EDITOR_COLUMNS),
         [family for family in events_df["event_family"].tolist() if _safe_text(family)],
     )
     st.session_state[divisions_seed_key] = divisions_seed_df.copy()
-    day_label_options = [label for label in days_df[days_df["enabled"] == True]["label"].tolist()] or days_df["label"].tolist() or ["Day 1"]
+    day_label_options = [label for label in days_df[days_df["enabled"] == True]["label"].tolist() if _safe_text(label)] or [label for label in days_df["label"].tolist() if _safe_text(label)] or ["Day 1"]
     event_family_options = [family for family in events_df["event_family"].tolist() if _safe_text(family)] or ["Men's Doubles"]
     with tabs[3]:
         st.subheader("Divisions")
@@ -1000,6 +1026,7 @@ def render(ctx):
             },
             use_container_width=True,
         )
+        divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
         st.session_state[divisions_seed_key] = divisions_df.copy()
         for mode, help_text in AGE_MODE_HELP.items():
             st.caption(f"**{mode.replace('_', ' ').title()}** — {help_text}")
