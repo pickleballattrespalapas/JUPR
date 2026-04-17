@@ -7,8 +7,9 @@ from jupr_app.domain.live_social import (
     SOCIAL_TABLES_INSTALL_MESSAGE,
     SocialTablesNotInstalledError,
     normalize_skill_levels,
-    save_social_live_event,
 )
+from jupr_app.domain.live_social_submit import save_resolved_social_live_event
+
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.live import LivePageConfig, render_live_page
 
@@ -93,7 +94,7 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
     skill_levels = normalize_skill_levels(st.session_state.get(SOCIAL_SKILL_LEVELS_KEY))
     submission_mode = "admin" if admin_logged_in else "public"
     try:
-        result = save_social_live_event(
+        result = save_resolved_social_live_event(
             ctx,
             event,
             target_club_id=club_id,
@@ -122,9 +123,25 @@ def _save_social(ctx, state: dict, event: dict) -> bool:
         title = "Club Social results saved (admin)"
     else:
         title = "Club Social results submitted (public) — pending admin approval"
-    st.success(
+    created_rated = int(result.get("created_rated_players_count") or 0)
+    created_names = [
+        str(name).strip()
+        for name in (result.get("created_rated_player_names") or [])
+        if str(name).strip()
+    ]
+    detail = (
         f"{title} ({result['participant_count']} participants, {result['match_count']} matches, final status: {status})."
     )
+    if created_rated > 0:
+        created_suffix = ", ".join(created_names[:6])
+        if len(created_names) > 6:
+            created_suffix += ", ..."
+        detail += (
+            f" Created {created_rated} new rated player account"
+            f"{'s' if created_rated != 1 else ''}"
+            + (f": {created_suffix}." if created_suffix else ".")
+        )
+    st.success(detail)
     return True
 
 
