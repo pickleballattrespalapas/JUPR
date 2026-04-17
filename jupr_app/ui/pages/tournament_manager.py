@@ -217,6 +217,27 @@ def _date_window_message(start_date: Any, end_date: Any) -> tuple[str, str]:
     return ("info", f"Date window: {start.isoformat()} → {end.isoformat()} ({day_count} day{'s' if day_count != 1 else ''}).")
 
 
+def _infer_date_window_from_days_rows(days_rows: list[dict[str, Any]] | None) -> tuple[date | None, date | None]:
+    rows = days_rows or []
+    if not rows:
+        return None, None
+
+    enabled_dates: list[date] = []
+    all_dates: list[date] = []
+    for row in rows:
+        parsed_date = _parse_date((row or {}).get("event_date"))
+        if not parsed_date:
+            continue
+        all_dates.append(parsed_date)
+        if _coerce_bool((row or {}).get("enabled"), default=True):
+            enabled_dates.append(parsed_date)
+
+    preferred_dates = enabled_dates or all_dates
+    if not preferred_dates:
+        return None, None
+    return min(preferred_dates), max(preferred_dates)
+
+
 def _update_tournament_shell(supabase, tournament_id: str, *, name: str, start_date: date | None, end_date: date | None) -> None:
     payload = {
         "name": name.strip(),
@@ -1028,6 +1049,27 @@ def render(ctx):
         persisted_builder_draft = get_builder_draft(supabase, tournament_id)
         registration_count = count_tournament_registrations(supabase, tournament_id)
 
+    draft_days_rows = []
+    if isinstance(persisted_builder_draft, dict):
+        draft_days_rows = persisted_builder_draft.get("days") or []
+    inferred_start_date, inferred_end_date = _infer_date_window_from_days_rows(draft_days_rows or days)
+    canonical_start_date = _parse_date(tournament.get("start_date"))
+    canonical_end_date = _parse_date(tournament.get("end_date"))
+    canonical_has_range = bool(_date_rows(canonical_start_date, canonical_end_date))
+    inferred_has_range = inferred_start_date is not None and inferred_end_date is not None
+    regenerate_start_date = canonical_start_date or inferred_start_date
+    regenerate_end_date = canonical_end_date or inferred_end_date
+
+    effective_start_date = canonical_start_date or inferred_start_date or date.today()
+    effective_end_date = canonical_end_date or inferred_end_date or effective_start_date
+    if effective_end_date < effective_start_date:
+        effective_end_date = effective_start_date
+    using_inferred_window = (
+        (canonical_start_date is None or canonical_end_date is None)
+        and inferred_start_date is not None
+        and inferred_end_date is not None
+    )
+
     structure_locked = bool(registration_count)
     if structure_locked:
         st.warning(
@@ -1056,18 +1098,30 @@ def render(ctx):
     with tabs[0]:
         st.subheader("Tournament Info")
         st.caption("Set the tournament shell, registration window, and published content. The date range is used to generate tournament days.")
-        start_default = _parse_date(tournament.get("start_date")) or date.today()
-        end_default = _parse_date(tournament.get("end_date")) or start_default
+        start_default = effective_start_date
+        end_default = effective_end_date
         safe_end_default = end_default if end_default >= start_default else start_default
         reg_open_default = _parse_datetime_value(settings.get("registration_open_at"))
         reg_close_default = _parse_datetime_value(settings.get("registration_close_at"))
         default_open_dt = reg_open_default or datetime.combine(start_default, datetime.min.time())
         default_close_dt = reg_close_default or datetime.combine(safe_end_default, datetime.min.time())
 
+        current_start_label = _safe_text(tournament.get("start_date")) or (
+            inferred_start_date.isoformat() if inferred_start_date else "No start date"
+        )
+        current_end_label = _safe_text(tournament.get("end_date")) or (
+            inferred_end_date.isoformat() if inferred_end_date else "No end date"
+        )
         st.caption(
             f"Current tournament: **{_safe_text(tournament.get('name') or 'Untitled Tournament')}** · "
-            f"{_safe_text(tournament.get('start_date') or 'No start date')} → {_safe_text(tournament.get('end_date') or 'No end date')}"
+            f"{current_start_label} → {current_end_label}"
         )
+        if using_inferred_window:
+            st.info(
+                "Using saved draft day range: "
+                f"{inferred_start_date.isoformat()} → {inferred_end_date.isoformat()}. "
+                "Save Tournament Info to write these dates to the tournament shell."
+            )
 
         with st.form("edit_tournament"):
             c1, c2 = st.columns(2)
@@ -1247,7 +1301,7 @@ def render(ctx):
     with tabs[1]:
         st.subheader("Days")
         st.caption("Days are created from the tournament date range. Relabel them to match how you actually talk about the schedule, such as 'Mixed Doubles Day' or 'Championship Sunday'.")
-        if not _date_rows(tournament.get("start_date"), tournament.get("end_date")):
+        if not canonical_has_range and not inferred_has_range:
             st.warning("No tournament date range is saved yet. You can add days manually, or save dates in Tournament Info to auto-generate days.")
         if structure_locked:
             st.caption("Days are view-only because registrations already exist.")
@@ -1267,9 +1321,13 @@ def render(ctx):
         days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
         st.session_state[days_seed_key] = days_df.copy()
         if st.button("Regenerate days from tournament dates", disabled=structure_locked):
-            generated = _seed_days([], tournament)
+            generated = _df_with_hidden_ids(
+                [{"id": _uid("day"), **row} for row in _date_rows(regenerate_start_date, regenerate_end_date)],
+                "id",
+                DAYS_EDITOR_COLUMNS,
+            )
             if generated.empty:
-                st.warning("Cannot regenerate days yet. Save both start and end dates first.")
+                st.warning("Cannot regenerate days yet. Save a start/end range in Tournament Info or create draft days with valid dates first.")
             else:
                 st.session_state[days_seed_key] = generated
             st.rerun()
