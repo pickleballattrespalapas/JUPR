@@ -602,7 +602,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         can_create = False
     if roster_requires_resolution and participant_names:
         roster_candidates = list(state.get("roster_candidates") or [])
-        st.markdown("#### Review roster matches")
+        st.markdown("#### Step 1: Review roster matches")
         st.caption(
             "Confirm each pasted name once. Exact or suggested matches use canonical current-player names; "
             "or choose the explicit new social player option."
@@ -648,7 +648,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 state["roster_confirmed"] = True
                 state["participant_text"] = "\n".join(canonical_names)
                 state["resolved_roster_ids"] = resolved_ids
-                st.success("Roster confirmed. You can now create the event.")
+                st.success("Step 2 complete: roster confirmed. You can now create the event.")
                 st.rerun()
         if state.get("roster_confirmed"):
             confirmed_rows = list(state.get("confirmed_roster_rows") or [])
@@ -663,6 +663,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 st.caption("New social: " + ", ".join(str(row.get("name") or "") for row in new_rows))
 
     action_cols = st.columns([1, 1, 3])
+    if roster_requires_resolution:
+        st.caption("Step 3: Create event → enter scores → submit Club Social results.")
     create_disabled = not can_create or (roster_requires_resolution and not bool(state.get("roster_confirmed")))
     if action_cols[0].button(
         "Create event",

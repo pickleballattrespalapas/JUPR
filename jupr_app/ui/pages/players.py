@@ -351,7 +351,7 @@ def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: 
     try:
         events_resp = (
             _supabase.table("live_events")
-            .select("id,name,event_type,event_date,submitted_by,submitted_by_name,status,result_mode,summary_json")
+            .select("id,name,event_type,event_date,submitted_by_name,status,result_mode,summary_json")
             .eq("club_id", str(club_id))
             .eq("result_mode", "social_unrated")
             .eq("status", "saved")
@@ -434,7 +434,7 @@ def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: 
                 "Wins": 0,
                 "Losses": 0,
                 "Diff": 0,
-                "Submitted By": str(event_row.get("submitted_by") or event_row.get("submitted_by_name") or "").strip(),
+                "Submitted By": str(event_row.get("submitted_by_name") or "").strip(),
             }
         )
 
