@@ -13,13 +13,13 @@ This package contains rewritten versions of the four tournament-facing Streamlit
 - Reworked around an operator workflow:
   1. Tournament Info
   2. Days
-  3. Event Families
+  3. Events
   4. Divisions
   5. Schedule Preview
   6. Publish & QA
 - Removed the confusing raw `day_key` / `event_key` admin experience.
 - Removed the `max_events_per_day` concept.
-- Added event-family defaults for format/scoring.
+- Added event defaults for format/scoring.
 - Added division-level scheduling so each division is assigned to exactly one day.
 - Added structured capture for age rules, auto age split thresholds, and split-age thresholds.
 - Keeps database output backward-compatible by flattening the builder back into the existing registration `event_options` payload shape.
@@ -34,7 +34,7 @@ This package contains rewritten versions of the four tournament-facing Streamlit
 - Singles divisions now allow one-player slots in readiness validation and labeling.
 
 ### Tournament Registration
-- Public registration is grouped by day -> event family -> division.
+- Public registration is grouped by day -> event -> division.
 - Added clearer division labels and event detail captions.
 - Partner-board opt-in now happens per selected doubles division.
 - Added validation for at least one selected division.
