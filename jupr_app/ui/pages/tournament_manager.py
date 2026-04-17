@@ -820,6 +820,7 @@ def _render_division_form(
             )
             division_name = st.text_input("Division name", value=_safe_text(defaults.get("division_name")), disabled=disabled)
             skill_label = st.text_input("Skill label", value=_safe_text(defaults.get("skill_label") or "Open"), disabled=disabled)
+            st.caption("Skill labels are enforced as half-step bands (example: 3.5 means 3.5 to <4.0). Doubles teams play to the higher-rated player: at least one player must be in-band and no player may be above the band.")
             age_mode = st.selectbox(
                 "Age mode",
                 AGE_MODES,

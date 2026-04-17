@@ -5,6 +5,7 @@ import uuid
 
 import streamlit as st
 
+from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
 from jupr_app.domain.tournament_registration_repo import (
     build_registration_state,
     build_public_urls,
@@ -76,7 +77,7 @@ def _group_events(days: list[dict[str, Any]], event_options: list[dict[str, Any]
     return grouped
 
 
-def _division_choice_label(event: dict[str, Any]) -> str:
+def _division_choice_label(event: dict[str, Any], *, eligible: bool = True) -> str:
     name = _safe_text(event.get("division_name") or event.get("label") or "Division")
     parts: list[str] = []
     skill = _safe_text(event.get("skill_label"))
@@ -88,8 +89,21 @@ def _division_choice_label(event: dict[str, Any]) -> str:
         parts.append(age)
     if price not in (None, "", "None"):
         parts.append(f"${price}")
-    return f"{name} — {' • '.join(parts)}" if parts else name
+    label = f"{name} — {' • '.join(parts)}" if parts else name
+    return label if eligible else f"{label} ⛔ Not eligible based on current rating"
 
+
+
+
+def _preview_division_eligibility(event: dict[str, Any], player: dict[str, Any]) -> tuple[bool, str | None]:
+    preview_selection = {"partner_mode": "NEEDS_PARTNER" if bool(event.get("partner_required")) else "NONE"}
+    return validate_selection_against_skill(
+        event=event,
+        selection=preview_selection,
+        player=player,
+        partner=None,
+        allow_missing_partner_for_preview=True,
+    )
 
 def _division_help(event: dict[str, Any]) -> str:
     details: list[str] = []
@@ -208,6 +222,11 @@ def render(ctx):
         gender = st.selectbox("Gender", ["", "Female", "Male", "Other", "Prefer not to say"])
         notes = st.text_area("Notes for tournament staff", height=90)
 
+        player_profile = {
+            "doubles_skill": _coerce_float(doubles_skill),
+            "singles_skill": _coerce_float(singles_skill),
+        }
+
         st.markdown("### 2. Choose your divisions")
         st.caption("Work day by day. You can skip any event family you are not playing.")
         selections: list[dict[str, Any]] = []
@@ -221,10 +240,13 @@ def render(ctx):
                 st.markdown(f"**{family}**")
                 option_lookup = {"— Not playing this event —": None}
                 ordered_labels = ["— Not playing this event —"]
+                eligibility_lookup: dict[str, tuple[bool, str | None]] = {}
                 for event in options:
-                    label = _division_choice_label(event)
+                    eligible, reason = _preview_division_eligibility(event, player_profile)
+                    label = _division_choice_label(event, eligible=eligible)
                     option_lookup[label] = event
                     ordered_labels.append(label)
+                    eligibility_lookup[str(event.get("id"))] = (eligible, reason)
                 selected_label = st.selectbox(
                     f"Choose your division for {family}",
                     ordered_labels,
@@ -237,6 +259,12 @@ def render(ctx):
                 help_text = _division_help(selected_event)
                 if help_text:
                     st.caption(help_text)
+
+                current_eligible, current_reason = eligibility_lookup.get(str(selected_event.get("id")), (True, None))
+                if not current_eligible:
+                    st.warning(current_reason or "Not eligible based on current rating.")
+                elif bool(selected_event.get("partner_required")):
+                    st.caption("For doubles, final eligibility is validated at submit time using both players' ratings when a partner is named.")
 
                 selection_row: dict[str, Any] = {
                     "id": _uid("sel"),
@@ -298,6 +326,33 @@ def render(ctx):
                 if not _safe_text(selection.get("partner_name")) and not _safe_text(selection.get("partner_email")):
                     st.error("For doubles events with a named partner, enter at least the partner name or partner email.")
                     st.stop()
+
+        event_lookup = {str(row.get("id")): row for row in event_options}
+        submit_player = {
+            "doubles_skill": _coerce_float(doubles_skill),
+            "singles_skill": _coerce_float(singles_skill),
+        }
+        for selection in selections:
+            event = event_lookup.get(str(selection.get("event_option_id") or ""))
+            if not event:
+                continue
+            partner = None
+            if _safe_text(selection.get("partner_mode")).upper() == "HAS_PARTNER":
+                partner = {
+                    "doubles_skill": selection.get("partner_skill"),
+                    "singles_skill": selection.get("partner_skill"),
+                }
+            eligible, reason = validate_selection_against_skill(
+                event=event,
+                selection=selection,
+                player=submit_player,
+                partner=partner,
+                allow_missing_partner_for_preview=False,
+            )
+            if not eligible:
+                division_label = _safe_text(event.get("division_name") or event.get("label") or event.get("id"))
+                st.error(f"{division_label}: {reason or 'Skill eligibility requirements were not met.'}")
+                st.stop()
 
         try:
             state_before_submit = build_registration_state(supabase, tournament, settings, days, event_options)
