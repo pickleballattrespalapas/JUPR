@@ -789,6 +789,14 @@ def _display_optional(value: Any, fallback: str = "—") -> str:
     return text if text else fallback
 
 
+def _display_labelized(value: Any, fallback: str = "—") -> str:
+    text = _safe_text(value).replace("_", " ")
+    text = " ".join(text.split())
+    if not text:
+        return fallback
+    return text.title()
+
+
 def _truncate_text(value: Any, max_len: int = 40) -> str:
     text = _safe_text(value)
     if not text:
@@ -796,6 +804,26 @@ def _truncate_text(value: Any, max_len: int = 40) -> str:
     if len(text) <= max_len:
         return text
     return f"{text[: max_len - 1].rstrip()}…"
+
+
+def _resolve_division_format(row: pd.Series, template_lookup: dict[str, pd.Series]) -> str:
+    direct_value = _safe_text(row.get("division_format"))
+    if direct_value:
+        return _display_labelized(direct_value)
+    event_family = _safe_text(row.get("event_family"))
+    template_row = template_lookup.get(event_family)
+    fallback_value = _safe_text(template_row.get("default_format")) if template_row is not None else ""
+    return _display_labelized(fallback_value)
+
+
+def _resolve_division_scoring(row: pd.Series, template_lookup: dict[str, pd.Series]) -> str:
+    direct_value = _safe_text(row.get("division_scoring"))
+    if direct_value:
+        return _display_labelized(direct_value)
+    event_family = _safe_text(row.get("event_family"))
+    template_row = template_lookup.get(event_family)
+    fallback_value = _safe_text(template_row.get("default_scoring")) if template_row is not None else ""
+    return _display_labelized(fallback_value)
 
 
 def _validate_builder(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, divisions_df: pd.DataFrame) -> list[str]:
@@ -1867,14 +1895,27 @@ def render(ctx):
         if divisions_df.empty:
             st.info("No divisions yet. Click Create Division to start.")
         else:
+            template_lookup = {
+                _safe_text(template_row.get("event_family")): template_row
+                for _, template_row in events_df.iterrows()
+                if _safe_text(template_row.get("event_family"))
+            }
             st.markdown("##### Existing Divisions")
             for family in sorted({ _safe_text(v) for v in divisions_df["event_family"].tolist() if _safe_text(v) }):
                 family_df = divisions_df[divisions_df["event_family"].apply(lambda value: _safe_text(value) == family)]
                 st.markdown(f"**{family}**")
                 for day in sorted({ _safe_text(v) for v in family_df["assigned_day"].tolist() if _safe_text(v) }):
                     day_df = family_df[family_df["assigned_day"].apply(lambda value: _safe_text(value) == day)]
-                    st.caption(f"Day: {day}")
-                    st.caption("**Division | Skill | Age | Status | Capacity | Price**")
+                    st.markdown("")
+                    st.markdown(f"##### {day}")
+                    header_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
+                    header_cols[0].markdown("**Division**")
+                    header_cols[1].markdown("**Skill**")
+                    header_cols[2].markdown("**Age**")
+                    header_cols[3].markdown("**Status**")
+                    header_cols[4].markdown("**Capacity**")
+                    header_cols[5].markdown("**Price**")
+                    header_cols[6].markdown("**Actions**")
                     for division_id, row in day_df.iterrows():
                         division_name = _display_division_name(row)
                         row_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
@@ -1894,12 +1935,14 @@ def render(ctx):
                             st.session_state[divisions_seed_key] = _delete_division_row(divisions_df, str(division_id))
                             st.success(f"Deleted division '{division_name}'.")
                             st.rerun()
+                        notes_text = _safe_text(row.get("notes"))
                         secondary_parts = [
-                            f"Age Mode: {_display_optional(row.get('age_mode'))}",
-                            f"Format: {_display_optional(row.get('division_format'))}",
-                            f"Scoring: {_display_optional(row.get('division_scoring'))}",
-                            f"Notes: {_truncate_text(row.get('notes'))}",
+                            f"Age Mode: {_display_labelized(row.get('age_mode'))}",
+                            f"Format: {_resolve_division_format(row, template_lookup)}",
+                            f"Scoring: {_resolve_division_scoring(row, template_lookup)}",
                         ]
+                        if notes_text:
+                            secondary_parts.append(f"Notes: {_truncate_text(notes_text)}")
                         st.caption(" · ".join(secondary_parts))
                         st.divider()
         for mode, help_text in AGE_MODE_HELP.items():
