@@ -9,25 +9,19 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
-from jupr_app.domain.tournament_registration_exports import build_registration_workbook
 from jupr_app.domain.tournament_registration_repo import (
-    ADMIN_PAYMENT_STATUS_OPTIONS,
-    ADMIN_REGISTRATION_STATUS_OPTIONS,
     REGISTRATION_STATUS_OPTIONS,
     build_public_urls,
-    build_registration_state,
     count_tournament_registrations,
     get_builder_draft,
     get_registration_settings,
     get_tournament_record,
     list_event_options,
     list_existing_tournaments,
-    list_registrations,
     list_registration_days,
     registration_feature_available,
     replace_registration_configuration,
     save_builder_draft,
-    update_registration_admin_fields,
     upsert_registration_settings,
 )
 from jupr_app.ui.layout import page_shell
@@ -2098,108 +2092,5 @@ def render(ctx):
                 st.success("Tournament schedule, events, and divisions saved.")
                 st.rerun()
 
-        state = build_registration_state(
-            supabase,
-            get_tournament_record(supabase, tournament_id) or tournament,
-            settings,
-            list_registration_days(supabase, tournament_id),
-            list_event_options(supabase, tournament_id),
-        )
-        registrations = state.get("registrations", [])
-        issues = state.get("issues", [])
-        summary = state.get("summary", {})
-        st.metric("Registrations received", len(registrations))
-        if issues:
-            st.caption(f"Current registration issues: {len(issues)}")
-        if registrations:
-            st.dataframe(pd.DataFrame(registrations), hide_index=True, use_container_width=True)
-            st.download_button(
-                "Download registration workbook",
-                data=build_registration_workbook(tournament=tournament, state=state),
-                file_name=f"{_safe_text(tournament.get('name') or 'tournament').replace(' ', '_')}_registration.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        st.info("Registration review, issue triage, and workbook exports now live on 📋 Tournament Operations.")
 
-        st.divider()
-        st.markdown("#### Registration issues and roster status")
-        st.caption(f"Issue count: {summary.get('issue_count', 0)}")
-        if issues:
-            issue_rows = [
-                {
-                    "Severity": row.get("severity"),
-                    "Type": row.get("issue_type"),
-                    "Message": row.get("message"),
-                    "Event Option ID": row.get("event_option_id"),
-                    "Registration ID": row.get("registration_id"),
-                }
-                for row in issues
-            ]
-            st.dataframe(pd.DataFrame(issue_rows), hide_index=True, use_container_width=True)
-        else:
-            st.success("No derived registration issues right now.")
-
-        status_rows: list[dict[str, Any]] = []
-        for roster in state.get("event_rosters", []):
-            status_counts = {"CONFIRMED": 0, "REVIEW": 0, "WAITLIST": 0, "NEEDS_PARTNER": 0, "PARTNER_MISSING": 0}
-            for entry in roster.get("entries", []):
-                status = _safe_text(entry.get("status")).upper()
-                if status in status_counts:
-                    status_counts[status] += 1
-            status_rows.append(
-                {
-                    "Event": roster.get("event_label"),
-                    "Division": roster.get("event_label"),
-                    "Confirmed": status_counts["CONFIRMED"],
-                    "Review": status_counts["REVIEW"],
-                    "Waitlist": status_counts["WAITLIST"],
-                    "Needs Partner": status_counts["NEEDS_PARTNER"],
-                    "Partner Missing": status_counts["PARTNER_MISSING"],
-                }
-            )
-        if status_rows:
-            st.dataframe(pd.DataFrame(status_rows), hide_index=True, use_container_width=True)
-
-        st.divider()
-        st.markdown("#### Registration admin review")
-        raw_regs = list_registrations(supabase, tournament_id)
-        if not raw_regs:
-            st.info("No registration submissions to review yet.")
-        else:
-            options = {
-                f"{_safe_text(row.get('display_name') or row.get('email') or row.get('id'))} · {_safe_text(row.get('status'))}/{_safe_text(row.get('payment_status'))} · {row.get('submitted_at') or 'no timestamp'}": row
-                for row in raw_regs
-            }
-            selected_label = st.selectbox("Select registration to review", list(options.keys()), key=f"tm_admin_pick_{tournament_id}")
-            selected_reg = options[selected_label]
-            with st.form(f"tm_admin_review_{tournament_id}"):
-                st.text_input("Display name", value=_safe_text(selected_reg.get("display_name")), disabled=True)
-                st.text_input("Email", value=_safe_text(selected_reg.get("email")), disabled=True)
-                admin_status = st.selectbox(
-                    "Registration status",
-                    ADMIN_REGISTRATION_STATUS_OPTIONS,
-                    index=ADMIN_REGISTRATION_STATUS_OPTIONS.index(_safe_text(selected_reg.get("status")).lower())
-                    if _safe_text(selected_reg.get("status")).lower() in ADMIN_REGISTRATION_STATUS_OPTIONS
-                    else 0,
-                )
-                admin_payment_status = st.selectbox(
-                    "Payment status",
-                    ADMIN_PAYMENT_STATUS_OPTIONS,
-                    index=ADMIN_PAYMENT_STATUS_OPTIONS.index(_safe_text(selected_reg.get("payment_status")).lower())
-                    if _safe_text(selected_reg.get("payment_status")).lower() in ADMIN_PAYMENT_STATUS_OPTIONS
-                    else 0,
-                )
-                save_admin = st.form_submit_button("Save registration admin fields", use_container_width=True)
-            if save_admin:
-                try:
-                    update_registration_admin_fields(
-                        supabase,
-                        tournament_id=tournament_id,
-                        registration_id=str(selected_reg.get("id")),
-                        status=admin_status,
-                        payment_status=admin_payment_status,
-                    )
-                    st.success("Registration admin fields updated.")
-                    st.session_state[f"tm_refresh_{tournament_id}"] = True
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Could not update registration: {exc}")
