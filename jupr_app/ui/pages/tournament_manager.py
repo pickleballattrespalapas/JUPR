@@ -1831,6 +1831,7 @@ def render(ctx):
     day_label_options = [label for label in days_df[days_df["enabled"] == True]["label"].tolist() if _safe_text(label)] or [
         label for label in days_df["label"].tolist() if _safe_text(label)
     ]
+    ordered_day_labels = list(dict.fromkeys(_safe_text(label) for label in day_label_options if _safe_text(label)))
     event_family_options = [family for family in events_df["event_family"].tolist() if _safe_text(family)]
     with tabs[3]:
         st.subheader("Divisions")
@@ -1904,47 +1905,55 @@ def render(ctx):
             for family in sorted({ _safe_text(v) for v in divisions_df["event_family"].tolist() if _safe_text(v) }):
                 family_df = divisions_df[divisions_df["event_family"].apply(lambda value: _safe_text(value) == family)]
                 st.markdown(f"**{family}**")
-                for day in sorted({ _safe_text(v) for v in family_df["assigned_day"].tolist() if _safe_text(v) }):
+                family_day_labels = { _safe_text(v) for v in family_df["assigned_day"].tolist() if _safe_text(v) }
+                ordered_family_days = [day for day in ordered_day_labels if day in family_day_labels]
+                remaining_days = list(
+                    dict.fromkeys(
+                        _safe_text(value)
+                        for value in family_df["assigned_day"].tolist()
+                        if _safe_text(value) and _safe_text(value) not in ordered_family_days
+                    )
+                )
+                for day_index, day in enumerate(ordered_family_days + remaining_days):
                     day_df = family_df[family_df["assigned_day"].apply(lambda value: _safe_text(value) == day)]
-                    st.markdown("")
-                    st.markdown(f"##### {day}")
-                    header_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
-                    header_cols[0].markdown("**Division**")
-                    header_cols[1].markdown("**Skill**")
-                    header_cols[2].markdown("**Age**")
-                    header_cols[3].markdown("**Status**")
-                    header_cols[4].markdown("**Capacity**")
-                    header_cols[5].markdown("**Price**")
-                    header_cols[6].markdown("**Actions**")
-                    for division_id, row in day_df.iterrows():
-                        division_name = _display_division_name(row)
-                        row_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
-                        row_cols[0].markdown(f"**{_display_optional(division_name)}**")
-                        row_cols[1].markdown(_display_optional(row.get("skill_label")))
-                        row_cols[2].markdown(_display_optional(row.get("age_label")))
-                        row_cols[3].markdown(_display_optional(row.get("status")))
-                        row_cols[4].markdown(_display_optional(row.get("capacity_teams")))
-                        price_value = row.get("price_usd")
-                        row_cols[5].markdown(f"${float(price_value):.2f}" if _coerce_float(price_value) is not None else "—")
-                        action_cols = row_cols[6].columns([1, 1], gap="small")
-                        if action_cols[0].button("✏️ Edit", key=f"tm_div_edit_{tournament_id}_{division_id}", disabled=structure_locked):
-                            st.session_state[division_form_mode_key] = "edit"
-                            st.session_state[division_edit_id_key] = str(division_id)
-                            st.rerun()
-                        if action_cols[1].button("🗑️ Delete", key=f"tm_div_del_{tournament_id}_{division_id}", disabled=structure_locked):
-                            st.session_state[divisions_seed_key] = _delete_division_row(divisions_df, str(division_id))
-                            st.success(f"Deleted division '{division_name}'.")
-                            st.rerun()
-                        notes_text = _safe_text(row.get("notes"))
-                        secondary_parts = [
-                            f"Age Mode: {_display_labelized(row.get('age_mode'))}",
-                            f"Format: {_resolve_division_format(row, template_lookup)}",
-                            f"Scoring: {_resolve_division_scoring(row, template_lookup)}",
-                        ]
-                        if notes_text:
-                            secondary_parts.append(f"Notes: {_truncate_text(notes_text)}")
-                        st.caption(" · ".join(secondary_parts))
-                        st.divider()
+                    with st.expander(day, expanded=(day_index == 0)):
+                        header_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
+                        header_cols[0].markdown("**Division**")
+                        header_cols[1].markdown("**Skill**")
+                        header_cols[2].markdown("**Age**")
+                        header_cols[3].markdown("**Status**")
+                        header_cols[4].markdown("**Capacity**")
+                        header_cols[5].markdown("**Price**")
+                        header_cols[6].markdown("**Actions**")
+                        for division_id, row in day_df.iterrows():
+                            division_name = _display_division_name(row)
+                            row_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
+                            row_cols[0].markdown(f"**{_display_optional(division_name)}**")
+                            row_cols[1].markdown(_display_optional(row.get("skill_label")))
+                            row_cols[2].markdown(_display_optional(row.get("age_label")))
+                            row_cols[3].markdown(_display_optional(row.get("status")))
+                            row_cols[4].markdown(_display_optional(row.get("capacity_teams")))
+                            price_value = row.get("price_usd")
+                            row_cols[5].markdown(f"${float(price_value):.2f}" if _coerce_float(price_value) is not None else "—")
+                            action_cols = row_cols[6].columns([1, 1], gap="small")
+                            if action_cols[0].button("✏️ Edit", key=f"tm_div_edit_{tournament_id}_{division_id}", disabled=structure_locked):
+                                st.session_state[division_form_mode_key] = "edit"
+                                st.session_state[division_edit_id_key] = str(division_id)
+                                st.rerun()
+                            if action_cols[1].button("🗑️ Delete", key=f"tm_div_del_{tournament_id}_{division_id}", disabled=structure_locked):
+                                st.session_state[divisions_seed_key] = _delete_division_row(divisions_df, str(division_id))
+                                st.success(f"Deleted division '{division_name}'.")
+                                st.rerun()
+                            notes_text = _safe_text(row.get("notes"))
+                            secondary_parts = [
+                                f"Age Mode: {_display_labelized(row.get('age_mode'))}",
+                                f"Format: {_resolve_division_format(row, template_lookup)}",
+                                f"Scoring: {_resolve_division_scoring(row, template_lookup)}",
+                            ]
+                            if notes_text:
+                                secondary_parts.append(f"Notes: {_truncate_text(notes_text)}")
+                            st.caption(" · ".join(secondary_parts))
+                            st.divider()
         for mode, help_text in AGE_MODE_HELP.items():
             st.caption(f"**{mode.replace('_', ' ').title()}** — {help_text}")
         if st.button("Save Divisions Draft", disabled=structure_locked, key=f"tm_save_divisions_draft_{tournament_id}"):
