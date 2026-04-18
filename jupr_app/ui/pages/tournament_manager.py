@@ -501,7 +501,9 @@ def _add_event_family_row(events_df: pd.DataFrame, payload: dict[str, Any]) -> p
     out = _ensure_editor_columns(events_df, EVENT_TEMPLATE_COLUMNS).copy()
     row_id = _uid("evt")
     for column in EVENT_TEMPLATE_COLUMNS:
-        out.loc[row_id, column] = payload.get(column)
+        if column not in out.columns:
+            out[column] = None
+        out.at[row_id, column] = payload.get(column)
     return _ensure_editor_columns(out, EVENT_TEMPLATE_COLUMNS)
 
 
@@ -510,7 +512,9 @@ def _update_event_family_row(events_df: pd.DataFrame, event_id: str, payload: di
     if str(event_id) not in {str(idx) for idx in out.index.tolist()}:
         return out
     for column in EVENT_TEMPLATE_COLUMNS:
-        out.loc[event_id, column] = payload.get(column)
+        if column not in out.columns:
+            out[column] = None
+        out.at[event_id, column] = payload.get(column)
     return _ensure_editor_columns(out, EVENT_TEMPLATE_COLUMNS)
 
 
