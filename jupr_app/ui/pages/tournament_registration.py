@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import json
 import uuid
 
 import streamlit as st
@@ -10,7 +11,9 @@ from jupr_app.domain.tournament_registration_repo import (
     build_registration_state,
     build_public_urls,
     get_public_tournament_bundle,
+    is_day_enabled,
     list_open_public_tournaments,
+    public_event_option_visibility,
     registration_feature_available,
     registration_is_open,
     save_registration,
@@ -70,8 +73,11 @@ def _show_tournament_picker(ctx, supabase) -> tuple[dict[str, Any] | None, dict[
 
 def _group_events(days: list[dict[str, Any]], event_options: list[dict[str, Any]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
     grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    day_ids = {str(day.get("id")) for day in days}
     for event in event_options:
         day_id = str(event.get("registration_day_id"))
+        if day_id not in day_ids:
+            continue
         family = _safe_text(event.get("event_family_label") or event.get("label") or "Event")
         grouped.setdefault(day_id, {}).setdefault(family, []).append(event)
     return grouped
@@ -125,7 +131,21 @@ def _division_help(event: dict[str, Any]) -> str:
     elif age_mode == "FIXED_AGE_BRACKET":
         details.append(_safe_text(event.get("age_label")))
     if age_rules:
-        details.append("Age rule details available")
+        try:
+            parsed_age_rules = json.loads(age_rules)
+        except Exception:
+            parsed_age_rules = {}
+        min_teams = parsed_age_rules.get("min_teams_per_age_group")
+        split_threshold = parsed_age_rules.get("split_age_threshold")
+        notes = _safe_text(parsed_age_rules.get("notes"))
+        if age_mode == "AUTO_AGE_SPLIT" and min_teams not in (None, ""):
+            details.append(f"Auto-split minimum: {min_teams} teams/group")
+        if age_mode == "SPLIT_AGE" and split_threshold not in (None, ""):
+            details.append(f"Split-age threshold: {split_threshold}+")
+        if notes:
+            details.append(notes)
+        if not any([min_teams not in (None, ""), split_threshold not in (None, ""), notes]):
+            details.append("Age rule details available")
     return " • ".join(part for part in details if part)
 
 
@@ -198,11 +218,21 @@ def render(ctx):
         st.warning(message or "Registration is not open.")
         st.stop()
 
-    if not days or not event_options:
+    days = [row for row in days if is_day_enabled(row)]
+    selectable_event_options = [row for row in event_options if public_event_option_visibility(row) == "selectable"]
+    blocked_visible_options = [row for row in event_options if public_event_option_visibility(row) == "visible_blocked"]
+
+    if not days or not selectable_event_options:
         st.warning("This tournament does not have a registration form configured yet.")
         st.stop()
 
-    grouped_events = _group_events(days, event_options)
+    grouped_events = _group_events(days, selectable_event_options)
+    blocked_by_family: dict[tuple[str, str], list[str]] = {}
+    for event in blocked_visible_options:
+        day_id = str(event.get("registration_day_id"))
+        family = _safe_text(event.get("event_family_label") or event.get("label") or "Event")
+        division_name = _safe_text(event.get("division_name") or event.get("label") or "Division")
+        blocked_by_family.setdefault((day_id, family), []).append(division_name)
 
     with st.form(f"registration_form_{tournament.get('id')}"):
         st.markdown("### 1. Player information")
@@ -254,6 +284,9 @@ def render(ctx):
                 )
                 selected_event = option_lookup[selected_label]
                 if not selected_event:
+                    blocked_names = blocked_by_family.get((day_id, family), [])
+                    if blocked_names:
+                        st.caption("Closed divisions: " + ", ".join(sorted(blocked_names)))
                     continue
 
                 help_text = _division_help(selected_event)

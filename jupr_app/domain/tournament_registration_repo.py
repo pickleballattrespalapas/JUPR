@@ -17,6 +17,46 @@ PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
 ADMIN_REGISTRATION_STATUS_OPTIONS = ["pending", "confirmed", "waitlist", "cancelled"]
 ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 
+REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
+    "migrations/20261010_tournament_builder_refactor.sql",
+    "migrations/20261018_tournament_registration_schema_contract.sql",
+]
+
+REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "tournament_registration_settings": (
+        "id",
+        "tournament_id",
+        "builder_draft_json",
+        "builder_draft_updated_at",
+    ),
+    "tournament_registration_days": (
+        "id",
+        "tournament_id",
+        "enabled",
+    ),
+    "tournament_event_options": (
+        "id",
+        "tournament_id",
+        "registration_day_id",
+        "event_family_label",
+        "division_name",
+        "event_format_default",
+        "scoring_default",
+        "event_format_override",
+        "scoring_override",
+        "skill_mode",
+        "age_mode",
+        "age_rules",
+        "waitlist_enabled",
+        "partner_board_enabled",
+        "status",
+        "enabled",
+    ),
+}
+
+PUBLIC_EVENT_STATUS_VISIBLE = {"open", "tentative", "confirmed", "closed"}
+PUBLIC_EVENT_STATUS_SELECTABLE = {"open", "tentative", "confirmed"}
+
 
 def _with_normalized_event_tags(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if not row:
@@ -106,17 +146,51 @@ def _is_missing_column_error(exc: Exception, column_name: str, table_name: str) 
     )
 
 
+def _schema_contract_error_message(missing: list[str]) -> str:
+    missing_text = "; ".join(sorted(set(missing)))
+    migration_text = " then ".join(REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS)
+    return (
+        "Tournament registration schema contract check failed. "
+        f"Missing required columns: {missing_text}. "
+        f"Run {migration_text}, then refresh the app."
+    )
+
+
+def assert_registration_schema_contract(supabase, *, required_tables: list[str] | None = None) -> None:
+    tables = required_tables or list(REGISTRATION_SCHEMA_REQUIRED_COLUMNS.keys())
+    failures: list[str] = []
+    for table_name in tables:
+        required_columns = REGISTRATION_SCHEMA_REQUIRED_COLUMNS.get(table_name, ())
+        if not required_columns:
+            continue
+        select_expr = ", ".join(required_columns)
+        try:
+            supabase.table(table_name).select(select_expr).limit(1).execute()
+        except Exception as exc:
+            failures.append(f"{table_name} ({select_expr}): {exc}")
+    if failures:
+        raise ValueError(_schema_contract_error_message(failures))
+
+
+def is_day_enabled(day: dict[str, Any]) -> bool:
+    return _coerce_bool((day or {}).get("enabled", True))
+
+
+def public_event_option_visibility(event: dict[str, Any]) -> str:
+    if not _coerce_bool((event or {}).get("enabled", True)):
+        return "hidden"
+    status = str((event or {}).get("status") or "draft").strip().lower()
+    if status in PUBLIC_EVENT_STATUS_SELECTABLE:
+        return "selectable"
+    if status in PUBLIC_EVENT_STATUS_VISIBLE:
+        return "visible_blocked"
+    return "hidden"
+
+
 def _insert_registration_days(supabase, days: list[dict[str, Any]]) -> None:
     if not days:
         return
-    try:
-        supabase.table("tournament_registration_days").insert(days).execute()
-        return
-    except Exception as exc:
-        if not _is_missing_column_error(exc, "enabled", "tournament_registration_days"):
-            raise
-    stripped_days = [{k: v for k, v in row.items() if k != "enabled"} for row in days]
-    supabase.table("tournament_registration_days").insert(stripped_days).execute()
+    supabase.table("tournament_registration_days").insert(days).execute()
 
 
 def registration_feature_available(supabase) -> tuple[bool, str | None]:
@@ -135,6 +209,11 @@ def registration_feature_available(supabase) -> tuple[bool, str | None]:
             failures.append(f"{table_name}: {exc}")
     if failures:
         return False, "Registration tables unavailable: " + " | ".join(failures)
+
+    try:
+        assert_registration_schema_contract(supabase)
+    except ValueError as exc:
+        return False, str(exc)
     return True, None
 
 
@@ -321,6 +400,7 @@ def save_builder_draft(
     divisions: list[dict[str, Any]],
     saved_step: str | None = None,
 ) -> dict[str, Any]:
+    assert_registration_schema_contract(supabase, required_tables=["tournament_registration_settings"])
     settings = get_registration_settings(supabase, str(tournament_id))
     payload = build_builder_draft_payload(
         days=days,
@@ -335,16 +415,11 @@ def save_builder_draft(
         "builder_draft_updated_at": _now_iso(),
         "updated_at": _now_iso(),
     }
-    try:
-        (
-            supabase.table("tournament_registration_settings")
-            .upsert(update_payload, on_conflict="tournament_id")
-            .execute()
-        )
-    except Exception as exc:
-        if _is_missing_column_error(exc, "builder_draft_json", "tournament_registration_settings"):
-            raise ValueError("Builder draft columns are missing. Run the latest migrations.") from exc
-        raise
+    (
+        supabase.table("tournament_registration_settings")
+        .upsert(update_payload, on_conflict="tournament_id")
+        .execute()
+    )
     return payload
 
 
@@ -431,6 +506,10 @@ def replace_registration_configuration(
     event_options: list[dict[str, Any]],
     allow_replace_with_registrations: bool = False,
 ) -> None:
+    assert_registration_schema_contract(
+        supabase,
+        required_tables=["tournament_registration_settings", "tournament_registration_days", "tournament_event_options"],
+    )
     registration_count = count_tournament_registrations(supabase, tournament_id)
     if registration_count and not allow_replace_with_registrations:
         raise ValueError(
@@ -618,6 +697,8 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) 
         "updated_at": submitted_at,
     }
 
+    days = list_registration_days(supabase, str(tournament_id))
+    day_lookup = {str(row.get("id")): row for row in days if is_day_enabled(row)}
     event_lookup = {str(row.get("id")): row for row in list_event_options(supabase, str(tournament_id))}
 
     rows: list[dict[str, Any]] = []
@@ -629,6 +710,16 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) 
         event = event_lookup.get(event_option_id)
         if not event:
             raise ValueError(f"Selected division {event_option_id} is no longer available.")
+        if str(event.get("registration_day_id") or "") not in day_lookup:
+            raise ValueError("Selected division is not on an enabled registration day.")
+
+        visibility = public_event_option_visibility(event)
+        if visibility != "selectable":
+            status_label = str(event.get("status") or "draft").lower()
+            division_label = str(event.get("division_name") or event.get("label") or event_option_id)
+            raise ValueError(
+                f"{division_label} is not open for public registration (status={status_label}, enabled={bool(event.get('enabled', True))})."
+            )
 
         partner_email = _normalize_email(selection.get("partner_email")) or None
         partner_payload = {

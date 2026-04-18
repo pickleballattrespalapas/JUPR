@@ -724,7 +724,7 @@ def _seed_divisions(days_df: pd.DataFrame, event_templates_df: pd.DataFrame, eve
                 "price_usd": row.get("price_usd"),
                 "waitlist_enabled": bool(row.get("waitlist_enabled", True)),
                 "partner_board_enabled": bool(row.get("partner_board_enabled", row.get("public_partner_board", True))),
-                "status": _safe_text(row.get("status") or "draft"),
+                "status": _safe_text(row.get("status") or "draft").lower(),
                 "division_format": _safe_text(row.get("event_format_override") or ""),
                 "division_scoring": _safe_text(row.get("scoring_override") or ""),
                 "notes": _safe_text(age_rules.get("notes")),
@@ -871,6 +871,13 @@ def _build_payloads(
     event_templates_df: pd.DataFrame,
     divisions_df: pd.DataFrame,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Canonical persisted registration contract (consumed by public registration):
+    - days: id/tournament_id/sort_order/label/event_date/enabled
+    - event options: day assignment, family/division labels, skill+age labels and modes,
+      format/scoring defaults and overrides, capacity, partner/waitlist controls,
+      and publication semantics via status + enabled.
+    """
     days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
     event_templates_df = _ensure_editor_columns(event_templates_df, EVENT_TEMPLATE_COLUMNS)
     divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
@@ -917,6 +924,7 @@ def _build_payloads(
                 "event_type": participant_type,
                 "gender_restriction": _safe_text(template.get("gender_restriction") or "ANY"),
                 "skill_label": _safe_text(row.get("skill_label") or "Open"),
+                "skill_mode": "OPEN" if _safe_text(row.get("skill_label") or "Open").lower() == "open" else "SKILL_BRACKET",
                 "age_label": _safe_text(row.get("age_label") or "All Ages"),
                 "partner_required": participant_type != "SINGLES",
                 "capacity_teams": _coerce_int(row.get("capacity_teams")),
@@ -932,7 +940,7 @@ def _build_payloads(
                 "age_rules": _encode_age_rules(row),
                 "waitlist_enabled": bool(row.get("waitlist_enabled", template.get("default_waitlist", True))),
                 "partner_board_enabled": bool(row.get("partner_board_enabled", template.get("default_partner_board", True))),
-                "status": _safe_text(row.get("status") or "draft"),
+                "status": _safe_text(row.get("status") or "draft").lower(),
                 "enabled": True,
             }
         )

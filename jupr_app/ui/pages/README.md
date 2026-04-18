@@ -22,7 +22,7 @@ This package contains rewritten versions of the four tournament-facing Streamlit
 - Added event defaults for format/scoring.
 - Added division-level scheduling so each division is assigned to exactly one day.
 - Added structured capture for age rules, auto age split thresholds, and split-age thresholds.
-- Keeps database output backward-compatible by flattening the builder back into the existing registration `event_options` payload shape.
+- Persists the builder output as the canonical registration contract (`days` + rich `event_options`) consumed by public registration.
 
 ### Tournaments
 - Creation is now a tournament shell flow instead of a bracket-first flow.
