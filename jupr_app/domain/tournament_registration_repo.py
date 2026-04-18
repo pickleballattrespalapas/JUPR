@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
+import math
 import re
 import uuid
 
@@ -63,6 +64,37 @@ def _coerce_bool(value: Any) -> bool:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_nan_like(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, float):
+        return math.isnan(value)
+
+    value_type = type(value)
+    type_name = value_type.__name__
+    type_module = value_type.__module__
+    if type_module.startswith("pandas") and type_name in {"NAType", "NaTType"}:
+        return True
+    if type_module.startswith("pandas") and str(value) == "NaT":
+        return True
+
+    return False
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if _is_nan_like(value):
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
 
 
 def _is_missing_column_error(exc: Exception, column_name: str, table_name: str) -> bool:
@@ -261,7 +293,7 @@ def build_builder_draft_payload(
     divisions: list[dict[str, Any]],
     saved_step: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "version": 1,
         "saved_at": _now_iso(),
         "saved_step": str(saved_step or "").strip() or None,
@@ -269,6 +301,7 @@ def build_builder_draft_payload(
         "event_families": list(event_families or []),
         "divisions": list(divisions or []),
     }
+    return _json_safe_value(payload)
 
 
 def get_builder_draft(supabase, tournament_id: str) -> dict[str, Any] | None:
