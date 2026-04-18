@@ -315,10 +315,11 @@ def _ensure_editor_columns(df: pd.DataFrame | None, columns: list[str]) -> pd.Da
     if not isinstance(df, pd.DataFrame):
         return pd.DataFrame(columns=columns)
     out = df.copy()
+    out = out.loc[:, ~pd.Index(out.columns).duplicated(keep="last")]
     for column in columns:
         if column not in out.columns:
             out[column] = pd.Series([None] * len(out), index=out.index)
-    return out[columns]
+    return out.loc[:, columns]
 
 
 def _df_with_hidden_ids(rows: list[dict[str, Any]], id_key: str, ordered_columns: list[str]) -> pd.DataFrame:
