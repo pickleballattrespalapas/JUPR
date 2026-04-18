@@ -586,6 +586,8 @@ def analyze_registration_publish_impact(
     event_options: list[dict[str, Any]],
 ) -> dict[str, Any]:
     tournament_id = str(tournament_id)
+    days = _json_safe_value(list(days or []))
+    event_options = _json_safe_value(list(event_options or []))
     published_days = list_registration_days(supabase, tournament_id)
     published_events = list_event_options(supabase, tournament_id)
     usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
@@ -752,6 +754,8 @@ def replace_registration_configuration(
     event_options: list[dict[str, Any]],
     allow_replace_with_registrations: bool = False,
 ) -> None:
+    days = _json_safe_value(list(days or []))
+    event_options = _json_safe_value(list(event_options or []))
     assert_registration_schema_contract(
         supabase,
         required_tables=["tournament_registration_settings", "tournament_registration_days", "tournament_event_options"],
@@ -845,6 +849,8 @@ def publish_registration_configuration(
       and convert removed populated rows into soft-closed/disabled records.
     - Public registration continues to consume published day/event rows only.
     """
+    days = _json_safe_value(list(days or []))
+    event_options = _json_safe_value(list(event_options or []))
     registration_count = count_tournament_registrations(supabase, tournament_id)
     if registration_count == 0:
         replace_registration_configuration(

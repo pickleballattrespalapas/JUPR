@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -280,21 +281,31 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 
 
 def _coerce_int(value: Any) -> int | None:
+    if pd.isna(value):
+        return None
     text = _safe_text(value)
     if not text:
         return None
     try:
-        return int(float(text))
+        number = float(text)
+        if not math.isfinite(number):
+            return None
+        return int(number)
     except Exception:
         return None
 
 
 def _coerce_float(value: Any) -> float | None:
+    if pd.isna(value):
+        return None
     text = _safe_text(value)
     if not text:
         return None
     try:
-        return float(text)
+        number = float(text)
+        if not math.isfinite(number):
+            return None
+        return number
     except Exception:
         return None
 
