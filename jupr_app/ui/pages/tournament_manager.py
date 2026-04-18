@@ -122,13 +122,6 @@ EVENT_TEMPLATE_COLUMNS = [
     "default_capacity_teams",
     "default_price_usd",
     "default_status",
-    "generator_selected_days",
-    "generator_selected_skill_levels",
-    "generator_age_mode",
-    "generator_age_labels",
-    "generator_format_override",
-    "generator_scoring_override",
-    "generator_notes_default",
 ]
 DIVISION_EDITOR_COLUMNS = [
     "event_family",
@@ -438,13 +431,6 @@ def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
                 "default_capacity_teams": _coerce_int(row.get("capacity_teams")) or 16,
                 "default_price_usd": _coerce_float(row.get("price_usd")) or 0.0,
                 "default_status": _safe_text(row.get("status") or "draft"),
-                "generator_selected_days": [],
-                "generator_selected_skill_levels": ["Open"],
-                "generator_age_mode": "ALL_AGES",
-                "generator_age_labels": [],
-                "generator_format_override": "",
-                "generator_scoring_override": "",
-                "generator_notes_default": "",
             },
         )
     rows = list(grouped.values())
@@ -584,40 +570,43 @@ def _compose_division_name(event_name: str, skill_label: str, age_mode: str, age
     return " ".join(part for part in parts if part).strip()
 
 
-def _division_generation_preview_count(event_row: pd.Series) -> int:
-    days = _coerce_list(event_row.get("generator_selected_days"))
-    skills = _coerce_list(event_row.get("generator_selected_skill_levels")) or ["Open"]
-    age_mode = _safe_text(event_row.get("generator_age_mode") or "ALL_AGES")
-    age_labels = _coerce_list(event_row.get("generator_age_labels"))
-    age_variants = 1
+def _age_variants_for_mode(age_mode: str, age_labels: list[str]) -> list[str]:
     if age_mode == "FIXED_AGE_BRACKET":
-        age_variants = max(1, len(age_labels))
-    return len(days) * len(skills) * age_variants
+        return age_labels or ["All Ages"]
+    if age_mode == "AUTO_AGE_SPLIT":
+        return ["Auto Age Split"]
+    if age_mode == "SPLIT_AGE":
+        return ["Split Age"]
+    return ["All Ages"]
 
 
-def _generate_division_rows_for_event(
+def _division_generation_preview_count(*, selected_days: list[str], selected_skills: list[str], age_mode: str, age_labels: list[str]) -> int:
+    age_variants = _age_variants_for_mode(age_mode, age_labels)
+    return len(selected_days) * len(selected_skills) * len(age_variants)
+
+
+def _generate_division_rows_for_event_batch(
     *,
     event_row: pd.Series,
+    selected_days: list[str],
+    selected_skills: list[str],
+    age_mode: str,
+    age_labels: list[str],
+    batch_overrides: dict[str, Any],
     current_divisions_df: pd.DataFrame,
     generation_mode: str,
 ) -> tuple[pd.DataFrame, int, int]:
     out = _ensure_editor_columns(current_divisions_df, DIVISION_EDITOR_COLUMNS).copy()
     event_name = _safe_text(event_row.get("event_family"))
-    days = _coerce_list(event_row.get("generator_selected_days"))
-    skills = _coerce_list(event_row.get("generator_selected_skill_levels")) or ["Open"]
-    age_mode = _safe_text(event_row.get("generator_age_mode") or "ALL_AGES")
-    age_labels = _coerce_list(event_row.get("generator_age_labels"))
+    days = [_safe_text(day) for day in selected_days if _safe_text(day)]
+    skills = [_safe_text(skill) for skill in selected_skills if _safe_text(skill)] or ["Open"]
+    age_mode = _safe_text(age_mode) or "ALL_AGES"
+    age_labels = [_safe_text(label) for label in age_labels if _safe_text(label)]
 
     if not event_name or not days or not skills:
         return out, 0, 0
 
-    age_variants = ["All Ages"]
-    if age_mode == "FIXED_AGE_BRACKET":
-        age_variants = age_labels or ["All Ages"]
-    elif age_mode == "AUTO_AGE_SPLIT":
-        age_variants = ["Auto Age Split"]
-    elif age_mode == "SPLIT_AGE":
-        age_variants = ["Split Age"]
+    age_variants = _age_variants_for_mode(age_mode, age_labels)
 
     generation_keys: list[tuple[str, str, str, str]] = []
     for day in days:
@@ -663,6 +652,12 @@ def _generate_division_rows_for_event(
                 if key in existing_keys:
                     skipped += 1
                     continue
+                capacity_override = _coerce_int(batch_overrides.get("capacity_teams"))
+                price_override = _coerce_float(batch_overrides.get("price_usd"))
+                status_override = _safe_text(batch_overrides.get("status"))
+                format_override = _safe_text(batch_overrides.get("division_format"))
+                scoring_override = _safe_text(batch_overrides.get("division_scoring"))
+                notes_default = _safe_text(batch_overrides.get("notes"))
                 payload = {
                     "event_family": event_name,
                     "division_name": _compose_division_name(event_name, skill, age_mode, age_label),
@@ -673,14 +668,18 @@ def _generate_division_rows_for_event(
                     "min_teams_per_age_group": _coerce_int(event_row.get("min_teams_per_age_group")) if age_mode == "AUTO_AGE_SPLIT" else None,
                     "split_age_threshold": 50 if age_mode == "SPLIT_AGE" else None,
                     "assigned_day": _safe_text(day),
-                    "capacity_teams": _coerce_int(event_row.get("default_capacity_teams")) or 16,
-                    "price_usd": _coerce_float(event_row.get("default_price_usd")) or 0.0,
-                    "waitlist_enabled": bool(event_row.get("default_waitlist", True)),
-                    "partner_board_enabled": bool(event_row.get("default_partner_board", True)),
-                    "status": _safe_text(event_row.get("default_status") or "draft"),
-                    "division_format": _safe_text(event_row.get("generator_format_override")),
-                    "division_scoring": _safe_text(event_row.get("generator_scoring_override")),
-                    "notes": _safe_text(event_row.get("generator_notes_default")),
+                    "capacity_teams": capacity_override if capacity_override is not None else (_coerce_int(event_row.get("default_capacity_teams")) or 16),
+                    "price_usd": price_override if price_override is not None else (_coerce_float(event_row.get("default_price_usd")) or 0.0),
+                    "waitlist_enabled": bool(batch_overrides.get("waitlist_enabled"))
+                    if batch_overrides.get("waitlist_enabled") is not None
+                    else bool(event_row.get("default_waitlist", True)),
+                    "partner_board_enabled": bool(batch_overrides.get("partner_board_enabled"))
+                    if batch_overrides.get("partner_board_enabled") is not None
+                    else bool(event_row.get("default_partner_board", True)),
+                    "status": status_override or _safe_text(event_row.get("default_status") or "draft"),
+                    "division_format": format_override,
+                    "division_scoring": scoring_override,
+                    "notes": notes_default,
                     "generated_from_event": True,
                 }
                 out = _add_division_row(out, payload)
@@ -1003,9 +1002,6 @@ def _render_event_family_form(
     disabled: bool,
 ) -> tuple[bool, bool, dict[str, Any]]:
     defaults = defaults or {}
-    days_default = _coerce_list(defaults.get("generator_selected_days"))
-    skills_default = _coerce_list(defaults.get("generator_selected_skill_levels")) or ["Open"]
-    age_labels_default = _coerce_list(defaults.get("generator_age_labels"))
     with st.form(form_key):
         col1, col2 = st.columns(2)
         with col1:
@@ -1071,65 +1067,8 @@ def _render_event_family_form(
                 else 0,
                 disabled=disabled,
             )
-
-        st.markdown("##### Division Generator")
-        gen_col1, gen_col2 = st.columns(2)
-        with gen_col1:
-            generator_selected_days = st.multiselect(
-                "Selected days",
-                options=st.session_state.get("_tm_day_generator_options", []),
-                default=days_default,
-                disabled=disabled,
-            )
-            generator_selected_skill_levels = st.multiselect(
-                "Selected skill levels",
-                options=SKILL_LABEL_OPTIONS,
-                default=[skill for skill in skills_default if skill in SKILL_LABEL_OPTIONS] or ["Open"],
-                disabled=disabled,
-            )
-            generator_age_mode = st.selectbox(
-                "Age mode",
-                AGE_MODES,
-                index=AGE_MODES.index(_safe_text(defaults.get("generator_age_mode") or "ALL_AGES"))
-                if _safe_text(defaults.get("generator_age_mode") or "ALL_AGES") in AGE_MODES
-                else 0,
-                disabled=disabled,
-            )
-            if generator_age_mode == "FIXED_AGE_BRACKET":
-                generator_age_labels = st.multiselect(
-                    "Age labels",
-                    options=["18+", "35+", "50+", "60+", "70+"],
-                    default=age_labels_default,
-                    disabled=disabled,
-                )
-            else:
-                generator_age_labels = []
-        with gen_col2:
-            generator_format_override = st.selectbox(
-                "Generated division format override",
-                [""] + COMPETITION_FORMATS,
-                index=([""] + COMPETITION_FORMATS).index(_safe_text(defaults.get("generator_format_override")))
-                if _safe_text(defaults.get("generator_format_override")) in [""] + COMPETITION_FORMATS
-                else 0,
-                disabled=disabled,
-            )
-            generator_scoring_override = st.selectbox(
-                "Generated division scoring override",
-                [""] + SCORING_OPTIONS,
-                index=([""] + SCORING_OPTIONS).index(_safe_text(defaults.get("generator_scoring_override")))
-                if _safe_text(defaults.get("generator_scoring_override")) in [""] + SCORING_OPTIONS
-                else 0,
-                disabled=disabled,
-            )
-            generator_notes_default = st.text_area(
-                "Notes default",
-                value=_safe_text(defaults.get("generator_notes_default")),
-                height=100,
-                disabled=disabled,
-            )
         submit_col, cancel_col = st.columns(2)
-        submitted = submit_col.form_submit_button("Save Event Only", type="primary", disabled=disabled)
-        submitted_and_generate = submit_col.form_submit_button("Save Event + Generate Divisions", disabled=disabled)
+        submitted = submit_col.form_submit_button(submit_label, type="primary", disabled=disabled)
         canceled = cancel_col.form_submit_button("Cancel")
 
     payload = {
@@ -1143,16 +1082,111 @@ def _render_event_family_form(
         "default_capacity_teams": _coerce_int(default_capacity_teams) or 16,
         "default_price_usd": _coerce_float(default_price_usd) or 0.0,
         "default_status": _safe_text(default_status) or "draft",
-        "generator_selected_days": generator_selected_days,
-        "generator_selected_skill_levels": generator_selected_skill_levels or ["Open"],
-        "generator_age_mode": _safe_text(generator_age_mode) or "ALL_AGES",
-        "generator_age_labels": generator_age_labels,
-        "generator_format_override": _safe_text(generator_format_override),
-        "generator_scoring_override": _safe_text(generator_scoring_override),
-        "generator_notes_default": _safe_text(generator_notes_default),
-        "_generate_divisions": bool(submitted_and_generate),
     }
-    return submitted or submitted_and_generate, canceled, payload
+    return submitted, canceled, payload
+
+
+def _render_event_generation_form(
+    *,
+    form_key: str,
+    event_defaults: dict[str, Any],
+    day_label_options: list[str],
+    disabled: bool,
+) -> tuple[bool, bool, dict[str, Any]]:
+    with st.form(form_key):
+        st.caption(f"Event Family: **{_safe_text(event_defaults.get('event_family') or 'Unnamed Event')}**")
+        left_col, right_col = st.columns(2)
+        with left_col:
+            selected_days = st.multiselect("Selected days", options=day_label_options, disabled=disabled)
+            selected_skill_levels = st.multiselect(
+                "Selected skill levels",
+                options=SKILL_LABEL_OPTIONS,
+                default=["Open"],
+                disabled=disabled,
+            )
+            age_mode = st.selectbox("Age mode", AGE_MODES, index=0, disabled=disabled)
+            if age_mode == "FIXED_AGE_BRACKET":
+                age_labels = st.multiselect(
+                    "Age labels",
+                    options=["18+", "35+", "50+", "60+", "70+"],
+                    disabled=disabled,
+                )
+            else:
+                age_labels = []
+        with right_col:
+            st.markdown("##### Batch defaults for this run")
+            override_capacity_enabled = st.checkbox("Override capacity", value=False, disabled=disabled)
+            capacity_teams = st.number_input(
+                "Capacity",
+                min_value=1,
+                step=1,
+                value=int(_coerce_int(event_defaults.get("default_capacity_teams")) or 16),
+                disabled=disabled or not override_capacity_enabled,
+            )
+            override_price_enabled = st.checkbox("Override price", value=False, disabled=disabled)
+            price_usd = st.number_input(
+                "Price",
+                min_value=0.0,
+                step=1.0,
+                value=float(_coerce_float(event_defaults.get("default_price_usd")) or 0.0),
+                disabled=disabled or not override_price_enabled,
+            )
+            override_status_enabled = st.checkbox("Override status", value=False, disabled=disabled)
+            status = st.selectbox(
+                "Status",
+                DIVISION_STATUSES,
+                index=DIVISION_STATUSES.index(_safe_text(event_defaults.get("default_status") or "draft"))
+                if _safe_text(event_defaults.get("default_status") or "draft") in DIVISION_STATUSES
+                else 0,
+                disabled=disabled or not override_status_enabled,
+            )
+            waitlist_enabled = st.checkbox("Waitlist enabled", value=bool(event_defaults.get("default_waitlist", True)), disabled=disabled)
+            partner_board_enabled = st.checkbox(
+                "Partner board enabled",
+                value=bool(event_defaults.get("default_partner_board", True)),
+                disabled=disabled,
+            )
+            format_override = st.selectbox("Format override", [""] + COMPETITION_FORMATS, index=0, disabled=disabled)
+            scoring_override = st.selectbox("Scoring override", [""] + SCORING_OPTIONS, index=0, disabled=disabled)
+            notes_default = st.text_area("Notes default", value="", height=100, disabled=disabled)
+
+        generation_mode = st.radio(
+            "Duplicate handling",
+            options=["create_missing_only", "replace_generated_set"],
+            format_func=lambda value: "Create missing only" if value == "create_missing_only" else "Replace generated set",
+            index=0,
+            horizontal=True,
+            disabled=disabled,
+        )
+        preview_count = _division_generation_preview_count(
+            selected_days=selected_days,
+            selected_skills=selected_skill_levels or ["Open"],
+            age_mode=age_mode,
+            age_labels=age_labels,
+        )
+        st.caption(f"Preview: {preview_count} potential division(s).")
+        submit_col, cancel_col = st.columns(2)
+        submitted = submit_col.form_submit_button("Generate Divisions", type="primary", disabled=disabled)
+        canceled = cancel_col.form_submit_button("Cancel")
+
+    payload = {
+        "selected_days": selected_days,
+        "selected_skill_levels": selected_skill_levels or ["Open"],
+        "age_mode": _safe_text(age_mode) or "ALL_AGES",
+        "age_labels": age_labels,
+        "generation_mode": generation_mode,
+        "batch_overrides": {
+            "capacity_teams": _coerce_int(capacity_teams) if override_capacity_enabled else None,
+            "price_usd": _coerce_float(price_usd) if override_price_enabled else None,
+            "status": _safe_text(status) if override_status_enabled else "",
+            "waitlist_enabled": bool(waitlist_enabled),
+            "partner_board_enabled": bool(partner_board_enabled),
+            "division_format": _safe_text(format_override),
+            "division_scoring": _safe_text(scoring_override),
+            "notes": _safe_text(notes_default),
+        },
+    }
+    return submitted, canceled, payload
 
 
 def _render_division_form(
@@ -1582,6 +1616,8 @@ def render(ctx):
     event_edit_id_key = f"tm_event_edit_id_{tournament_id}"
     division_form_mode_key = f"tm_division_form_mode_{tournament_id}"
     division_edit_id_key = f"tm_division_edit_id_{tournament_id}"
+    generate_event_id_key = f"tm_generate_event_id_{tournament_id}"
+    generation_result_key = f"tm_generation_result_{tournament_id}"
     load_templates_confirm_key = f"tm_load_templates_confirm_{tournament_id}"
     if event_form_mode_key not in st.session_state:
         st.session_state[event_form_mode_key] = None
@@ -1591,6 +1627,10 @@ def render(ctx):
         st.session_state[division_form_mode_key] = None
     if division_edit_id_key not in st.session_state:
         st.session_state[division_edit_id_key] = None
+    if generate_event_id_key not in st.session_state:
+        st.session_state[generate_event_id_key] = None
+    if generation_result_key not in st.session_state:
+        st.session_state[generation_result_key] = ""
     if load_templates_confirm_key not in st.session_state:
         st.session_state[load_templates_confirm_key] = False
 
@@ -1664,10 +1704,11 @@ def render(ctx):
     day_label_options = [label for label in days_df[days_df["enabled"] == True]["label"].tolist() if _safe_text(label)] or [
         label for label in days_df["label"].tolist() if _safe_text(label)
     ]
+    ordered_day_labels = list(dict.fromkeys(_safe_text(label) for label in day_label_options if _safe_text(label)))
 
     with tabs[2]:
         st.subheader("Events")
-        st.caption("Define event defaults and division-generation rules in this step.")
+        st.caption("Define persistent event-family defaults in this step. Use Generate Divisions for one-off batch runs.")
         if structure_locked:
             st.caption("Events are view-only because registrations already exist.")
         events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
@@ -1699,7 +1740,6 @@ def render(ctx):
             if event_mode == "edit" and event_edit_id is not None and str(event_edit_id) in {str(idx) for idx in events_df.index.tolist()}:
                 defaults = events_df.loc[event_edit_id].to_dict()
             st.markdown("#### Edit Event" if event_mode == "edit" else "#### Add Event")
-            st.session_state["_tm_day_generator_options"] = day_label_options
             submitted, canceled, payload = _render_event_family_form(
                 form_key=f"tm_event_family_form_{tournament_id}_{event_mode}",
                 mode=event_mode,
@@ -1717,13 +1757,6 @@ def render(ctx):
                     errors.append("Event name is required.")
                 if _event_family_name_exists(events_df, payload["event_family"], exclude_id=event_edit_id if event_mode == "edit" else None):
                     errors.append("Event name must be unique.")
-                if payload.get("_generate_divisions"):
-                    if not _coerce_list(payload.get("generator_selected_days")):
-                        errors.append("Select at least one day for division generation.")
-                    if not _coerce_list(payload.get("generator_selected_skill_levels")):
-                        errors.append("Select at least one skill level for division generation.")
-                    if payload.get("generator_age_mode") == "FIXED_AGE_BRACKET" and not _coerce_list(payload.get("generator_age_labels")):
-                        errors.append("Fixed Age Brackets requires at least one age label.")
                 if errors:
                     for error in errors:
                         st.error(error)
@@ -1732,21 +1765,6 @@ def render(ctx):
                         st.session_state[events_seed_key] = _update_event_family_row(events_df, str(event_edit_id), payload)
                     else:
                         st.session_state[events_seed_key] = _add_event_family_row(events_df, payload)
-                    if payload.get("_generate_divisions"):
-                        saved_events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
-                        candidate = saved_events_df[saved_events_df["event_family"].apply(lambda value: _safe_text(value) == payload["event_family"])]
-                        if not candidate.empty:
-                            generation_mode = _safe_text(st.session_state.get(f"tm_generation_mode_{tournament_id}") or "create_missing_only")
-                            divisions_df_current = _ensure_editor_columns(st.session_state[divisions_seed_key], DIVISION_EDITOR_COLUMNS)
-                            next_divisions, created_count, skipped_count = _generate_division_rows_for_event(
-                                event_row=candidate.iloc[0],
-                                current_divisions_df=divisions_df_current,
-                                generation_mode=generation_mode,
-                            )
-                            st.session_state[divisions_seed_key] = next_divisions
-                            st.session_state[f"tm_generation_result_{tournament_id}"] = (
-                                f"Generated {created_count} division(s). Skipped {skipped_count} duplicate(s)."
-                            )
                     st.session_state[event_form_mode_key] = None
                     st.session_state[event_edit_id_key] = None
                     st.rerun()
@@ -1771,20 +1789,11 @@ def render(ctx):
             )
             st.dataframe(preview, hide_index=True, use_container_width=True)
             st.markdown("##### Manage Events")
-            st.radio(
-                "Duplicate handling for Save Event + Generate Divisions",
-                options=["create_missing_only", "replace_generated_set"],
-                format_func=lambda value: "Create missing only" if value == "create_missing_only" else "Replace generated set",
-                key=f"tm_generation_mode_{tournament_id}",
-                disabled=structure_locked,
-                horizontal=True,
-            )
             divisions_snapshot = _ensure_editor_columns(st.session_state.get(f"tm_divisions_seed_{tournament_id}"), DIVISION_EDITOR_COLUMNS)
             for event_id, row in events_df.iterrows():
                 name = _safe_text(row.get("event_family") or "Unnamed Event")
-                preview_count = _division_generation_preview_count(row)
-                row_cols = st.columns([4, 1, 1])
-                row_cols[0].markdown(f"**{name}** · {_safe_text(row.get('participant_type'))} · {_safe_text(row.get('gender_restriction'))} · Preview divisions: **{preview_count}**")
+                row_cols = st.columns([4, 1, 1, 1.2])
+                row_cols[0].markdown(f"**{name}** · {_safe_text(row.get('participant_type'))} · {_safe_text(row.get('gender_restriction'))}")
                 if row_cols[1].button("Edit", key=f"tm_evt_edit_{tournament_id}_{event_id}", disabled=structure_locked):
                     st.session_state[event_form_mode_key] = "edit"
                     st.session_state[event_edit_id_key] = str(event_id)
@@ -1799,10 +1808,59 @@ def render(ctx):
                         st.session_state[events_seed_key] = _delete_event_family_row(events_df, str(event_id))
                         st.success(f"Deleted event '{name}'.")
                         st.rerun()
-        st.caption("Events define defaults and generation rules. Divisions can still be edited one-off on the Divisions tab.")
-        if _safe_text(st.session_state.get(f"tm_generation_result_{tournament_id}")):
-            st.success(_safe_text(st.session_state.get(f"tm_generation_result_{tournament_id}")))
-            st.session_state[f"tm_generation_result_{tournament_id}"] = ""
+                if row_cols[3].button("Generate Divisions", key=f"tm_evt_gen_{tournament_id}_{event_id}", disabled=structure_locked):
+                    st.session_state[generate_event_id_key] = str(event_id)
+                    st.rerun()
+        generate_event_id = st.session_state.get(generate_event_id_key)
+        if generate_event_id is not None and str(generate_event_id) in {str(idx) for idx in events_df.index.tolist()}:
+            generator_defaults = events_df.loc[generate_event_id].to_dict()
+            st.markdown("#### Generate Divisions")
+            submitted, canceled, generation_payload = _render_event_generation_form(
+                form_key=f"tm_generate_form_{tournament_id}_{generate_event_id}",
+                event_defaults=generator_defaults,
+                day_label_options=ordered_day_labels,
+                disabled=structure_locked,
+            )
+            if canceled:
+                st.session_state[generate_event_id_key] = None
+                st.rerun()
+            if submitted:
+                errors: list[str] = []
+                selected_days = _coerce_list(generation_payload.get("selected_days"))
+                selected_skills = _coerce_list(generation_payload.get("selected_skill_levels"))
+                age_mode = _safe_text(generation_payload.get("age_mode") or "ALL_AGES")
+                age_labels = _coerce_list(generation_payload.get("age_labels"))
+                if not selected_days:
+                    errors.append("Select at least one day for division generation.")
+                if not selected_skills:
+                    errors.append("Select at least one skill level for division generation.")
+                if age_mode == "FIXED_AGE_BRACKET" and not age_labels:
+                    errors.append("Fixed Age Brackets requires at least one age label.")
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    divisions_df_current = _ensure_editor_columns(st.session_state[divisions_seed_key], DIVISION_EDITOR_COLUMNS)
+                    next_divisions, created_count, skipped_count = _generate_division_rows_for_event_batch(
+                        event_row=events_df.loc[generate_event_id],
+                        selected_days=selected_days,
+                        selected_skills=selected_skills,
+                        age_mode=age_mode,
+                        age_labels=age_labels,
+                        batch_overrides=generation_payload.get("batch_overrides") or {},
+                        current_divisions_df=divisions_df_current,
+                        generation_mode=_safe_text(generation_payload.get("generation_mode") or "create_missing_only"),
+                    )
+                    st.session_state[divisions_seed_key] = next_divisions
+                    st.session_state[generation_result_key] = (
+                        f"Generated {created_count} division(s). Skipped {skipped_count} duplicate(s)."
+                    )
+                    st.session_state[generate_event_id_key] = None
+                    st.rerun()
+        st.caption("Events define persistent defaults only. Divisions can still be edited one-off on the Divisions tab.")
+        if _safe_text(st.session_state.get(generation_result_key)):
+            st.success(_safe_text(st.session_state.get(generation_result_key)))
+            st.session_state[generation_result_key] = ""
         if st.button("Save Events Draft", disabled=structure_locked, key=f"tm_save_events_draft_{tournament_id}"):
             saved_payload = save_builder_draft(
                 supabase,
