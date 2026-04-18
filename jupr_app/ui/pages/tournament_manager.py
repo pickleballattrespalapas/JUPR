@@ -1902,21 +1902,30 @@ def render(ctx):
                 if _safe_text(template_row.get("event_family"))
             }
             st.markdown("##### Existing Divisions")
-            for family in sorted({ _safe_text(v) for v in divisions_df["event_family"].tolist() if _safe_text(v) }):
-                family_df = divisions_df[divisions_df["event_family"].apply(lambda value: _safe_text(value) == family)]
-                st.markdown(f"**{family}**")
-                family_day_labels = { _safe_text(v) for v in family_df["assigned_day"].tolist() if _safe_text(v) }
-                ordered_family_days = [day for day in ordered_day_labels if day in family_day_labels]
-                remaining_days = list(
-                    dict.fromkeys(
-                        _safe_text(value)
-                        for value in family_df["assigned_day"].tolist()
-                        if _safe_text(value) and _safe_text(value) not in ordered_family_days
-                    )
+            divisions_day_labels = {
+                _safe_text(value) for value in divisions_df["assigned_day"].tolist() if _safe_text(value)
+            }
+            ordered_division_days = [day for day in ordered_day_labels if day in divisions_day_labels]
+            remaining_days = list(
+                dict.fromkeys(
+                    _safe_text(value)
+                    for value in divisions_df["assigned_day"].tolist()
+                    if _safe_text(value) and _safe_text(value) not in ordered_division_days
                 )
-                for day_index, day in enumerate(ordered_family_days + remaining_days):
-                    day_df = family_df[family_df["assigned_day"].apply(lambda value: _safe_text(value) == day)]
-                    with st.expander(day, expanded=(day_index == 0)):
+            )
+            for day_index, day in enumerate(ordered_division_days + remaining_days):
+                day_df = divisions_df[divisions_df["assigned_day"].apply(lambda value: _safe_text(value) == day)]
+                if day_df.empty:
+                    continue
+                with st.expander(day, expanded=(day_index == 0)):
+                    day_families = sorted({
+                        _safe_text(value) for value in day_df["event_family"].tolist() if _safe_text(value)
+                    })
+                    for family in day_families:
+                        family_df = day_df[day_df["event_family"].apply(lambda value: _safe_text(value) == family)]
+                        if family_df.empty:
+                            continue
+                        st.markdown(f"**{family}**")
                         header_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
                         header_cols[0].markdown("**Division**")
                         header_cols[1].markdown("**Skill**")
@@ -1925,7 +1934,7 @@ def render(ctx):
                         header_cols[4].markdown("**Capacity**")
                         header_cols[5].markdown("**Price**")
                         header_cols[6].markdown("**Actions**")
-                        for division_id, row in day_df.iterrows():
+                        for division_id, row in family_df.iterrows():
                             division_name = _display_division_name(row)
                             row_cols = st.columns([5.0, 1.0, 1.2, 1.0, 1.0, 1.0, 2.4])
                             row_cols[0].markdown(f"**{_display_optional(division_name)}**")
