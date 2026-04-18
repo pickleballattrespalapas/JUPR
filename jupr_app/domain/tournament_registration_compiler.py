@@ -564,6 +564,7 @@ def _apply_capacity(
         return entries, []
 
     issues: list[dict[str, Any]] = []
+    waitlist_enabled = bool(event.get("waitlist_enabled", True))
     confirmed_slots = 0
     ordered = sorted(entries, key=lambda row: row.get("sort_key") or datetime.min)
     out: list[dict[str, Any]] = []
@@ -575,13 +576,14 @@ def _apply_capacity(
         confirmed_slots += 1
         if confirmed_slots > int(capacity):
             entry = dict(entry)
-            entry["status"] = "WAITLIST"
+            entry["status"] = "WAITLIST" if waitlist_enabled else "REVIEW"
+            overflow_status = "waitlist" if waitlist_enabled else "manual review"
             issues.append(
                 _issue(
                     str(tournament_id),
                     "EVENT_AT_CAPACITY",
                     "warning",
-                    f"{event.get('label')} exceeded its configured capacity. Later entry moved to waitlist.",
+                    f"{event.get('label')} exceeded its configured capacity. Later entry moved to {overflow_status}.",
                     registration_id=(entry.get("source_registration_ids") or [None])[0],
                     event_option_id=str(event.get("id")),
                 )
