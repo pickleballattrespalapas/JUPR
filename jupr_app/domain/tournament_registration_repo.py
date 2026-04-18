@@ -479,6 +479,252 @@ def count_tournament_registrations(supabase, tournament_id: str) -> int:
         return len(rows)
 
 
+def list_registration_usage_by_event_option(supabase, tournament_id: str) -> dict[str, dict[str, int]]:
+    tournament_id = str(tournament_id)
+    usage: dict[str, dict[str, int]] = {}
+
+    selection_rows = _safe_data(
+        supabase.table("tournament_registration_selections")
+        .select("event_option_id")
+        .eq("tournament_id", tournament_id)
+        .execute()
+    )
+    for row in selection_rows:
+        event_option_id = str(row.get("event_option_id") or "").strip()
+        if not event_option_id:
+            continue
+        bucket = usage.setdefault(event_option_id, {"registrations": 0, "event_draws": 0, "teams": 0, "games": 0})
+        bucket["registrations"] += 1
+
+    for table_name, key in [
+        ("tournament_event_draws", "event_draws"),
+        ("tournament_teams", "teams"),
+        ("tournament_games", "games"),
+    ]:
+        try:
+            rows = _safe_data(
+                supabase.table(table_name)
+                .select("event_option_id")
+                .eq("tournament_id", tournament_id)
+                .execute()
+            )
+        except Exception:
+            rows = []
+        for row in rows:
+            event_option_id = str(row.get("event_option_id") or "").strip()
+            if not event_option_id:
+                continue
+            bucket = usage.setdefault(event_option_id, {"registrations": 0, "event_draws": 0, "teams": 0, "games": 0})
+            bucket[key] += 1
+
+    return usage
+
+
+def list_registration_usage_by_day(supabase, tournament_id: str) -> dict[str, dict[str, int]]:
+    tournament_id = str(tournament_id)
+    usage: dict[str, dict[str, int]] = {}
+
+    selection_rows = _safe_data(
+        supabase.table("tournament_registration_selections")
+        .select("registration_day_id")
+        .eq("tournament_id", tournament_id)
+        .execute()
+    )
+    for row in selection_rows:
+        day_id = str(row.get("registration_day_id") or "").strip()
+        if not day_id:
+            continue
+        bucket = usage.setdefault(day_id, {"registrations": 0, "event_draws": 0, "teams": 0, "games": 0})
+        bucket["registrations"] += 1
+
+    for table_name, key in [
+        ("tournament_event_draws", "event_draws"),
+        ("tournament_teams", "teams"),
+        ("tournament_games", "games"),
+    ]:
+        try:
+            rows = _safe_data(
+                supabase.table(table_name)
+                .select("registration_day_id")
+                .eq("tournament_id", tournament_id)
+                .execute()
+            )
+        except Exception:
+            rows = []
+        for row in rows:
+            day_id = str(row.get("registration_day_id") or "").strip()
+            if not day_id:
+                continue
+            bucket = usage.setdefault(day_id, {"registrations": 0, "event_draws": 0, "teams": 0, "games": 0})
+            bucket[key] += 1
+
+    return usage
+
+
+def _entity_usage_total(usage: dict[str, int] | None) -> int:
+    if not usage:
+        return 0
+    return int(usage.get("registrations", 0) or 0) + int(usage.get("event_draws", 0) or 0) + int(usage.get("teams", 0) or 0) + int(usage.get("games", 0) or 0)
+
+
+def _event_identity_key(event: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        str(event.get("event_family_label") or "").strip().lower(),
+        str(event.get("division_name") or event.get("label") or "").strip().lower(),
+        str(event.get("event_type") or "").strip().upper(),
+        str(event.get("gender_restriction") or "").strip().upper(),
+        str(event.get("skill_label") or "").strip().lower(),
+        str(event.get("age_label") or "").strip().lower(),
+    )
+
+
+def analyze_registration_publish_impact(
+    supabase,
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    tournament_id = str(tournament_id)
+    published_days = list_registration_days(supabase, tournament_id)
+    published_events = list_event_options(supabase, tournament_id)
+    usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
+    usage_by_day = list_registration_usage_by_day(supabase, tournament_id)
+
+    published_days_by_id = {str(row.get("id")): row for row in published_days if str(row.get("id") or "").strip()}
+    published_events_by_id = {str(row.get("id")): row for row in published_events if str(row.get("id") or "").strip()}
+    published_event_ids_by_identity = {_event_identity_key(row): str(row.get("id")) for row in published_events if str(row.get("id") or "").strip()}
+
+    draft_days: list[dict[str, Any]] = []
+    draft_day_ids: set[str] = set()
+    for row in days or []:
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            row = {**row, "id": _uid("day")}
+            row_id = str(row.get("id"))
+        draft_day_ids.add(row_id)
+        draft_days.append({**row, "id": row_id})
+
+    draft_events: list[dict[str, Any]] = []
+    draft_event_ids: set[str] = set()
+    for row in event_options or []:
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            fallback_id = published_event_ids_by_identity.get(_event_identity_key(row))
+            row_id = fallback_id or _uid("event")
+            row = {**row, "id": row_id}
+        draft_event_ids.add(row_id)
+        draft_events.append({**row, "id": row_id})
+
+    creates: list[str] = []
+    updates: list[str] = []
+    soft_closes: list[str] = []
+    deletes: list[str] = []
+    warnings: list[str] = []
+    blocked: list[str] = []
+
+    for day in draft_days:
+        day_id = str(day.get("id"))
+        existing = published_days_by_id.get(day_id)
+        if existing is None:
+            creates.append(f"Day '{day.get('label') or day_id}' will be created.")
+            continue
+        updates.append(f"Day '{existing.get('label') or day_id}' will be updated.")
+        usage = usage_by_day.get(day_id, {})
+        if _entity_usage_total(usage) and str(existing.get("label") or "") != str(day.get("label") or ""):
+            warnings.append(f"Populated day '{existing.get('label') or day_id}' is being relabeled.")
+
+    for event in draft_events:
+        event_id = str(event.get("id"))
+        existing = published_events_by_id.get(event_id)
+        label = str(event.get("division_name") or event.get("label") or event_id)
+        if existing is None:
+            creates.append(f"Division '{label}' will be created.")
+            continue
+        updates.append(f"Division '{str(existing.get('division_name') or existing.get('label') or event_id)}' will be updated.")
+        usage = usage_by_event.get(event_id, {})
+        occupied = int(usage.get("registrations", 0) or 0)
+        has_usage = _entity_usage_total(usage) > 0
+
+        existing_day_id = str(existing.get("registration_day_id") or "")
+        draft_day_id = str(event.get("registration_day_id") or "")
+        if has_usage and existing_day_id != draft_day_id:
+            blocked.append(f"Cannot move populated division '{label}' to a different day.")
+        if has_usage and str(existing.get("event_type") or "") != str(event.get("event_type") or ""):
+            blocked.append(f"Cannot change participant type for populated division '{label}'.")
+        if has_usage and str(existing.get("gender_restriction") or "") != str(event.get("gender_restriction") or ""):
+            blocked.append(f"Cannot change gender restriction for populated division '{label}'.")
+
+        rule_columns = ["skill_label", "skill_mode", "age_label", "age_mode", "age_rules"]
+        if has_usage and any(str(existing.get(column) or "") != str(event.get(column) or "") for column in rule_columns):
+            blocked.append(f"Cannot change skill/age rules for populated division '{label}' in ways that could invalidate registrants.")
+
+        existing_capacity = existing.get("capacity_teams")
+        next_capacity = event.get("capacity_teams")
+        try:
+            if existing_capacity is not None and next_capacity is not None:
+                old_cap = int(existing_capacity)
+                new_cap = int(next_capacity)
+                if new_cap < old_cap:
+                    if new_cap < occupied:
+                        blocked.append(f"Cannot reduce capacity for '{label}' below occupied teams ({occupied}).")
+                    else:
+                        warnings.append(f"Capacity for '{label}' is being reduced from {old_cap} to {new_cap} with {occupied} occupied.")
+        except Exception:
+            pass
+
+        if has_usage and str(existing.get("division_name") or existing.get("label") or "") != label:
+            warnings.append(f"Populated division '{existing.get('division_name') or existing.get('label') or event_id}' is being relabeled.")
+
+        if str(existing.get("enabled", True)).lower() in {"true", "1"} and not _coerce_bool(event.get("enabled", True)):
+            warnings.append(f"Division '{label}' will be hidden from future registration.")
+
+    for existing_event in published_events:
+        event_id = str(existing_event.get("id") or "")
+        if not event_id or event_id in draft_event_ids:
+            continue
+        usage = usage_by_event.get(event_id, {})
+        event_label = str(existing_event.get("division_name") or existing_event.get("label") or event_id)
+        if _entity_usage_total(usage):
+            soft_closes.append(f"Division '{event_label}' is omitted from draft and will be archived/closed (history preserved).")
+            warnings.append(f"Division '{event_label}' has usage and cannot be destructively deleted; it will be soft-closed.")
+        else:
+            deletes.append(f"Division '{event_label}' is empty and will be deleted.")
+
+    for existing_day in published_days:
+        day_id = str(existing_day.get("id") or "")
+        if not day_id or day_id in draft_day_ids:
+            continue
+        usage = usage_by_day.get(day_id, {})
+        day_label = str(existing_day.get("label") or day_id)
+        if _entity_usage_total(usage):
+            soft_closes.append(f"Day '{day_label}' is omitted from draft and will be disabled (history preserved).")
+            warnings.append(f"Day '{day_label}' has usage and cannot be destructively deleted; it will be soft-closed.")
+        else:
+            deletes.append(f"Day '{day_label}' is empty and will be deleted.")
+
+    return {
+        "summary": {
+            "creates": len(creates),
+            "updates": len(updates),
+            "soft_closes": len(soft_closes),
+            "deletes": len(deletes),
+            "warnings": len(warnings),
+            "blocked": len(blocked),
+        },
+        "creates": creates,
+        "updates": updates,
+        "soft_closes": soft_closes,
+        "deletes": deletes,
+        "warnings": warnings,
+        "blocked": blocked,
+        "draft_days": draft_days,
+        "draft_event_options": draft_events,
+        "published_days": published_days,
+        "published_event_options": published_events,
+    }
+
+
 def _legacy_day_aliases(days: list[dict[str, Any]]) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for idx, day in enumerate(days, start=1):
@@ -582,6 +828,98 @@ def replace_registration_configuration(
             )
     except Exception as exc:
         raise ValueError(f"Failed to replace registration configuration for tournament {tournament_id}: {exc}") from exc
+
+
+def publish_registration_configuration(
+    supabase,
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Publish rules summary:
+    - If tournament has zero registrations, publish can use full replace for simplicity.
+    - If tournament has registrations, publish uses a guarded diff:
+      preserve stable IDs, block destructive mutations to populated rows,
+      and convert removed populated rows into soft-closed/disabled records.
+    - Public registration continues to consume published day/event rows only.
+    """
+    registration_count = count_tournament_registrations(supabase, tournament_id)
+    if registration_count == 0:
+        replace_registration_configuration(
+            supabase,
+            tournament_id=tournament_id,
+            days=days,
+            event_options=event_options,
+            allow_replace_with_registrations=False,
+        )
+        return {"mode": "replace", "blocked": [], "warnings": []}
+
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id=tournament_id,
+        days=days,
+        event_options=event_options,
+    )
+    if impact["blocked"]:
+        raise ValueError("Publish blocked due to destructive changes: " + " | ".join(impact["blocked"]))
+
+    published_days = impact["published_days"]
+    published_events = impact["published_event_options"]
+    draft_days = impact["draft_days"]
+    draft_events = impact["draft_event_options"]
+    draft_day_ids = {str(row.get("id")) for row in draft_days}
+    draft_event_ids = {str(row.get("id")) for row in draft_events}
+    usage_by_day = list_registration_usage_by_day(supabase, tournament_id)
+    usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
+
+    day_upserts = list(draft_days)
+    event_upserts = list(draft_events)
+    day_delete_ids: list[str] = []
+    event_delete_ids: list[str] = []
+
+    for row in published_events:
+        row_id = str(row.get("id") or "")
+        if not row_id or row_id in draft_event_ids:
+            continue
+        if _entity_usage_total(usage_by_event.get(row_id)):
+            event_upserts.append(
+                {
+                    **row,
+                    "enabled": False,
+                    "status": "closed",
+                    "updated_at": _now_iso(),
+                }
+            )
+        else:
+            event_delete_ids.append(row_id)
+
+    for row in published_days:
+        row_id = str(row.get("id") or "")
+        if not row_id or row_id in draft_day_ids:
+            continue
+        if _entity_usage_total(usage_by_day.get(row_id)):
+            day_upserts.append(
+                {
+                    **row,
+                    "enabled": False,
+                    "updated_at": _now_iso(),
+                }
+            )
+        else:
+            day_delete_ids.append(row_id)
+
+    if day_upserts:
+        supabase.table("tournament_registration_days").upsert(day_upserts).execute()
+    if event_upserts:
+        supabase.table("tournament_event_options").upsert(event_upserts).execute()
+    if event_delete_ids:
+        supabase.table("tournament_event_options").delete().eq("tournament_id", str(tournament_id)).in_("id", event_delete_ids).execute()
+    if day_delete_ids:
+        supabase.table("tournament_registration_days").delete().eq("tournament_id", str(tournament_id)).in_("id", day_delete_ids).execute()
+
+    return {"mode": "guarded", "blocked": impact["blocked"], "warnings": impact["warnings"], "summary": impact["summary"]}
 
 
 def list_registrations(supabase, tournament_id: str) -> list[dict[str, Any]]:

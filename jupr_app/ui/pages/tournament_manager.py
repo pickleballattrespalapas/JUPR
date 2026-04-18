@@ -11,6 +11,7 @@ import streamlit as st
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_registration_repo import (
     REGISTRATION_STATUS_OPTIONS,
+    analyze_registration_publish_impact,
     build_public_urls,
     count_tournament_registrations,
     get_builder_draft,
@@ -19,8 +20,8 @@ from jupr_app.domain.tournament_registration_repo import (
     list_event_options,
     list_existing_tournaments,
     list_registration_days,
+    publish_registration_configuration,
     registration_feature_available,
-    replace_registration_configuration,
     save_builder_draft,
     upsert_registration_settings,
 )
@@ -1414,15 +1415,9 @@ def render(ctx):
         and inferred_end_date is not None
     )
 
-    structure_locked = bool(registration_count)
-    if structure_locked:
-        st.warning(
-            "This tournament already has registrations. Structural draft edits are locked."
-        )
-    else:
-        st.info(
-            "Recommended setup order: 1) save tournament info and dates, 2) review days, 3) define events and defaults, 4) review generated divisions, 5) publish links."
-        )
+    st.info(
+        "Recommended setup order: 1) save tournament info and dates, 2) review days, 3) define events and defaults, 4) review generated divisions, 5) publish links."
+    )
 
     metrics = st.columns(4)
     metrics[0].metric("Registration status", _safe_text(settings.get("registration_status") or "draft"))
@@ -1556,7 +1551,7 @@ def render(ctx):
                         "partner_board_enabled": True,
                     },
                 )
-                if dates_changed and not structure_locked:
+                if dates_changed:
                     synced_days, synced_events = _sync_days_with_date_range(
                         tournament_id,
                         start_date,
@@ -1564,19 +1559,23 @@ def render(ctx):
                         days,
                         event_options,
                     )
-                    replace_registration_configuration(
-                        supabase,
-                        tournament_id=tournament_id,
-                        days=synced_days,
-                        event_options=synced_events,
-                    )
+                    try:
+                        publish_registration_configuration(
+                            supabase,
+                            tournament_id=tournament_id,
+                            days=synced_days,
+                            event_options=synced_events,
+                        )
+                    except ValueError as exc:
+                        st.error(str(exc))
+                        st.stop()
 
                 _clear_tournament_manager_state(tournament_id)
                 st.session_state[f"tm_refresh_{tournament_id}"] = True
 
                 st.success(
                     "Tournament info and days synchronized."
-                    if dates_changed and not structure_locked
+                    if dates_changed
                     else "Tournament info saved."
                 )
                 st.rerun()
@@ -1653,14 +1652,12 @@ def render(ctx):
         st.caption("Days are created from the tournament date range. Relabel them to match how you actually talk about the schedule, such as 'Mixed Doubles Day' or 'Championship Sunday'.")
         if not canonical_has_range and not inferred_has_range:
             st.warning("No tournament date range is saved yet. You can add days manually, or save dates in Tournament Info to auto-generate days.")
-        if structure_locked:
-            st.caption("Days are view-only because registrations already exist.")
         days_df = st.data_editor(
             st.session_state[days_seed_key],
             hide_index=True,
             num_rows="dynamic",
             key=f"tm_days_editor_{tournament_id}",
-            disabled=structure_locked,
+            disabled=False,
             column_config={
                 "event_date": st.column_config.TextColumn("Date (YYYY-MM-DD)"),
                 "label": st.column_config.TextColumn("Day label"),
@@ -1670,7 +1667,7 @@ def render(ctx):
         )
         days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
         st.session_state[days_seed_key] = days_df.copy()
-        if st.button("Regenerate days from tournament dates", disabled=structure_locked):
+        if st.button("Regenerate days from tournament dates"):
             generated = _df_with_hidden_ids(
                 [{"id": _uid("day"), **row} for row in _date_rows(regenerate_start_date, regenerate_end_date)],
                 "id",
@@ -1681,7 +1678,7 @@ def render(ctx):
             else:
                 st.session_state[days_seed_key] = generated
             st.rerun()
-        if st.button("Save Days Draft", disabled=structure_locked, key=f"tm_save_days_draft_{tournament_id}"):
+        if st.button("Save Days Draft", key=f"tm_save_days_draft_{tournament_id}"):
             saved_payload = save_builder_draft(
                 supabase,
                 tournament_id=tournament_id,
@@ -1711,17 +1708,15 @@ def render(ctx):
     with tabs[2]:
         st.subheader("Events")
         st.caption("Define persistent event-family defaults in this step. Use Generate Divisions for one-off batch runs.")
-        if structure_locked:
-            st.caption("Events are view-only because registrations already exist.")
         events_df = _ensure_editor_columns(st.session_state[events_seed_key], EVENT_TEMPLATE_COLUMNS)
         st.session_state[events_seed_key] = events_df.copy()
 
         action_col1, action_col2 = st.columns([1, 1])
-        if action_col1.button("Create Event", type="primary", disabled=structure_locked):
+        if action_col1.button("Create Event", type="primary"):
             st.session_state[event_form_mode_key] = "create"
             st.session_state[event_edit_id_key] = None
             st.rerun()
-        if action_col2.button("Load standard events", disabled=structure_locked):
+        if action_col2.button("Load standard events"):
             if not events_df.empty and not st.session_state.get(load_templates_confirm_key):
                 st.session_state[load_templates_confirm_key] = True
                 st.warning("Existing events found. Click again to append missing standard templates.")
@@ -1747,7 +1742,7 @@ def render(ctx):
                 mode=event_mode,
                 defaults=defaults,
                 submit_label="Save Event" if event_mode == "edit" else "Add Event",
-                disabled=structure_locked,
+                disabled=False,
             )
             if canceled:
                 st.session_state[event_form_mode_key] = None
@@ -1796,11 +1791,11 @@ def render(ctx):
                 name = _safe_text(row.get("event_family") or "Unnamed Event")
                 row_cols = st.columns([4, 1, 1, 1.2])
                 row_cols[0].markdown(f"**{name}** · {_safe_text(row.get('participant_type'))} · {_safe_text(row.get('gender_restriction'))}")
-                if row_cols[1].button("Edit", key=f"tm_evt_edit_{tournament_id}_{event_id}", disabled=structure_locked):
+                if row_cols[1].button("Edit", key=f"tm_evt_edit_{tournament_id}_{event_id}"):
                     st.session_state[event_form_mode_key] = "edit"
                     st.session_state[event_edit_id_key] = str(event_id)
                     st.rerun()
-                if row_cols[2].button("Delete", key=f"tm_evt_del_{tournament_id}_{event_id}", disabled=structure_locked):
+                if row_cols[2].button("Delete", key=f"tm_evt_del_{tournament_id}_{event_id}"):
                     has_dependent_divisions = not divisions_snapshot[
                         divisions_snapshot["event_family"].apply(lambda value: _safe_text(value).lower() == name.lower())
                     ].empty
@@ -1810,7 +1805,7 @@ def render(ctx):
                         st.session_state[events_seed_key] = _delete_event_family_row(events_df, str(event_id))
                         st.success(f"Deleted event '{name}'.")
                         st.rerun()
-                if row_cols[3].button("Generate Divisions", key=f"tm_evt_gen_{tournament_id}_{event_id}", disabled=structure_locked):
+                if row_cols[3].button("Generate Divisions", key=f"tm_evt_gen_{tournament_id}_{event_id}"):
                     st.session_state[generate_event_id_key] = str(event_id)
                     st.rerun()
         generate_event_id = st.session_state.get(generate_event_id_key)
@@ -1821,7 +1816,7 @@ def render(ctx):
                 form_key=f"tm_generate_form_{tournament_id}_{generate_event_id}",
                 event_defaults=generator_defaults,
                 day_label_options=ordered_day_labels,
-                disabled=structure_locked,
+                disabled=False,
             )
             if canceled:
                 st.session_state[generate_event_id_key] = None
@@ -1863,7 +1858,7 @@ def render(ctx):
         if _safe_text(st.session_state.get(generation_result_key)):
             st.success(_safe_text(st.session_state.get(generation_result_key)))
             st.session_state[generation_result_key] = ""
-        if st.button("Save Events Draft", disabled=structure_locked, key=f"tm_save_events_draft_{tournament_id}"):
+        if st.button("Save Events Draft", key=f"tm_save_events_draft_{tournament_id}"):
             saved_payload = save_builder_draft(
                 supabase,
                 tournament_id=tournament_id,
@@ -1896,9 +1891,7 @@ def render(ctx):
     with tabs[3]:
         st.subheader("Divisions")
         st.caption("Review, edit, and remove generated divisions. Manual one-off additions are optional.")
-        if structure_locked:
-            st.caption("Divisions are view-only because registrations already exist.")
-        create_disabled = structure_locked or not event_family_options or not day_label_options
+        create_disabled = not event_family_options or not day_label_options
         if st.button("Create Division", type="primary", disabled=create_disabled):
             st.session_state[division_form_mode_key] = "create"
             st.session_state[division_edit_id_key] = None
@@ -1922,7 +1915,7 @@ def render(ctx):
                 event_family_options=event_family_options,
                 day_label_options=day_label_options,
                 submit_label="Save Division" if division_mode == "edit" else "Add Division",
-                disabled=structure_locked,
+                disabled=False,
             )
             if canceled:
                 st.session_state[division_form_mode_key] = None
@@ -2005,11 +1998,11 @@ def render(ctx):
                             price_value = row.get("price_usd")
                             row_cols[5].markdown(f"${float(price_value):.2f}" if _coerce_float(price_value) is not None else "—")
                             action_cols = row_cols[6].columns([1, 1], gap="small")
-                            if action_cols[0].button("✏️ Edit", key=f"tm_div_edit_{tournament_id}_{division_id}", disabled=structure_locked):
+                            if action_cols[0].button("✏️ Edit", key=f"tm_div_edit_{tournament_id}_{division_id}"):
                                 st.session_state[division_form_mode_key] = "edit"
                                 st.session_state[division_edit_id_key] = str(division_id)
                                 st.rerun()
-                            if action_cols[1].button("🗑️ Delete", key=f"tm_div_del_{tournament_id}_{division_id}", disabled=structure_locked):
+                            if action_cols[1].button("🗑️ Delete", key=f"tm_div_del_{tournament_id}_{division_id}"):
                                 st.session_state[divisions_seed_key] = _delete_division_row(divisions_df, str(division_id))
                                 st.success(f"Deleted division '{division_name}'.")
                                 st.rerun()
@@ -2025,7 +2018,7 @@ def render(ctx):
                             st.divider()
         for mode, help_text in AGE_MODE_HELP.items():
             st.caption(f"**{mode.replace('_', ' ').title()}** — {help_text}")
-        if st.button("Save Divisions Draft", disabled=structure_locked, key=f"tm_save_divisions_draft_{tournament_id}"):
+        if st.button("Save Divisions Draft", key=f"tm_save_divisions_draft_{tournament_id}"):
             saved_payload = save_builder_draft(
                 supabase,
                 tournament_id=tournament_id,
@@ -2065,20 +2058,62 @@ def render(ctx):
                 st.warning(error)
 
         days_payload, event_payload = _build_payloads(tournament_id, days_df, events_df, divisions_df)
-        if st.button("Save builder changes", type="primary", disabled=structure_locked):
+        publish_impact = analyze_registration_publish_impact(
+            supabase,
+            tournament_id=tournament_id,
+            days=days_payload,
+            event_options=event_payload,
+        ) if days_payload and event_payload else None
+        if publish_impact:
+            summary = publish_impact.get("summary", {})
+            metric_cols = st.columns(6)
+            metric_cols[0].metric("Creates", int(summary.get("creates", 0)))
+            metric_cols[1].metric("Updates", int(summary.get("updates", 0)))
+            metric_cols[2].metric("Soft closes", int(summary.get("soft_closes", 0)))
+            metric_cols[3].metric("Deletes", int(summary.get("deletes", 0)))
+            metric_cols[4].metric("Warnings", int(summary.get("warnings", 0)))
+            metric_cols[5].metric("Blocked", int(summary.get("blocked", 0)))
+
+            for section_title, rows in [
+                ("Safe creates", publish_impact.get("creates", [])),
+                ("Safe updates", publish_impact.get("updates", [])),
+                ("Safe close/archive actions", publish_impact.get("soft_closes", [])),
+                ("Safe hard deletes (unused only)", publish_impact.get("deletes", [])),
+            ]:
+                if rows:
+                    st.markdown(f"##### {section_title}")
+                    for row in rows:
+                        st.caption(f"• {row}")
+            if publish_impact.get("warnings"):
+                st.markdown("##### Warnings")
+                for row in publish_impact.get("warnings", []):
+                    st.warning(row)
+            if publish_impact.get("blocked"):
+                st.markdown("##### Blocked destructive changes")
+                for row in publish_impact.get("blocked", []):
+                    st.error(row)
+
+        has_blocked_changes = bool(publish_impact and publish_impact.get("blocked"))
+        if st.button("Save builder changes", type="primary", disabled=has_blocked_changes):
             if validation_errors:
                 st.error("Resolve the builder warnings before saving.")
             elif not days_payload:
                 st.error("Enable at least one tournament day.")
             elif not event_payload:
                 st.error("Create at least one division before saving.")
+            elif has_blocked_changes:
+                st.error("Publish is blocked until destructive changes are resolved.")
             else:
-                replace_registration_configuration(
-                    supabase,
-                    tournament_id=tournament_id,
-                    days=days_payload,
-                    event_options=event_payload,
-                )
+                try:
+                    publish_registration_configuration(
+                        supabase,
+                        tournament_id=tournament_id,
+                        days=days_payload,
+                        event_options=event_payload,
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                    st.stop()
                 saved_payload = save_builder_draft(
                     supabase,
                     tournament_id=tournament_id,
@@ -2093,4 +2128,3 @@ def render(ctx):
                 st.rerun()
 
         st.info("Registration review, issue triage, and workbook exports now live on 📋 Tournament Operations.")
-
