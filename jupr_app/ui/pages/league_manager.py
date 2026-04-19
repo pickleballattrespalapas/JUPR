@@ -204,6 +204,14 @@ def _seed_rating_for_player(pid: int, league_name: str, df_players_all: pd.DataF
     return 1200.0
 
 
+def _streamlit_theme_mode() -> str:
+    try:
+        base = str(st.get_option("theme.base") or "").strip().lower()
+    except Exception:
+        base = ""
+    return "dark" if base == "dark" else "light"
+
+
 def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
     if roster_df is None or roster_df.empty:
         return pd.DataFrame()
@@ -586,7 +594,11 @@ def render(ctx):
             courts_payload = roster_df_to_courts(roster_df, ladder_court_sizes=st.session_state.get("ladder_court_sizes"))
 
             round_num = int(st.session_state.get("ladder_round_num", 1))
-            result = court_board(courts_payload, key=f"court_board_confirm_start_r{round_num}")
+            result = court_board(
+                courts_payload,
+                key=f"court_board_confirm_start_r{round_num}",
+                theme_mode=_streamlit_theme_mode(),
+            )
 
             if result and isinstance(result, dict) and "courts" in result:
                 updated_courts = result["courts"]

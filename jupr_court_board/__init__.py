@@ -11,5 +11,14 @@ if _RELEASE:
 else:
     _component = components.declare_component("jupr_court_board", url="http://localhost:5173")
 
-def court_board(courts: List[Dict[str, Any]], key: Optional[str] = None) -> Dict[str, Any]:
-    return _component(courts=courts, key=key, default={"courts": courts})
+def court_board(
+    courts: List[Dict[str, Any]],
+    key: Optional[str] = None,
+    theme_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    return _component(
+        courts=courts,
+        theme_mode=theme_mode,
+        key=key,
+        default={"courts": courts},
+    )
