@@ -149,6 +149,51 @@ def _division_help(event: dict[str, Any]) -> str:
     return " • ".join(part for part in details if part)
 
 
+def _active_players_from_ctx(ctx) -> list[dict[str, Any]]:
+    df_players_active = getattr(ctx, "df_players_active", None)
+    if df_players_active is None:
+        return []
+    try:
+        if bool(getattr(df_players_active, "empty", True)):
+            return []
+        return [dict(row) for row in df_players_active.to_dict(orient="records")]
+    except Exception:
+        return []
+
+
+def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]:
+    rows = _active_players_from_ctx(ctx)
+    if rows:
+        return rows
+    try:
+        base_query = (
+            supabase.table("players")
+            .select("id,name,display_name,email,phone,whatsapp,dupr_id,doubles_skill,singles_skill,gender,age,inactive_at,active")
+            .eq("club_id", str(club_id))
+            .order("name")
+            .limit(2000)
+        )
+        try:
+            resp = base_query.is_("inactive_at", None).execute()
+        except Exception:
+            resp = base_query.eq("active", True).execute()
+        return [dict(row) for row in (resp.data or [])]
+    except Exception:
+        return []
+
+
+def _player_label(player: dict[str, Any]) -> str:
+    display_name = _safe_text(player.get("display_name") or player.get("name") or f"Player #{player.get('id')}")
+    rating = player.get("doubles_skill") or player.get("singles_skill")
+    if rating in (None, ""):
+        return display_name
+    return f"{display_name} · Rating {rating}"
+
+
+def _family_key(day_id: str, family: str) -> str:
+    return f"{day_id}::{family}"
+
+
 def render(ctx):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell(
@@ -236,30 +281,77 @@ def render(ctx):
 
     with st.form(f"registration_form_{tournament.get('id')}"):
         st.markdown("### 1. Player information")
+        player_entry_mode = st.radio(
+            "Player profile",
+            ["I'm already in JUPR", "I'm new / create new player"],
+            horizontal=True,
+            key=f"player_entry_mode_{tournament.get('id')}",
+        )
+        using_existing_player = player_entry_mode == "I'm already in JUPR"
+        active_players = _load_active_players(supabase, club_id=club_id, ctx=ctx) if using_existing_player else []
+        selected_existing_player: dict[str, Any] | None = None
+        if using_existing_player:
+            if not active_players:
+                st.warning("No active JUPR players were found for this club. Please use the new-player path.")
+            else:
+                player_choices = {"— Select your player —": None}
+                for row in active_players:
+                    label = _player_label(row)
+                    if label in player_choices:
+                        label = f"{label} (#{row.get('id')})"
+                    player_choices[label] = row
+                selected_player_label = st.selectbox(
+                    "Select your active JUPR player",
+                    list(player_choices.keys()),
+                    key=f"existing_player_{tournament.get('id')}",
+                )
+                selected_existing_player = player_choices.get(selected_player_label)
+
+        existing_first = _safe_text((selected_existing_player or {}).get("first_name"))
+        existing_last = _safe_text((selected_existing_player or {}).get("last_name"))
+        existing_display = _safe_text((selected_existing_player or {}).get("display_name") or (selected_existing_player or {}).get("name"))
+        existing_email = _safe_text((selected_existing_player or {}).get("email"))
+        existing_phone = _safe_text((selected_existing_player or {}).get("phone") or (selected_existing_player or {}).get("whatsapp"))
+
         c1, c2 = st.columns(2)
         with c1:
-            first_name = st.text_input("First name")
-            email = st.text_input("Email *")
-            phone = st.text_input("Phone / WhatsApp")
-            doubles_skill = st.text_input("Doubles skill")
-            age = st.text_input("Age")
+            first_name = st.text_input("First name", value=existing_first if using_existing_player else "")
+            email = st.text_input("Email *", value=existing_email if using_existing_player else "")
+            phone = st.text_input("Phone / WhatsApp", value=existing_phone if using_existing_player else "")
+            age_default = _safe_text((selected_existing_player or {}).get("age")) if using_existing_player else ""
+            age = st.text_input("Age", value=age_default)
+            doubles_skill = ""
+            if not using_existing_player:
+                doubles_skill = st.text_input("Doubles skill")
         with c2:
-            last_name = st.text_input("Last name")
-            display_name = st.text_input("Display name")
-            dupr_id = st.text_input("DUPR ID")
-            singles_skill = st.text_input("Singles skill")
-            age_bracket = st.text_input("Age bracket / age note")
-        gender = st.selectbox("Gender", ["", "Female", "Male", "Other", "Prefer not to say"])
+            last_name = st.text_input("Last name", value=existing_last if using_existing_player else "")
+            display_name = st.text_input("Display name", value=existing_display if using_existing_player else "")
+            dupr_id = ""
+            singles_skill = ""
+            if not using_existing_player:
+                dupr_id = st.text_input("DUPR ID")
+                singles_skill = st.text_input("Singles skill")
+        gender_options = ["", "Female", "Male", "Other", "Prefer not to say"]
+        existing_gender = _safe_text((selected_existing_player or {}).get("gender"))
+        gender_index = gender_options.index(existing_gender) if existing_gender in gender_options else 0
+        gender = st.selectbox("Gender", gender_options, index=gender_index)
         notes = st.text_area("Notes for tournament staff", height=90)
 
+        if using_existing_player and selected_existing_player:
+            profile_doubles = _coerce_float(selected_existing_player.get("doubles_skill"))
+            profile_singles = _coerce_float(selected_existing_player.get("singles_skill"))
+        else:
+            profile_doubles = _coerce_float(doubles_skill)
+            profile_singles = _coerce_float(singles_skill)
         player_profile = {
-            "doubles_skill": _coerce_float(doubles_skill),
-            "singles_skill": _coerce_float(singles_skill),
+            "doubles_skill": profile_doubles,
+            "singles_skill": profile_singles,
         }
 
         st.markdown("### 2. Choose your divisions")
-        st.caption("Work day by day. You can skip any event family you are not playing.")
+        st.caption("Work day by day. Check divisions you want to play.")
         selections: list[dict[str, Any]] = []
+        family_selection_counts: dict[str, int] = {}
         for day in days:
             day_id = str(day.get("id"))
             family_map = grouped_events.get(day_id, {})
@@ -268,82 +360,90 @@ def render(ctx):
             st.markdown(f"#### {day.get('label')}")
             for family, options in family_map.items():
                 st.markdown(f"**{family}**")
-                option_lookup = {"— Not playing this event —": None}
-                ordered_labels = ["— Not playing this event —"]
                 eligibility_lookup: dict[str, tuple[bool, str | None]] = {}
+                chosen_in_family = 0
                 for event in options:
                     eligible, reason = _preview_division_eligibility(event, player_profile)
-                    label = _division_choice_label(event, eligible=eligible)
-                    option_lookup[label] = event
-                    ordered_labels.append(label)
                     eligibility_lookup[str(event.get("id"))] = (eligible, reason)
-                selected_label = st.selectbox(
-                    f"Choose your division for {family}",
-                    ordered_labels,
-                    key=f"event_pick_{tournament.get('id')}_{day_id}_{family}",
-                )
-                selected_event = option_lookup[selected_label]
-                if not selected_event:
-                    blocked_names = blocked_by_family.get((day_id, family), [])
-                    if blocked_names:
-                        st.caption("Closed divisions: " + ", ".join(sorted(blocked_names)))
-                    continue
-
-                help_text = _division_help(selected_event)
-                if help_text:
-                    st.caption(help_text)
-
-                current_eligible, current_reason = eligibility_lookup.get(str(selected_event.get("id")), (True, None))
-                if not current_eligible:
-                    st.warning(current_reason or "Not eligible based on current rating.")
-                elif bool(selected_event.get("partner_required")):
-                    st.caption("For doubles, final eligibility is validated at submit time using both players' ratings when a partner is named.")
-
-                selection_row: dict[str, Any] = {
-                    "id": _uid("sel"),
-                    "registration_day_id": day_id,
-                    "event_option_id": str(selected_event.get("id")),
-                    "partner_mode": "NONE",
-                }
-
-                if bool(selected_event.get("partner_required")):
-                    partner_mode_label = st.radio(
-                        f"Partner status for {_safe_text(selected_event.get('division_name') or selected_event.get('label'))}",
-                        ["I already have a partner", "I need a partner"],
-                        horizontal=True,
-                        key=f"partner_mode_{day_id}_{selected_event.get('id')}",
+                    checked = st.checkbox(
+                        _division_choice_label(event, eligible=eligible),
+                        value=False,
+                        key=f"event_pick_{tournament.get('id')}_{day_id}_{family}_{event.get('id')}",
                     )
-                    if partner_mode_label == "I already have a partner":
-                        selection_row["partner_mode"] = "HAS_PARTNER"
-                        p1, p2 = st.columns(2)
-                        with p1:
-                            selection_row["partner_name"] = st.text_input("Partner name", key=f"partner_name_{selected_event.get('id')}")
-                            selection_row["partner_email"] = st.text_input("Partner email", key=f"partner_email_{selected_event.get('id')}")
-                            selection_row["partner_phone"] = st.text_input("Partner phone", key=f"partner_phone_{selected_event.get('id')}")
-                        with p2:
-                            selection_row["partner_dupr_id"] = st.text_input("Partner DUPR ID", key=f"partner_dupr_{selected_event.get('id')}")
-                            selection_row["partner_skill"] = _coerce_float(st.text_input("Partner skill", key=f"partner_skill_{selected_event.get('id')}"))
-                            selection_row["partner_age"] = _coerce_int(st.text_input("Partner age", key=f"partner_age_{selected_event.get('id')}"))
-                    else:
-                        selection_row["partner_mode"] = "NEEDS_PARTNER"
-                        if bool(settings.get("partner_board_enabled", True)):
-                            selection_row["show_on_partner_board"] = st.checkbox(
-                                "Show me on the public partner board for this division",
-                                value=False,
-                                key=f"partner_board_optin_{selected_event.get('id')}",
-                            )
-                        else:
-                            selection_row["show_on_partner_board"] = False
-                        selection_row["partner_note"] = st.text_input(
-                            "Short note for partner board (optional)",
-                            key=f"partner_note_{selected_event.get('id')}",
+                    help_text = _division_help(event)
+                    if help_text:
+                        st.caption(help_text)
+                    if not checked:
+                        continue
+                    chosen_in_family += 1
+                    selection_row: dict[str, Any] = {
+                        "id": _uid("sel"),
+                        "registration_day_id": day_id,
+                        "event_option_id": str(event.get("id")),
+                        "partner_mode": "NONE",
+                    }
+                    current_eligible, current_reason = eligibility_lookup.get(str(event.get("id")), (True, None))
+                    if not current_eligible:
+                        st.warning(current_reason or "Not eligible based on current rating.")
+                    elif bool(event.get("partner_required")):
+                        st.caption(
+                            "For doubles, final eligibility is validated at submit time using both players' ratings when a partner is named."
                         )
-                selections.append(selection_row)
+                    if bool(event.get("partner_required")):
+                        partner_mode_label = st.radio(
+                            f"Partner status for {_safe_text(event.get('division_name') or event.get('label'))}",
+                            ["I already have a partner", "I need a partner"],
+                            horizontal=True,
+                            key=f"partner_mode_{day_id}_{event.get('id')}",
+                        )
+                        if partner_mode_label == "I already have a partner":
+                            selection_row["partner_mode"] = "HAS_PARTNER"
+                            p1, p2 = st.columns(2)
+                            with p1:
+                                selection_row["partner_name"] = st.text_input("Partner name", key=f"partner_name_{event.get('id')}")
+                                selection_row["partner_email"] = st.text_input(
+                                    "Partner email", key=f"partner_email_{event.get('id')}"
+                                )
+                                selection_row["partner_phone"] = st.text_input(
+                                    "Partner phone", key=f"partner_phone_{event.get('id')}"
+                                )
+                            with p2:
+                                selection_row["partner_dupr_id"] = st.text_input(
+                                    "Partner DUPR ID", key=f"partner_dupr_{event.get('id')}"
+                                )
+                                selection_row["partner_skill"] = _coerce_float(
+                                    st.text_input("Partner skill", key=f"partner_skill_{event.get('id')}")
+                                )
+                                selection_row["partner_age"] = _coerce_int(
+                                    st.text_input("Partner age", key=f"partner_age_{event.get('id')}")
+                                )
+                        else:
+                            selection_row["partner_mode"] = "NEEDS_PARTNER"
+                            if bool(settings.get("partner_board_enabled", True)):
+                                selection_row["show_on_partner_board"] = st.checkbox(
+                                    "Show me on the public partner board for this division",
+                                    value=False,
+                                    key=f"partner_board_optin_{event.get('id')}",
+                                )
+                            else:
+                                selection_row["show_on_partner_board"] = False
+                            selection_row["partner_note"] = st.text_input(
+                                "Short note for partner board (optional)",
+                                key=f"partner_note_{event.get('id')}",
+                            )
+                    selections.append(selection_row)
+                family_selection_counts[_family_key(day_id, family)] = chosen_in_family
+                blocked_names = blocked_by_family.get((day_id, family), [])
+                if blocked_names:
+                    st.caption("Closed divisions: " + ", ".join(sorted(blocked_names)))
 
         submitted = st.form_submit_button("Submit registration", type="primary")
 
     if submitted:
         final_display_name = _safe_text(display_name) or " ".join(part for part in [_safe_text(first_name), _safe_text(last_name)] if part)
+        if using_existing_player and not selected_existing_player:
+            st.error("Select your active JUPR player, or switch to the new-player path.")
+            st.stop()
         if not _safe_text(email):
             st.error("Email is required.")
             st.stop()
@@ -353,6 +453,19 @@ def render(ctx):
         if not selections:
             st.error("Choose at least one division before submitting.")
             st.stop()
+        over_selected_groups: list[str] = []
+        for day in days:
+            day_id = str(day.get("id"))
+            family_map = grouped_events.get(day_id, {})
+            for family in family_map.keys():
+                selected_count = family_selection_counts.get(_family_key(day_id, family), 0)
+                if selected_count > 1:
+                    over_selected_groups.append(f"{_safe_text(day.get('label') or day_id)} / {family}")
+        if over_selected_groups:
+            st.error(
+                "Choose only one division per day/event family group. Please fix: " + ", ".join(sorted(set(over_selected_groups)))
+            )
+            st.stop()
 
         for selection in selections:
             if selection.get("partner_mode") == "HAS_PARTNER":
@@ -361,14 +474,14 @@ def render(ctx):
                     st.stop()
 
         event_lookup = {str(row.get("id")): row for row in event_options}
-        submit_player = {
-            "doubles_skill": _coerce_float(doubles_skill),
-            "singles_skill": _coerce_float(singles_skill),
-        }
+        submit_player = dict(player_profile)
         for selection in selections:
             event = event_lookup.get(str(selection.get("event_option_id") or ""))
             if not event:
-                continue
+                st.error(
+                    f"Selected division {selection.get('event_option_id')} is no longer available. Please refresh and try again."
+                )
+                st.stop()
             partner = None
             if _safe_text(selection.get("partner_mode")).upper() == "HAS_PARTNER":
                 partner = {
@@ -429,10 +542,10 @@ def render(ctx):
                     "email": email,
                     "phone": phone,
                     "dupr_id": dupr_id,
-                    "doubles_skill": _coerce_float(doubles_skill),
-                    "singles_skill": _coerce_float(singles_skill),
+                    "doubles_skill": submit_player.get("doubles_skill"),
+                    "singles_skill": submit_player.get("singles_skill"),
                     "age": _coerce_int(age),
-                    "age_bracket": age_bracket,
+                    "age_bracket": None,
                     "gender": gender,
                     "notes": notes,
                     "wants_partner_board_contact": any(bool(row.get("show_on_partner_board")) for row in selections),
