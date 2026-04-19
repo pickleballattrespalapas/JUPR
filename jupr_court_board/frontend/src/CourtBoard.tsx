@@ -36,9 +36,10 @@ function clamp(n: number, min: number, max: number) {
 type Props = {
   courts: Court[];
   onChange: (nextCourts: Court[]) => void;
+  themeMode: "light" | "dark";
 };
 
-export default function CourtBoard({ courts, onChange }: Props) {
+export default function CourtBoard({ courts, onChange, themeMode }: Props) {
   // Ensure Bench exists (so logic never breaks)
   const normalizedCourts: Court[] = React.useMemo(() => {
     const hasBench = courts.some((c) => c.court_id === BENCH_ID);
@@ -100,7 +101,7 @@ export default function CourtBoard({ courts, onChange }: Props) {
   };
 
   return (
-    <div className="cb-board">
+    <div className="cb-board" data-theme={themeMode}>
       <DragDropContext onDragEnd={onDragEnd}>
         {normalizedCourts.map((court) => {
           const isBench = court.court_id === BENCH_ID;

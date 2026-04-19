@@ -7,11 +7,13 @@ import "./styles.css";
 type Props = ComponentProps & {
   args: {
     courts: Court[];
+    theme_mode?: string;
   };
 };
 
 function App({ args }: Props) {
   const courts = Array.isArray(args?.courts) ? args.courts : [];
+  const themeMode = String(args?.theme_mode || "").toLowerCase() === "dark" ? "dark" : "light";
 
   const onChange = (nextCourts: Court[]) => {
     Streamlit.setComponentValue({ courts: nextCourts });
@@ -22,13 +24,13 @@ function App({ args }: Props) {
   }, []);
 
   return (
-    <div className="cb-app">
+    <div className="cb-app" data-theme={themeMode}>
       <div className="cb-topbar">
         <div className="cb-title">Court Board</div>
         <div className="cb-subtitle">Drag to reorder. Drop onto a player to bench them.</div>
       </div>
 
-      <CourtBoard courts={courts} onChange={onChange} />
+      <CourtBoard courts={courts} onChange={onChange} themeMode={themeMode} />
     </div>
   );
 }
