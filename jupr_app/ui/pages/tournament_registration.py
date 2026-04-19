@@ -168,7 +168,7 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
     try:
         base_query = (
             supabase.table("players")
-            .select("id,name,display_name,email,phone,whatsapp,dupr_id,doubles_skill,singles_skill,gender,age,inactive_at,active")
+            .select("id,name,display_name,email,phone,whatsapp,dupr_id,rating,doubles_skill,singles_skill,gender,age,inactive_at,active")
             .eq("club_id", str(club_id))
             .order("name")
             .limit(2000)
@@ -182,12 +182,85 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
         return []
 
 
+def _player_rating_text(player: dict[str, Any]) -> str:
+    overall_rating_elo = _coerce_float(player.get("rating"))
+    if overall_rating_elo is not None:
+        return f"{overall_rating_elo / 400.0:.3f}"
+    doubles = _coerce_float(player.get("doubles_skill"))
+    if doubles is not None:
+        return f"{doubles:.3f}".rstrip("0").rstrip(".")
+    singles = _coerce_float(player.get("singles_skill"))
+    if singles is not None:
+        return f"{singles:.3f}".rstrip("0").rstrip(".")
+    return "N/A"
+
+
 def _player_label(player: dict[str, Any]) -> str:
     display_name = _safe_text(player.get("display_name") or player.get("name") or f"Player #{player.get('id')}")
-    rating = player.get("doubles_skill") or player.get("singles_skill")
-    if rating in (None, ""):
+    rating_text = _player_rating_text(player)
+    if rating_text == "N/A":
         return display_name
-    return f"{display_name} · Rating {rating}"
+    return f"{display_name} · Rating {rating_text}"
+
+
+@st.cache_data(ttl=90)
+def _load_profile_confirmation_data(_supabase, club_id: str, player_id: str) -> dict[str, Any]:
+    pid = int(player_id)
+    total_matches = 0
+    recent_matches: list[dict[str, Any]] = []
+    recent_leagues: list[str] = []
+    try:
+        count_resp = (
+            _supabase.table("matches")
+            .select("id", count="exact")
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+            .limit(1)
+            .execute()
+        )
+        total_matches = int(getattr(count_resp, "count", 0) or 0)
+    except Exception:
+        total_matches = 0
+    try:
+        match_resp = (
+            _supabase.table("matches")
+            .select("id,date,league,score_t1,score_t2,t1_p1,t1_p2,t2_p1,t2_p2")
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+            .order("date", desc=True)
+            .order("id", desc=True)
+            .limit(8)
+            .execute()
+        )
+        rows = [dict(row) for row in (match_resp.data or [])]
+    except Exception:
+        rows = []
+    for row in rows:
+        team1 = {int(row.get("t1_p1") or 0), int(row.get("t1_p2") or 0)}
+        team2 = {int(row.get("t2_p1") or 0), int(row.get("t2_p2") or 0)}
+        score_t1 = _coerce_int(row.get("score_t1"))
+        score_t2 = _coerce_int(row.get("score_t2"))
+        result = "—"
+        if score_t1 is not None and score_t2 is not None:
+            on_team1 = pid in team1
+            won = (on_team1 and score_t1 > score_t2) or ((not on_team1) and score_t2 > score_t1)
+            result = "W" if won else "L"
+        recent_matches.append(
+            {
+                "date": _safe_text(row.get("date")),
+                "league": _safe_text(row.get("league")),
+                "score": f"{_safe_text(row.get('score_t1'))}-{_safe_text(row.get('score_t2'))}",
+                "result": result,
+            }
+        )
+        league_name = _safe_text(row.get("league"))
+        if league_name and league_name not in recent_leagues:
+            recent_leagues.append(league_name)
+    return {
+        "total_matches": total_matches,
+        "recent_matches": recent_matches[:5],
+        "recent_leagues": recent_leagues[:4],
+    }
 
 
 @st.cache_data(ttl=90)
