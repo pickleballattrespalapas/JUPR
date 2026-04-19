@@ -12,6 +12,7 @@ from streamlit.components.v1 import html as st_html
 
 from jupr_app.domain.gamification.badge_copy import build_badge_copy_plain
 from jupr_app.ui.components.badge_cards import render_inline_badge_text
+from jupr_app.ui.badge_data import normalize_player_badges_frame
 from jupr_app.ui.helpers import (
     qp_get,
     display_requirement_text,
@@ -201,6 +202,56 @@ BADGE_ICONS = {
 
 def badge_icon(badge_id: str, category: str | None = None) -> str:
     return BADGE_ICONS.get(str(badge_id), "🏆")
+
+
+def resolve_player_badges_for_profile(ctx, _supabase, club_id: str, pid: int) -> pd.DataFrame:
+    shared_badges = getattr(ctx, "df_player_badges", None)
+    normalized_shared = normalize_player_badges_frame(shared_badges)
+    if not normalized_shared.empty:
+        if "club_id" in normalized_shared.columns:
+            normalized_shared = normalized_shared[
+                normalized_shared["club_id"] == str(club_id).strip()
+            ].copy()
+        selected_rows = normalized_shared[normalized_shared["player_id"] == int(pid)].copy()
+        if not selected_rows.empty:
+            return selected_rows
+        logger.info(
+            "Player badges: shared ctx.df_player_badges yielded 0 rows for player_id=%s club_id=%s; using direct player query.",
+            int(pid),
+            str(club_id).strip(),
+        )
+
+    try:
+        fetched = fetch_player_badges(_supabase, club_id, pid)
+    except Exception:
+        logger.exception("Failed to fetch badges for player view")
+        return pd.DataFrame()
+
+    normalized_fetched = normalize_player_badges_frame(fetched)
+    if normalized_fetched.empty:
+        return pd.DataFrame()
+    return normalized_fetched[normalized_fetched["player_id"] == int(pid)].copy()
+
+
+def select_featured_cuts(unlocked_badges: list[dict], limit: int = 3) -> list[dict]:
+    prestige_sorted = sorted(
+        unlocked_badges,
+        key=lambda b: (
+            int(b.get("prestige", 0) or 0),
+            pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce"),
+        ),
+        reverse=True,
+    )
+    non_participant = [b for b in prestige_sorted if b.get("badge_id") != "participant"]
+    if len(non_participant) >= limit:
+        return non_participant[:limit]
+
+    featured = non_participant[:]
+    remaining_slots = limit - len(featured)
+    if remaining_slots > 0:
+        participant_badges = [b for b in prestige_sorted if b.get("badge_id") == "participant"]
+        featured.extend(participant_badges[:remaining_slots])
+    return featured
 
 
 def _season_sort_key(league_name: str) -> tuple[int, int] | None:
@@ -1339,13 +1390,7 @@ def render(ctx):
         if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
             badge_defs = fetch_badge_definitions(_supabase)
 
-        player_badges = getattr(ctx, "df_player_badges", None)
-        if player_badges is None or (isinstance(player_badges, pd.DataFrame) and player_badges.empty):
-            try:
-                player_badges = fetch_player_badges(_supabase, club_id, pid)
-            except Exception:
-                logger.exception("Failed to fetch badges for player view")
-                player_badges = pd.DataFrame()
+        player_badges = resolve_player_badges_for_profile(ctx, _supabase, club_id, pid)
 
         summary = build_gamification_summary(pid, badge_defs, player_badges)
         prestige_total = summary.get("prestige_total", 0)
@@ -1537,25 +1582,7 @@ def render(ctx):
             badge_caption("No badges available yet.", label="badges.empty")
         else:
             badge_markdown("#### Featured Cuts", label="badges.featured.header")
-            prestige_sorted = sorted(
-                unlocked_badges,
-                key=lambda b: (
-                    int(b.get("prestige", 0) or 0),
-                    pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce"),
-                ),
-                reverse=True,
-            )
-            non_participant = [b for b in prestige_sorted if b.get("badge_id") != "participant"]
-            if len(non_participant) >= 3:
-                featured = non_participant[:3]
-            else:
-                featured = non_participant[:]
-                remaining_slots = 3 - len(featured)
-                if remaining_slots > 0:
-                    participant_badges = [
-                        b for b in prestige_sorted if b.get("badge_id") == "participant"
-                    ]
-                    featured.extend(participant_badges[:remaining_slots])
+            featured = select_featured_cuts(unlocked_badges, limit=3)
             if not featured:
                 badge_caption(
                     "The trophy room is quiet—new reels arrive after the next run.",
