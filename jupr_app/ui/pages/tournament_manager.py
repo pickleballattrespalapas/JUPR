@@ -34,6 +34,8 @@ AGE_MODES = ["ALL_AGES", "FIXED_AGE_BRACKET", "AUTO_AGE_SPLIT", "SPLIT_AGE"]
 PARTICIPANT_TYPES = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
 GENDER_RESTRICTIONS = ["ANY", "MEN", "WOMEN", "MIXED"]
 DIVISION_STATUSES = ["draft", "open", "tentative", "confirmed", "closed"]
+SELECTABLE_DIVISION_STATUSES = {"open", "tentative", "confirmed"}
+VISIBLE_CLOSED_DIVISION_STATUSES = {"closed"}
 SKILL_LABEL_OPTIONS = ["Open", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"]
 
 STANDARD_EVENT_TEMPLATES = [
@@ -47,7 +49,7 @@ STANDARD_EVENT_TEMPLATES = [
         "default_partner_board": True,
         "default_capacity_teams": 16,
         "default_price_usd": 0.0,
-        "default_status": "draft",
+        "default_status": "open",
     },
     {
         "event_family": "Women's Doubles",
@@ -59,7 +61,7 @@ STANDARD_EVENT_TEMPLATES = [
         "default_partner_board": True,
         "default_capacity_teams": 16,
         "default_price_usd": 0.0,
-        "default_status": "draft",
+        "default_status": "open",
     },
     {
         "event_family": "Mixed Doubles",
@@ -71,7 +73,7 @@ STANDARD_EVENT_TEMPLATES = [
         "default_partner_board": True,
         "default_capacity_teams": 16,
         "default_price_usd": 0.0,
-        "default_status": "draft",
+        "default_status": "open",
     },
     {
         "event_family": "Men's Singles",
@@ -83,7 +85,7 @@ STANDARD_EVENT_TEMPLATES = [
         "default_partner_board": False,
         "default_capacity_teams": 16,
         "default_price_usd": 0.0,
-        "default_status": "draft",
+        "default_status": "open",
     },
     {
         "event_family": "Women's Singles",
@@ -95,7 +97,7 @@ STANDARD_EVENT_TEMPLATES = [
         "default_partner_board": False,
         "default_capacity_teams": 16,
         "default_price_usd": 0.0,
-        "default_status": "draft",
+        "default_status": "open",
     },
 ]
 
@@ -436,7 +438,7 @@ def _seed_event_templates(event_options: list[dict[str, Any]]) -> pd.DataFrame:
                 "default_partner_board": bool(row.get("partner_board_enabled", row.get("public_partner_board", True))),
                 "default_capacity_teams": _coerce_int(row.get("capacity_teams")) or 16,
                 "default_price_usd": _coerce_float(row.get("price_usd")) or 0.0,
-                "default_status": _safe_text(row.get("status") or "draft"),
+                "default_status": _safe_text(row.get("status") or "open"),
             },
         )
     rows = list(grouped.values())
@@ -682,7 +684,7 @@ def _generate_division_rows_for_event_batch(
                     "partner_board_enabled": bool(batch_overrides.get("partner_board_enabled"))
                     if batch_overrides.get("partner_board_enabled") is not None
                     else bool(event_row.get("default_partner_board", True)),
-                    "status": status_override or _safe_text(event_row.get("default_status") or "draft"),
+                    "status": status_override or _safe_text(event_row.get("default_status") or "open"),
                     "division_format": format_override,
                     "division_scoring": scoring_override,
                     "notes": notes_default,
@@ -954,6 +956,34 @@ def _build_payloads(
     return day_payload, event_payload
 
 
+def _registration_readiness_summary(event_payload: list[dict[str, Any]]) -> dict[str, int]:
+    total = len(event_payload)
+    selectable = 0
+    visible_closed = 0
+    hidden = 0
+    hidden_draft = 0
+    for row in event_payload:
+        status = _safe_text(row.get("status") or "draft").lower()
+        enabled = bool(row.get("enabled", True))
+        if not enabled or status in {"draft", "disabled"}:
+            hidden += 1
+            if status == "draft":
+                hidden_draft += 1
+        elif status in SELECTABLE_DIVISION_STATUSES:
+            selectable += 1
+        elif status in VISIBLE_CLOSED_DIVISION_STATUSES:
+            visible_closed += 1
+        else:
+            hidden += 1
+    return {
+        "total": total,
+        "selectable": selectable,
+        "visible_closed": visible_closed,
+        "hidden": hidden,
+        "hidden_draft": hidden_draft,
+    }
+
+
 def _schedule_preview_rows(days_df: pd.DataFrame, divisions_df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
     days_df = _ensure_editor_columns(days_df, DAYS_EDITOR_COLUMNS)
     divisions_df = _ensure_editor_columns(divisions_df, DIVISION_EDITOR_COLUMNS)
@@ -1076,9 +1106,9 @@ def _render_event_family_form(
             default_status = st.selectbox(
                 "Default status",
                 DIVISION_STATUSES,
-                index=DIVISION_STATUSES.index(_safe_text(defaults.get("default_status") or "draft"))
-                if _safe_text(defaults.get("default_status") or "draft") in DIVISION_STATUSES
-                else 0,
+                index=DIVISION_STATUSES.index(_safe_text(defaults.get("default_status") or "open"))
+                if _safe_text(defaults.get("default_status") or "open") in DIVISION_STATUSES
+                else DIVISION_STATUSES.index("open"),
                 disabled=disabled,
             )
         submit_col, cancel_col = st.columns(2)
@@ -1095,7 +1125,7 @@ def _render_event_family_form(
         "default_partner_board": bool(default_partner_board),
         "default_capacity_teams": _coerce_int(default_capacity_teams) or 16,
         "default_price_usd": _coerce_float(default_price_usd) or 0.0,
-        "default_status": _safe_text(default_status) or "draft",
+        "default_status": _safe_text(default_status) or "open",
     }
     return submitted, canceled, payload
 
@@ -1149,9 +1179,9 @@ def _render_event_generation_form(
             status = st.selectbox(
                 "Status",
                 DIVISION_STATUSES,
-                index=DIVISION_STATUSES.index(_safe_text(event_defaults.get("default_status") or "draft"))
-                if _safe_text(event_defaults.get("default_status") or "draft") in DIVISION_STATUSES
-                else 0,
+                index=DIVISION_STATUSES.index(_safe_text(event_defaults.get("default_status") or "open"))
+                if _safe_text(event_defaults.get("default_status") or "open") in DIVISION_STATUSES
+                else DIVISION_STATUSES.index("open"),
                 disabled=disabled or not override_status_enabled,
             )
             waitlist_enabled = st.checkbox("Waitlist enabled", value=bool(event_defaults.get("default_waitlist", True)), disabled=disabled)
@@ -1288,9 +1318,9 @@ def _render_division_form(
             status = st.selectbox(
                 "Status",
                 DIVISION_STATUSES,
-                index=DIVISION_STATUSES.index(_safe_text(defaults.get("status") or "draft"))
-                if _safe_text(defaults.get("status") or "draft") in DIVISION_STATUSES
-                else 0,
+                index=DIVISION_STATUSES.index(_safe_text(defaults.get("status") or "open"))
+                if _safe_text(defaults.get("status") or "open") in DIVISION_STATUSES
+                else DIVISION_STATUSES.index("open"),
                 disabled=disabled,
             )
             division_format = st.selectbox(
@@ -1328,7 +1358,7 @@ def _render_division_form(
         "price_usd": _coerce_float(price_usd),
         "waitlist_enabled": bool(waitlist_enabled),
         "partner_board_enabled": bool(partner_board_enabled),
-        "status": _safe_text(status) or "draft",
+        "status": _safe_text(status) or "open",
         "division_format": _safe_text(division_format),
         "division_scoring": _safe_text(division_scoring),
         "notes": _safe_text(notes),
@@ -2004,7 +2034,8 @@ def render(ctx):
                             row_cols[0].markdown(f"**{_display_optional(division_name)}**")
                             row_cols[1].markdown(_display_optional(row.get("skill_label")))
                             row_cols[2].markdown(_display_optional(row.get("age_label")))
-                            row_cols[3].markdown(_display_optional(row.get("status")))
+                            status_value = _safe_text(row.get("status") or "draft").upper()
+                            row_cols[3].markdown(f"**`{status_value}`**")
                             row_cols[4].markdown(_display_optional(row.get("capacity_teams")))
                             price_value = row.get("price_usd")
                             row_cols[5].markdown(f"${float(price_value):.2f}" if _coerce_float(price_value) is not None else "—")
@@ -2061,7 +2092,7 @@ def render(ctx):
         )
         st.link_button("Public registration form", public_urls["registration"])
         st.link_button("Public partner board", public_urls["partner_board"])
-        st.caption("Save the builder before sharing links if you changed days, events, or divisions.")
+        st.caption("Publish registration changes before sharing links when days, events, or divisions have changed.")
 
         validation_errors = _validate_builder(days_df, events_df, divisions_df)
         if validation_errors:
@@ -2069,6 +2100,34 @@ def render(ctx):
                 st.warning(error)
 
         days_payload, event_payload = _build_payloads(tournament_id, days_df, events_df, divisions_df)
+        readiness = _registration_readiness_summary(event_payload)
+        st.markdown("##### Registration readiness")
+        readiness_cols = st.columns(4)
+        readiness_cols[0].metric("Total divisions", readiness["total"])
+        readiness_cols[1].metric("Publicly selectable", readiness["selectable"])
+        readiness_cols[2].metric("Visible but closed", readiness["visible_closed"])
+        readiness_cols[3].metric("Hidden from registration", readiness["hidden"])
+        if readiness["hidden_draft"] > 0:
+            st.warning(
+                f"{readiness['hidden_draft']} draft division(s) are hidden and will not appear in public registration."
+            )
+        zero_selectable = readiness["total"] > 0 and readiness["selectable"] == 0
+        if zero_selectable:
+            st.error("This publish would leave the public registration form with 0 selectable divisions.")
+        elif readiness["hidden"] > 0:
+            st.warning("Some divisions are hidden from public registration (draft/disabled).")
+
+        bulk_open_disabled = readiness["hidden_draft"] == 0
+        if st.button("Set all draft divisions to open", disabled=bulk_open_disabled):
+            divisions_next = _ensure_editor_columns(st.session_state[divisions_seed_key], DIVISION_EDITOR_COLUMNS).copy()
+            if not divisions_next.empty:
+                status_series = divisions_next["status"].apply(lambda value: _safe_text(value).lower())
+                draft_mask = status_series == "draft"
+                if draft_mask.any():
+                    divisions_next.loc[draft_mask, "status"] = "open"
+                    st.session_state[divisions_seed_key] = divisions_next
+            st.rerun()
+
         publish_impact = analyze_registration_publish_impact(
             supabase,
             tournament_id=tournament_id,
@@ -2105,13 +2164,25 @@ def render(ctx):
                     st.error(row)
 
         has_blocked_changes = bool(publish_impact and publish_impact.get("blocked"))
-        if st.button("Save builder changes", type="primary", disabled=has_blocked_changes):
+        publish_ack_required = zero_selectable
+        publish_acknowledged = (
+            st.checkbox(
+                "I understand this publish will leave public registration with no selectable divisions",
+                value=False,
+            )
+            if publish_ack_required
+            else True
+        )
+        publish_disabled = has_blocked_changes or (publish_ack_required and not publish_acknowledged)
+        if st.button("Publish registration changes", type="primary", disabled=publish_disabled):
             if validation_errors:
-                st.error("Resolve the builder warnings before saving.")
+                st.error("Resolve the builder warnings before publishing.")
             elif not days_payload:
                 st.error("Enable at least one tournament day.")
             elif not event_payload:
-                st.error("Create at least one division before saving.")
+                st.error("Create at least one division before publishing.")
+            elif publish_ack_required and not publish_acknowledged:
+                st.error("Acknowledge the zero-selectable warning to continue publishing.")
             elif has_blocked_changes:
                 st.error("Publish is blocked until destructive changes are resolved.")
             else:
@@ -2135,7 +2206,7 @@ def render(ctx):
                 )
                 st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
                 st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
-                st.success("Tournament schedule, events, and divisions saved.")
+                st.success("Registration changes published.")
                 st.rerun()
 
         st.info("Registration review, issue triage, and workbook exports now live on 📋 Tournament Operations.")
