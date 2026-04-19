@@ -10,6 +10,11 @@ from jupr_app.domain.gamification.recompute import run_badge_recompute
 from jupr_app.ui.layout import page_shell
 
 
+BADGE_AUDIT_FILTERS_FORM_KEY = "badge_audit_filters_form"
+BADGE_AUDIT_FILTERS_STATE_KEY = "badge_audit_filters_state"
+BADGE_AUDIT_REPORT_STATE_KEY = "badge_audit_report"
+
+
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🧾 Badge Audit", "Audit and repair badge awards against the current engine.", mode_label=mode_label)
@@ -29,9 +34,9 @@ def render(ctx):
         "include_non_live": False,
         "include_revoked": False,
     }
-    st.session_state.setdefault("badge_audit_filters", defaults)
+    st.session_state.setdefault(BADGE_AUDIT_FILTERS_STATE_KEY, defaults)
 
-    with st.form("badge_audit_filters"):
+    with st.form(BADGE_AUDIT_FILTERS_FORM_KEY):
         st.caption(f"Club: {club_id}")
         col1, col2, col3 = st.columns(3)
 
@@ -40,11 +45,11 @@ def render(ctx):
             badge_id = st.selectbox(
                 "Badge ID",
                 options=badge_options,
-                index=_safe_index(badge_options, st.session_state["badge_audit_filters"].get("badge_id", "")),
+                index=_safe_index(badge_options, st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("badge_id", "")),
                 format_func=lambda v: "All" if not v else v,
             )
             player_options = [""] + _player_options(ctx)
-            saved_player = st.session_state["badge_audit_filters"].get("player_id", "")
+            saved_player = st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("player_id", "")
             saved_player_value = int(saved_player) if str(saved_player).strip().isdigit() else ""
             player_id = st.selectbox(
                 "Player ID",
@@ -57,22 +62,22 @@ def render(ctx):
             league_id = st.selectbox(
                 "League ID",
                 options=[""] + _league_options(ctx),
-                index=_safe_index([""] + _league_options(ctx), st.session_state["badge_audit_filters"].get("league_id", "")),
+                index=_safe_index([""] + _league_options(ctx), st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("league_id", "")),
                 format_func=lambda v: "All" if not v else v,
             )
-            context_id = st.text_input("Context ID", value=st.session_state["badge_audit_filters"].get("context_id", ""))
+            context_id = st.text_input("Context ID", value=st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("context_id", ""))
 
         with col3:
-            since = st.text_input("Since (optional)", value=st.session_state["badge_audit_filters"].get("since", ""))
-            until = st.text_input("Until (optional)", value=st.session_state["badge_audit_filters"].get("until", ""))
+            since = st.text_input("Since (optional)", value=st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("since", ""))
+            until = st.text_input("Until (optional)", value=st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("until", ""))
 
         include_non_live = st.checkbox(
             "Include non-live badges?",
-            value=bool(st.session_state["badge_audit_filters"].get("include_non_live", False)),
+            value=bool(st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("include_non_live", False)),
         )
         include_revoked = st.checkbox(
             "Include revoked rows in detail?",
-            value=bool(st.session_state["badge_audit_filters"].get("include_revoked", False)),
+            value=bool(st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY].get("include_revoked", False)),
         )
 
         run_audit = st.form_submit_button("Run Audit", type="primary")
@@ -88,7 +93,7 @@ def render(ctx):
             "include_non_live": bool(include_non_live),
             "include_revoked": bool(include_revoked),
         }
-        st.session_state["badge_audit_filters"] = {
+        st.session_state[BADGE_AUDIT_FILTERS_STATE_KEY] = {
             "badge_id": badge_id,
             "player_id": str(player_id),
             "league_id": league_id,
@@ -105,9 +110,9 @@ def render(ctx):
                 ctx=ctx,
                 **filters,
             )
-        st.session_state["badge_audit_report"] = report
+        st.session_state[BADGE_AUDIT_REPORT_STATE_KEY] = report
 
-    report = st.session_state.get("badge_audit_report")
+    report = st.session_state.get(BADGE_AUDIT_REPORT_STATE_KEY)
     if not report:
         st.info("Run an audit to view summary, details, and repair actions.")
         return
@@ -188,7 +193,6 @@ def render(ctx):
                 context_id=scope_for_run["context_id"],
                 since=scope_for_run["since"],
                 until=scope_for_run["until"],
-                include_non_live=bool(scope.get("include_non_live", False)),
                 created_by=created_by.strip() or None,
                 revoke_reason=revoke_reason.strip() or "badge audit strict repair",
                 allow_strict_global=bool(allow_strict_global),
