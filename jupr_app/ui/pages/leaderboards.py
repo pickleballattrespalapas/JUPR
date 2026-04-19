@@ -332,11 +332,40 @@ def _build_badge_map(badges_df: pd.DataFrame) -> dict[int, list[LeaderboardBadge
         return {}
 
     badge_rows = badges_df.copy()
-    if "badge_id" not in badge_rows.columns or "player_id" not in badge_rows.columns:
+    if "player_id" not in badge_rows.columns:
         return {}
 
+    badge_rows["badge_id"] = _series_from_columns(
+        badge_rows,
+        ["badge_id", "badges.badge_id", "badge_id_def"],
+        default="",
+    )
+    badge_rows["name"] = _series_from_columns(
+        badge_rows,
+        ["name", "name_def", "badges.name", "name_y", "name_x"],
+        default="Badge",
+    )
+    badge_rows["category"] = _series_from_columns(
+        badge_rows,
+        ["category", "category_def", "badges.category", "category_y", "category_x"],
+        default="",
+    )
+    badge_rows["icon_key"] = _series_from_columns(
+        badge_rows,
+        ["icon_key", "icon_key_def", "badges.icon_key", "icon_key_y", "icon_key_x"],
+        default="",
+    )
+    badge_rows["rarity"] = _series_from_columns(
+        badge_rows,
+        ["rarity", "rarity_def", "badges.rarity", "rarity_y", "rarity_x"],
+        default="",
+    )
     badge_rows["earned_at_dt"] = pd.to_datetime(
-        _series_from_columns(badge_rows, ["earned_at", "created_at"], default=None),
+        _series_from_columns(
+            badge_rows,
+            ["earned_at", "created_at"],
+            default=None,
+        ),
         utc=True,
         errors="coerce",
     )
@@ -348,14 +377,13 @@ def _build_badge_map(badges_df: pd.DataFrame) -> dict[int, list[LeaderboardBadge
         ),
         errors="coerce",
     ).fillna(0)
-    badge_rows["name"] = _series_from_columns(badge_rows, ["name", "badges.name"], default="Badge")
-    badge_rows["category"] = _series_from_columns(
-        badge_rows, ["category", "badges.category"], default=""
-    )
-    badge_rows["icon_key"] = _series_from_columns(
-        badge_rows, ["icon_key", "badges.icon_key"], default=""
-    )
-    badge_rows["rarity"] = _series_from_columns(badge_rows, ["rarity", "badges.rarity"], default="")
+
+    badge_rows["badge_id"] = badge_rows["badge_id"].fillna("").astype(str).str.strip()
+    badge_rows["name"] = badge_rows["name"].fillna("").astype(str).str.strip()
+    badge_rows.loc[badge_rows["name"] == "", "name"] = "Badge"
+    badge_rows["category"] = badge_rows["category"].fillna("").astype(str).str.strip()
+    badge_rows["icon_key"] = badge_rows["icon_key"].fillna("").astype(str).str.strip()
+    badge_rows["rarity"] = badge_rows["rarity"].fillna("").astype(str).str.strip()
 
     badge_rows = badge_rows.sort_values(
         ["player_id", "badge_id", "earned_at_dt"], ascending=[True, True, False]

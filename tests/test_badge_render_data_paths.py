@@ -232,6 +232,74 @@ def test_leaderboard_badge_map_builds_from_minimal_row_shape():
     assert badge_map[304][0].prestige == 0
 
 
+def test_leaderboard_badge_map_prefers_plain_name_column():
+    merged = pd.DataFrame(
+        [
+            {
+                "player_id": 401,
+                "badge_id": "participant",
+                "name": "Participant",
+                "name_x": "Wrong X",
+                "name_y": "Wrong Y",
+                "prestige": 5,
+            }
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert badge_map[401][0].name == "Participant"
+
+
+def test_leaderboard_badge_map_reads_suffix_name_columns():
+    merged = pd.DataFrame(
+        [
+            {
+                "player_id": 402,
+                "badge_id": "participant",
+                "name_y": "Participant",
+                "prestige_def": 5,
+                "created_at": "2026-02-08T00:00:00Z",
+            },
+            {
+                "player_id": 402,
+                "badge_id": "giant_slayer",
+                "name_y": "Giant Slayer",
+                "prestige_def": 75,
+                "created_at": "2026-02-09T00:00:00Z",
+            },
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert [badge.name for badge in badge_map[402]] == ["Giant Slayer", "Participant"]
+
+
+def test_leaderboard_badge_map_reads_nested_name_and_fallback_prestige():
+    merged = pd.DataFrame(
+        [
+            {
+                "player_id": 403,
+                "badges.badge_id": "participant",
+                "badges.name": "Participant",
+                "badge_id_def": "participant",
+                "prestige_def": 5,
+            },
+            {
+                "player_id": 403,
+                "badges.badge_id": "giant_slayer",
+                "badges.name": "Giant Slayer",
+                "badge_id_def": "giant_slayer",
+                "prestige_def": 75,
+            },
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert [badge.name for badge in badge_map[403]] == ["Giant Slayer", "Participant"]
+    assert [badge.prestige for badge in badge_map[403]] == [75, 5]
+    assert all(badge.name != "Badge" for badge in badge_map[403])
+
+
 def test_player_profile_summary_unlocked_badges_from_selected_player_rows():
     class _PlayerCtx:
         df_player_badges = pd.DataFrame(
