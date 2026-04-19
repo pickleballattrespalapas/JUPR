@@ -168,7 +168,7 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
     try:
         base_query = (
             supabase.table("players")
-            .select("id,name,display_name,email,phone,whatsapp,dupr_id,doubles_skill,singles_skill,gender,age,inactive_at,active")
+            .select("id,name,display_name,email,phone,whatsapp,dupr_id,rating,doubles_skill,singles_skill,gender,age,inactive_at,active")
             .eq("club_id", str(club_id))
             .order("name")
             .limit(2000)
@@ -182,12 +182,85 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
         return []
 
 
+def _player_rating_text(player: dict[str, Any]) -> str:
+    overall_rating_elo = _coerce_float(player.get("rating"))
+    if overall_rating_elo is not None:
+        return f"{overall_rating_elo / 400.0:.3f}"
+    doubles = _coerce_float(player.get("doubles_skill"))
+    if doubles is not None:
+        return f"{doubles:.3f}".rstrip("0").rstrip(".")
+    singles = _coerce_float(player.get("singles_skill"))
+    if singles is not None:
+        return f"{singles:.3f}".rstrip("0").rstrip(".")
+    return "N/A"
+
+
 def _player_label(player: dict[str, Any]) -> str:
     display_name = _safe_text(player.get("display_name") or player.get("name") or f"Player #{player.get('id')}")
-    rating = player.get("doubles_skill") or player.get("singles_skill")
-    if rating in (None, ""):
+    rating_text = _player_rating_text(player)
+    if rating_text == "N/A":
         return display_name
-    return f"{display_name} · Rating {rating}"
+    return f"{display_name} · Rating {rating_text}"
+
+
+@st.cache_data(ttl=90)
+def _load_profile_confirmation_data(_supabase, club_id: str, player_id: str) -> dict[str, Any]:
+    pid = int(player_id)
+    total_matches = 0
+    recent_matches: list[dict[str, Any]] = []
+    recent_leagues: list[str] = []
+    try:
+        count_resp = (
+            _supabase.table("matches")
+            .select("id", count="exact")
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+            .limit(1)
+            .execute()
+        )
+        total_matches = int(getattr(count_resp, "count", 0) or 0)
+    except Exception:
+        total_matches = 0
+    try:
+        match_resp = (
+            _supabase.table("matches")
+            .select("id,date,league,score_t1,score_t2,t1_p1,t1_p2,t2_p1,t2_p2")
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+            .order("date", desc=True)
+            .order("id", desc=True)
+            .limit(8)
+            .execute()
+        )
+        rows = [dict(row) for row in (match_resp.data or [])]
+    except Exception:
+        rows = []
+    for row in rows:
+        team1 = {int(row.get("t1_p1") or 0), int(row.get("t1_p2") or 0)}
+        team2 = {int(row.get("t2_p1") or 0), int(row.get("t2_p2") or 0)}
+        score_t1 = _coerce_int(row.get("score_t1"))
+        score_t2 = _coerce_int(row.get("score_t2"))
+        result = "—"
+        if score_t1 is not None and score_t2 is not None:
+            on_team1 = pid in team1
+            won = (on_team1 and score_t1 > score_t2) or ((not on_team1) and score_t2 > score_t1)
+            result = "W" if won else "L"
+        recent_matches.append(
+            {
+                "date": _safe_text(row.get("date")),
+                "league": _safe_text(row.get("league")),
+                "score": f"{_safe_text(row.get('score_t1'))}-{_safe_text(row.get('score_t2'))}",
+                "result": result,
+            }
+        )
+        league_name = _safe_text(row.get("league"))
+        if league_name and league_name not in recent_leagues:
+            recent_leagues.append(league_name)
+    return {
+        "total_matches": total_matches,
+        "recent_matches": recent_matches[:5],
+        "recent_leagues": recent_leagues[:4],
+    }
 
 
 def _family_key(day_id: str, family: str) -> str:
@@ -305,7 +378,15 @@ def _init_wizard_state(tournament_id: Any) -> dict[str, Any]:
         st.session_state[key] = {
             "current_step": 1,
             "step1": {},
-            "step2": {"profile_mode": "new", "selected_player_id": ""},
+            "step2": {
+                "profile_mode": "new",
+                "selected_player_id": "",
+                "candidate_player_id": "",
+                "candidate_confirmed": False,
+                "rejected_likely": False,
+                "search_query": "",
+                "selection_source": "",
+            },
             "step3": {"selected_event_ids": []},
             "step4": {"partner_details": {}},
         }
@@ -453,45 +534,159 @@ def render(ctx):
                 st.rerun()
 
     step1 = wizard.get("step1") or {}
-    likely_matches, match_type = _likely_active_player_matches(
+    likely_matches, _match_type = _likely_active_player_matches(
         active_players,
         first_name=_safe_text(step1.get("first_name")),
         last_name=_safe_text(step1.get("last_name")),
         email=_safe_text(step1.get("email")),
     )
-    player_by_id = {str(row.get("id")): row for row in likely_matches}
 
     if current_step == 2:
         st.markdown("### 2. Match your JUPR profile")
-        st.caption("Use an existing profile if we found one, or create a new profile.")
-        profile_mode_default = _safe_text(step2.get("profile_mode") or ("existing" if likely_matches else "new"))
-        profile_mode = st.radio(
-            "Choose profile path",
-            ["existing", "new"],
-            horizontal=True,
-            format_func=lambda value: "Use existing JUPR profile" if value == "existing" else "Create new profile",
-            index=0 if profile_mode_default == "existing" else 1,
-        )
+        st.caption("Confirm your profile before we use it. If the match is wrong, search again or create a new profile.")
+        step2_state = dict(step2)
+        selected_player_id = _safe_text(step2_state.get("selected_player_id"))
+        selected_existing_player = next((row for row in active_players if str(row.get("id")) == selected_player_id), None)
+        candidate_player_id = _safe_text(step2_state.get("candidate_player_id"))
+        candidate_confirmed = bool(step2_state.get("candidate_confirmed"))
+        rejected_likely = bool(step2_state.get("rejected_likely"))
+        selection_source = _safe_text(step2_state.get("selection_source") or "likely")
+        search_query_default = _safe_text(step2_state.get("search_query"))
+        profile_mode = _safe_text(step2_state.get("profile_mode") or "new")
 
-        selected_player_id = _safe_text(step2.get("selected_player_id"))
-        selected_existing_player = player_by_id.get(selected_player_id)
-        if profile_mode == "existing":
-            if not likely_matches:
-                st.info("No likely active JUPR profile was found. Create a new profile to continue.")
-                profile_mode = "new"
-            elif len(likely_matches) == 1:
-                selected_existing_player = likely_matches[0]
-                st.success(f"We found your JUPR profile: {_player_label(selected_existing_player)}")
-            else:
-                if match_type == "email_exact":
-                    st.caption("Showing profiles with an exact email match.")
-                elif match_type == "full_name_exact":
-                    st.caption("Showing profiles with an exact full-name match.")
-                else:
-                    st.caption("Showing likely profile matches.")
-                options = {f"{_player_label(row)}": str(row.get("id")) for row in likely_matches}
-                selected_label = st.selectbox("Select your profile", list(options.keys()))
-                selected_existing_player = player_by_id.get(options[selected_label])
+        if selected_existing_player and candidate_confirmed:
+            st.success(f"Confirmed profile: {_player_label(selected_existing_player)}")
+        else:
+            if len(likely_matches) == 1 and not rejected_likely and not candidate_player_id:
+                candidate_player_id = str(likely_matches[0].get("id"))
+                selection_source = "likely"
+            if len(likely_matches) > 1 and not candidate_player_id and not rejected_likely:
+                st.caption("Multiple likely matches found. Choose one to review.")
+                likely_options = {f"{_player_label(row)}": str(row.get("id")) for row in likely_matches}
+                picked_likely = st.radio(
+                    "Likely profiles",
+                    list(likely_options.keys()),
+                    key=f"wizard_likely_profile_pick_{tournament.get('id')}",
+                )
+                candidate_player_id = likely_options[picked_likely]
+                selection_source = "likely"
+            candidate_player = next((row for row in active_players if str(row.get("id")) == candidate_player_id), None)
+            if candidate_player:
+                profile_mode = "existing"
+                st.markdown("#### Matched profile")
+                st.caption(_player_label(candidate_player))
+                summary = _load_profile_confirmation_data(supabase, club_id=club_id, player_id=str(candidate_player.get("id")))
+                info_cols = st.columns(3)
+                with info_cols[0]:
+                    st.metric("Current rating", _player_rating_text(candidate_player))
+                with info_cols[1]:
+                    st.metric("Total matches", int(summary.get("total_matches") or 0))
+                with info_cols[2]:
+                    recent_leagues = summary.get("recent_leagues") or []
+                    st.metric("Recent events", len(recent_leagues))
+                if recent_leagues:
+                    st.caption("Recent leagues/events: " + " • ".join(recent_leagues))
+                recent_matches = summary.get("recent_matches") or []
+                if recent_matches:
+                    st.markdown("**Recent results**")
+                    for row in recent_matches:
+                        league_name = _safe_text(row.get("league") or "Club match")
+                        st.caption(f"{_safe_text(row.get('date'))} · {league_name} · {row.get('result')} · {row.get('score')}")
+                choice_cols = st.columns(2)
+                with choice_cols[0]:
+                    if st.button("This is me", key=f"wizard_confirm_profile_{tournament.get('id')}"):
+                        selected_existing_player = candidate_player
+                        selected_player_id = str(candidate_player.get("id"))
+                        candidate_confirmed = True
+                        rejected_likely = False
+                        profile_mode = "existing"
+                        wizard["step2"] = {
+                            **step2_state,
+                            "profile_mode": "existing",
+                            "selected_player_id": selected_player_id,
+                            "candidate_player_id": selected_player_id,
+                            "candidate_confirmed": True,
+                            "rejected_likely": False,
+                            "selection_source": selection_source,
+                            "search_query": search_query_default,
+                        }
+                        st.rerun()
+                with choice_cols[1]:
+                    if st.button("This isn't me", key=f"wizard_reject_profile_{tournament.get('id')}"):
+                        selected_existing_player = None
+                        selected_player_id = ""
+                        candidate_confirmed = False
+                        candidate_player_id = ""
+                        rejected_likely = True
+                        profile_mode = "new"
+                        selection_source = "search"
+                        wizard["step2"] = {
+                            **step2_state,
+                            "profile_mode": "new",
+                            "selected_player_id": "",
+                            "candidate_player_id": "",
+                            "candidate_confirmed": False,
+                            "rejected_likely": True,
+                            "selection_source": "search",
+                            "search_query": search_query_default,
+                        }
+                        st.rerun()
+            if rejected_likely and not candidate_confirmed:
+                st.markdown("#### Choose next step")
+                option_cols = st.columns(2)
+                with option_cols[0]:
+                    if st.button("Search for my profile", key=f"wizard_search_mode_{tournament.get('id')}"):
+                        profile_mode = "existing"
+                        selection_source = "search"
+                        wizard["step2"] = {
+                            **step2_state,
+                            "profile_mode": "existing",
+                            "selection_source": "search",
+                            "candidate_confirmed": False,
+                            "selected_player_id": "",
+                        }
+                        st.rerun()
+                with option_cols[1]:
+                    if st.button("Create new profile", key=f"wizard_create_mode_{tournament.get('id')}"):
+                        profile_mode = "new"
+                        selection_source = "create"
+                        wizard["step2"] = {
+                            **step2_state,
+                            "profile_mode": "new",
+                            "selection_source": "create",
+                            "candidate_confirmed": False,
+                            "selected_player_id": "",
+                        }
+                        st.rerun()
+            if profile_mode == "existing" and not candidate_confirmed and selection_source == "search":
+                st.markdown("#### Search active players")
+                search_query = st.text_input(
+                    "Search by name",
+                    value=search_query_default,
+                    key=f"wizard_profile_search_{tournament.get('id')}",
+                    placeholder="Type at least 2 characters",
+                )
+                search_query_default = _safe_text(search_query)
+                normalized_query = _normalize_name_for_match(search_query)
+                search_results: list[dict[str, Any]] = []
+                if len(normalized_query) >= 2:
+                    for row in active_players:
+                        full_name = _normalize_name_for_match(_player_full_name(row))
+                        if normalized_query in full_name:
+                            search_results.append(row)
+                    search_results = search_results[:10]
+                elif search_query:
+                    st.caption("Keep typing to search.")
+                if search_results:
+                    result_options = {f"{_player_label(row)}": str(row.get("id")) for row in search_results}
+                    picked_search = st.radio(
+                        "Search results",
+                        list(result_options.keys()),
+                        key=f"wizard_search_pick_{tournament.get('id')}",
+                    )
+                    candidate_player_id = result_options[picked_search]
+                elif len(normalized_query) >= 2:
+                    st.info("No matching active profiles found. You can create a new profile.")
 
         c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
@@ -500,10 +695,18 @@ def render(ctx):
                 st.rerun()
         with c2:
             if st.button("Next ➜", type="primary"):
-                next_step2: dict[str, Any] = {"profile_mode": profile_mode, "selected_player_id": ""}
+                next_step2: dict[str, Any] = {
+                    "profile_mode": profile_mode,
+                    "selected_player_id": "",
+                    "candidate_player_id": candidate_player_id,
+                    "candidate_confirmed": candidate_confirmed,
+                    "rejected_likely": rejected_likely,
+                    "search_query": search_query_default,
+                    "selection_source": selection_source,
+                }
                 if profile_mode == "existing":
-                    if not selected_existing_player:
-                        st.error("Choose a profile or switch to Create new profile.")
+                    if not selected_existing_player or not candidate_confirmed:
+                        st.error("Select a profile and click “This is me” before continuing.")
                         st.stop()
                     next_step2["selected_player_id"] = str(selected_existing_player.get("id"))
                 else:
