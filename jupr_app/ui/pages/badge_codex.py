@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
+from math import isnan
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -17,6 +19,17 @@ logger = logging.getLogger(__name__)
 EARNS_PAGE_SIZE = 25
 
 SECTION_ORDER = ["Common", "Uncommon", "Rare", "Legendary", "Unclaimed", "Unranked", "Other"]
+CATALOG_SECTION_ORDER = ["Live Now", "Seasonal / League Close", "Manual / Curated", "Tracked / Disabled"]
+
+CANONICAL_CATEGORY_LABELS = {
+    "dominance": "Dominance",
+    "consistency": "Consistency",
+    "performance": "Performance",
+    "activity": "Activity",
+    "community": "Community",
+    "streaks": "Streaks",
+    "special": "Special",
+}
 
 
 def _badge_earner_counts(df_player_badges) -> dict[str, int]:
@@ -41,22 +54,119 @@ def get_all_badges(df_badges, df_player_badges, *, include_deprecated: bool = Fa
         earners_count = earners_map.get(badge_id)
         if earners_count is None and has_player_badges:
             earners_count = 0
-        state = str(getattr(row, "state", "") or "live")
-        if state == "deprecated" and not include_deprecated and (earners_count is None or earners_count == 0):
+        state = _norm_badge_value(getattr(row, "state", None), default="live")
+        badge_status = _norm_badge_value(getattr(row, "badge_status", None), default="live")
+        badge_award_timing = _norm_badge_value(getattr(row, "badge_award_timing", None), default="live")
+        badge_scope = _norm_optional_value(getattr(row, "badge_scope", None))
+        if (
+            state == "deprecated"
+            and badge_status != "deprecated"
+            and (earners_count is None or earners_count == 0)
+        ):
+            badge_status = "deprecated"
+        if badge_status == "deprecated" and not include_deprecated and (earners_count is None or earners_count == 0):
             continue
         badges.append(
             {
                 "badge_id": badge_id,
                 "name": name,
-                "category": getattr(row, "category", None),
+                "category": _normalize_category_label(getattr(row, "category", None)),
                 "prestige": getattr(row, "prestige", 0),
                 "requirements": getattr(row, "requirements", None),
                 "description_md": getattr(row, "description_md", None),
                 "earners_count": earners_count,
                 "state": state,
+                "badge_status": badge_status,
+                "badge_award_timing": badge_award_timing,
+                "badge_scope": badge_scope,
             }
         )
     return sorted(badges, key=lambda item: item["name"].lower())
+
+
+def _norm_badge_value(raw_value, *, default: str) -> str:
+    if raw_value is None:
+        return default
+    if isinstance(raw_value, float) and isnan(raw_value):
+        return default
+    normalized = str(raw_value).strip().lower()
+    if not normalized or normalized == "nan":
+        return default
+    return normalized
+
+
+def _norm_optional_value(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, float) and isnan(raw_value):
+        return None
+    normalized = str(raw_value).strip()
+    if not normalized or normalized.lower() == "nan":
+        return None
+    return normalized
+
+
+def _normalize_category_label(raw_category) -> str | None:
+    if raw_category is None:
+        return None
+    label = str(raw_category).strip()
+    if not label:
+        return None
+    key = " ".join(label.split()).lower()
+    return CANONICAL_CATEGORY_LABELS.get(key, label.title())
+
+
+def _badge_catalog_bucket(badge: dict) -> str:
+    status = str(badge.get("badge_status") or "live").lower()
+    timing = str(badge.get("badge_award_timing") or "live").lower()
+    if status == "deprecated":
+        return "Deprecated"
+    if status in {"tracked", "disabled", "frozen"}:
+        return "Tracked / Disabled"
+    if timing in {"manual", "curated"}:
+        return "Manual / Curated"
+    if timing in {"on_league_close", "seasonal"}:
+        return "Seasonal / League Close"
+    return "Live Now"
+
+
+def _availability_label(badge: dict) -> str:
+    status = str(badge.get("badge_status") or "live").lower()
+    timing = str(badge.get("badge_award_timing") or "live").lower()
+    if status == "deprecated":
+        return "Deprecated"
+    if status == "disabled":
+        return "Disabled"
+    if status in {"tracked", "frozen"}:
+        return "Tracked only"
+    if timing == "manual":
+        return "Manual award"
+    if timing == "curated":
+        return "Curated award"
+    if timing == "on_league_close":
+        return "Awarded on league close"
+    if timing == "seasonal":
+        return "Seasonal award"
+    return "Live now"
+
+
+def _show_earners_panel(badge: dict) -> bool:
+    status = str(badge.get("badge_status") or "live").lower()
+    return status in {"live", "deprecated"}
+
+
+def _split_badges_for_catalog(badges: list[dict], *, include_deprecated: bool = False) -> dict[str, list[dict]]:
+    grouped = {name: [] for name in CATALOG_SECTION_ORDER}
+    if include_deprecated:
+        grouped["Deprecated"] = []
+    for badge in badges:
+        bucket = _badge_catalog_bucket(badge)
+        if bucket == "Deprecated":
+            if include_deprecated:
+                grouped["Deprecated"].append(badge)
+            continue
+        grouped.setdefault(bucket, []).append(badge)
+    return grouped
 
 
 def _group_badges(badges: list[dict]) -> list[tuple[str, list[dict]]]:
@@ -106,10 +216,17 @@ def _render_badge_card(
     name = badge.get("name", "Badge")
     icon = badge_icon(badge_id, badge.get("category"))
     earners_count = badge.get("earners_count")
-    state = str(badge.get("state") or "live")
-    state_label = None
-    if state in {"frozen", "deprecated"}:
-        state_label = state.capitalize()
+    state_label = _availability_label(badge)
+    status = str(badge.get("badge_status") or "live").lower()
+    timing = str(badge.get("badge_award_timing") or "live").lower()
+    scope = badge.get("badge_scope")
+    meta_parts = []
+    if scope:
+        meta_parts.append(f"Scope: {scope}")
+    meta_parts.append(state_label)
+    if status == "live" and timing == "live":
+        meta_parts.append("Currently obtainable")
+    meta_line = " • ".join(meta_parts)
     open_key = f"badge_earners_open::{badge_id}"
     open_state = st.session_state.setdefault(open_key, False)
     toggle_label = (
@@ -120,11 +237,12 @@ def _render_badge_card(
 
     with column:
         copy_plain = build_badge_copy_plain(badge, earners_count=earners_count)
+        copy_plain = replace(copy_plain, meta_text=meta_line)
         card_html = render_badge_card_html(
             name=name,
             icon=icon,
             copy_plain=copy_plain,
-            state_label=state_label,
+            state_label=None,
         )
         final_md = card_html
         if debug_badges and not st.session_state.get("badge_codex_debug_shown"):
@@ -164,17 +282,20 @@ def _render_badge_card(
                 st.warning("Debug guard: blank line followed by 4-space indentation detected.")
             components.html(final_md, height=260, scrolling=True)
         st.markdown(final_md, unsafe_allow_html=True)
-        if st.button(toggle_label, key=f"badge_codex_toggle_{badge_id}", use_container_width=True):
-            open_state = not open_state
-            st.session_state[open_key] = open_state
+        if _show_earners_panel(badge):
+            if st.button(toggle_label, key=f"badge_codex_toggle_{badge_id}", use_container_width=True):
+                open_state = not open_state
+                st.session_state[open_key] = open_state
 
-        if open_state:
-            _render_earners_section(
-                badge_id,
-                earners_count,
-                df_player_badges,
-                df_players,
-            )
+            if open_state:
+                _render_earners_section(
+                    badge_id,
+                    earners_count,
+                    df_player_badges,
+                    df_players,
+                )
+        else:
+            st.caption("Earners list hidden for non-obtainable badges.")
 
 
 def get_badge_earners_page(
@@ -381,20 +502,27 @@ def render(ctx) -> None:
         st.caption("No badges are available yet.")
         return
 
-    sections = _group_badges(badges)
+    catalog_groups = _split_badges_for_catalog(badges, include_deprecated=include_deprecated)
 
-    for section_name, items in sections:
-        st.subheader(section_name)
-        columns = st.columns(3)
-        for idx, badge in enumerate(items):
-            _render_badge_card(
-                badge,
-                columns[idx % 3],
-                player_badges,
-                df_players,
-                debug_badges=debug_badges,
-            )
-        st.markdown("<div style='height: 0.5rem'></div>", unsafe_allow_html=True)
+    tabs = st.tabs(list(catalog_groups.keys()))
+    for tab, tab_name in zip(tabs, catalog_groups):
+        with tab:
+            tab_badges = catalog_groups.get(tab_name, [])
+            if not tab_badges:
+                st.caption("No badges in this section.")
+                continue
+            for section_name, items in _group_badges(tab_badges):
+                st.subheader(section_name)
+                columns = st.columns(3)
+                for idx, badge in enumerate(items):
+                    _render_badge_card(
+                        badge,
+                        columns[idx % 3],
+                        player_badges,
+                        df_players,
+                        debug_badges=debug_badges,
+                    )
+                st.markdown("<div style='height: 0.5rem'></div>", unsafe_allow_html=True)
 
     if show_incomplete_audit:
         audit_rows = []
