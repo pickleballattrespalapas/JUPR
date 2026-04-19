@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 import json
+import logging
 
 import pandas as pd
 
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.gamification.live_awards import run_live_badge_awards
+
+logger = logging.getLogger(__name__)
 
 def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
     """
@@ -138,6 +142,7 @@ def apply_bulk_match_edits(
 
     affected_leagues: Set[str] = set()
     affected_players: Set[int] = set()
+    badge_eligible_players: Set[int] = set()
 
     # For audit
     audit_before: List[Dict[str, Any]] = []
@@ -166,7 +171,11 @@ def apply_bulk_match_edits(
             v = before.get(col)
             if v is not None and not (isinstance(v, float) and pd.isna(v)):
                 try:
-                    affected_players.add(int(v))
+                    pid = int(v)
+                    affected_players.add(pid)
+                    is_popup = bool(before.get("is_popup", False)) or str(before.get("match_type") or "") == "PopUp"
+                    if not is_popup:
+                        badge_eligible_players.add(pid)
                 except Exception:
                     pass
 
@@ -260,18 +269,40 @@ def apply_bulk_match_edits(
         # don't fail admin operation if recompute fails
         warnings.append("Unable to recompute last_game_at for players automatically. (Non-fatal)")
 
-    if updated_ids and supabase is not None:
+    badge_summary: Dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
+    if updated_ids and supabase is not None and badge_eligible_players:
         for match_id in updated_ids:
-            queued = enqueue_badge_eval(
+            enqueue_result = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),
                 event_type="match_updated",
-                player_ids=sorted(affected_players),
+                player_ids=sorted(badge_eligible_players),
                 match_id=str(match_id),
                 payload={"updated_ids": updated_ids[:50]},
             )
-            if queued:
-                process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
+            should_fallback = not bool(enqueue_result.get("queued"))
+            worker_result = None
+            if not should_fallback:
+                try:
+                    worker_result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
+                    badge_summary = {"mode": "queue", **worker_result}
+                    should_fallback = bool(worker_result.get("errored")) or (
+                        int(worker_result.get("processed") or 0) == 0 and int(worker_result.get("errored") or 0) > 0
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    should_fallback = True
+                    logger.warning("Badge queue worker failed during bulk match edit: %s", exc)
+            if should_fallback:
+                try:
+                    badge_summary = run_live_badge_awards(
+                        supabase,
+                        club_id=str(club_id),
+                        player_ids=sorted(badge_eligible_players),
+                        event_type="match_updated",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Inline live badge fallback failed during bulk edit: %s", exc)
+                    badge_summary = {"mode": "inline_error", "error": str(exc)}
 
     return {
         "updated_count": len(updated_ids),
@@ -279,4 +310,5 @@ def apply_bulk_match_edits(
         "affected_leagues": sorted(affected_leagues),
         "recompute_scope": recompute_scope,
         "warnings": warnings,
+        "badge_summary": badge_summary,
     }

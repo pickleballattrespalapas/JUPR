@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 from postgrest.exceptions import APIError
 
-from jupr_app.data.schema_preflight import ensure_badge_schema_preflight
+from jupr_app.data.schema_preflight import (
+    ensure_badge_schema_preflight,
+    ensure_badge_schema_preflight_live,
+)
 
 
 class _FakeResponse:
@@ -77,3 +80,13 @@ def test_preflight_raises_when_columns_missing(monkeypatch):
     assert "migrations/20260625_badge_recompute_runs.sql" in str(excinfo.value)
     assert "migrations/20260630_player_badges_revocation.sql" in str(excinfo.value)
     assert "badge_eval_runs" in str(excinfo.value)
+
+
+def test_live_preflight_does_not_require_recompute_schema(monkeypatch):
+    monkeypatch.delenv("JUPR_SKIP_BADGE_SCHEMA_PREFLIGHT", raising=False)
+    supabase = _FakeSupabase(
+        {
+            "player_badges": {"awarded_by", "rule_version", "eval_run_id"},
+        }
+    )
+    assert ensure_badge_schema_preflight_live(supabase) is True

@@ -33,9 +33,25 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_badge_schema_preflight(supabase: Any) -> bool:
+    return ensure_badge_schema_preflight_strict(supabase)
+
+
+def ensure_badge_schema_preflight_live(supabase: Any) -> bool:
     if _should_skip_preflight():
         return True
-    missing_columns = _find_missing_player_badges_columns(supabase)
+    missing_columns = _find_missing_player_badges_columns(supabase, include_revoked=False)
+    if missing_columns:
+        message_parts = [MIGRATION_HINT + "."]
+        missing_all = ", ".join(sorted(missing_columns))
+        message_parts.append(f"Missing player_badges columns: {missing_all}.")
+        raise RuntimeError(" ".join(message_parts))
+    return True
+
+
+def ensure_badge_schema_preflight_strict(supabase: Any) -> bool:
+    if _should_skip_preflight():
+        return True
+    missing_columns = _find_missing_player_badges_columns(supabase, include_revoked=True)
     missing_tables = _find_missing_tables(supabase, REQUIRED_BADGE_TABLES)
     missing_optional_tables = _find_missing_tables(supabase, OPTIONAL_BADGE_TABLES)
     if missing_columns or missing_tables:
@@ -55,9 +71,12 @@ def ensure_badge_schema_preflight(supabase: Any) -> bool:
     return True
 
 
-def _find_missing_player_badges_columns(supabase: Any) -> set[str]:
+def _find_missing_player_badges_columns(supabase: Any, *, include_revoked: bool) -> set[str]:
     missing = set()
-    for column in sorted(REQUIRED_PLAYER_BADGES_COLUMNS | REQUIRED_REVOKED_COLUMNS):
+    columns = set(REQUIRED_PLAYER_BADGES_COLUMNS)
+    if include_revoked:
+        columns |= REQUIRED_REVOKED_COLUMNS
+    for column in sorted(columns):
         if not _probe_column(supabase, "player_badges", column):
             missing.add(column)
     return missing

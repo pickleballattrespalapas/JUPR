@@ -118,13 +118,22 @@ If you have direct Postgres access, apply migrations in order with:
 DATABASE_URL="postgres://USER:PASSWORD@HOST:5432/dbname" make db-migrate
 ```
 
-## Incremental badge evaluation
+## Incremental badge evaluation (queue + inline fallback)
 When matches are ingested or edited, the app enqueues badge evaluation work instead of evaluating
 the full match history on every page view:
 - `badge_eval_queue` stores pending evaluation events (match recorded/updated, player IDs, context).
 - `player_badge_facts` stores incremental counters used by evaluators (future worker use).
+- The write path attempts a short worker drain immediately.
+- If queueing or queue processing fails, the app runs an **inline live fallback** (`run_live_badge_awards`)
+  so official non-popup match writes still award live badges.
 
-Current implementation only enqueues events; a worker will dequeue and process them separately.
+Live fallback only evaluates badges that are:
+- `status="live"`
+- `award_timing="live"`
+- relevant to the triggering event (`match_recorded` or `match_updated`)
+
+This fallback still persists via `upsert_player_badges`, so uniqueness/idempotency continues to be
+enforced by `(club_id, player_id, badge_id, context_id)`.
 
 ### Running the worker locally
 ```bash

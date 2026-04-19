@@ -22,9 +22,9 @@ def enqueue_badge_eval(
     context_id: str | None = None,
     match_id: str | None = None,
     payload: dict[str, Any] | None = None,
-) -> bool:
+) -> dict[str, Any]:
     if supabase is None or not club_id or not event_type:
-        return False
+        return {"queued": False, "reason": "invalid_input"}
     payload_json = dict(payload or {})
     row = {
         "club_id": str(club_id),
@@ -52,17 +52,17 @@ def enqueue_badge_eval(
                 code,
                 message,
             )
-            return False
+            return {"queued": False, "reason": "missing_table"}
         logger.warning(
             "Failed to enqueue badge evaluation (code=%s message=%s). Skipping badge enqueue.",
             code,
             message,
         )
-        return False
+        return {"queued": False, "reason": "api_error"}
     except Exception as exc:  # noqa: BLE001 - badge enqueue should never crash uploads
         logger.warning("Unexpected error while enqueueing badge evaluation: %s", exc)
-        return False
-    return True
+        return {"queued": False, "reason": "unexpected_error"}
+    return {"queued": True, "reason": "ok"}
 
 
 def dequeue_badge_eval(supabase: Any) -> dict[str, Any] | None:

@@ -208,13 +208,15 @@ def test_worker_error_marks_queue(monkeypatch):
 def test_enqueue_badge_eval_missing_table_is_ignored():
     storage = {"raise_missing_table": True}
     supabase = FakeSupabase(storage)
-    enqueue_badge_eval(
+    status = enqueue_badge_eval(
         supabase,
         club_id="club",
         event_type="match_recorded",
         player_ids=[1],
         match_id="m1",
     )
+    assert status["queued"] is False
+    assert status["reason"] == "missing_table"
     assert storage.get(BADGE_QUEUE_TABLE) is None
 
 
