@@ -316,6 +316,17 @@ def _fetch_leaderboard_badges(ctx, player_ids):
     return badges_flat
 
 
+def _series_from_columns(
+    df: pd.DataFrame,
+    candidates: list[str],
+    default=None,
+) -> pd.Series:
+    for col in candidates:
+        if col in df.columns:
+            return df[col]
+    return pd.Series([default] * len(df), index=df.index)
+
+
 def _build_badge_map(badges_df: pd.DataFrame) -> dict[int, list[LeaderboardBadge]]:
     if badges_df is None or badges_df.empty:
         return {}
@@ -324,11 +335,27 @@ def _build_badge_map(badges_df: pd.DataFrame) -> dict[int, list[LeaderboardBadge
     if "badge_id" not in badge_rows.columns or "player_id" not in badge_rows.columns:
         return {}
 
-    earned_col = "earned_at" if "earned_at" in badge_rows.columns else "created_at"
     badge_rows["earned_at_dt"] = pd.to_datetime(
-        badge_rows.get(earned_col, None), utc=True, errors="coerce"
+        _series_from_columns(badge_rows, ["earned_at", "created_at"], default=None),
+        utc=True,
+        errors="coerce",
     )
-    badge_rows["prestige"] = pd.to_numeric(badge_rows.get("prestige", 0), errors="coerce").fillna(0)
+    badge_rows["prestige"] = pd.to_numeric(
+        _series_from_columns(
+            badge_rows,
+            ["prestige", "prestige_def", "badges.prestige"],
+            default=0,
+        ),
+        errors="coerce",
+    ).fillna(0)
+    badge_rows["name"] = _series_from_columns(badge_rows, ["name", "badges.name"], default="Badge")
+    badge_rows["category"] = _series_from_columns(
+        badge_rows, ["category", "badges.category"], default=""
+    )
+    badge_rows["icon_key"] = _series_from_columns(
+        badge_rows, ["icon_key", "badges.icon_key"], default=""
+    )
+    badge_rows["rarity"] = _series_from_columns(badge_rows, ["rarity", "badges.rarity"], default="")
 
     badge_rows = badge_rows.sort_values(
         ["player_id", "badge_id", "earned_at_dt"], ascending=[True, True, False]
