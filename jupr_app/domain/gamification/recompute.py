@@ -32,13 +32,14 @@ def run_badge_recompute(
     allow_strict_global: bool = False,
     match_limit: int = 5000,
     ctx: Any | None = None,
+    include_non_live: bool = False,
 ) -> dict[str, Any]:
     if mode not in {"dry-run", "append-only", "strict"}:
         raise ValueError(f"Unsupported mode: {mode}")
 
     if mode == "strict" and not allow_strict_global:
-        if not any([badge_id, player_id, context_id]):
-            raise ValueError("Strict mode requires badge_id, player_id, or context_id unless allow_strict_global is set.")
+        if not _has_scope_filter(league_id=league_id, badge_id=badge_id, player_id=player_id, context_id=context_id):
+            raise ValueError("Strict mode requires badge_id, player_id, context_id, or league_id unless allow_strict_global is set.")
 
     scope = _build_scope(
         club_id=club_id,
@@ -63,6 +64,7 @@ def run_badge_recompute(
                 club_id=club_id,
                 league_id=league_id,
                 ctx=ctx,
+                allow_non_live=include_non_live,
             )
         )
         computed = _filter_candidates(
@@ -83,19 +85,23 @@ def run_badge_recompute(
         computed_keys = {(c.player_id, str(c.badge_id), str(c.context_id)) for c in computed}
 
         rule_version = rule_version or _compute_rule_version()
+        active_existing_keys = {row["key"] for row in existing_rows if row.get("revoked_at") is None}
+        missing_keys = computed_keys - active_existing_keys
+        stale_keys = active_existing_keys - computed_keys
+
         summary: dict[str, Any] = {
             "mode": mode,
             "scope": scope,
             "computed_count": len(computed_keys),
             "existing_count": len(existing_keys),
             "rule_version": rule_version,
+            "missing_count_candidate_scope": len(missing_keys),
+            "stale_count_candidate_scope": len(stale_keys),
         }
 
         if mode == "dry-run":
-            summary["new_awards_count"] = len(computed_keys - existing_keys)
-            summary["revoked_count"] = len(
-                [row for row in existing_rows if row["key"] not in computed_keys and row.get("revoked_at") is None]
-            )
+            summary["new_awards_count"] = len(missing_keys)
+            summary["revoked_count"] = len(stale_keys)
             _update_eval_run(supabase, eval_run_id, status="completed", finished_at=_now_iso(), summary=summary)
             return summary
 
@@ -313,3 +319,13 @@ def _update_eval_run(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _has_scope_filter(
+    *,
+    league_id: str | None,
+    badge_id: str | None,
+    player_id: int | None,
+    context_id: str | None,
+) -> bool:
+    return any([league_id, badge_id, player_id, context_id])

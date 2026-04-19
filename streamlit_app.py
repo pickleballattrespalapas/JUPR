@@ -316,6 +316,7 @@ def main():
             admin_tools,
             badge_codex,
             badge_debug,
+            badge_audit,
             challenge_ladder,
             challenge_ladder_admin,
             faqs,
@@ -353,6 +354,7 @@ def main():
             "🔍 Player Search": players,
             "📼 Badge Codex": badge_codex,
             "🧪 Badge Debug": badge_debug,
+            "🧾 Badge Audit": badge_audit,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
             # Admin-only
