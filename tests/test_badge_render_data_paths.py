@@ -165,6 +165,73 @@ def test_leaderboard_badge_map_includes_single_badge_players_and_dedupes_duplica
     assert len(badge_map[102]) == 1
 
 
+def test_leaderboard_badge_map_missing_prestige_defaults_to_zero_without_crashing():
+    merged = pd.DataFrame(
+        [
+            {"player_id": 301, "badge_id": "participant", "name": "Participant", "earned_at": "2026-02-08T00:00:00Z"},
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert 301 in badge_map
+    assert len(badge_map[301]) == 1
+    assert badge_map[301][0].prestige == 0
+
+
+def test_leaderboard_badge_map_uses_normal_prestige_column_when_present():
+    merged = pd.DataFrame(
+        [
+            {"player_id": 302, "badge_id": "participant", "name": "Participant", "prestige": 5, "earned_at": "2026-02-08T00:00:00Z"},
+            {"player_id": 302, "badge_id": "giant_slayer", "name": "Giant Slayer", "prestige": 75, "earned_at": "2026-02-09T00:00:00Z"},
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert [badge.badge_id for badge in badge_map[302]] == ["giant_slayer", "participant"]
+    assert [badge.prestige for badge in badge_map[302]] == [75, 5]
+
+
+def test_leaderboard_badge_map_uses_suffix_style_prestige_column_when_available():
+    merged = pd.DataFrame(
+        [
+            {
+                "player_id": 303,
+                "badge_id": "participant",
+                "badges.name": "Participant",
+                "prestige_def": 11,
+                "created_at": "2026-02-08T00:00:00Z",
+            },
+            {
+                "player_id": 303,
+                "badge_id": "giant_slayer",
+                "badges.name": "Giant Slayer",
+                "prestige_def": 99,
+                "created_at": "2026-02-09T00:00:00Z",
+            },
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert [badge.badge_id for badge in badge_map[303]] == ["giant_slayer", "participant"]
+    assert [badge.prestige for badge in badge_map[303]] == [99, 11]
+    assert [badge.name for badge in badge_map[303]] == ["Giant Slayer", "Participant"]
+
+
+def test_leaderboard_badge_map_builds_from_minimal_row_shape():
+    merged = pd.DataFrame(
+        [
+            {"player_id": 304, "badge_id": "participant", "name": "Participant"},
+        ]
+    )
+
+    badge_map = _build_badge_map(merged)
+    assert 304 in badge_map
+    assert len(badge_map[304]) == 1
+    assert badge_map[304][0].badge_id == "participant"
+    assert badge_map[304][0].name == "Participant"
+    assert badge_map[304][0].prestige == 0
+
+
 def test_player_profile_summary_unlocked_badges_from_selected_player_rows():
     class _PlayerCtx:
         df_player_badges = pd.DataFrame(
