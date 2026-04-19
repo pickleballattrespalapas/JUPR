@@ -119,7 +119,6 @@ def render(ctx):
                         "Player": player.get("display_name"),
                         "Skill": player.get("skill"),
                         "Age": player.get("age"),
-                        "Contact": player.get("email") if row.get("show_contact_email") else "Contact hidden",
                         "Note": row.get("note"),
                     }
                 )
