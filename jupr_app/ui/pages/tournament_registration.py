@@ -263,6 +263,66 @@ def _load_profile_confirmation_data(_supabase, club_id: str, player_id: str) -> 
     }
 
 
+@st.cache_data(ttl=90)
+def _load_profile_confirmation_data(_supabase, club_id: str, player_id: str) -> dict[str, Any]:
+    pid = int(player_id)
+    total_matches = 0
+    recent_matches: list[dict[str, Any]] = []
+    recent_leagues: list[str] = []
+    try:
+        count_resp = (
+            _supabase.table("matches")
+            .select("id", count="exact")
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+            .limit(1)
+            .execute()
+        )
+        total_matches = int(getattr(count_resp, "count", 0) or 0)
+    except Exception:
+        total_matches = 0
+    try:
+        match_resp = (
+            _supabase.table("matches")
+            .select("id,date,league,score_t1,score_t2,t1_p1,t1_p2,t2_p1,t2_p2")
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+            .order("date", desc=True)
+            .order("id", desc=True)
+            .limit(8)
+            .execute()
+        )
+        rows = [dict(row) for row in (match_resp.data or [])]
+    except Exception:
+        rows = []
+    for row in rows:
+        team1 = {int(row.get("t1_p1") or 0), int(row.get("t1_p2") or 0)}
+        team2 = {int(row.get("t2_p1") or 0), int(row.get("t2_p2") or 0)}
+        score_t1 = _coerce_int(row.get("score_t1"))
+        score_t2 = _coerce_int(row.get("score_t2"))
+        result = "—"
+        if score_t1 is not None and score_t2 is not None:
+            on_team1 = pid in team1
+            won = (on_team1 and score_t1 > score_t2) or ((not on_team1) and score_t2 > score_t1)
+            result = "W" if won else "L"
+        recent_matches.append(
+            {
+                "date": _safe_text(row.get("date")),
+                "league": _safe_text(row.get("league")),
+                "score": f"{_safe_text(row.get('score_t1'))}-{_safe_text(row.get('score_t2'))}",
+                "result": result,
+            }
+        )
+        league_name = _safe_text(row.get("league"))
+        if league_name and league_name not in recent_leagues:
+            recent_leagues.append(league_name)
+    return {
+        "total_matches": total_matches,
+        "recent_matches": recent_matches[:5],
+        "recent_leagues": recent_leagues[:4],
+    }
+
+
 def _family_key(day_id: str, family: str) -> str:
     return f"{day_id}::{family}"
 
@@ -578,7 +638,7 @@ def render(ctx):
                 summary = _load_profile_confirmation_data(supabase, club_id=club_id, player_id=str(candidate_player.get("id")))
                 info_cols = st.columns(3)
                 with info_cols[0]:
-                    st.metric("Current rating", _player_rating_text(candidate_player))
+                    st.metric("Current rating", _safe_text(candidate_player.get("doubles_skill") or candidate_player.get("singles_skill") or "N/A"))
                 with info_cols[1]:
                     st.metric("Total matches", int(summary.get("total_matches") or 0))
                 with info_cols[2]:
