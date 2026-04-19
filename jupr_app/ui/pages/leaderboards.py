@@ -10,6 +10,7 @@ from jupr_app.ui.url import qp_get
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
+from jupr_app.ui.badge_data import normalize_player_badges_frame, normalize_player_ids
 from jupr_app.ui.pages.players import badge_icon
 
 
@@ -194,7 +195,8 @@ def select_leaderboard_players(
 
 
 def _fetch_leaderboard_badges(ctx, player_ids):
-    if not player_ids:
+    normalized_player_ids = normalize_player_ids(player_ids)
+    if not normalized_player_ids:
         return pd.DataFrame()
 
     pb_df = getattr(ctx, "df_player_badges", None)
@@ -206,20 +208,28 @@ def _fetch_leaderboard_badges(ctx, player_ids):
         and not pb_df.empty
         and not badges_df.empty
     ):
-        pb_copy = pb_df.copy()
+        pb_copy = normalize_player_badges_frame(pb_df)
         if "club_id" in pb_copy.columns:
-            pb_copy = pb_copy[pb_copy["club_id"].astype(str) == str(ctx.club_id)]
-        pb_copy = pb_copy[pb_copy["player_id"].isin(player_ids)]
+            pb_copy = pb_copy[pb_copy["club_id"] == str(ctx.club_id).strip()]
+        pb_copy = pb_copy[pb_copy["player_id"].isin(normalized_player_ids)]
         if pb_copy.empty:
-            return pd.DataFrame()
-        merged = pb_copy.merge(badges_df, on="badge_id", how="left")
-        for col in ("name", "category", "icon_key", "rarity"):
-            if col in merged.columns:
-                merged[col] = merged[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
-        sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in merged.columns]
-        if sort_cols:
-            merged = merged.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
-        return merged
+            logger.info(
+                "Leaderboard badges: ctx.df_player_badges had 0 rows for requested players=%s club_id=%s; using fallback query.",
+                normalized_player_ids,
+                str(ctx.club_id).strip(),
+            )
+        else:
+            badges_defs = badges_df.copy()
+            if "badge_id" in badges_defs.columns:
+                badges_defs["badge_id"] = badges_defs["badge_id"].fillna("").astype(str).str.strip()
+            merged = pb_copy.merge(badges_defs, on="badge_id", how="left")
+            for col in ("name", "category", "icon_key", "rarity"):
+                if col in merged.columns:
+                    merged[col] = merged[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+            sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in merged.columns]
+            if sort_cols:
+                merged = merged.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
+            return merged
 
     try:
         resp = (
@@ -229,7 +239,7 @@ def _fetch_leaderboard_badges(ctx, player_ids):
                 "badges:badges(badge_id,name,prestige,category,icon_key,rarity)"
             )
             .eq("club_id", str(ctx.club_id))
-            .in_("player_id", player_ids)
+            .in_("player_id", normalized_player_ids)
             .execute()
         )
     except Exception:
@@ -241,6 +251,9 @@ def _fetch_leaderboard_badges(ctx, player_ids):
         return pd.DataFrame()
 
     badges_flat = pd.json_normalize(data, sep=".")
+    badges_flat = normalize_player_badges_frame(badges_flat)
+    if "badge_id" in badges_flat.columns and "badges.badge_id" in badges_flat.columns:
+        badges_flat = badges_flat.drop(columns=["badge_id"])
     column_map = {
         "badges.badge_id": "badge_id",
         "badges.name": "name",
@@ -250,12 +263,20 @@ def _fetch_leaderboard_badges(ctx, player_ids):
         "badges.rarity": "rarity",
     }
     badges_flat = badges_flat.rename(columns=column_map)
+    if "badge_id" in badges_flat.columns:
+        badges_flat["badge_id"] = badges_flat["badge_id"].fillna("").astype(str).str.strip()
     for col in ("name", "category", "icon_key", "rarity"):
         if col in badges_flat.columns:
             badges_flat[col] = badges_flat[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
     sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in badges_flat.columns]
     if sort_cols:
         badges_flat = badges_flat.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
+    logger.info(
+        "Leaderboard badges fallback query returned %s rows for players=%s club_id=%s.",
+        len(badges_flat),
+        normalized_player_ids,
+        str(ctx.club_id).strip(),
+    )
     return badges_flat
 
 
