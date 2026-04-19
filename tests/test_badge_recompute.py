@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from jupr_app.domain.gamification.recompute import run_badge_recompute
 
@@ -201,3 +202,94 @@ def test_recompute_strict_revokes_missing():
     assert row.get("revoked_at")
     assert row.get("revoked_by") == "admin"
     assert row.get("revoke_reason") == "strict cleanup"
+
+
+def test_recompute_strict_global_blocked_without_scope():
+    supabase = FakeSupabase({})
+    with pytest.raises(ValueError, match="Strict mode requires"):
+        run_badge_recompute(
+            supabase,
+            club_id="club",
+            mode="strict",
+            ctx=_build_ctx(),
+            allow_strict_global=False,
+        )
+
+
+def test_recompute_append_only_does_not_revoke_stale_rows():
+    storage = {
+        "player_badges": [
+            {
+                "id": "legacy1",
+                "club_id": "club",
+                "player_id": 99,
+                "badge_id": "participant",
+                "context_id": "overall",
+                "revoked_at": None,
+            }
+        ]
+    }
+    supabase = FakeSupabase(storage)
+    run_badge_recompute(
+        supabase,
+        club_id="club",
+        mode="append-only",
+        ctx=_build_ctx(),
+        badge_id="participant",
+        allow_strict_global=True,
+    )
+    stale = next(row for row in storage["player_badges"] if row["id"] == "legacy1")
+    assert stale.get("revoked_at") is None
+
+
+def test_recompute_strict_scoped_to_badge_id_only():
+    storage = {
+        "player_badges": [
+            {
+                "id": "legacy-high",
+                "club_id": "club",
+                "player_id": 7,
+                "badge_id": "high_roller",
+                "context_id": "legacy",
+                "revoked_at": None,
+            },
+            {
+                "id": "keep-other",
+                "club_id": "club",
+                "player_id": 7,
+                "badge_id": "participant",
+                "context_id": "overall",
+                "revoked_at": None,
+            },
+        ]
+    }
+    supabase = FakeSupabase(storage)
+    ctx = SimpleNamespace(
+        supabase=None,
+        club_id="club",
+        df_matches=pd.DataFrame(),
+        df_players_all=pd.DataFrame(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+        df_badges=pd.DataFrame([
+            {"badge_id": "high_roller", "state": "live"},
+            {"badge_id": "participant", "state": "live"},
+        ]),
+        df_player_badges=pd.DataFrame(),
+        name_to_id={},
+        id_to_name={},
+        public_mode=False,
+        admin_logged_in=True,
+    )
+    run_badge_recompute(
+        supabase,
+        club_id="club",
+        mode="strict",
+        ctx=ctx,
+        badge_id="high_roller",
+        allow_strict_global=False,
+    )
+    legacy = next(row for row in storage["player_badges"] if row["id"] == "legacy-high")
+    untouched = next(row for row in storage["player_badges"] if row["id"] == "keep-other")
+    assert legacy.get("revoked_at") is not None
+    assert untouched.get("revoked_at") is None
