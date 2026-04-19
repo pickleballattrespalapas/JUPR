@@ -194,6 +194,88 @@ def _family_key(day_id: str, family: str) -> str:
     return f"{day_id}::{family}"
 
 
+def _normalize_name_for_match(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _player_full_name(player: dict[str, Any]) -> str:
+    first = _safe_text(player.get("first_name"))
+    last = _safe_text(player.get("last_name"))
+    if first or last:
+        return " ".join(part for part in [first, last] if part)
+    return _safe_text(player.get("display_name") or player.get("name"))
+
+
+def _likely_active_player_matches(players: list[dict[str, Any]], *, first_name: str, last_name: str) -> list[dict[str, Any]]:
+    first = _normalize_name_for_match(first_name)
+    last = _normalize_name_for_match(last_name)
+    if not first or not last:
+        return []
+
+    target_full = _normalize_name_for_match(f"{first} {last}")
+    exact: list[dict[str, Any]] = []
+    contains: list[dict[str, Any]] = []
+    for row in players:
+        full_name = _normalize_name_for_match(_player_full_name(row))
+        if not full_name:
+            continue
+        if full_name == target_full:
+            exact.append(row)
+            continue
+        tokens = full_name.split()
+        if first in tokens and last in tokens:
+            contains.append(row)
+
+    matches = exact or contains
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in matches:
+        pid = str(row.get("id") or "")
+        key = pid or _normalize_name_for_match(_player_full_name(row))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped[:8]
+
+
+def _gender_filter_allows_event(event: dict[str, Any], gender: str) -> bool:
+    g = _normalize_name_for_match(gender)
+    if g not in {"male", "female"}:
+        return True
+    restriction = _normalize_name_for_match(event.get("gender_restriction"))
+    if not restriction:
+        return True
+    female_only = {"female", "women", "womens", "woman", "girls", "f"}
+    male_only = {"male", "men", "mens", "man", "boys", "m"}
+    if g == "male" and restriction in female_only:
+        return False
+    if g == "female" and restriction in male_only:
+        return False
+    return True
+
+
+def _rating_filter_allows_event(event: dict[str, Any], player: dict[str, Any]) -> bool:
+    eligible, reason = _preview_division_eligibility(event, player)
+    if eligible:
+        return True
+    reason_text = _normalize_name_for_match(reason)
+    if "rated above" in reason_text or "one player is rated above" in reason_text or "please register for" in reason_text:
+        return False
+    return True
+
+
+def _visible_division_options(options: list[dict[str, Any]], *, gender: str, player: dict[str, Any]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for event in options:
+        if not _gender_filter_allows_event(event, gender):
+            continue
+        if not _rating_filter_allows_event(event, player):
+            continue
+        filtered.append(event)
+    return filtered
+
+
 def render(ctx):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell(
@@ -281,41 +363,48 @@ def render(ctx):
 
     with st.form(f"registration_form_{tournament.get('id')}"):
         st.markdown("### 1. Player information")
-        player_entry_mode = st.radio(
-            "Player profile",
-            ["I'm already in JUPR", "I'm new / create new player"],
-            horizontal=True,
-            key=f"player_entry_mode_{tournament.get('id')}",
-        )
-        using_existing_player = player_entry_mode == "I'm already in JUPR"
-        active_players = _load_active_players(supabase, club_id=club_id, ctx=ctx) if using_existing_player else []
-        selected_existing_player: dict[str, Any] | None = None
-        if using_existing_player:
-            if not active_players:
-                st.warning("No active JUPR players were found for this club. Please use the new-player path.")
-            else:
-                player_choices = {"— Select your player —": None}
-                for row in active_players:
-                    label = _player_label(row)
-                    if label in player_choices:
-                        label = f"{label} (#{row.get('id')})"
-                    player_choices[label] = row
-                selected_player_label = st.selectbox(
-                    "Select your active JUPR player",
-                    list(player_choices.keys()),
-                    key=f"existing_player_{tournament.get('id')}",
-                )
-                selected_existing_player = player_choices.get(selected_player_label)
+        active_players = _load_active_players(supabase, club_id=club_id, ctx=ctx)
 
-        existing_first = _safe_text((selected_existing_player or {}).get("first_name"))
-        existing_last = _safe_text((selected_existing_player or {}).get("last_name"))
+        c1, c2 = st.columns(2)
+        with c1:
+            first_name = st.text_input("First name")
+        with c2:
+            last_name = st.text_input("Last name")
+
+        likely_matches = _likely_active_player_matches(active_players, first_name=first_name, last_name=last_name)
+        selected_existing_player: dict[str, Any] | None = None
+
+        if likely_matches:
+            if len(likely_matches) == 1:
+                selected_existing_player = likely_matches[0]
+            else:
+                match_choices: dict[str, dict[str, Any] | None] = {"Continue as new player": None}
+                for row in likely_matches:
+                    label = _player_label(row)
+                    if label in match_choices:
+                        label = f"{label} (#{row.get('id')})"
+                    match_choices[label] = row
+                selected_label = st.selectbox(
+                    "We found multiple active JUPR players with this name",
+                    list(match_choices.keys()),
+                    key=f"match_existing_player_{tournament.get('id')}",
+                )
+                selected_existing_player = match_choices.get(selected_label)
+
+        using_existing_player = selected_existing_player is not None
+        existing_first = _safe_text((selected_existing_player or {}).get("first_name")) or first_name
+        existing_last = _safe_text((selected_existing_player or {}).get("last_name")) or last_name
         existing_display = _safe_text((selected_existing_player or {}).get("display_name") or (selected_existing_player or {}).get("name"))
         existing_email = _safe_text((selected_existing_player or {}).get("email"))
         existing_phone = _safe_text((selected_existing_player or {}).get("phone") or (selected_existing_player or {}).get("whatsapp"))
 
+        if using_existing_player:
+            matched_rating = _coerce_float(selected_existing_player.get("doubles_skill")) or _coerce_float(selected_existing_player.get("singles_skill"))
+            rating_text = f" ({matched_rating:.2f})" if matched_rating is not None else ""
+            st.success(f"Matched to active JUPR player: {_safe_text(existing_display) or _safe_text(existing_first + ' ' + existing_last)}{rating_text}")
+
         c1, c2 = st.columns(2)
         with c1:
-            first_name = st.text_input("First name", value=existing_first if using_existing_player else "")
             email = st.text_input("Email *", value=existing_email if using_existing_player else "")
             phone = st.text_input("Phone / WhatsApp", value=existing_phone if using_existing_player else "")
             age_default = _safe_text((selected_existing_player or {}).get("age")) if using_existing_player else ""
@@ -324,13 +413,13 @@ def render(ctx):
             if not using_existing_player:
                 doubles_skill = st.text_input("Doubles skill")
         with c2:
-            last_name = st.text_input("Last name", value=existing_last if using_existing_player else "")
-            display_name = st.text_input("Display name", value=existing_display if using_existing_player else "")
+            display_name = st.text_input("Display name", value=existing_display)
             dupr_id = ""
             singles_skill = ""
             if not using_existing_player:
                 dupr_id = st.text_input("DUPR ID")
                 singles_skill = st.text_input("Singles skill")
+
         gender_options = ["", "Female", "Male", "Other", "Prefer not to say"]
         existing_gender = _safe_text((selected_existing_player or {}).get("gender"))
         gender_index = gender_options.index(existing_gender) if existing_gender in gender_options else 0
@@ -340,6 +429,9 @@ def render(ctx):
         if using_existing_player and selected_existing_player:
             profile_doubles = _coerce_float(selected_existing_player.get("doubles_skill"))
             profile_singles = _coerce_float(selected_existing_player.get("singles_skill"))
+            first_name = existing_first
+            last_name = existing_last
+            dupr_id = _safe_text(selected_existing_player.get("dupr_id"))
         else:
             profile_doubles = _coerce_float(doubles_skill)
             profile_singles = _coerce_float(singles_skill)
@@ -348,13 +440,20 @@ def render(ctx):
             "singles_skill": profile_singles,
         }
 
+        visible_event_options = _visible_division_options(
+            selectable_event_options,
+            gender=gender,
+            player=player_profile,
+        )
+        visible_grouped_events = _group_events(days, visible_event_options)
+
         st.markdown("### 2. Choose your divisions")
         st.caption("Work day by day. Check divisions you want to play.")
         selections: list[dict[str, Any]] = []
         family_selection_counts: dict[str, int] = {}
         for day in days:
             day_id = str(day.get("id"))
-            family_map = grouped_events.get(day_id, {})
+            family_map = visible_grouped_events.get(day_id, {})
             if not family_map:
                 continue
             st.markdown(f"#### {day.get('label')}")
@@ -441,9 +540,6 @@ def render(ctx):
 
     if submitted:
         final_display_name = _safe_text(display_name) or " ".join(part for part in [_safe_text(first_name), _safe_text(last_name)] if part)
-        if using_existing_player and not selected_existing_player:
-            st.error("Select your active JUPR player, or switch to the new-player path.")
-            st.stop()
         if not _safe_text(email):
             st.error("Email is required.")
             st.stop()
@@ -456,7 +552,7 @@ def render(ctx):
         over_selected_groups: list[str] = []
         for day in days:
             day_id = str(day.get("id"))
-            family_map = grouped_events.get(day_id, {})
+            family_map = visible_grouped_events.get(day_id, {})
             for family in family_map.keys():
                 selected_count = family_selection_counts.get(_family_key(day_id, family), 0)
                 if selected_count > 1:
