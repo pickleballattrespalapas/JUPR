@@ -96,13 +96,40 @@ def build_gamification_summary(
         assert "rarity" in badge_defs.columns or rarity_fallback
     active_badges = badge_defs[badge_defs["is_active"] != False].copy()
 
-    pb = pb[pb.get("player_id") == int(player_id)].copy() if not pb.empty else pd.DataFrame()
+    def _series_or_default(df: pd.DataFrame, col: str, default: Any) -> pd.Series:
+        if col in df.columns:
+            return df[col]
+        fallback_col = f"{col}_def"
+        if fallback_col in df.columns:
+            return df[fallback_col]
+        return pd.Series([default] * len(df), index=df.index)
+
+    if not pb.empty:
+        pb_player_id = pd.to_numeric(pb.get("player_id"), errors="coerce")
+        pb = pb.loc[pb_player_id.notna()].copy()
+        if not pb.empty:
+            pb_player_id = pb_player_id.loc[pb.index].astype(int)
+            pb = pb.loc[pb_player_id == int(player_id)].copy()
+
     if pb.empty or active_badges.empty:
         unlocked = []
     else:
-        merged = pb.merge(active_badges, on="badge_id", how="left")
+        merged = pb.merge(active_badges, on="badge_id", how="left", suffixes=("", "_def"))
         merged["earned_at_dt"] = pd.to_datetime(merged.get("earned_at", None), utc=True, errors="coerce")
-        merged["prestige"] = pd.to_numeric(merged.get("prestige", 0), errors="coerce").fillna(0)
+        merged["prestige"] = pd.to_numeric(
+            _series_or_default(merged, "prestige", 0), errors="coerce"
+        ).fillna(0)
+        merged["name"] = _series_or_default(merged, "name", None)
+        merged["category"] = _series_or_default(merged, "category", "")
+        merged["rarity"] = _series_or_default(merged, "rarity", None)
+        merged["requirements"] = _series_or_default(merged, "requirements", "Requirements TBD")
+        merged["is_stackable"] = _series_or_default(merged, "is_stackable", False)
+        merged["icon_key"] = _series_or_default(merged, "icon_key", None)
+        merged["tier"] = _series_or_default(merged, "tier", None)
+        merged["scope"] = _series_or_default(merged, "scope", None)
+        merged["badge_scope"] = _series_or_default(merged, "badge_scope", None)
+        merged["badge_status"] = _series_or_default(merged, "badge_status", "live")
+        merged["badge_award_timing"] = _series_or_default(merged, "badge_award_timing", "live")
 
         unlocked = []
         for badge_id, group in merged.groupby("badge_id"):
