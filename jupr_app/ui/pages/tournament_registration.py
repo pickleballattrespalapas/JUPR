@@ -451,7 +451,6 @@ def render(ctx):
                 }
                 wizard["current_step"] = 2
                 st.rerun()
-        return
 
     step1 = wizard.get("step1") or {}
     likely_matches, match_type = _likely_active_player_matches(
@@ -508,26 +507,13 @@ def render(ctx):
                         st.stop()
                     next_step2["selected_player_id"] = str(selected_existing_player.get("id"))
                 else:
-                    new_display_name = st.session_state.get(
-                        f"wizard_new_display_name_{tournament.get('id')}",
-                        _safe_text(step2.get("display_name")),
-                    )
+                    new_display_name = st.session_state.get("wizard_new_display_name", _safe_text(step2.get("display_name")))
                     next_step2.update(
                         {
                             "display_name": _safe_text(new_display_name),
-                            "dupr_id": _safe_text(
-                                st.session_state.get(f"wizard_new_dupr_id_{tournament.get('id')}", step2.get("dupr_id"))
-                            ),
-                            "doubles_skill": _safe_text(
-                                st.session_state.get(
-                                    f"wizard_new_doubles_skill_{tournament.get('id')}", step2.get("doubles_skill")
-                                )
-                            ),
-                            "singles_skill": _safe_text(
-                                st.session_state.get(
-                                    f"wizard_new_singles_skill_{tournament.get('id')}", step2.get("singles_skill")
-                                )
-                            ),
+                            "dupr_id": _safe_text(st.session_state.get("wizard_new_dupr_id", step2.get("dupr_id"))),
+                            "doubles_skill": _safe_text(st.session_state.get("wizard_new_doubles_skill", step2.get("doubles_skill"))),
+                            "singles_skill": _safe_text(st.session_state.get("wizard_new_singles_skill", step2.get("singles_skill"))),
                         }
                     )
                 wizard["step2"] = next_step2
@@ -536,27 +522,14 @@ def render(ctx):
 
         if profile_mode == "new":
             st.markdown("#### New profile details")
-            st.text_input(
-                "Display name",
-                value=_safe_text(step2.get("display_name")),
-                key=f"wizard_new_display_name_{tournament.get('id')}",
-            )
+            st.text_input("Display name", value=_safe_text(step2.get("display_name")), key="wizard_new_display_name")
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.text_input("DUPR ID", value=_safe_text(step2.get("dupr_id")), key=f"wizard_new_dupr_id_{tournament.get('id')}")
+                st.text_input("DUPR ID", value=_safe_text(step2.get("dupr_id")), key="wizard_new_dupr_id")
             with c2:
-                st.text_input(
-                    "Doubles skill",
-                    value=_safe_text(step2.get("doubles_skill")),
-                    key=f"wizard_new_doubles_skill_{tournament.get('id')}",
-                )
+                st.text_input("Doubles skill", value=_safe_text(step2.get("doubles_skill")), key="wizard_new_doubles_skill")
             with c3:
-                st.text_input(
-                    "Singles skill",
-                    value=_safe_text(step2.get("singles_skill")),
-                    key=f"wizard_new_singles_skill_{tournament.get('id')}",
-                )
-        return
+                st.text_input("Singles skill", value=_safe_text(step2.get("singles_skill")), key="wizard_new_singles_skill")
 
     step2 = wizard.get("step2") or {}
     using_existing_player = _safe_text(step2.get("profile_mode")) == "existing"
@@ -647,7 +620,6 @@ def render(ctx):
                 wizard["step3"] = {"selected_event_ids": new_selected}
                 wizard["current_step"] = 4
                 st.rerun()
-        return
 
     step3 = wizard.get("step3") or {}
     selected_event_ids: list[str] = step3.get("selected_event_ids") or []
