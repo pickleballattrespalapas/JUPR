@@ -271,3 +271,133 @@ def test_story_cards_dedupe_by_type_and_context():
     stories = compute_story_cards(ctx, facts, awards)
     keys = [(s["story_type"], s["context_id"]) for s in stories]
     assert len(keys) == len(set(keys))
+
+
+def test_profile_summary_supports_raw_player_badges():
+    df_badges = pd.DataFrame(
+        [
+            {
+                "badge_id": "participant_grace",
+                "name": "Grace",
+                "prestige": 10,
+                "category": "Participation",
+                "rarity": "common",
+            }
+        ]
+    )
+    df_player_badges = pd.DataFrame(
+        [
+            {
+                "player_id": 42,
+                "badge_id": "participant_grace",
+                "earned_at": "2024-02-01T00:00:00Z",
+            }
+        ]
+    )
+
+    summary = build_gamification_summary(42, df_badges, df_player_badges)
+
+    assert summary["collected_unique_count"] == 1
+    assert summary["prestige_total"] == 10
+    assert summary["unlocked_badges"][0]["name"] == "Grace"
+
+
+def test_profile_summary_supports_enriched_player_badges():
+    df_badges = pd.DataFrame(
+        [
+            {
+                "badge_id": "participant_grace",
+                "name": "Grace",
+                "prestige": 10,
+                "category": "Participation",
+                "rarity": "common",
+            }
+        ]
+    )
+    df_player_badges = pd.DataFrame(
+        [
+            {
+                "player_id": "42",
+                "badge_id": "participant_grace",
+                "earned_at": "2024-02-01T00:00:00Z",
+                "name": "Grace (enriched)",
+                "prestige": 15,
+                "category": "Participation",
+                "rarity": "rare",
+                "requirements": "Play one match",
+                "is_stackable": False,
+            }
+        ]
+    )
+
+    summary = build_gamification_summary(42, df_badges, df_player_badges)
+
+    assert summary["collected_unique_count"] == 1
+    assert summary["prestige_total"] == 15
+    assert summary["unlocked_badges"][0]["name"] == "Grace (enriched)"
+    assert summary["unlocked_badges"][0]["rarity"] == "rare"
+
+
+def test_profile_summary_handles_def_suffix_without_crash():
+    df_badges = pd.DataFrame(
+        [
+            {
+                "badge_id": "participant_grace",
+                "name": "Grace",
+                "prestige": 10,
+                "category": "Participation",
+                "rarity": "common",
+            }
+        ]
+    )
+    df_player_badges = pd.DataFrame(
+        [
+            {
+                "player_id": "42",
+                "badge_id": "participant_grace",
+                "earned_at": "2024-02-01T00:00:00Z",
+                "prestige_def": 99,
+                "name_def": "Grace def",
+            },
+            {
+                "player_id": "not-a-number",
+                "badge_id": "participant_grace",
+                "earned_at": "2024-02-02T00:00:00Z",
+            },
+        ]
+    )
+
+    summary = build_gamification_summary(42, df_badges, df_player_badges)
+
+    assert summary["collected_unique_count"] == 1
+    assert summary["prestige_total"] == 10
+    assert summary["unlocked_badges"][0]["name"] == "Grace"
+
+
+def test_profile_summary_single_participant_badge_is_unlocked():
+    df_badges = pd.DataFrame(
+        [
+            {
+                "badge_id": "participant_grace",
+                "name": "Grace",
+                "prestige": 10,
+                "category": "Participation",
+                "rarity": "common",
+            }
+        ]
+    )
+    df_player_badges = pd.DataFrame(
+        [
+            {
+                "player_id": 7.0,
+                "badge_id": "participant_grace",
+                "earned_at": "2024-02-01T00:00:00Z",
+            }
+        ]
+    )
+
+    summary = build_gamification_summary(7, df_badges, df_player_badges)
+
+    assert len(summary["unlocked_badges"]) == 1
+    assert summary["collected_unique_count"] == 1
+    assert summary["prestige_total"] > 0
