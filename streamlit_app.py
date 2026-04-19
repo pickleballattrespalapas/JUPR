@@ -297,7 +297,7 @@ def main():
                 and "id" in df_players_all.columns
             ):
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
-            queued = enqueue_badge_eval(
+            enqueue_result = enqueue_badge_eval(
                 supabase,
                 club_id=CLUB_ID,
                 event_type="match_recorded",
@@ -305,7 +305,7 @@ def main():
                 match_id=f"initial_load:{CLUB_ID}",
                 payload={"initial_load": True},
             )
-            if queued:
+            if enqueue_result.get("queued"):
                 process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2)
 
         # -------------------------

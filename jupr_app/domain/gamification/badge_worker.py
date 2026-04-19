@@ -8,12 +8,13 @@ from typing import Any, Callable
 
 import httpx
 import pandas as pd
+from postgrest.exceptions import APIError
 
-from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_player
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
+from jupr_app.domain.player_activity import add_activity_columns
 
 
 def process_badge_eval_queue(
@@ -204,7 +205,7 @@ def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: 
         id_to_name,
         schema_degraded,
         schema_degraded_reason,
-    ) = load_data(supabase, club_id, match_limit=match_limit)
+    ) = load_live_badge_data(supabase, club_id, match_limit=match_limit)
     return SimpleNamespace(
         supabase=supabase,
         club_id=club_id,
@@ -222,6 +223,126 @@ def _resolve_context(ctx: Any | None, supabase: Any, club_id: str, match_limit: 
         schema_degraded=schema_degraded,
         schema_degraded_reason=schema_degraded_reason,
     )
+
+
+def load_live_badge_data(supabase: Any, club_id: str, *, match_limit: int = 5000) -> tuple[Any, ...]:
+    club_id = str(club_id)
+    schema_degraded = False
+    schema_degraded_reason = None
+
+    p_resp = supabase.table("players").select("*").eq("club_id", club_id).execute()
+    df_players_all = add_activity_columns(pd.DataFrame(p_resp.data or []))
+    if not df_players_all.empty and "inactive_at" in df_players_all.columns:
+        df_players_active = df_players_all[df_players_all["inactive_at"].isna()].copy()
+    elif not df_players_all.empty and "active" in df_players_all.columns:
+        df_players_active = df_players_all[df_players_all["active"] == True].copy()
+    else:
+        df_players_active = df_players_all.copy()
+
+    l_resp = (
+        supabase.table("league_ratings")
+        .select("id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active")
+        .eq("club_id", club_id)
+        .execute()
+    )
+    df_leagues = pd.DataFrame(l_resp.data or [])
+
+    m_resp = (
+        supabase.table("matches")
+        .select("*")
+        .eq("club_id", club_id)
+        .order("id", desc=True)
+        .limit(int(match_limit))
+        .execute()
+    )
+    df_matches = pd.DataFrame(m_resp.data or [])
+
+    meta_resp = supabase.table("leagues_metadata").select("*").eq("club_id", club_id).execute()
+    df_meta = pd.DataFrame(meta_resp.data or [])
+
+    df_badges = _fetch_badges(supabase)
+    df_player_badges, schema_degraded, schema_degraded_reason = _fetch_player_badges_live(supabase, club_id)
+
+    if not df_players_all.empty and "id" in df_players_all.columns and "name" in df_players_all.columns:
+        ids = pd.to_numeric(df_players_all["id"], errors="coerce").dropna().astype(int)
+        names = df_players_all.loc[ids.index, "name"].astype(str)
+        id_to_name = dict(zip(ids, names))
+        name_to_id = dict(zip(names, ids))
+    else:
+        id_to_name, name_to_id = {}, {}
+
+    return (
+        df_players_all,
+        df_players_active,
+        df_leagues,
+        df_matches,
+        df_meta,
+        df_badges,
+        df_player_badges,
+        name_to_id,
+        id_to_name,
+        schema_degraded,
+        schema_degraded_reason,
+    )
+
+
+def _fetch_badges(supabase: Any) -> pd.DataFrame:
+    try:
+        resp = supabase.table("badges").select(
+            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+            "tier,icon_key,scope,state,eval_triggers,created_at"
+        ).execute()
+    except APIError:
+        resp = supabase.table("badges").select(
+            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+            "tier,icon_key,scope,created_at"
+        ).execute()
+    df_badges = pd.DataFrame(resp.data or [])
+    if not df_badges.empty:
+        if "state" not in df_badges.columns:
+            df_badges["state"] = "live"
+        if "eval_triggers" not in df_badges.columns:
+            df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
+    return df_badges
+
+
+def _fetch_player_badges_live(supabase: Any, club_id: str) -> tuple[pd.DataFrame, bool, str | None]:
+    base_cols = [
+        "id",
+        "club_id",
+        "player_id",
+        "badge_id",
+        "earned_at",
+        "context_type",
+        "context_id",
+        "match_id",
+        "value_num",
+        "value_json",
+    ]
+    optional_cols = ["awarded_by", "rule_version", "eval_run_id", "revoked_at", "revoked_by", "revoke_reason"]
+    schema_degraded = False
+    schema_degraded_reason = None
+    try:
+        resp = (
+            supabase.table("player_badges")
+            .select(",".join(base_cols + optional_cols))
+            .eq("club_id", club_id)
+            .execute()
+        )
+    except APIError:
+        schema_degraded = True
+        schema_degraded_reason = "player_badges optional provenance/revocation columns missing"
+        resp = (
+            supabase.table("player_badges")
+            .select(",".join(base_cols))
+            .eq("club_id", club_id)
+            .execute()
+        )
+    df = pd.DataFrame(resp.data or [])
+    for col in optional_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df, schema_degraded, schema_degraded_reason
 
 
 def _badge_ids_for_trigger(ctx: Any, event_type: str) -> set[str]:

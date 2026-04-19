@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any, Callable
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
@@ -13,6 +14,10 @@ from jupr_app.domain.player_activity import (
 )
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
+from jupr_app.domain.gamification.live_awards import run_live_badge_awards
+
+
+logger = logging.getLogger(__name__)
 
 
 def process_matches(
@@ -278,6 +283,7 @@ def process_matches(
     # -------------------------
     # Write match rows
     # -------------------------
+    badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
     if db_matches:
         CHUNK_M = 300
         for i in range(0, len(db_matches), CHUNK_M):
@@ -304,15 +310,41 @@ def process_matches(
                 )
 
         if supabase is not None and has_non_popup_match:
-            queued = enqueue_badge_eval(
+            enqueue_result = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),
                 event_type="match_recorded",
                 player_ids=sorted(affected_players),
                 payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
             )
-            if queued:
-                process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
+            worker_result = None
+            should_fallback = not bool(enqueue_result.get("queued"))
+            if not should_fallback:
+                try:
+                    worker_result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
+                    should_fallback = bool(worker_result.get("errored")) or (
+                        int(worker_result.get("processed") or 0) == 0 and int(worker_result.get("errored") or 0) > 0
+                    )
+                    badge_summary = {"mode": "queue", **worker_result}
+                except Exception as exc:  # noqa: BLE001
+                    should_fallback = True
+                    logger.warning("Badge queue worker failed during match processing: %s", exc)
+            else:
+                logger.warning(
+                    "Badge queue enqueue unavailable during match processing; falling back inline. reason=%s",
+                    enqueue_result.get("reason"),
+                )
+            if should_fallback:
+                try:
+                    badge_summary = run_live_badge_awards(
+                        supabase,
+                        club_id=str(club_id),
+                        player_ids=sorted(affected_players),
+                        event_type="match_recorded",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Inline live badge fallback failed after match processing: %s", exc)
+                    badge_summary = {"mode": "inline_error", "error": str(exc)}
 
     # -------------------------
     # Update overall player rows
@@ -399,4 +431,5 @@ def process_matches(
         "inserted": len(db_matches),
         "skipped_incomplete": int(skipped_incomplete),
         "skipped_empty": int(skipped_empty),
+        "badge_summary": badge_summary,
     }
