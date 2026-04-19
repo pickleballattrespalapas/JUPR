@@ -199,6 +199,59 @@ def _fetch_leaderboard_badges(ctx, player_ids):
     if not normalized_player_ids:
         return pd.DataFrame()
 
+    def _fetch_badges_from_db(target_player_ids):
+        if not target_player_ids:
+            return pd.DataFrame()
+        try:
+            resp = (
+                ctx.supabase.table("player_badges")
+                .select(
+                    "player_id,badge_id,earned_at,"
+                    "badges:badges(badge_id,name,prestige,category,icon_key,rarity)"
+                )
+                .eq("club_id", str(ctx.club_id))
+                .in_("player_id", target_player_ids)
+                .execute()
+            )
+        except Exception:
+            logger.exception("Failed to fetch leaderboard badges")
+            return pd.DataFrame()
+
+        data = resp.data or []
+        if not data:
+            logger.info(
+                "Leaderboard badges fallback query returned 0 rows for players=%s club_id=%s.",
+                target_player_ids,
+                str(ctx.club_id).strip(),
+            )
+            return pd.DataFrame()
+
+        badges_flat = pd.json_normalize(data, sep=".")
+        badges_flat = normalize_player_badges_frame(badges_flat)
+        if "badge_id" in badges_flat.columns and "badges.badge_id" in badges_flat.columns:
+            badges_flat = badges_flat.drop(columns=["badge_id"])
+        column_map = {
+            "badges.badge_id": "badge_id",
+            "badges.name": "name",
+            "badges.prestige": "prestige",
+            "badges.category": "category",
+            "badges.icon_key": "icon_key",
+            "badges.rarity": "rarity",
+        }
+        badges_flat = badges_flat.rename(columns=column_map)
+        if "badge_id" in badges_flat.columns:
+            badges_flat["badge_id"] = badges_flat["badge_id"].fillna("").astype(str).str.strip()
+        for col in ("name", "category", "icon_key", "rarity"):
+            if col in badges_flat.columns:
+                badges_flat[col] = badges_flat[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+        logger.info(
+            "Leaderboard badges fallback query returned %s rows for players=%s club_id=%s.",
+            len(badges_flat),
+            target_player_ids,
+            str(ctx.club_id).strip(),
+        )
+        return badges_flat
+
     pb_df = getattr(ctx, "df_player_badges", None)
     badges_df = getattr(ctx, "df_badges", None)
 
@@ -212,71 +265,54 @@ def _fetch_leaderboard_badges(ctx, player_ids):
         if "club_id" in pb_copy.columns:
             pb_copy = pb_copy[pb_copy["club_id"] == str(ctx.club_id).strip()]
         pb_copy = pb_copy[pb_copy["player_id"].isin(normalized_player_ids)]
+        requested_ids = set(normalized_player_ids)
+        ctx_ids = set(pb_copy["player_id"].unique()) if "player_id" in pb_copy.columns else set()
+        missing_ids = sorted(requested_ids - ctx_ids)
+        logger.info(
+            "Leaderboard badges coverage check: requested_ids=%s ctx_ids=%s missing_ids=%s club_id=%s.",
+            sorted(requested_ids),
+            sorted(ctx_ids),
+            missing_ids,
+            str(ctx.club_id).strip(),
+        )
+
         if pb_copy.empty:
             logger.info(
                 "Leaderboard badges: ctx.df_player_badges had 0 rows for requested players=%s club_id=%s; using fallback query.",
                 normalized_player_ids,
                 str(ctx.club_id).strip(),
             )
+            merged = _fetch_badges_from_db(normalized_player_ids)
         else:
-            badges_defs = badges_df.copy()
-            if "badge_id" in badges_defs.columns:
-                badges_defs["badge_id"] = badges_defs["badge_id"].fillna("").astype(str).str.strip()
-            merged = pb_copy.merge(badges_defs, on="badge_id", how="left")
-            for col in ("name", "category", "icon_key", "rarity"):
-                if col in merged.columns:
-                    merged[col] = merged[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
-            sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in merged.columns]
-            if sort_cols:
-                merged = merged.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
-            return merged
+            merged = pb_copy
+            if missing_ids:
+                fallback_missing = _fetch_badges_from_db(missing_ids)
+                if not fallback_missing.empty:
+                    merged = pd.concat([merged, fallback_missing], ignore_index=True, sort=False)
+                    dedupe_keys = [
+                        col
+                        for col in ("player_id", "badge_id", "earned_at", "context_id")
+                        if col in merged.columns
+                    ]
+                    if dedupe_keys:
+                        merged = merged.drop_duplicates(subset=dedupe_keys, keep="first")
 
-    try:
-        resp = (
-            ctx.supabase.table("player_badges")
-            .select(
-                "player_id,badge_id,earned_at,"
-                "badges:badges(badge_id,name,prestige,category,icon_key,rarity)"
-            )
-            .eq("club_id", str(ctx.club_id))
-            .in_("player_id", normalized_player_ids)
-            .execute()
-        )
-    except Exception:
-        logger.exception("Failed to fetch leaderboard badges")
-        return pd.DataFrame()
+        badges_defs = badges_df.copy()
+        if "badge_id" in badges_defs.columns:
+            badges_defs["badge_id"] = badges_defs["badge_id"].fillna("").astype(str).str.strip()
+        merged = merged.merge(badges_defs, on="badge_id", how="left")
+        for col in ("name", "category", "icon_key", "rarity"):
+            if col in merged.columns:
+                merged[col] = merged[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+        sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in merged.columns]
+        if sort_cols:
+            merged = merged.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
+        return merged
 
-    data = resp.data or []
-    if not data:
-        return pd.DataFrame()
-
-    badges_flat = pd.json_normalize(data, sep=".")
-    badges_flat = normalize_player_badges_frame(badges_flat)
-    if "badge_id" in badges_flat.columns and "badges.badge_id" in badges_flat.columns:
-        badges_flat = badges_flat.drop(columns=["badge_id"])
-    column_map = {
-        "badges.badge_id": "badge_id",
-        "badges.name": "name",
-        "badges.prestige": "prestige",
-        "badges.category": "category",
-        "badges.icon_key": "icon_key",
-        "badges.rarity": "rarity",
-    }
-    badges_flat = badges_flat.rename(columns=column_map)
-    if "badge_id" in badges_flat.columns:
-        badges_flat["badge_id"] = badges_flat["badge_id"].fillna("").astype(str).str.strip()
-    for col in ("name", "category", "icon_key", "rarity"):
-        if col in badges_flat.columns:
-            badges_flat[col] = badges_flat[col].fillna("").astype(str).str.replace(r"<[^>]+>", "", regex=True)
+    badges_flat = _fetch_badges_from_db(normalized_player_ids)
     sort_cols = [col for col in ("player_id", "earned_at", "badge_id") if col in badges_flat.columns]
     if sort_cols:
         badges_flat = badges_flat.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
-    logger.info(
-        "Leaderboard badges fallback query returned %s rows for players=%s club_id=%s.",
-        len(badges_flat),
-        normalized_player_ids,
-        str(ctx.club_id).strip(),
-    )
     return badges_flat
 
 
