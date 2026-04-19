@@ -182,17 +182,24 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
         return []
 
 
-def _player_rating_text(player: dict[str, Any]) -> str:
+def _player_current_overall_jupr(player: dict[str, Any]) -> float | None:
     overall_rating_elo = _coerce_float(player.get("rating"))
     if overall_rating_elo is not None:
-        return f"{overall_rating_elo / 400.0:.3f}"
+        return overall_rating_elo / 400.0
     doubles = _coerce_float(player.get("doubles_skill"))
     if doubles is not None:
-        return f"{doubles:.3f}".rstrip("0").rstrip(".")
+        return doubles
     singles = _coerce_float(player.get("singles_skill"))
     if singles is not None:
-        return f"{singles:.3f}".rstrip("0").rstrip(".")
-    return "N/A"
+        return singles
+    return None
+
+
+def _player_rating_text(player: dict[str, Any]) -> str:
+    rating = _player_current_overall_jupr(player)
+    if rating is None:
+        return "N/A"
+    return f"{rating:.3f}"
 
 
 def _player_label(player: dict[str, Any]) -> str:
@@ -603,7 +610,7 @@ def render(ctx):
 
     if current_step == 2:
         st.markdown("### 2. Match your JUPR profile")
-        st.caption("Confirm your profile before we use it. If the match is wrong, search again or create a new profile.")
+        st.caption("Confirm your profile before we use it. If you select an existing JUPR profile, your current overall JUPR at registration time is what this tournament will use.")
         step2_state = dict(step2)
         selected_player_id = _safe_text(step2_state.get("selected_player_id"))
         selected_existing_player = next((row for row in active_players if str(row.get("id")) == selected_player_id), None)
@@ -638,7 +645,7 @@ def render(ctx):
                 summary = _load_profile_confirmation_data(supabase, club_id=club_id, player_id=str(candidate_player.get("id")))
                 info_cols = st.columns(3)
                 with info_cols[0]:
-                    st.metric("Current rating", _safe_text(candidate_player.get("doubles_skill") or candidate_player.get("singles_skill") or "N/A"))
+                    st.metric("Current rating", _player_rating_text(candidate_player))
                 with info_cols[1]:
                     st.metric("Total matches", int(summary.get("total_matches") or 0))
                 with info_cols[2]:
@@ -803,8 +810,13 @@ def render(ctx):
             None,
         )
     if using_existing_player and selected_existing_player:
-        profile_doubles = _coerce_float(selected_existing_player.get("doubles_skill"))
-        profile_singles = _coerce_float(selected_existing_player.get("singles_skill"))
+        canonical_overall_rating = _player_current_overall_jupr(selected_existing_player)
+        if canonical_overall_rating is not None:
+            profile_doubles = canonical_overall_rating
+            profile_singles = canonical_overall_rating
+        else:
+            profile_doubles = _coerce_float(selected_existing_player.get("doubles_skill"))
+            profile_singles = _coerce_float(selected_existing_player.get("singles_skill"))
     else:
         profile_doubles = _coerce_float(step2.get("doubles_skill"))
         profile_singles = _coerce_float(step2.get("singles_skill"))
