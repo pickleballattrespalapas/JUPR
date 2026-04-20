@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
+import json
 from datetime import datetime, timezone
 from jupr_app.domain.replay_history import replay_history
 
@@ -11,7 +12,10 @@ from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
+from jupr_app.domain.gamification.badge_audit import build_badge_audit_report
+from jupr_app.domain.gamification.recompute import run_badge_recompute
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
+from jupr_app.domain.gamification.evaluators import build_evaluation_context
 from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue,
     process_badge_eval_queue_until_empty,
@@ -422,6 +426,12 @@ def render(ctx):
                 st.dataframe(summary, use_container_width=True, hide_index=True)
 
     st.divider()
+    _render_badge_audit_section(ctx, club_id)
+
+    st.divider()
+    _render_badge_recompute_section(ctx, club_id)
+
+    st.divider()
     _render_club_social_review(ctx)
 
     st.divider()
@@ -571,6 +581,164 @@ def _render_club_social_review(ctx) -> None:
         with st.expander("View raw_event_json", expanded=False):
             st.json(row.get("raw_event_json") or {})
         st.divider()
+
+
+def _render_badge_audit_section(ctx, club_id: str) -> None:
+    st.subheader("🎯 Badge Audit")
+    st.caption("Compare expected badge rows vs actual rows for targeted diagnostics and troubleshooting.")
+
+    df_players = getattr(ctx, "df_players_all", pd.DataFrame())
+    player_options = [""] + sorted(df_players.get("id", pd.Series(dtype=int)).dropna().astype(int).unique().tolist())
+    df_badges = getattr(ctx, "df_badges", pd.DataFrame())
+    badge_options = [""] + sorted(df_badges.get("badge_id", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+    df_meta = getattr(ctx, "df_meta", pd.DataFrame())
+    league_options = [""] + sorted(df_meta.get("league_name", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        player_id = st.selectbox("Player", options=player_options, key="admin_badge_audit_player")
+    with col2:
+        badge_id = st.selectbox("Badge", options=badge_options, key="admin_badge_audit_badge")
+    with col3:
+        league_id = st.selectbox("League (optional)", options=league_options, key="admin_badge_audit_league")
+
+    include_revoked = st.checkbox("Include revoked rows", value=False, key="admin_badge_audit_include_revoked")
+    include_non_live = st.checkbox("Include non-live badges", value=False, key="admin_badge_audit_include_non_live")
+
+    if st.button("Run Badge Audit", key="admin_badge_audit_run"):
+        report = build_badge_audit_report(
+            ctx.supabase,
+            club_id=club_id,
+            ctx=ctx,
+            player_id=int(player_id) if str(player_id).strip() else None,
+            badge_id=str(badge_id).strip() or None,
+            league_id=str(league_id).strip() or None,
+            include_revoked=bool(include_revoked),
+            include_non_live=bool(include_non_live),
+        )
+        st.session_state["admin_badge_audit_report"] = report
+        st.session_state["admin_badge_audit_inputs"] = {
+            "player_id": int(player_id) if str(player_id).strip() else None,
+            "badge_id": str(badge_id).strip() or None,
+            "league_id": str(league_id).strip() or None,
+        }
+
+    report = st.session_state.get("admin_badge_audit_report")
+    if not report:
+        return
+
+    counts = report.get("counts", {})
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Expected", int(counts.get("expected_count", 0)))
+    c2.metric("Actual Active", int(counts.get("actual_active_count", 0)))
+    c3.metric("Missing", int(counts.get("missing_count", 0)))
+    c4.metric("Stale", int(counts.get("stale_count", 0)))
+
+    c5, c6, c7 = st.columns(3)
+    c5.metric("Context Drift", int(counts.get("context_drift_exact_row_count", 0)))
+    c6.metric("Revoked", int(counts.get("revoked_count", 0)))
+    c7.metric("Duplicates", int(counts.get("duplicate_count", 0)))
+
+    tabs = st.tabs(["Expected", "Actual Active", "Revoked", "Missing", "Stale", "Context Drift"])
+    with tabs[0]:
+        st.dataframe(pd.DataFrame(report.get("expected_rows", [])), use_container_width=True, hide_index=True)
+    with tabs[1]:
+        st.dataframe(pd.DataFrame(report.get("actual_active_rows", [])), use_container_width=True, hide_index=True)
+    with tabs[2]:
+        st.dataframe(pd.DataFrame(report.get("revoked_rows", [])), use_container_width=True, hide_index=True)
+    with tabs[3]:
+        st.dataframe(pd.DataFrame(report.get("missing_rows", [])), use_container_width=True, hide_index=True)
+    with tabs[4]:
+        st.dataframe(pd.DataFrame(report.get("stale_rows", [])), use_container_width=True, hide_index=True)
+    with tabs[5]:
+        st.dataframe(pd.DataFrame(report.get("context_drift_rows", [])), use_container_width=True, hide_index=True)
+
+    selected_badge = (st.session_state.get("admin_badge_audit_inputs", {}) or {}).get("badge_id")
+    selected_player = (st.session_state.get("admin_badge_audit_inputs", {}) or {}).get("player_id")
+    selected_league = (st.session_state.get("admin_badge_audit_inputs", {}) or {}).get("league_id")
+    if selected_badge == "high_roller" and selected_player is not None:
+        _render_high_roller_diagnostics(ctx, club_id=club_id, player_id=int(selected_player), league_id=selected_league)
+
+
+def _render_high_roller_diagnostics(ctx, *, club_id: str, player_id: int, league_id: str | None) -> None:
+    st.markdown("**High Roller diagnostics**")
+    eval_ctx = build_evaluation_context(ctx, club_id=club_id, league_id=league_id, as_of=None)
+    facts = eval_ctx.facts_hybrid if eval_ctx.facts_hybrid is not None else eval_ctx.facts
+    wins = facts[(facts["player_id"] == int(player_id)) & (facts["win"] == True)].dropna(subset=["match_id"])
+    unique_match_ids = sorted(wins["match_id"].astype(str).unique().tolist())
+    win_count = len(unique_match_ids)
+    threshold_met = win_count >= 100
+
+    d1, d2, d3 = st.columns(3)
+    d1.metric("Computed wins", win_count)
+    d2.metric("Threshold (100) met", "Yes" if threshold_met else "No")
+    d3.metric("Unique winning match_ids", win_count)
+
+    if unique_match_ids:
+        st.caption("First 5 winning match_ids counted by the badge engine")
+        st.code(", ".join(unique_match_ids[:5]), language="text")
+        st.caption("Last 5 winning match_ids counted by the badge engine")
+        st.code(", ".join(unique_match_ids[-5:]), language="text")
+
+
+def _render_badge_recompute_section(ctx, club_id: str) -> None:
+    st.subheader("🧹 Badge Recompute / Cleanup")
+    st.caption("Run scoped badge recompute. Strict mode can revoke stale rows when safely scoped.")
+
+    df_players = getattr(ctx, "df_players_all", pd.DataFrame())
+    player_options = [""] + sorted(df_players.get("id", pd.Series(dtype=int)).dropna().astype(int).unique().tolist())
+    df_badges = getattr(ctx, "df_badges", pd.DataFrame())
+    badge_options = [""] + sorted(df_badges.get("badge_id", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+    df_meta = getattr(ctx, "df_meta", pd.DataFrame())
+    league_options = [""] + sorted(df_meta.get("league_name", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+
+    mode = st.selectbox("Mode", ["dry-run", "append-only", "strict"], key="admin_badge_recompute_mode")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        player_id = st.selectbox("Player (optional)", options=player_options, key="admin_badge_recompute_player")
+    with col2:
+        badge_id = st.selectbox("Badge (optional)", options=badge_options, key="admin_badge_recompute_badge")
+    with col3:
+        league_id = st.selectbox("League (optional)", options=league_options, key="admin_badge_recompute_league")
+    context_id = st.text_input("Context ID (optional advanced)", key="admin_badge_recompute_context")
+    include_non_live = st.checkbox("Include non-live badges", value=False, key="admin_badge_recompute_include_non_live")
+    revoke_reason = st.text_input("Revoke reason (required for strict)", value="", key="admin_badge_recompute_reason")
+    match_limit = st.number_input("Match limit", min_value=100, max_value=200000, step=100, value=5000, key="admin_badge_recompute_match_limit")
+
+    if st.button("Run Badge Recompute", key="admin_badge_recompute_run"):
+        scoped = any(
+            (
+                str(player_id).strip(),
+                str(badge_id).strip(),
+                str(league_id).strip(),
+                str(context_id).strip(),
+            )
+        )
+        if mode == "strict":
+            if not scoped:
+                st.error("Strict mode requires at least one scope filter: player_id, badge_id, league_id, or context_id.")
+                return
+            if not revoke_reason.strip():
+                st.error("Revoke reason is required for strict mode.")
+                return
+
+        result = run_badge_recompute(
+            ctx.supabase,
+            club_id=club_id,
+            mode=mode,
+            player_id=int(player_id) if str(player_id).strip() else None,
+            badge_id=str(badge_id).strip() or None,
+            league_id=str(league_id).strip() or None,
+            context_id=str(context_id).strip() or None,
+            include_non_live=bool(include_non_live),
+            revoke_reason=str(revoke_reason).strip() or None,
+            allow_strict_global=False,
+            match_limit=int(match_limit),
+            ctx=ctx,
+            created_by="admin_tools_ui",
+        )
+        st.success("Recompute finished.")
+        st.code(json.dumps(result, indent=2), language="json")
 
 
 
