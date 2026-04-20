@@ -85,3 +85,26 @@ def test_upset_champion_picks_lowest_expected():
     upset = [a for a in candidates if a.badge_id == "upset_champion"]
     assert upset
     assert any(a.context_id.endswith("match:m1") for a in upset)
+
+
+def test_canonical_only_badges_do_not_use_legacy_safe_only_rows():
+    df_matches = pd.DataFrame(
+        [
+            {
+                "id": "legacy-only",
+                "club_id": "club",
+                "date": "2024-01-02",
+                "league_name": "A",
+                "team1_player1": 1,
+                "team2_player1": 2,
+                "team1_score": 11,
+                "team2_score": 5,
+            }
+        ]
+    )
+    df_players = pd.DataFrame([{"id": 1, "rating": 1400}, {"id": 2, "rating": 1400}])
+    ctx = SimpleNamespace(df_matches=df_matches, df_players_all=df_players, club_id="club")
+    candidates = list(compute_candidates_for_club("club", ctx=ctx))
+    awarded = {(c.player_id, c.badge_id) for c in candidates}
+    assert (1, "david_vs_goliath") not in awarded
+    assert (1, "above_expectations") not in awarded

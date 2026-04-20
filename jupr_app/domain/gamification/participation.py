@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import pandas as pd
 
+from jupr_app.domain.gamification.match_facts import build_hybrid_player_match_facts
 from jupr_app.domain.match_filters import apply_match_filters, normalize_player_id, normalize_score
 
 
 def get_participation_player_match_pairs(ctx) -> pd.DataFrame:
-    """Return unique (player_id, match_id) pairs after canonical match filtering."""
+    """Return unique (player_id, match_id) pairs using hybrid-safe fact sourcing."""
     df_matches = getattr(ctx, "df_matches", None)
     if df_matches is None or df_matches.empty:
         return pd.DataFrame(columns=["player_id", "match_id"])
@@ -17,12 +18,17 @@ def get_participation_player_match_pairs(ctx) -> pd.DataFrame:
         return pd.DataFrame(columns=["player_id", "match_id"])
 
     filtered = filtered.copy()
-    match_id_col = _ensure_match_id_column(filtered)
-
     if "player_id" in filtered.columns:
+        match_id_col = _ensure_match_id_column(filtered)
         pairs = _pairs_from_player_rows(filtered, match_id_col)
     else:
-        pairs = _pairs_from_match_rows(filtered, match_id_col)
+        scoped_ctx = type("ParticipationCtx", (), {"df_matches": filtered, "club_id": getattr(ctx, "club_id", None)})()
+        facts = build_hybrid_player_match_facts(scoped_ctx, df_matches_override=filtered, club_id_override=getattr(ctx, "club_id", None))
+        if facts.empty:
+            match_id_col = _ensure_match_id_column(filtered)
+            pairs = _pairs_from_match_rows(filtered, match_id_col)
+        else:
+            pairs = facts[["player_id", "match_id"]].copy()
 
     if pairs.empty:
         return pairs

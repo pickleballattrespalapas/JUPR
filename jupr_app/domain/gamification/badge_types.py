@@ -27,3 +27,5 @@ class BadgeEvaluationContext:
     ctx: Any
     facts: pd.DataFrame
     matches: pd.DataFrame
+    facts_canonical: pd.DataFrame | None = None
+    facts_hybrid: pd.DataFrame | None = None

@@ -293,3 +293,50 @@ def test_recompute_strict_scoped_to_badge_id_only():
     untouched = next(row for row in storage["player_badges"] if row["id"] == "keep-other")
     assert legacy.get("revoked_at") is not None
     assert untouched.get("revoked_at") is None
+
+
+def test_recompute_append_only_uses_hybrid_safe_legacy_rows():
+    storage = {}
+    supabase = FakeSupabase(storage)
+    ctx = SimpleNamespace(
+        supabase=None,
+        club_id="club",
+        df_matches=pd.DataFrame(
+            [
+                {
+                    "id": "legacy-1",
+                    "club_id": "club",
+                    "date": "2024-02-01T10:00:00Z",
+                    "league_name": "Open",
+                    "team1_player1": 1,
+                    "team2_player1": 2,
+                    "team1_score": 11,
+                    "team2_score": 7,
+                }
+            ]
+        ),
+        df_players_all=pd.DataFrame(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+        df_badges=pd.DataFrame(
+            [
+                {"badge_id": "participant", "state": "live"},
+                {"badge_id": "first_win", "state": "live"},
+            ]
+        ),
+        df_player_badges=pd.DataFrame(),
+        name_to_id={},
+        id_to_name={},
+        public_mode=False,
+        admin_logged_in=True,
+    )
+    run_badge_recompute(
+        supabase,
+        club_id="club",
+        mode="append-only",
+        ctx=ctx,
+        allow_strict_global=True,
+    )
+    badge_pairs = {(row["player_id"], row["badge_id"]) for row in storage.get("player_badges", [])}
+    assert (1, "participant") in badge_pairs
+    assert (1, "first_win") in badge_pairs
