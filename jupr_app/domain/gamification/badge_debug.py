@@ -10,6 +10,7 @@ from jupr_app.domain.gamification.badge_registry import registry
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.evaluators import build_evaluation_context
 from jupr_app.domain.match_filters import MatchFilterAudit, MatchFilterAuditStep, apply_match_filters_with_audit
+from jupr_app.domain.player_aggregate_audit import compute_player_aggregate_reconciliation
 
 
 @dataclass
@@ -83,6 +84,14 @@ def build_badge_debug_report(
         evaluation=evaluation,
         badge_id=str(badge_id),
         player_id=int(player_id),
+    )
+    report.diagnostics["player_aggregate_reconciliation"] = compute_player_aggregate_reconciliation(
+        ctx,
+        player_id=int(player_id),
+        club_id=str(club_id),
+        league_id=league_id,
+        filtered_matches=filtered_matches,
+        match_audit=match_audit,
     )
 
     return report

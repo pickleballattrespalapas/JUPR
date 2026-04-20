@@ -222,6 +222,7 @@ def _render_badge_diagnostics(report) -> None:
         st.write(f"Distinct qualifying wins: {distinct_wins}")
         st.write(f"Threshold: {threshold}")
         st.write(f"Qualifies: {'Yes' if qualifies else 'No'}")
+        st.caption("High Roller uses canonical filtered match history, not the OVERALL player aggregate row.")
     elif badge_id in {"dedicated_participant_50", "lifetime_participant_200"}:
         distinct_matches = int(diagnostics.get("filtered_player_distinct_match_ids", 0))
         threshold = int(diagnostics.get("threshold_required", 0))
@@ -229,6 +230,55 @@ def _render_badge_diagnostics(report) -> None:
         st.write(f"Distinct qualifying matches: {distinct_matches}")
         st.write(f"Threshold: {threshold}")
         st.write(f"Qualifies: {'Yes' if qualifies else 'No'}")
+
+
+    reconciliation = diagnostics.get("player_aggregate_reconciliation")
+    if isinstance(reconciliation, dict) and reconciliation:
+        st.markdown("### Player Aggregate Reconciliation")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.markdown("**Leaderboard / players row**")
+            st.write(f"wins: {int(reconciliation.get('players_table_wins', 0))}")
+            st.write(f"losses: {int(reconciliation.get('players_table_losses', 0))}")
+            st.write(f"matches_played: {int(reconciliation.get('players_table_matches_played', 0))}")
+        with col_b:
+            st.markdown("**Canonical filtered match history**")
+            st.write(f"distinct matches: {int(reconciliation.get('filtered_match_distinct_match_ids', 0))}")
+            st.write(f"distinct wins: {int(reconciliation.get('filtered_match_distinct_win_match_ids', 0))}")
+            st.write(f"distinct losses: {int(reconciliation.get('filtered_match_distinct_loss_match_ids', 0))}")
+        with col_c:
+            st.markdown("**Difference (players - canonical)**")
+            st.write(f"wins delta: {int(reconciliation.get('wins_delta', 0))}")
+            st.write(f"losses delta: {int(reconciliation.get('losses_delta', 0))}")
+            st.write(f"matches delta: {int(reconciliation.get('matches_delta', 0))}")
+
+        aux_rows = {
+            "raw_player_match_rows": int(reconciliation.get("raw_player_match_rows", 0)),
+            "filtered_player_match_rows": int(reconciliation.get("filtered_player_match_rows", 0)),
+            "filtered_match_win_rows": int(reconciliation.get("filtered_match_win_rows", 0)),
+            "filtered_match_loss_rows": int(reconciliation.get("filtered_match_loss_rows", 0)),
+            "popup_match_count_for_player": int(reconciliation.get("popup_match_count_for_player", 0)),
+            "tournament_context_match_count_for_player": int(reconciliation.get("tournament_context_match_count_for_player", 0)),
+            "invalid_or_void_match_count_for_player": int(reconciliation.get("invalid_or_void_match_count_for_player", 0)),
+            "invalid_or_missing_score_match_count_for_player": int(reconciliation.get("invalid_or_missing_score_match_count_for_player", 0)),
+            "matches_missing_required_player_slots_for_facts": int(reconciliation.get("matches_missing_required_player_slots_for_facts", 0)),
+            "filtered_duplicate_match_rows_for_player": int(reconciliation.get("filtered_duplicate_match_rows_for_player", 0)),
+        }
+        st.dataframe(
+            pd.DataFrame([aux_rows]).T.rename(columns={0: "count"}),
+            use_container_width=True,
+        )
+
+        by_step = reconciliation.get("excluded_match_count_by_filter_step", {})
+        if by_step:
+            st.markdown("**Excluded by filter step**")
+            step_df = pd.DataFrame(
+                [{"step": str(k), "removed": int(v)} for k, v in by_step.items()]
+            )
+            st.dataframe(step_df, use_container_width=True, hide_index=True)
+
+        if bool(reconciliation.get("aggregate_out_of_sync_warning", False)):
+            st.warning("players aggregate appears out of sync with canonical match history")
 
     with st.expander("Diagnostics payload"):
         st.json(diagnostics)
