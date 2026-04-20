@@ -8,6 +8,7 @@ import pandas as pd
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.data.load import load_data
+from jupr_app.domain.gamification.aggregate_metrics import compute_high_roller_counts_from_standings
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.evaluators import compute_high_roller_win_counts
 from jupr_app.domain.gamification.match_facts import (
@@ -202,17 +203,28 @@ def _build_high_roller_badge_debug(
     match_limit: int,
 ) -> dict[str, Any]:
     scoped_ctx = ctx if ctx is not None else _load_ctx(supabase, club_id, match_limit)
-    facts_hybrid = build_hybrid_player_match_facts(scoped_ctx, club_id_override=club_id)
-    win_counts = compute_high_roller_win_counts(facts_hybrid)
+    standings_counts = compute_high_roller_counts_from_standings(scoped_ctx)
+    source_policy = registry().get("high_roller").metric_source_policy if registry().get("high_roller") else "unknown"
+    expected_by_player: dict[int, int] = {}
+    for row in expected_rows:
+        if str(row.get("badge_id")) != "high_roller":
+            continue
+        pid = int(row.get("player_id"))
+        wins = int(((row.get("value_json") or {}).get("wins")) or 0)
+        expected_by_player[pid] = max(expected_by_player.get(pid, 0), wins)
+
     debug: dict[str, Any] = {
-        "computed_win_counts_by_player": {str(int(pid)): int(count) for pid, count in win_counts.items()},
-        "qualifies_by_player": {str(int(pid)): int(count) >= 100 for pid, count in win_counts.items()},
+        "source_policy_used": source_policy,
+        "standings_wins_by_player": {str(int(pid)): int(count) for pid, count in standings_counts.items()},
+        "badge_evaluated_wins_by_player": {str(int(pid)): int(count) for pid, count in expected_by_player.items()},
+        "qualifies_by_player": {str(int(pid)): int(count) >= 100 for pid, count in standings_counts.items()},
     }
     if player_id is not None:
         pid = int(player_id)
         debug["player_id"] = pid
-        debug["player_qualifies"] = int(win_counts.get(pid, 0)) >= 100
-        debug["player_computed_wins"] = int(win_counts.get(pid, 0))
+        debug["player_qualifies"] = int(standings_counts.get(pid, 0)) >= 100
+        debug["player_standings_wins"] = int(standings_counts.get(pid, 0))
+        debug["player_badge_evaluated_wins"] = int(expected_by_player.get(pid, 0))
         debug["player_expected_rows"] = [row for row in expected_rows if int(row.get("player_id")) == pid]
         debug["player_existing_badge_rows"] = [row for row in actual_rows if int(row.get("player_id")) == pid]
     return debug
@@ -233,6 +245,8 @@ def build_high_roller_diagnostic_report(
     hybrid = build_hybrid_player_match_facts(scoped_ctx, club_id_override=club_id)
     canonical_win_counts = compute_high_roller_win_counts(canonical)
     hybrid_win_counts = compute_high_roller_win_counts(hybrid)
+    standings_win_counts = compute_high_roller_counts_from_standings(scoped_ctx)
+    source_policy = registry().get("high_roller").metric_source_policy if registry().get("high_roller") else "unknown"
 
     report: dict[str, Any] = {
         "raw_matches_count": int(len(df_matches)),
@@ -252,6 +266,8 @@ def build_high_roller_diagnostic_report(
             {"player_id": int(pid), "hybrid_unique_wins": int(count)}
             for pid, count in hybrid_win_counts.head(20).items()
         ],
+        "source_policy_used": source_policy,
+        "standings_wins_by_player": {str(int(pid)): int(count) for pid, count in standings_win_counts.items()},
     }
 
     if player_id is not None:
@@ -275,6 +291,10 @@ def build_high_roller_diagnostic_report(
             "hybrid_unique_win_match_ids": int(hybrid_win_counts.get(pid, 0)),
             "qualifies_high_roller_canonical": int(canonical_win_counts.get(pid, 0)) >= 100,
             "qualifies_high_roller_hybrid": int(hybrid_win_counts.get(pid, 0)) >= 100,
+            "standings_wins": int(standings_win_counts.get(pid, 0)),
+            "qualifies_high_roller_standings": int(standings_win_counts.get(pid, 0)) >= 100,
+            "badge_evaluated_wins": int(standings_win_counts.get(pid, 0)),
+            "qualifies_high_roller_badge_rule": int(standings_win_counts.get(pid, 0)) >= 100,
             "first_20_hybrid_win_match_ids": unique_hybrid_ids[:20],
             "last_20_hybrid_win_match_ids": unique_hybrid_ids[-20:],
             "leagues_represented": leagues,

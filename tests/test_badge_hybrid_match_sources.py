@@ -11,11 +11,21 @@ from jupr_app.domain.gamification.match_facts import (
 from jupr_app.domain.gamification.participation import compute_lifetime_games
 
 
-def _ctx(df_matches: pd.DataFrame) -> SimpleNamespace:
+def _ctx(df_matches: pd.DataFrame, df_players_all: pd.DataFrame | None = None) -> SimpleNamespace:
+    players = (
+        df_players_all
+        if df_players_all is not None
+        else pd.DataFrame(
+            [
+                {"id": 1, "rating": 1200.0, "wins": 100, "losses": 20, "matches_played": 120},
+                {"id": 2, "rating": 1200.0, "wins": 20, "losses": 100, "matches_played": 120},
+            ]
+        )
+    )
     return SimpleNamespace(
         club_id="club",
         df_matches=df_matches,
-        df_players_all=pd.DataFrame([{"id": 1, "rating": 1200.0}, {"id": 2, "rating": 1200.0}]),
+        df_players_all=players,
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
         df_badges=pd.DataFrame(
@@ -151,7 +161,15 @@ def test_high_roller_joe_style_threshold_met_only_with_hybrid_legacy_fill():
             "team2_score": 7,
         }
     )
-    ctx = _ctx(pd.DataFrame(rows))
+    ctx = _ctx(
+        pd.DataFrame(rows),
+        df_players_all=pd.DataFrame(
+            [
+                {"id": 1, "rating": 1200.0, "wins": 112, "losses": 20, "matches_played": 132},
+                {"id": 2, "rating": 1200.0, "wins": 10, "losses": 112, "matches_played": 122},
+            ]
+        ),
+    )
     canonical = build_canonical_player_match_facts(ctx)
     hybrid = build_hybrid_player_match_facts(ctx)
 

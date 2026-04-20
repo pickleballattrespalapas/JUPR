@@ -41,7 +41,7 @@ def _ctx() -> SimpleNamespace:
     return SimpleNamespace(
         club_id="club",
         df_matches=pd.DataFrame(),
-        df_players_all=pd.DataFrame(),
+        df_players_all=pd.DataFrame([{"id": 11, "wins": 112, "losses": 12, "matches_played": 124}]),
         df_players_active=pd.DataFrame(),
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
@@ -275,6 +275,7 @@ def test_badge_audit_high_roller_debug_payload(monkeypatch):
         player_id=11,
     )
     debug = report["high_roller_debug"]
-    assert debug["player_computed_wins"] == 112
+    assert debug["player_standings_wins"] == 112
+    assert debug["player_badge_evaluated_wins"] == 112
     assert debug["player_qualifies"] is True
     assert len(debug["player_existing_badge_rows"]) == 1
