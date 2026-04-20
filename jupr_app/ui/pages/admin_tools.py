@@ -18,7 +18,8 @@ from jupr_app.domain.gamification.badge_audit import (
 )
 from jupr_app.domain.gamification.recompute import run_badge_recompute
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
-from jupr_app.domain.gamification.evaluators import build_evaluation_context
+from jupr_app.domain.gamification.aggregate_metrics import compute_high_roller_counts_from_standings
+from jupr_app.domain.gamification.badge_registry import registry
 from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue,
     process_badge_eval_queue_until_empty,
@@ -668,23 +669,14 @@ def _render_badge_audit_section(ctx, club_id: str) -> None:
 
 def _render_high_roller_diagnostics(ctx, *, club_id: str, player_id: int, league_id: str | None) -> None:
     st.markdown("**High Roller diagnostics**")
-    eval_ctx = build_evaluation_context(ctx, club_id=club_id, league_id=league_id, as_of=None)
-    facts = eval_ctx.facts_hybrid if eval_ctx.facts_hybrid is not None else eval_ctx.facts
-    wins = facts[(facts["player_id"] == int(player_id)) & (facts["win"] == True)].dropna(subset=["match_id"])
-    unique_match_ids = sorted(wins["match_id"].astype(str).unique().tolist())
-    win_count = len(unique_match_ids)
-    threshold_met = win_count >= 100
+    source_policy = registry().get("high_roller").metric_source_policy if registry().get("high_roller") else "unknown"
+    standings_wins = int(compute_high_roller_counts_from_standings(ctx).get(int(player_id), 0))
+    threshold_met = standings_wins >= 100
 
     d1, d2, d3 = st.columns(3)
-    d1.metric("Computed wins", win_count)
+    d1.metric("Standings wins", standings_wins)
     d2.metric("Threshold (100) met", "Yes" if threshold_met else "No")
-    d3.metric("Unique winning match_ids", win_count)
-
-    if unique_match_ids:
-        st.caption("First 5 winning match_ids counted by the badge engine")
-        st.code(", ".join(unique_match_ids[:5]), language="text")
-        st.caption("Last 5 winning match_ids counted by the badge engine")
-        st.code(", ".join(unique_match_ids[-5:]), language="text")
+    d3.metric("Source policy", source_policy)
 
 
 def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
@@ -723,8 +715,9 @@ def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Canonical wins", int(selected.get("canonical_unique_win_match_ids", 0)))
     col2.metric("Hybrid wins", int(selected.get("hybrid_unique_win_match_ids", 0)))
-    col3.metric("Qualifies canonical", "Yes" if selected.get("qualifies_high_roller_canonical") else "No")
-    col4.metric("Qualifies hybrid", "Yes" if selected.get("qualifies_high_roller_hybrid") else "No")
+    col3.metric("Standings wins", int(selected.get("standings_wins", 0)))
+    col4.metric("Badge eval wins", int(selected.get("badge_evaluated_wins", 0)))
+    st.caption(f"High Roller source policy: {report.get('source_policy_used', 'unknown')}")
 
     filter_steps = ((report.get("filter_steps", {}) or {}).get("steps")) or []
     if filter_steps:
@@ -747,10 +740,10 @@ def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
         player_row = df_players[df_players["id"] == int(selected.get("player_id", -1))]
         if not player_row.empty:
             ui_wins = int(pd.to_numeric(player_row.iloc[0][ui_col], errors="coerce") or 0)
-            hybrid_wins = int(selected.get("hybrid_unique_win_match_ids", 0))
-            if abs(ui_wins - hybrid_wins) >= 10:
+            badge_wins = int(selected.get("badge_evaluated_wins", 0))
+            if abs(ui_wins - badge_wins) >= 1:
                 st.warning(
-                    f"Material mismatch: UI wins={ui_wins}, High Roller hybrid wins={hybrid_wins}. "
+                    f"Mismatch: UI wins={ui_wins}, High Roller badge wins={badge_wins}. "
                     "Badge and UI counts may be out of sync."
                 )
 

@@ -7,36 +7,39 @@ from jupr_app.domain.gamification.badge_types import BadgeEvaluationContext
 from jupr_app.domain.gamification.evaluators import compute_high_roller_win_counts, evaluate_high_roller
 
 
-def _context_with_facts(facts: pd.DataFrame) -> BadgeEvaluationContext:
+def _context_with_facts(facts: pd.DataFrame, df_players_all: pd.DataFrame | None = None) -> BadgeEvaluationContext:
     return BadgeEvaluationContext(
         club_id="club",
         league_id=None,
         as_of=None,
-        ctx=SimpleNamespace(),
+        ctx=SimpleNamespace(df_players_all=df_players_all if df_players_all is not None else pd.DataFrame()),
         facts=facts,
         matches=facts,
     )
 
 
-def test_high_roller_counts_distinct_match_wins():
+def test_high_roller_uses_standings_not_distinct_match_wins():
     rows = []
     for match_index in range(1, 25):
         match_id = f"m{match_index}"
         for _ in range(5):
             rows.append({"player_id": 1, "match_id": match_id, "win": True})
     facts = pd.DataFrame(rows)
-    ctx = _context_with_facts(facts)
+    standings = pd.DataFrame([{"id": 1, "wins": 112, "losses": 40, "matches_played": 152}])
+    ctx = _context_with_facts(facts, standings)
 
     candidates = list(evaluate_high_roller(ctx))
 
-    assert candidates == []
+    assert len(candidates) == 1
+    assert candidates[0].value_json["wins"] == 112
 
 
-def test_high_roller_awards_at_100_wins():
-    rows = [{"player_id": 7, "match_id": f"win-{i}", "win": True} for i in range(100)]
+def test_high_roller_awards_at_100_wins_from_standings():
+    rows = [{"player_id": 7, "match_id": f"win-{i}", "win": True} for i in range(42)]
     rows.extend({"player_id": 7, "match_id": f"loss-{i}", "win": False} for i in range(20))
     facts = pd.DataFrame(rows)
-    ctx = _context_with_facts(facts)
+    standings = pd.DataFrame([{"id": 7, "wins": 100, "losses": 20, "matches_played": 120}])
+    ctx = _context_with_facts(facts, standings)
 
     candidates = list(evaluate_high_roller(ctx))
 
@@ -151,7 +154,13 @@ def test_high_roller_diagnostic_report_exclusions_and_stable_counts():
             },
         ]
     )
-    ctx = SimpleNamespace(club_id="club", df_matches=pd.DataFrame(rows))
+    players = pd.DataFrame(
+        [
+            {"id": 11, "wins": 112, "losses": 10, "matches_played": 122},
+            {"id": 22, "wins": 99, "losses": 3, "matches_played": 102},
+        ]
+    )
+    ctx = SimpleNamespace(club_id="club", df_matches=pd.DataFrame(rows), df_players_all=players)
 
     report = build_high_roller_diagnostic_report(
         supabase=SimpleNamespace(),
@@ -163,7 +172,9 @@ def test_high_roller_diagnostic_report_exclusions_and_stable_counts():
     selected = report["selected_player"]
     assert selected["hybrid_unique_win_match_ids"] == 112
     assert selected["canonical_unique_win_match_ids"] == 112
-    assert selected["qualifies_high_roller_hybrid"] is True
+    assert selected["standings_wins"] == 112
+    assert selected["badge_evaluated_wins"] == 112
+    assert selected["qualifies_high_roller_badge_rule"] is True
     assert report["hybrid_unique_win_match_ids_by_player"]["22"] == 99
     assert len(report["top_20_players_by_hybrid_unique_win_count"]) >= 2
 

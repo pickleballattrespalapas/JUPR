@@ -150,6 +150,12 @@ def test_participation_badges_awarded_via_engine_idempotent():
     supabase = FakeSupabase(storage)
     ctx = SimpleNamespace(
         df_matches=df_matches,
+        df_players_all=pd.DataFrame(
+            [
+                {"id": 1, "wins": 210, "losses": 0, "matches_played": 210},
+                {"id": 2, "wins": 1, "losses": 0, "matches_played": 1},
+            ]
+        ),
         club_id="club",
         supabase=supabase,
         public_mode=False,

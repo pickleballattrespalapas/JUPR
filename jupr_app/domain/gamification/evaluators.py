@@ -9,12 +9,15 @@ from typing import Any
 import pandas as pd
 
 from jupr_app.domain.awards import compute_top_performer_awards
+from jupr_app.domain.gamification.aggregate_metrics import (
+    compute_high_roller_counts_from_standings,
+    compute_participation_counts_from_standings,
+)
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
 from jupr_app.domain.gamification.match_facts import (
     build_canonical_player_match_facts,
     build_hybrid_player_match_facts,
 )
-from jupr_app.domain.gamification.participation import compute_lifetime_games
 from jupr_app.domain.gamification.top_performer_awards import (
     TOP_PERFORMER_BADGE_IDS,
     _build_league_standings,
@@ -48,8 +51,8 @@ def _league_filter(df: pd.DataFrame, league_id: str | None) -> pd.DataFrame:
 
 
 def _participant_candidates(ctx: BadgeEvaluationContext, badge_id: str, threshold: int) -> Iterable[BadgeCandidate]:
-    counts = compute_lifetime_games(ctx.ctx)
-    if not counts:
+    counts = compute_participation_counts_from_standings(ctx.ctx)
+    if counts.empty:
         return []
     candidates: list[BadgeCandidate] = []
     for player_id, games in counts.items():
@@ -462,8 +465,7 @@ def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 
 def evaluate_high_roller(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    facts = _as_of_filter(ctx.facts, ctx.as_of)
-    grouped = compute_high_roller_win_counts(facts)
+    grouped = compute_high_roller_counts_from_standings(ctx.ctx)
     candidates: list[BadgeCandidate] = []
     for player_id, win_count in grouped.items():
         if int(win_count) >= 100:
