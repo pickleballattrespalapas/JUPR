@@ -12,7 +12,13 @@ from typing import Any
 
 import pandas as pd
 
-from jupr_app.domain.match_filters import apply_match_filters, normalize_player_id, normalize_score
+from jupr_app.domain.match_filters import (
+    MatchFilterAudit,
+    apply_match_filters,
+    apply_match_filters_with_audit,
+    normalize_player_id,
+    normalize_score,
+)
 
 
 _FACT_COLUMNS = [
@@ -72,7 +78,7 @@ def build_canonical_player_match_facts(
 
     club_id = club_id_override if club_id_override is not None else getattr(ctx, "club_id", None)
     filters = {"club_id": club_id, "exclude_popups": True}
-    filtered = apply_match_filters(df_matches, filters)
+    filtered = filter_matches_for_badge_facts(df_matches, filters)
     if filtered.empty:
         return _empty_facts()
 
@@ -172,7 +178,7 @@ def build_legacy_safe_player_match_facts(
 
     club_id = club_id_override if club_id_override is not None else getattr(ctx, "club_id", None)
     filters = {"club_id": club_id, "exclude_popups": True}
-    filtered = apply_match_filters(df_matches, filters)
+    filtered = filter_matches_for_badge_facts(df_matches, filters)
     if filtered.empty:
         return _empty_facts_with_source()
 
@@ -281,6 +287,17 @@ def build_hybrid_player_match_facts(
 
 def _empty_facts_with_source() -> pd.DataFrame:
     return pd.DataFrame(columns=[*_FACT_COLUMNS, "fact_source"])
+
+
+def filter_matches_for_badge_facts(
+    df_matches: pd.DataFrame,
+    context_filters: dict | None,
+    *,
+    include_audit: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, MatchFilterAudit]:
+    if include_audit:
+        return apply_match_filters_with_audit(df_matches, context_filters)
+    return apply_match_filters(df_matches, context_filters)
 
 
 def _resolve_player(row: dict[str, Any], target: str) -> int | None:
