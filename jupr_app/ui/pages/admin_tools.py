@@ -385,7 +385,10 @@ def render(ctx):
     # Badge Backfill
     # -------------------------
     st.subheader("🎖️ Badge Backfill")
-    st.caption("Compute badge candidates and write any missing awards for this club.")
+    st.caption(
+        "Compute badge candidates and write any missing awards for this club. "
+        "Includes eligible legacy-safe match rows for hybrid-safe badges while keeping canonical-only badges strict."
+    )
 
     league_options = ["All leagues"]
     if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:

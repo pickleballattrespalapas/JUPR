@@ -10,7 +10,10 @@ import pandas as pd
 
 from jupr_app.domain.awards import compute_top_performer_awards
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
-from jupr_app.domain.gamification.match_facts import build_player_match_facts
+from jupr_app.domain.gamification.match_facts import (
+    build_canonical_player_match_facts,
+    build_hybrid_player_match_facts,
+)
 from jupr_app.domain.gamification.participation import compute_lifetime_games
 from jupr_app.domain.gamification.top_performer_awards import (
     TOP_PERFORMER_BADGE_IDS,
@@ -1029,7 +1032,17 @@ def build_evaluation_context(
     as_of: datetime | None,
     df_matches_override: pd.DataFrame | None = None,
 ) -> BadgeEvaluationContext:
-    facts = build_player_match_facts(ctx, df_matches_override=df_matches_override, club_id_override=club_id)
+    facts_canonical = build_canonical_player_match_facts(
+        ctx,
+        df_matches_override=df_matches_override,
+        club_id_override=club_id,
+    )
+    facts_hybrid = build_hybrid_player_match_facts(
+        ctx,
+        df_matches_override=df_matches_override,
+        club_id_override=club_id,
+    )
+    facts = facts_canonical
     if facts.empty:
         matches = df_matches_override
         if matches is None:
@@ -1040,8 +1053,12 @@ def build_evaluation_context(
         matches = facts
     if league_id:
         facts = _league_filter(facts, league_id)
+        facts_canonical = _league_filter(facts_canonical, league_id)
+        facts_hybrid = _league_filter(facts_hybrid, league_id)
     if as_of:
         facts = _as_of_filter(facts, as_of)
+        facts_canonical = _as_of_filter(facts_canonical, as_of)
+        facts_hybrid = _as_of_filter(facts_hybrid, as_of)
     return BadgeEvaluationContext(
         club_id=club_id,
         league_id=league_id,
@@ -1049,6 +1066,8 @@ def build_evaluation_context(
         ctx=ctx,
         facts=facts,
         matches=matches,
+        facts_canonical=facts_canonical,
+        facts_hybrid=facts_hybrid,
     )
 
 

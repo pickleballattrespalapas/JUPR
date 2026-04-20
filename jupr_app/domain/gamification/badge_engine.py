@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from dataclasses import replace
 from datetime import datetime
 import logging
 from typing import Any
@@ -35,8 +36,9 @@ def compute_candidates_for_player(
             continue
         if not is_badge_active(spec.badge_id, status=status, award_timing=award_timing):
             continue
+        eval_for_badge = _context_for_spec(evaluation, spec.match_source_policy)
         try:
-            for candidate in spec.evaluator(evaluation):
+            for candidate in spec.evaluator(eval_for_badge):
                 if int(candidate.player_id) != int(player_id):
                     continue
                 candidates.append(candidate)
@@ -70,8 +72,9 @@ def compute_candidates_for_club(
             continue
         if not is_badge_active(spec.badge_id, status=status, award_timing=award_timing):
             continue
+        eval_for_badge = _context_for_spec(evaluation, spec.match_source_policy)
         try:
-            yield from spec.evaluator(evaluation)
+            yield from spec.evaluator(eval_for_badge)
         except Exception:
             logger.exception(
                 "Badge evaluator failed for %s (club_id=%s league_id=%s)",
@@ -103,3 +106,11 @@ def _is_badge_live(badge_id: str, state_map: dict[str, str]) -> bool:
     if not state:
         return True
     return str(state).strip().lower() == "live"
+
+
+def _context_for_spec(evaluation, source_policy: str):
+    if source_policy == "hybrid_safe":
+        return replace(evaluation, facts=evaluation.facts_hybrid if evaluation.facts_hybrid is not None else evaluation.facts)
+    if source_policy == "canonical_only":
+        return replace(evaluation, facts=evaluation.facts_canonical if evaluation.facts_canonical is not None else evaluation.facts)
+    return replace(evaluation, facts=evaluation.facts_canonical if evaluation.facts_canonical is not None else evaluation.facts)
