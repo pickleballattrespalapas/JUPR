@@ -118,13 +118,30 @@ def render(ctx):
         return
 
     counts = report.get("counts", {})
-    cols = st.columns(6)
-    cols[0].metric("Expected Active", int(counts.get("expected_count", 0)))
-    cols[1].metric("Actual Active", int(counts.get("actual_active_count", 0)))
-    cols[2].metric("Missing", int(counts.get("missing_count", 0)))
-    cols[3].metric("Stale", int(counts.get("stale_count", 0)))
-    cols[4].metric("Duplicates", int(counts.get("duplicate_count", 0)))
-    cols[5].metric("Revoked", int(counts.get("revoked_count", 0)))
+    st.caption(
+        "Exact = strict player_id + badge_id + context_id. "
+        "Soft = player_id + badge_id only. "
+        "Context Drift = same player+badge exists on both sides but context_ids differ."
+    )
+    st.markdown("**Exact Match**")
+    exact_cols = st.columns(4)
+    exact_cols[0].metric("Expected Exact", int(counts.get("expected_exact_count", 0)))
+    exact_cols[1].metric("Actual Exact", int(counts.get("actual_active_exact_count", 0)))
+    exact_cols[2].metric("Missing Exact", int(counts.get("missing_exact_count", 0)))
+    exact_cols[3].metric("Stale Exact", int(counts.get("stale_exact_count", 0)))
+
+    st.markdown("**Soft Match**")
+    soft_cols = st.columns(5)
+    soft_cols[0].metric("Expected Soft", int(counts.get("expected_soft_count", 0)))
+    soft_cols[1].metric("Actual Soft", int(counts.get("actual_active_soft_count", 0)))
+    soft_cols[2].metric("Missing Soft", int(counts.get("missing_soft_count", 0)))
+    soft_cols[3].metric("Stale Soft", int(counts.get("stale_soft_count", 0)))
+    soft_cols[4].metric("Context Drift", int(counts.get("context_drift_soft_key_count", 0)))
+
+    diag_cols = st.columns(3)
+    diag_cols[0].metric("Context Drift Rows", int(counts.get("context_drift_exact_row_count", 0)))
+    diag_cols[1].metric("Duplicates", int(counts.get("duplicate_count", 0)))
+    diag_cols[2].metric("Revoked", int(counts.get("revoked_count", 0)))
 
     if report.get("schema_degraded"):
         st.warning(report.get("schema_degraded_reason") or "Schema degraded; badge details may be limited.")
@@ -132,13 +149,15 @@ def render(ctx):
     st.subheader("Per-badge Summary")
     st.dataframe(pd.DataFrame(report.get("per_badge_summary", [])), use_container_width=True, hide_index=True)
 
-    tab_missing, tab_stale, tab_duplicates, tab_revoked, tab_active, tab_expected = st.tabs(
-        ["Missing", "Stale", "Duplicates", "Revoked", "Actual Active", "Expected"]
+    tab_missing, tab_stale, tab_context_drift, tab_duplicates, tab_revoked, tab_active, tab_expected = st.tabs(
+        ["Missing Exact", "Stale Exact", "Context Drift", "Duplicates", "Revoked", "Actual Active", "Expected"]
     )
     with tab_missing:
         st.dataframe(pd.DataFrame(report.get("missing_rows", [])), use_container_width=True, hide_index=True)
     with tab_stale:
         st.dataframe(pd.DataFrame(report.get("stale_rows", [])), use_container_width=True, hide_index=True)
+    with tab_context_drift:
+        st.dataframe(pd.DataFrame(report.get("context_drift_rows", [])), use_container_width=True, hide_index=True)
     with tab_duplicates:
         st.dataframe(pd.DataFrame(report.get("duplicate_rows", [])), use_container_width=True, hide_index=True)
         if report.get("duplicate_groups"):

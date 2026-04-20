@@ -52,29 +52,42 @@ def _ctx() -> SimpleNamespace:
     )
 
 
-def test_badge_audit_detects_stale_legacy_row(monkeypatch):
+def test_badge_audit_soft_match_context_drift(monkeypatch):
     storage = {
         "player_badges": [
             {
                 "id": "pb1",
                 "club_id": "club",
-                "player_id": 10,
+                "player_id": 7,
                 "badge_id": "high_roller",
-                "context_id": "match123:high_roller",
+                "context_id": "old_match_rule_context",
                 "revoked_at": None,
             }
         ]
     }
+    candidate = BadgeCandidate(
+        badge_id="high_roller",
+        player_id=7,
+        club_id="club",
+        context_type="overall",
+        context_id="lifetime_wins_100",
+        match_id=None,
+        value_json={"wins": 120},
+    )
 
     monkeypatch.setattr(
         "jupr_app.domain.gamification.badge_audit.compute_candidates_for_club",
-        lambda **kwargs: [],
+        lambda **kwargs: [candidate],
     )
 
     report = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=_ctx())
-    assert report["counts"]["stale_count"] == 1
+    assert report["counts"]["missing_exact_count"] == 1
+    assert report["counts"]["stale_exact_count"] == 1
+    assert report["counts"]["missing_soft_count"] == 0
+    assert report["counts"]["stale_soft_count"] == 0
+    assert report["counts"]["context_drift_soft_key_count"] == 1
     assert report["per_badge_summary"][0]["badge_id"] == "high_roller"
-    assert report["per_badge_summary"][0]["stale_count"] == 1
+    assert report["per_badge_summary"][0]["context_drift_count"] == 1
 
 
 def test_badge_audit_detects_missing_row(monkeypatch):
@@ -93,9 +106,34 @@ def test_badge_audit_detects_missing_row(monkeypatch):
     )
 
     report = build_badge_audit_report(FakeSupabase({"player_badges": []}), club_id="club", ctx=_ctx())
-    assert report["counts"]["missing_count"] == 1
+    assert report["counts"]["missing_exact_count"] == 1
+    assert report["counts"]["missing_soft_count"] == 1
     assert report["per_badge_summary"][0]["badge_id"] == "high_roller"
-    assert report["per_badge_summary"][0]["missing_count"] == 1
+    assert report["per_badge_summary"][0]["missing_exact_count"] == 1
+    assert report["per_badge_summary"][0]["missing_soft_count"] == 1
+
+
+def test_badge_audit_detects_true_stale_on_both_layers(monkeypatch):
+    storage = {
+        "player_badges": [
+            {
+                "id": "pb1",
+                "club_id": "club",
+                "player_id": 9,
+                "badge_id": "high_roller",
+                "context_id": "legacy_context",
+                "revoked_at": None,
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_audit.compute_candidates_for_club",
+        lambda **kwargs: [],
+    )
+
+    report = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=_ctx())
+    assert report["counts"]["stale_exact_count"] == 1
+    assert report["counts"]["stale_soft_count"] == 1
 
 
 def test_badge_audit_detects_duplicates_and_revoked_not_active(monkeypatch):
@@ -105,7 +143,7 @@ def test_badge_audit_detects_duplicates_and_revoked_not_active(monkeypatch):
                 "id": "a1",
                 "club_id": "club",
                 "player_id": 1,
-                "badge_id": "participant",
+                "badge_id": "high_roller",
                 "context_id": "overall",
                 "revoked_at": None,
             },
@@ -113,7 +151,7 @@ def test_badge_audit_detects_duplicates_and_revoked_not_active(monkeypatch):
                 "id": "a2",
                 "club_id": "club",
                 "player_id": 1,
-                "badge_id": "participant",
+                "badge_id": "high_roller",
                 "context_id": "overall",
                 "revoked_at": "2026-01-01T00:00:00Z",
             },
@@ -127,7 +165,7 @@ def test_badge_audit_detects_duplicates_and_revoked_not_active(monkeypatch):
     report = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=_ctx(), include_revoked=True)
     assert report["counts"]["duplicate_count"] == 2
     assert report["counts"]["revoked_count"] == 1
-    assert report["counts"]["actual_active_count"] == 1
+    assert report["counts"]["actual_active_exact_count"] == 1
 
 
 def test_badge_audit_include_non_live_passthrough(monkeypatch):
@@ -154,3 +192,43 @@ def test_badge_audit_include_non_live_passthrough(monkeypatch):
         include_non_live=True,
     )
     assert seen["allow_non_live"] is True
+
+
+def test_badge_audit_filters_non_live_actual_rows_by_default(monkeypatch):
+    storage = {
+        "player_badges": [
+            {
+                "id": "l1",
+                "club_id": "club",
+                "player_id": 1,
+                "badge_id": "high_roller",
+                "context_id": "overall",
+                "revoked_at": None,
+            },
+            {
+                "id": "n1",
+                "club_id": "club",
+                "player_id": 1,
+                "badge_id": "manual_only",
+                "context_id": "admin_manual",
+                "revoked_at": None,
+            },
+        ]
+    }
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_audit.compute_candidates_for_club",
+        lambda **kwargs: [],
+    )
+    ctx = _ctx()
+    ctx.df_badges = pd.DataFrame(
+        [
+            {"badge_id": "high_roller", "state": "live"},
+            {"badge_id": "manual_only", "state": "inactive"},
+        ]
+    )
+
+    report_live_only = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=ctx, include_non_live=False)
+    assert report_live_only["counts"]["actual_active_exact_count"] == 1
+
+    report_with_non_live = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=ctx, include_non_live=True)
+    assert report_with_non_live["counts"]["actual_active_exact_count"] == 2
