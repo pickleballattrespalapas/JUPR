@@ -6,21 +6,38 @@ from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import streamlit as st
+
+
+def _secret_or_env(name: str, default: str = "") -> str:
+    env_val = str(os.getenv(name, "")).strip()
+    if env_val:
+        return env_val
+
+    try:
+        secret_val = st.secrets.get(name, default)
+    except Exception:
+        return str(default).strip()
+
+    if secret_val is None:
+        return str(default).strip()
+    return str(secret_val).strip()
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
-    val = str(os.getenv(name, "")).strip().lower()
+    val = _secret_or_env(name).lower()
     if not val:
         return default
     return val in {"1", "true", "yes", "y", "on"}
 
 
 def _smtp_config_from_env() -> dict:
-    host = str(os.getenv("SMTP_HOST", "")).strip()
-    port_raw = str(os.getenv("SMTP_PORT", "")).strip()
-    username = str(os.getenv("SMTP_USERNAME", "")).strip()
-    password = str(os.getenv("SMTP_PASSWORD", "")).strip()
-    from_email = str(os.getenv("SMTP_FROM_EMAIL", "")).strip()
-    from_name = str(os.getenv("SMTP_FROM_NAME", "")).strip() or "JUPR"
+    host = _secret_or_env("SMTP_HOST")
+    port_raw = _secret_or_env("SMTP_PORT")
+    username = _secret_or_env("SMTP_USERNAME")
+    password = _secret_or_env("SMTP_PASSWORD")
+    from_email = _secret_or_env("SMTP_FROM_EMAIL")
+    from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR"
     use_tls = _env_bool("SMTP_USE_TLS", default=True)
 
     missing = [
