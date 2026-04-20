@@ -331,6 +331,7 @@ def main():
             match_log,
             match_uploader,
             moneyball,
+            player_updates_admin,
             player_editor,
             players,
             reset_password,
@@ -383,6 +384,7 @@ def main():
             "🔐 Reset Password": reset_password,
             # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
+            "📬 Player Updates Admin": player_updates_admin,
         }
 
         # Visible labels based on auth

@@ -48,6 +48,7 @@ PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("weekly_recap", "🗞️ Weekly Recap", public=True),
     PageDefinition("top_players_printable", "🧾 Top Active Players PDF", admin_only=True),
     PageDefinition("weekly_recap_admin", "🗞️ Weekly Recap Admin", admin_only=True),
+    PageDefinition("player_updates_admin", "📬 Player Updates Admin", admin_only=True),
     PageDefinition("reset_password", "🔐 Reset Password", show_in_nav=False),
 )
 
