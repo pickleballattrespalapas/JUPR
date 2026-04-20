@@ -119,6 +119,7 @@ def render(ctx):
     st.subheader("Candidate Rows")
     if not report.candidates:
         st.info("No candidates returned by evaluator.")
+        _render_no_candidate_diagnostics(report)
     else:
         candidate_df = pd.DataFrame(report.candidates)
         display_cols = [c for c in ["context_id", "match_id", "value_json"] if c in candidate_df.columns]
@@ -132,6 +133,12 @@ def render(ctx):
         for idx, row in candidate_df.iterrows():
             with st.expander(f"Candidate {idx + 1} • context_id={row.get('context_id')}"):
                 st.json(report.candidates[idx].get("value_json", {}))
+
+    st.subheader("Badge Diagnostics")
+    if report.diagnostics:
+        _render_badge_diagnostics(report)
+    else:
+        st.caption("No badge-specific diagnostics available for this badge yet.")
 
     st.subheader("Match Filtering Audit")
     if not report.filter_audit_steps:
@@ -196,3 +203,32 @@ def _render_id_list(ids: list[str], *, key: str, sample_size: int = 50) -> None:
     else:
         st.write(ids[:sample_size])
         st.caption(f"Showing first {sample_size} of {len(ids)} IDs.")
+
+
+def _render_no_candidate_diagnostics(report) -> None:
+    if len(report.candidates) > 0 or not report.diagnostics:
+        return
+    st.markdown("**Why no candidate?**")
+    _render_badge_diagnostics(report)
+
+
+def _render_badge_diagnostics(report) -> None:
+    diagnostics = dict(report.diagnostics or {})
+    badge_id = diagnostics.get("badge_id")
+    if badge_id == "high_roller":
+        distinct_wins = int(diagnostics.get("filtered_player_distinct_win_match_ids", 0))
+        threshold = int(diagnostics.get("threshold_required", 100))
+        qualifies = bool(diagnostics.get("qualifies_boolean", False))
+        st.write(f"Distinct qualifying wins: {distinct_wins}")
+        st.write(f"Threshold: {threshold}")
+        st.write(f"Qualifies: {'Yes' if qualifies else 'No'}")
+    elif badge_id in {"dedicated_participant_50", "lifetime_participant_200"}:
+        distinct_matches = int(diagnostics.get("filtered_player_distinct_match_ids", 0))
+        threshold = int(diagnostics.get("threshold_required", 0))
+        qualifies = bool(diagnostics.get("qualifies_boolean", False))
+        st.write(f"Distinct qualifying matches: {distinct_matches}")
+        st.write(f"Threshold: {threshold}")
+        st.write(f"Qualifies: {'Yes' if qualifies else 'No'}")
+
+    with st.expander("Diagnostics payload"):
+        st.json(diagnostics)
