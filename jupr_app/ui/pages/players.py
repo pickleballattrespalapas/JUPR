@@ -28,6 +28,12 @@ from jupr_app.domain.live_social import (
     SOCIAL_TABLES_INSTALL_MESSAGE,
     is_missing_social_tables_error,
 )
+from jupr_app.domain.notifications.player_profile_update_repo import (
+    REQUEST_STATUS_ACTIVE,
+    REQUEST_STATUS_PENDING,
+    create_public_request,
+    get_open_or_active_subscription,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1144,6 +1150,49 @@ def render(ctx):
     c1, c2 = st.columns(2)
     c1.metric("Player", pick_name)
     c2.metric("Overall JUPR", f"{current_jupr:.3f}")
+
+    if PUBLIC_MODE:
+        with st.container(border=True):
+            st.subheader("Request verified player updates")
+            st.caption(
+                "One verified email may receive weekly updates for this player profile. "
+                "Requests are reviewed by admin."
+            )
+
+            open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
+            existing_status = str((open_or_active or {}).get("request_status") or "").strip().lower()
+            if existing_status == REQUEST_STATUS_ACTIVE:
+                st.info("This player profile already has verified updates enabled.")
+            elif existing_status == REQUEST_STATUS_PENDING:
+                st.info("A verified updates request is already pending for this player profile.")
+            else:
+                with st.form(f"verified_updates_public_request_{pid}"):
+                    request_email = st.text_input("Email", key=f"verified_updates_email_{pid}")
+                    request_note = st.text_area(
+                        "Note for admin (optional)",
+                        key=f"verified_updates_note_{pid}",
+                    )
+                    submit_request = st.form_submit_button("Request updates")
+
+                if submit_request:
+                    open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
+                    status_now = str((open_or_active or {}).get("request_status") or "").strip().lower()
+                    if status_now == REQUEST_STATUS_ACTIVE:
+                        st.info("This player profile already has verified updates enabled.")
+                    elif status_now == REQUEST_STATUS_PENDING:
+                        st.info("A verified updates request is already pending for this player profile.")
+                    else:
+                        try:
+                            create_public_request(
+                                _supabase,
+                                club_id=str(club_id),
+                                player_id=pid,
+                                email=request_email,
+                                request_note=request_note,
+                            )
+                            st.success("Request submitted for admin review.")
+                        except Exception as exc:
+                            st.error(f"Could not submit request: {exc}")
 
     tape_tab, ratings_tab, social_tab = st.tabs(["Trophy Room", "Ratings", "Social"])
 
