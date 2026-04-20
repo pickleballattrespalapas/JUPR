@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import pandas as pd
 import streamlit as st
@@ -9,10 +8,6 @@ import streamlit as st
 from jupr_app.domain.gamification.badge_debug import build_badge_debug_report
 from jupr_app.domain.match_filters import apply_match_filters_with_audit
 from jupr_app.ui.layout import page_shell
-
-
-def _is_badge_debug_enabled() -> bool:
-    return os.getenv("BADGE_DEBUG") == "1" or os.getenv("JUPR_ADMIN") == "1"
 
 
 @st.cache_data(show_spinner=False)
@@ -27,10 +22,6 @@ def render(ctx):
 
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")
-        st.stop()
-
-    if not _is_badge_debug_enabled():
-        st.info("Badge Debug is disabled. Set BADGE_DEBUG=1 (or JUPR_ADMIN=1) to enable this view.")
         st.stop()
 
     df_players = getattr(ctx, "df_players_all", pd.DataFrame())
