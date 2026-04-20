@@ -1225,7 +1225,13 @@ def render(ctx):
                             )
                             st.success("Request submitted for admin review.")
                         except Exception as exc:
-                            st.error(f"Could not submit request: {exc}")
+                            msg = str(exc or "").strip().lower()
+                            if "already has an active verified subscriber" in msg:
+                                st.info("This player profile already has verified updates enabled.")
+                            elif "already pending" in msg or "already exists" in msg:
+                                st.info("A verified updates request is already pending for this player profile.")
+                            else:
+                                st.error(f"Could not submit request: {exc}")
 
     tape_tab, ratings_tab, social_tab = st.tabs(["Trophy Room", "Ratings", "Social"])
 

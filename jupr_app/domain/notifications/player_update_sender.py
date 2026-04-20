@@ -116,7 +116,8 @@ def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date)
             )
             queued += 1
         except Exception as exc:
-            if "duplicate key" in str(exc).lower() or "unique" in str(exc).lower():
+            err = str(exc).lower()
+            if "duplicate key" in err or "unique" in err or "already exists" in err:
                 already_exists += 1
             else:
                 failed += 1
