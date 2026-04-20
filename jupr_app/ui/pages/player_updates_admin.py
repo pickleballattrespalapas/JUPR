@@ -8,11 +8,14 @@ import streamlit as st
 from jupr_app.domain.notifications.player_profile_update_repo import (
     approve_request,
     list_active_subscriptions,
+    list_digests_for_range,
     list_pending_requests,
     mark_unsubscribed,
     reject_request,
     replace_verified_subscriber,
+    save_digest,
 )
+from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.ui.layout import page_shell
 
 
@@ -82,6 +85,47 @@ def _find_active_for_player(active_rows: list[dict], player_id: int | None) -> d
         except Exception:
             continue
     return None
+
+
+def _digest_player_options(ctx, active_rows: list[dict]) -> tuple[list[str], dict[str, int]]:
+    labels: list[str] = []
+    index: dict[str, int] = {}
+    for row in active_rows:
+        try:
+            pid = int(row.get("player_id"))
+        except Exception:
+            continue
+        label = f"#{pid}"
+        name = _player_name(ctx, pid)
+        if name:
+            label = f"{name} (#{pid})"
+        labels.append(label)
+        index[label] = pid
+    return labels, index
+
+
+def _render_digest_preview(digest: dict) -> None:
+    st.markdown("#### Preview")
+    st.write(
+        {
+            "player": digest.get("player_name"),
+            "range": digest.get("display_range"),
+            "subject_line": digest.get("subject_line"),
+        }
+    )
+    st.json(digest.get("summary") or {})
+
+    points = (digest.get("chart") or {}).get("points") or []
+    if points:
+        st.dataframe(pd.DataFrame(points), use_container_width=True, hide_index=True)
+    else:
+        st.caption("No chart points available in selected date range.")
+
+    highlights = digest.get("highlights") or []
+    if highlights:
+        st.markdown("**Highlights**")
+        for line in highlights:
+            st.write(f"• {line}")
 
 
 def render(ctx) -> None:
@@ -243,11 +287,116 @@ def render(ctx) -> None:
     with digests_tab:
         st.subheader("Weekly Digests")
         today = date.today()
-        with st.form("player_updates_digests_filters"):
-            st.date_input("Start Date", value=today - timedelta(days=28), key="player_updates_digest_start")
-            st.date_input("End Date", value=today, key="player_updates_digest_end")
-            st.form_submit_button("Apply")
-        st.info("Digest generation is implemented in a later step.")
+        start_date = st.date_input("Start Date", value=today - timedelta(days=7), key="player_updates_digest_start")
+        end_date = st.date_input("End Date", value=today, key="player_updates_digest_end")
+
+        if end_date < start_date:
+            st.error("End Date must be on or after Start Date.")
+            return
+
+        active_rows = list_active_subscriptions(supabase, club_id, limit=500)
+        labels, label_to_pid = _digest_player_options(ctx, active_rows)
+
+        selected_label = st.selectbox("Player", options=labels, index=0 if labels else None)
+        selected_pid = label_to_pid.get(selected_label) if selected_label else None
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Generate Digest", disabled=selected_pid is None):
+                try:
+                    digest = compute_player_weekly_digest(
+                        ctx,
+                        player_id=int(selected_pid),
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                    save_digest(
+                        supabase,
+                        club_id=club_id,
+                        player_id=int(selected_pid),
+                        week_start=start_date,
+                        week_end=end_date,
+                        generated_json=digest,
+                        final_json=digest,
+                    )
+                    st.session_state["player_updates_digest_preview"] = digest
+                    st.success("Digest generated and saved.")
+                except Exception as exc:
+                    st.error(f"Digest generation failed: {exc}")
+
+        with c2:
+            if st.button("Preview Digest", disabled=selected_pid is None):
+                try:
+                    digest = compute_player_weekly_digest(
+                        ctx,
+                        player_id=int(selected_pid),
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                    st.session_state["player_updates_digest_preview"] = digest
+                    st.success("Digest preview loaded.")
+                except Exception as exc:
+                    st.error(f"Digest preview failed: {exc}")
+
+        with st.expander("Generate / Preview by Active Subscription", expanded=False):
+            if not active_rows:
+                st.caption("No active subscriptions.")
+            for row in active_rows:
+                pid = row.get("player_id")
+                name = _player_name(ctx, pid)
+                label = f"{name} (#{pid})" if name else f"#{pid}"
+                cols = st.columns([4, 1, 1])
+                cols[0].write(label)
+                if cols[1].button("Generate", key=f"digest_generate_row_{pid}"):
+                    digest = compute_player_weekly_digest(ctx, int(pid), start_date, end_date)
+                    save_digest(
+                        supabase,
+                        club_id=club_id,
+                        player_id=int(pid),
+                        week_start=start_date,
+                        week_end=end_date,
+                        generated_json=digest,
+                        final_json=digest,
+                    )
+                    st.session_state["player_updates_digest_preview"] = digest
+                    st.success(f"Saved digest for {label}.")
+                if cols[2].button("Preview", key=f"digest_preview_row_{pid}"):
+                    digest = compute_player_weekly_digest(ctx, int(pid), start_date, end_date)
+                    st.session_state["player_updates_digest_preview"] = digest
+
+        preview_digest = st.session_state.get("player_updates_digest_preview")
+        if isinstance(preview_digest, dict) and preview_digest:
+            _render_digest_preview(preview_digest)
+
+        st.divider()
+        st.markdown("#### Saved digests in selected range")
+        try:
+            saved_rows = list_digests_for_range(
+                supabase,
+                club_id,
+                week_start_from=start_date,
+                week_start_to=end_date,
+                player_id=int(selected_pid) if selected_pid is not None else None,
+            )
+        except Exception as exc:
+            st.warning(f"Unable to load saved digests: {exc}")
+            saved_rows = []
+
+        if saved_rows:
+            rows = []
+            for row in saved_rows:
+                rows.append(
+                    {
+                        "player_id": row.get("player_id"),
+                        "player_name": _player_name(ctx, row.get("player_id")),
+                        "week_start": row.get("week_start"),
+                        "week_end": row.get("week_end"),
+                        "updated_at": row.get("updated_at"),
+                    }
+                )
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No saved digests for selected range.")
 
     with queue_tab:
         st.subheader("Send Queue")

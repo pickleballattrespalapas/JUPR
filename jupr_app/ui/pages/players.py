@@ -28,6 +28,7 @@ from jupr_app.domain.live_social import (
     SOCIAL_TABLES_INSTALL_MESSAGE,
     is_missing_social_tables_error,
 )
+from jupr_app.domain.player_rating_series import build_player_overall_rating_series
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_ACTIVE,
     REQUEST_STATUS_PENDING,
@@ -1910,9 +1911,9 @@ def render(ctx):
 
         st.divider()
 
-        matches = fetch_player_matches(_supabase, club_id, pid, limit=600)
+        df = build_player_overall_rating_series(_supabase, club_id, pid, limit=600)
 
-        if matches.empty:
+        if df.empty:
             st.info("No matches recorded for this player.")
             return
 
@@ -1923,43 +1924,6 @@ def render(ctx):
                 return int(x)
             except Exception:
                 return default
-
-        def _safe_float(x, default=None):
-            try:
-                if x is None or str(x).strip() == "":
-                    return default
-                return float(x)
-            except Exception:
-                return default
-
-        def score_for_player(r):
-            try:
-                t1p1 = _safe_int(r.get("t1_p1"))
-                t1p2 = _safe_int(r.get("t1_p2"))
-                s1 = _safe_int(r.get("score_t1"), 0) or 0
-                s2 = _safe_int(r.get("score_t2"), 0) or 0
-            except Exception:
-                return ""
-            if t1p1 == pid or t1p2 == pid:
-                return f"{s1}-{s2}"
-            return f"{s2}-{s1}"
-
-        def result_for_player(r):
-            try:
-                t1p1 = _safe_int(r.get("t1_p1"))
-                t1p2 = _safe_int(r.get("t1_p2"))
-                s1 = _safe_int(r.get("score_t1"), 0) or 0
-                s2 = _safe_int(r.get("score_t2"), 0) or 0
-            except Exception:
-                return ""
-
-            if s1 == s2:
-                return "DRAW"
-            on_t1 = pid in {t1p1, t1p2}
-            winner = "WIN" if s1 > s2 else "LOSS"
-            if not on_t1:
-                winner = "WIN" if s2 > s1 else "LOSS"
-            return winner
 
         def explain_link(r):
             try:
@@ -2000,116 +1964,8 @@ def render(ctx):
                 params["public"] = 1
             return f"/?{urlencode(params)}"
 
-        def get_overall_snap(r: dict, pid_: int):
-            pid_ = int(pid_)
-            t1p1 = _safe_int(r.get("t1_p1"))
-            t1p2 = _safe_int(r.get("t1_p2"))
-            t2p1 = _safe_int(r.get("t2_p1"))
-            t2p2 = _safe_int(r.get("t2_p2"))
-
-            if t1p1 == pid_:
-                return _safe_float(r.get("t1_p1_r")), _safe_float(r.get("t1_p1_r_end"))
-            if t1p2 == pid_:
-                return _safe_float(r.get("t1_p2_r")), _safe_float(r.get("t1_p2_r_end"))
-            if t2p1 == pid_:
-                return _safe_float(r.get("t2_p1_r")), _safe_float(r.get("t2_p1_r_end"))
-            if t2p2 == pid_:
-                return _safe_float(r.get("t2_p2_r")), _safe_float(r.get("t2_p2_r_end"))
-            return None, None
-
-        def signed_delta_from_elo_delta(r: dict, pid_: int):
-            pid_ = int(pid_)
-            raw = _safe_float(r.get("elo_delta"), None)
-            if raw is None:
-                return None
-
-            s1 = _safe_int(r.get("score_t1"), 0) or 0
-            s2 = _safe_int(r.get("score_t2"), 0) or 0
-            if s1 == s2:
-                return 0.0
-
-            t1 = {_safe_int(r.get("t1_p1")), _safe_int(r.get("t1_p2"))}
-            t2 = {_safe_int(r.get("t2_p1")), _safe_int(r.get("t2_p2"))}
-            on_t1 = pid_ in t1
-            on_t2 = pid_ in t2
-            if not on_t1 and not on_t2:
-                return None
-
-            winner_team = 1 if s1 > s2 else 2
-            my_team = 1 if on_t1 else 2
-            return abs(float(raw)) if winner_team == my_team else -abs(float(raw))
-
-        # Normalize date + league strings
-        matches = matches.copy()
-        matches["date_dt"] = pd.to_datetime(matches.get("date", None), errors="coerce", utc=True)
-        matches = matches.dropna(subset=["date_dt"]).copy()
-        matches["league"] = matches.get("league", "").fillna("").astype(str).str.strip()
-        matches["match_type"] = matches.get("match_type", "").fillna("").astype(str).str.strip()
-
-        # Build overall series rows
-        processed = []
-        for _, r0 in matches.iterrows():
-            r = dict(r0)
-
-            start_elo, end_elo = get_overall_snap(r, pid)
-            after_jupr = None
-            delta_jupr = None
-
-            if start_elo is not None and end_elo is not None:
-                try:
-                    delta_jupr = (float(end_elo) - float(start_elo)) / 400.0
-                    after_jupr = float(end_elo) / 400.0
-                except Exception:
-                    pass
-            else:
-                d_elo = signed_delta_from_elo_delta(r, pid)
-                if d_elo is not None:
-                    delta_jupr = float(d_elo) / 400.0
-
-            processed.append(
-                {
-                    "id": _safe_int(r.get("id")),
-                    "Date": r.get("date_dt"),
-                    "League": str(r.get("league", "") or "").strip(),
-                    "match_type": str(r.get("match_type", "") or "").strip(),
-                    "Score": score_for_player(r),
-                    "Result": result_for_player(r),
-                    "Overall Δ": delta_jupr,
-                    "Overall After": after_jupr,
-                    "Explain": explain_link(r),
-                }
-            )
-
-        df = pd.DataFrame(processed)
-        if df.empty:
-            st.info("No matches available.")
-            return
-
-        df = df.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
-        df["Overall Δ"] = pd.to_numeric(df["Overall Δ"], errors="coerce")
-        df["Overall After"] = pd.to_numeric(df["Overall After"], errors="coerce")
-
-        # Backfill overall-after if needed
-        if df["Overall After"].notna().any():
-            for i in range(len(df)):
-                if pd.isna(df.loc[i, "Overall After"]):
-                    if i > 0 and pd.notna(df.loc[i - 1, "Overall After"]) and pd.notna(df.loc[i, "Overall Δ"]):
-                        df.loc[i, "Overall After"] = float(df.loc[i - 1, "Overall After"]) + float(df.loc[i, "Overall Δ"])
-            for i in range(len(df) - 2, -1, -1):
-                if pd.isna(df.loc[i, "Overall After"]):
-                    if pd.notna(df.loc[i + 1, "Overall After"]) and pd.notna(df.loc[i + 1, "Overall Δ"]):
-                        df.loc[i, "Overall After"] = float(df.loc[i + 1, "Overall After"]) - float(df.loc[i + 1, "Overall Δ"])
-        else:
-            df_rev = df.sort_values(["Date", "id"], ascending=[False, False]).reset_index(drop=True)
-            running = 0.0
-            after_vals = []
-            for i in range(len(df_rev)):
-                after_vals.append(float(current_jupr) - float(running))
-                d = df_rev.loc[i, "Overall Δ"]
-                if pd.notna(d):
-                    running += float(d)
-            df_rev["Overall After"] = after_vals
-            df = df_rev.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
+        df = df.copy()
+        df["Explain"] = df.apply(lambda row: explain_link(dict(row)), axis=1)
 
         # -------------------------
         # Restore: tabs for Overall + each league
