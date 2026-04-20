@@ -10,10 +10,16 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     list_active_subscriptions,
     list_digests_for_range,
     list_pending_requests,
+    list_outbox_rows,
     mark_unsubscribed,
     reject_request,
     replace_verified_subscriber,
     save_digest,
+)
+from jupr_app.domain.notifications.player_update_sender import (
+    queue_digest_outbox_rows_for_range,
+    send_pending_player_update_emails,
+    send_test_player_update_email,
 )
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.ui.layout import page_shell
@@ -400,4 +406,68 @@ def render(ctx) -> None:
 
     with queue_tab:
         st.subheader("Send Queue")
-        st.info("Email sending is implemented in a later step.")
+
+        today = date.today()
+        queue_start = st.date_input("Queue Start Date", value=today - timedelta(days=7), key="player_updates_queue_start")
+        queue_end = st.date_input("Queue End Date", value=today, key="player_updates_queue_end")
+
+        if queue_end < queue_start:
+            st.error("Queue End Date must be on or after Queue Start Date.")
+            return
+
+        q1, q2, q3 = st.columns(3)
+        with q1:
+            if st.button("Queue Pending for Date Range"):
+                try:
+                    result = queue_digest_outbox_rows_for_range(ctx, start_date=queue_start, end_date=queue_end)
+                    st.success(
+                        f"Queued: {result['queued']} · Existing: {result['already_exists']} · Failed: {result['failed']}"
+                    )
+                except Exception as exc:
+                    st.error(f"Queue failed: {exc}")
+
+        with q2:
+            if st.button("Send Pending"):
+                try:
+                    result = send_pending_player_update_emails(ctx, limit=500)
+                    st.success(
+                        f"Attempted: {result['attempted']} · Sent: {result['sent']} · "
+                        f"Skipped: {result['skipped']} · Errors: {result['errors']}"
+                    )
+                except Exception as exc:
+                    st.error(f"Send pending failed: {exc}")
+
+        with q3:
+            if st.button("Send Test to Admin"):
+                try:
+                    result = send_test_player_update_email(ctx, start_date=queue_start, end_date=queue_end)
+                    st.success(f"Sent test email to {result['to_email']}.")
+                except Exception as exc:
+                    st.error(f"Send test failed: {exc}")
+
+        st.divider()
+        try:
+            outbox_rows = list_outbox_rows(supabase, club_id, limit=500)
+        except Exception as exc:
+            st.warning(f"Unable to load outbox rows: {exc}")
+            outbox_rows = []
+
+        if outbox_rows:
+            display_rows = []
+            for row in outbox_rows:
+                display_rows.append(
+                    {
+                        "id": row.get("id"),
+                        "player_id": row.get("player_id"),
+                        "player_name": _player_name(ctx, row.get("player_id")),
+                        "week_start": row.get("week_start"),
+                        "week_end": row.get("week_end"),
+                        "send_status": row.get("send_status"),
+                        "sent_at": row.get("sent_at"),
+                        "error_text": row.get("error_text"),
+                        "created_at": row.get("created_at"),
+                    }
+                )
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No outbox rows.")

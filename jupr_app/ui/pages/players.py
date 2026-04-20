@@ -34,6 +34,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_PENDING,
     create_public_request,
     get_open_or_active_subscription,
+    mark_unsubscribed,
 )
 
 logger = logging.getLogger(__name__)
@@ -1100,6 +1101,8 @@ def render(ctx):
     players_df["id"] = players_df["id"].astype(int)
 
     pid_q = qp_get("pid", "").strip()
+    unsub_q = qp_get("unsubscribe", "").strip()
+    sid_q = qp_get("sid", "").strip()
     pid_sig = f"pid:{pid_q}" if pid_q else ""
     last_sig = st.session_state.get("player_pid_sig_applied", "")
 
@@ -1138,9 +1141,38 @@ def render(ctx):
 
     pid = int(pick_id)
     row = players_df[players_df["id"] == pid].iloc[0]
-    pick_name = str(row["name"])
     _supabase = ctx.supabase
     club_id = ctx.club_id
+
+    if PUBLIC_MODE and unsub_q == "1":
+        unsub_sig = f"unsub:{pid}:{sid_q}"
+        if st.session_state.get("verified_updates_unsub_sig") != unsub_sig:
+            st.session_state["verified_updates_unsub_sig"] = unsub_sig
+            try:
+                active_sub = (
+                    _supabase.table("player_profile_update_subscriptions")
+                    .select("id")
+                    .eq("club_id", str(club_id))
+                    .eq("player_id", int(pid))
+                    .eq("request_status", REQUEST_STATUS_ACTIVE)
+                    .limit(1)
+                    .execute()
+                )
+                active_rows = active_sub.data or []
+                active_id = str((active_rows[0] if active_rows else {}).get("id") or "")
+                if sid_q and active_id and sid_q == active_id:
+                    mark_unsubscribed(_supabase, sid_q)
+                    st.success("Verified player updates have been unsubscribed.")
+                else:
+                    st.error("Unable to process unsubscribe request.")
+            except Exception:
+                st.error("Unable to process unsubscribe request.")
+            try:
+                st.query_params.pop("unsubscribe", None)
+                st.query_params.pop("sid", None)
+            except Exception:
+                pass
+    pick_name = str(row["name"])
 
     try:
         current_overall_elo = float(row.get("rating", 1200.0) or 1200.0)
