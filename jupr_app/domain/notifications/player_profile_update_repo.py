@@ -42,6 +42,11 @@ def _safe_int(value: Any) -> int:
         raise ValueError("player_id must be an integer-like value")
 
 
+def _is_unique_violation(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "duplicate key" in text or "unique" in text
+
+
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
 
@@ -67,6 +72,13 @@ def create_public_request(
     normalized = normalize_email(email_raw)
     player_id_int = _safe_int(player_id)
 
+    existing = get_open_or_active_subscription(supabase, club_id, player_id_int)
+    if existing is not None:
+        existing_status = str(existing.get("request_status") or "").strip().lower()
+        if existing_status == REQUEST_STATUS_ACTIVE:
+            raise ValueError("This player already has an active verified subscriber.")
+        raise ValueError("A verified updates request is already pending for this player.")
+
     payload = {
         "club_id": club_id,
         "player_id": player_id_int,
@@ -76,11 +88,16 @@ def create_public_request(
         "request_note": str(request_note or "").strip() or None,
         "preferences_json": preferences_json or dict(DEFAULT_PREFERENCES),
     }
-    resp = (
-        supabase.table("player_profile_update_subscriptions")
-        .insert(payload)
-        .execute()
-    )
+    try:
+        resp = (
+            supabase.table("player_profile_update_subscriptions")
+            .insert(payload)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise ValueError("A verified request or active subscriber already exists for this player.") from exc
+        raise
     row = _safe_first(resp)
     if row is None:
         raise RuntimeError("Failed to create subscription request")
@@ -209,6 +226,13 @@ def approve_request(
     if row.get("request_status") != REQUEST_STATUS_PENDING:
         raise ValueError("approve_request only activates pending requests")
 
+    conflict = get_open_or_active_subscription(supabase, str(row.get("club_id") or ""), int(row.get("player_id")))
+    if conflict is not None and str(conflict.get("id") or "") != subscription_id:
+        conflict_status = str(conflict.get("request_status") or "").strip().lower()
+        if conflict_status == REQUEST_STATUS_ACTIVE:
+            raise ValueError("Cannot approve: this player already has an active verified subscriber.")
+        raise ValueError("Cannot approve: another pending request exists for this player.")
+
     payload = {
         "request_status": REQUEST_STATUS_ACTIVE,
         "admin_note": str(admin_note or "").strip() or None,
@@ -216,13 +240,18 @@ def approve_request(
         "verified_at": _now_iso(),
         "unsubscribed_at": None,
     }
-    updated = _safe_first(
-        supabase.table("player_profile_update_subscriptions")
-        .update(payload)
-        .eq("id", subscription_id)
-        .eq("request_status", REQUEST_STATUS_PENDING)
-        .execute()
-    )
+    try:
+        updated = _safe_first(
+            supabase.table("player_profile_update_subscriptions")
+            .update(payload)
+            .eq("id", subscription_id)
+            .eq("request_status", REQUEST_STATUS_PENDING)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise ValueError("Cannot approve: this player already has a pending or active verified subscriber.") from exc
+        raise
     if updated is None:
         raise RuntimeError("Request could not be approved")
     return updated
@@ -280,11 +309,16 @@ def replace_verified_subscriber(
         "verified_at": now_iso,
         "preferences_json": current.get("preferences_json") or dict(DEFAULT_PREFERENCES),
     }
-    inserted = _safe_first(
-        supabase.table("player_profile_update_subscriptions")
-        .insert(new_row_payload)
-        .execute()
-    )
+    try:
+        inserted = _safe_first(
+            supabase.table("player_profile_update_subscriptions")
+            .insert(new_row_payload)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise ValueError("Cannot replace subscriber because another pending/active row exists for this player.") from exc
+        raise
     if inserted is None:
         raise RuntimeError("Failed to create replacement active subscription")
     return inserted
@@ -386,11 +420,16 @@ def create_outbox_row(
         "email": email_raw,
         "send_status": SEND_STATUS_PENDING,
     }
-    row = _safe_first(
-        supabase.table("player_profile_update_outbox")
-        .insert(payload)
-        .execute()
-    )
+    try:
+        row = _safe_first(
+            supabase.table("player_profile_update_outbox")
+            .insert(payload)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise ValueError("An outbox row already exists for this subscriber and week_start.") from exc
+        raise
     if row is None:
         raise RuntimeError("Outbox row could not be created")
     return row

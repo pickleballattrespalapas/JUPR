@@ -134,6 +134,11 @@ def _render_digest_preview(digest: dict) -> None:
             st.write(f"• {line}")
 
 
+def _friendly_error(exc: Exception) -> str:
+    text = str(exc or "").strip()
+    return text or "Unknown error."
+
+
 def render(ctx) -> None:
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell(
@@ -180,10 +185,15 @@ def render(ctx) -> None:
                 st.caption(f"Requested by {row.get('email') or 'unknown'} on {row.get('created_at') or 'n/a'}")
                 st.write(f"Request note: {row.get('request_note') or '—'}")
                 with st.form(f"pending_action_{row_id}"):
-                    admin_note = st.text_area("Admin note", key=f"pending_admin_note_{row_id}")
+                    admin_note = st.text_area(
+                        "Admin note",
+                        key=f"pending_admin_note_{row_id}",
+                        help="Visible to operators for review context.",
+                    )
                     replacement_email = st.text_input(
                         "Replacement email (for Replace Verified Subscriber)",
                         key=f"pending_replace_email_{row_id}",
+                        help="Used only when replacing an existing active subscriber.",
                     )
                     replacement_note = st.text_area(
                         "Replacement request note (optional)",
@@ -199,7 +209,7 @@ def render(ctx) -> None:
                         st.success("Request approved.")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Approve failed: {exc}")
+                        st.error(f"Approve failed: {_friendly_error(exc)}")
 
                 if reject_clicked:
                     try:
@@ -207,7 +217,7 @@ def render(ctx) -> None:
                         st.success("Request rejected.")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Reject failed: {exc}")
+                        st.error(f"Reject failed: {_friendly_error(exc)}")
 
                 if replace_clicked:
                     try:
@@ -232,7 +242,7 @@ def render(ctx) -> None:
                         st.success("Verified subscriber replaced and pending request closed.")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Replace failed: {exc}")
+                        st.error(f"Replace failed: {_friendly_error(exc)}")
 
     with active_tab:
         st.subheader("Active Profiles")
@@ -253,10 +263,15 @@ def render(ctx) -> None:
             with st.expander(header):
                 st.caption(f"Verified email: {row.get('email') or 'unknown'}")
                 with st.form(f"active_action_{row_id}"):
-                    admin_note = st.text_area("Admin note", key=f"active_admin_note_{row_id}")
+                    admin_note = st.text_area(
+                        "Admin note",
+                        key=f"active_admin_note_{row_id}",
+                        help="Optional operator context stored for audit history.",
+                    )
                     replacement_email = st.text_input(
                         "Replacement email",
                         key=f"active_replace_email_{row_id}",
+                        help="Creates a new active row and deactivates the current one.",
                     )
                     replacement_note = st.text_area(
                         "Replacement request note (optional)",
@@ -280,7 +295,7 @@ def render(ctx) -> None:
                         st.success("Verified subscriber replaced.")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Replace failed: {exc}")
+                        st.error(f"Replace failed: {_friendly_error(exc)}")
 
                 if unsubscribe_clicked:
                     try:
@@ -288,13 +303,23 @@ def render(ctx) -> None:
                         st.success("Subscription deactivated.")
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Unsubscribe failed: {exc}")
+                        st.error(f"Unsubscribe failed: {_friendly_error(exc)}")
 
     with digests_tab:
         st.subheader("Weekly Digests")
         today = date.today()
-        start_date = st.date_input("Start Date", value=today - timedelta(days=7), key="player_updates_digest_start")
-        end_date = st.date_input("End Date", value=today, key="player_updates_digest_end")
+        start_date = st.date_input(
+            "Start Date",
+            value=today - timedelta(days=7),
+            key="player_updates_digest_start",
+            help="Custom date windows are supported (not Monday–Sunday only).",
+        )
+        end_date = st.date_input(
+            "End Date",
+            value=today,
+            key="player_updates_digest_end",
+            help="Must be on or after Start Date.",
+        )
 
         if end_date < start_date:
             st.error("End Date must be on or after Start Date.")
@@ -328,7 +353,7 @@ def render(ctx) -> None:
                     st.session_state["player_updates_digest_preview"] = digest
                     st.success("Digest generated and saved.")
                 except Exception as exc:
-                    st.error(f"Digest generation failed: {exc}")
+                    st.error(f"Digest generation failed: {_friendly_error(exc)}")
 
         with c2:
             if st.button("Preview Digest", disabled=selected_pid is None):
@@ -342,7 +367,7 @@ def render(ctx) -> None:
                     st.session_state["player_updates_digest_preview"] = digest
                     st.success("Digest preview loaded.")
                 except Exception as exc:
-                    st.error(f"Digest preview failed: {exc}")
+                    st.error(f"Digest preview failed: {_friendly_error(exc)}")
 
         with st.expander("Generate / Preview by Active Subscription", expanded=False):
             if not active_rows:
@@ -408,8 +433,18 @@ def render(ctx) -> None:
         st.subheader("Send Queue")
 
         today = date.today()
-        queue_start = st.date_input("Queue Start Date", value=today - timedelta(days=7), key="player_updates_queue_start")
-        queue_end = st.date_input("Queue End Date", value=today, key="player_updates_queue_end")
+        queue_start = st.date_input(
+            "Queue Start Date",
+            value=today - timedelta(days=7),
+            key="player_updates_queue_start",
+            help="Queue rows for any custom date window.",
+        )
+        queue_end = st.date_input(
+            "Queue End Date",
+            value=today,
+            key="player_updates_queue_end",
+            help="Must be on or after Queue Start Date.",
+        )
 
         if queue_end < queue_start:
             st.error("Queue End Date must be on or after Queue Start Date.")
@@ -424,7 +459,7 @@ def render(ctx) -> None:
                         f"Queued: {result['queued']} · Existing: {result['already_exists']} · Failed: {result['failed']}"
                     )
                 except Exception as exc:
-                    st.error(f"Queue failed: {exc}")
+                    st.error(f"Queue failed: {_friendly_error(exc)}")
 
         with q2:
             if st.button("Send Pending"):
@@ -435,7 +470,7 @@ def render(ctx) -> None:
                         f"Skipped: {result['skipped']} · Errors: {result['errors']}"
                     )
                 except Exception as exc:
-                    st.error(f"Send pending failed: {exc}")
+                    st.error(f"Send pending failed: {_friendly_error(exc)}")
 
         with q3:
             if st.button("Send Test to Admin"):
@@ -443,7 +478,7 @@ def render(ctx) -> None:
                     result = send_test_player_update_email(ctx, start_date=queue_start, end_date=queue_end)
                     st.success(f"Sent test email to {result['to_email']}.")
                 except Exception as exc:
-                    st.error(f"Send test failed: {exc}")
+                    st.error(f"Send test failed: {_friendly_error(exc)}")
 
         st.divider()
         try:
