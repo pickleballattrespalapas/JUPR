@@ -12,7 +12,10 @@ from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
-from jupr_app.domain.gamification.badge_audit import build_badge_audit_report
+from jupr_app.domain.gamification.badge_audit import (
+    build_badge_audit_report,
+    build_high_roller_diagnostic_report,
+)
 from jupr_app.domain.gamification.recompute import run_badge_recompute
 from jupr_app.domain.gamification.badge_state import ALLOWED_BADGE_STATES, can_transition_badge_state
 from jupr_app.domain.gamification.evaluators import build_evaluation_context
@@ -429,6 +432,9 @@ def render(ctx):
     _render_badge_audit_section(ctx, club_id)
 
     st.divider()
+    _render_high_roller_diagnostic_section(ctx, club_id)
+
+    st.divider()
     _render_badge_recompute_section(ctx, club_id)
 
     st.divider()
@@ -679,6 +685,74 @@ def _render_high_roller_diagnostics(ctx, *, club_id: str, player_id: int, league
         st.code(", ".join(unique_match_ids[:5]), language="text")
         st.caption("Last 5 winning match_ids counted by the badge engine")
         st.code(", ".join(unique_match_ids[-5:]), language="text")
+
+
+def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
+    st.subheader("🕵️ High Roller Diagnostic")
+    st.caption("Run focused diagnostics for High Roller counting and match-filter removals.")
+
+    df_players = getattr(ctx, "df_players_all", pd.DataFrame()).copy()
+    if df_players is None or df_players.empty or "id" not in df_players.columns:
+        st.info("No players available for High Roller diagnostic.")
+        return
+
+    df_players["id"] = pd.to_numeric(df_players["id"], errors="coerce")
+    df_players = df_players.dropna(subset=["id"])
+    if df_players.empty:
+        st.info("No players available for High Roller diagnostic.")
+        return
+    df_players["id"] = df_players["id"].astype(int)
+
+    player_options = sorted(df_players["id"].unique().tolist())
+    player_id = st.selectbox("Diagnostic player", player_options, key="high_roller_diag_player")
+    if st.button("Run High Roller Diagnostic", key="high_roller_diag_run"):
+        report = build_high_roller_diagnostic_report(
+            ctx.supabase,
+            club_id=club_id,
+            player_id=int(player_id),
+            match_limit=5000,
+            ctx=ctx,
+        )
+        st.session_state["high_roller_diag_report"] = report
+
+    report = st.session_state.get("high_roller_diag_report")
+    if not report:
+        return
+
+    selected = report.get("selected_player", {}) or {}
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Canonical wins", int(selected.get("canonical_unique_win_match_ids", 0)))
+    col2.metric("Hybrid wins", int(selected.get("hybrid_unique_win_match_ids", 0)))
+    col3.metric("Qualifies canonical", "Yes" if selected.get("qualifies_high_roller_canonical") else "No")
+    col4.metric("Qualifies hybrid", "Yes" if selected.get("qualifies_high_roller_hybrid") else "No")
+
+    filter_steps = ((report.get("filter_steps", {}) or {}).get("steps")) or []
+    if filter_steps:
+        st.caption("Filter-step removal summary")
+        step_df = pd.DataFrame(filter_steps)
+        st.dataframe(
+            step_df[["step_name", "before_count", "after_count", "removed_count"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    top_df = pd.DataFrame(report.get("top_20_players_by_hybrid_unique_win_count", []))
+    if not top_df.empty:
+        st.caption("Top players by hybrid unique win count")
+        st.dataframe(top_df, use_container_width=True, hide_index=True)
+
+    ui_win_columns = [name for name in ("wins", "win_count", "total_wins", "lifetime_wins") if name in df_players.columns]
+    if ui_win_columns and selected:
+        ui_col = ui_win_columns[0]
+        player_row = df_players[df_players["id"] == int(selected.get("player_id", -1))]
+        if not player_row.empty:
+            ui_wins = int(pd.to_numeric(player_row.iloc[0][ui_col], errors="coerce") or 0)
+            hybrid_wins = int(selected.get("hybrid_unique_win_match_ids", 0))
+            if abs(ui_wins - hybrid_wins) >= 10:
+                st.warning(
+                    f"Material mismatch: UI wins={ui_wins}, High Roller hybrid wins={hybrid_wins}. "
+                    "Badge and UI counts may be out of sync."
+                )
 
 
 def _render_badge_recompute_section(ctx, club_id: str) -> None:

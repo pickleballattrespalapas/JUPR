@@ -463,8 +463,7 @@ def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 def evaluate_high_roller(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    wins = facts[facts["win"] == True].dropna(subset=["match_id"])
-    grouped = wins.groupby("player_id")["match_id"].nunique()
+    grouped = compute_high_roller_win_counts(facts)
     candidates: list[BadgeCandidate] = []
     for player_id, win_count in grouped.items():
         if int(win_count) >= 100:
@@ -481,6 +480,15 @@ def evaluate_high_roller(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
                 )
             )
     return candidates
+
+
+def compute_high_roller_win_counts(facts: pd.DataFrame) -> pd.Series:
+    if facts is None or facts.empty:
+        return pd.Series(dtype="int64")
+    wins = facts[facts["win"] == True].dropna(subset=["match_id"])
+    if wins.empty:
+        return pd.Series(dtype="int64")
+    return wins.groupby("player_id")["match_id"].nunique().sort_values(ascending=False)
 
 
 def evaluate_social_butterfly(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:

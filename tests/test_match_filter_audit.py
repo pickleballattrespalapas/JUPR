@@ -1,6 +1,6 @@
 import pandas as pd
 
-from jupr_app.domain.match_filters import apply_match_filters_with_audit
+from jupr_app.domain.match_filters import apply_match_filters_with_audit, summarize_match_filter_audit
 
 
 def test_apply_match_filters_with_audit_tracks_removed_ids():
@@ -68,3 +68,7 @@ def test_apply_match_filters_with_audit_tracks_removed_ids():
     assert removed_by_step["start_date"] == ["9"]
     assert removed_by_step["end_date"] == ["11"]
     assert removed_by_step["eligible_player_ids"] == ["10"]
+
+    summary = summarize_match_filter_audit(audit)
+    assert summary["raw_count"] == 11
+    assert summary["final_count"] == 1

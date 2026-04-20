@@ -32,6 +32,23 @@ def apply_match_filters_with_audit(
     return filtered, audit
 
 
+def summarize_match_filter_audit(audit: MatchFilterAudit) -> dict[str, object]:
+    return {
+        "raw_count": len(audit.raw_match_ids),
+        "final_count": len(audit.final_match_ids),
+        "steps": [
+            {
+                "step_name": step.step_name,
+                "before_count": int(step.before_count),
+                "after_count": int(step.after_count),
+                "removed_count": int(step.before_count - step.after_count),
+                "removed_match_ids": list(step.removed_match_ids),
+            }
+            for step in audit.steps
+        ],
+    }
+
+
 def resolve_match_id_column(df_matches: pd.DataFrame) -> str:
     for col in ("match_id", "id", "matchId", "matchID"):
         if col in df_matches.columns:

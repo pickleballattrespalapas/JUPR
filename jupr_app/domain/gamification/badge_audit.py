@@ -9,7 +9,14 @@ import pandas as pd
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
+from jupr_app.domain.gamification.evaluators import compute_high_roller_win_counts
+from jupr_app.domain.gamification.match_facts import (
+    build_canonical_player_match_facts,
+    build_hybrid_player_match_facts,
+    filter_matches_for_badge_facts,
+)
 from jupr_app.domain.gamification.badge_registry import is_badge_active, registry
+from jupr_app.domain.match_filters import summarize_match_filter_audit
 
 
 KEY_FIELDS = ("player_id", "badge_id", "context_id")
@@ -110,7 +117,7 @@ def build_badge_audit_report(
     missing_soft_rows = [row for row in expected_rows if _soft_key(row) in missing_soft_keys]
     stale_soft_rows = [row for row in actual_active_rows if _soft_key(row) in stale_soft_keys]
 
-    return {
+    report = {
         "scope": {
             "club_id": str(club_id),
             "league_id": league_id,
@@ -171,6 +178,109 @@ def build_badge_audit_report(
         "missing_keys": sorted(missing_exact_keys),
         "stale_keys": sorted(stale_exact_keys),
     }
+    if str(badge_id or "").strip() == "high_roller":
+        report["high_roller_debug"] = _build_high_roller_badge_debug(
+            supabase=supabase,
+            club_id=club_id,
+            player_id=player_id,
+            expected_rows=expected_rows,
+            actual_rows=actual_rows,
+            ctx=ctx,
+            match_limit=match_limit,
+        )
+    return report
+
+
+def _build_high_roller_badge_debug(
+    *,
+    supabase: Any,
+    club_id: str,
+    player_id: int | None,
+    expected_rows: list[dict[str, Any]],
+    actual_rows: list[dict[str, Any]],
+    ctx: Any,
+    match_limit: int,
+) -> dict[str, Any]:
+    scoped_ctx = ctx if ctx is not None else _load_ctx(supabase, club_id, match_limit)
+    facts_hybrid = build_hybrid_player_match_facts(scoped_ctx, club_id_override=club_id)
+    win_counts = compute_high_roller_win_counts(facts_hybrid)
+    debug: dict[str, Any] = {
+        "computed_win_counts_by_player": {str(int(pid)): int(count) for pid, count in win_counts.items()},
+        "qualifies_by_player": {str(int(pid)): int(count) >= 100 for pid, count in win_counts.items()},
+    }
+    if player_id is not None:
+        pid = int(player_id)
+        debug["player_id"] = pid
+        debug["player_qualifies"] = int(win_counts.get(pid, 0)) >= 100
+        debug["player_computed_wins"] = int(win_counts.get(pid, 0))
+        debug["player_expected_rows"] = [row for row in expected_rows if int(row.get("player_id")) == pid]
+        debug["player_existing_badge_rows"] = [row for row in actual_rows if int(row.get("player_id")) == pid]
+    return debug
+
+
+def build_high_roller_diagnostic_report(
+    supabase: Any,
+    club_id: str,
+    player_id: int | None = None,
+    match_limit: int = 5000,
+    ctx: Any | None = None,
+) -> dict[str, Any]:
+    scoped_ctx = ctx if ctx is not None else _load_ctx(supabase, club_id, match_limit)
+    df_matches = getattr(scoped_ctx, "df_matches", pd.DataFrame())
+    filters = {"club_id": club_id, "exclude_popups": True}
+    filtered_matches, audit = filter_matches_for_badge_facts(df_matches, filters, include_audit=True)
+    canonical = build_canonical_player_match_facts(scoped_ctx, club_id_override=club_id)
+    hybrid = build_hybrid_player_match_facts(scoped_ctx, club_id_override=club_id)
+    canonical_win_counts = compute_high_roller_win_counts(canonical)
+    hybrid_win_counts = compute_high_roller_win_counts(hybrid)
+
+    report: dict[str, Any] = {
+        "raw_matches_count": int(len(df_matches)),
+        "filtered_matches_count": int(len(filtered_matches)),
+        "filter_steps": summarize_match_filter_audit(audit),
+        "canonical_fact_rows_count": int(len(canonical)),
+        "hybrid_fact_rows_count": int(len(hybrid)),
+        "canonical_win_rows_count": int((canonical.get("win") == True).sum()) if not canonical.empty else 0,
+        "hybrid_win_rows_count": int((hybrid.get("win") == True).sum()) if not hybrid.empty else 0,
+        "canonical_unique_win_match_ids_by_player": {
+            str(int(pid)): int(count) for pid, count in canonical_win_counts.items()
+        },
+        "hybrid_unique_win_match_ids_by_player": {
+            str(int(pid)): int(count) for pid, count in hybrid_win_counts.items()
+        },
+        "top_20_players_by_hybrid_unique_win_count": [
+            {"player_id": int(pid), "hybrid_unique_wins": int(count)}
+            for pid, count in hybrid_win_counts.head(20).items()
+        ],
+    }
+
+    if player_id is not None:
+        pid = int(player_id)
+        player_hybrid = hybrid[(hybrid["player_id"] == pid) & (hybrid["win"] == True)].copy()
+        player_hybrid["match_id"] = player_hybrid["match_id"].astype(str)
+        unique_hybrid_ids = sorted(player_hybrid["match_id"].dropna().unique().tolist())
+        if not player_hybrid.empty:
+            source_col = (
+                player_hybrid["fact_source"].fillna("canonical")
+                if "fact_source" in player_hybrid.columns
+                else pd.Series(["canonical"] * len(player_hybrid), index=player_hybrid.index)
+            )
+            source_breakdown = source_col.value_counts()
+        else:
+            source_breakdown = pd.Series(dtype="int64")
+        leagues = sorted(player_hybrid.get("league", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+        report["selected_player"] = {
+            "player_id": pid,
+            "canonical_unique_win_match_ids": int(canonical_win_counts.get(pid, 0)),
+            "hybrid_unique_win_match_ids": int(hybrid_win_counts.get(pid, 0)),
+            "qualifies_high_roller_canonical": int(canonical_win_counts.get(pid, 0)) >= 100,
+            "qualifies_high_roller_hybrid": int(hybrid_win_counts.get(pid, 0)) >= 100,
+            "first_20_hybrid_win_match_ids": unique_hybrid_ids[:20],
+            "last_20_hybrid_win_match_ids": unique_hybrid_ids[-20:],
+            "leagues_represented": leagues,
+            "fact_source_breakdown": {str(k): int(v) for k, v in source_breakdown.items()},
+        }
+    return report
 
 
 def _load_ctx(supabase: Any, club_id: str, match_limit: int) -> Any:

@@ -232,3 +232,49 @@ def test_badge_audit_filters_non_live_actual_rows_by_default(monkeypatch):
 
     report_with_non_live = build_badge_audit_report(FakeSupabase(storage), club_id="club", ctx=ctx, include_non_live=True)
     assert report_with_non_live["counts"]["actual_active_exact_count"] == 2
+
+
+def test_badge_audit_high_roller_debug_payload(monkeypatch):
+    storage = {
+        "player_badges": [
+            {
+                "id": "hr1",
+                "club_id": "club",
+                "player_id": 11,
+                "badge_id": "high_roller",
+                "context_id": "lifetime_wins_100",
+                "revoked_at": None,
+            }
+        ]
+    }
+    candidate = BadgeCandidate(
+        badge_id="high_roller",
+        player_id=11,
+        club_id="club",
+        context_type="overall",
+        context_id="lifetime_wins_100",
+        match_id=None,
+        value_json={"wins": 112},
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_audit.compute_candidates_for_club",
+        lambda **kwargs: [candidate],
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_audit.build_hybrid_player_match_facts",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            [{"player_id": 11, "match_id": f"m-{i}", "win": True} for i in range(112)]
+        ),
+    )
+
+    report = build_badge_audit_report(
+        FakeSupabase(storage),
+        club_id="club",
+        ctx=_ctx(),
+        badge_id="high_roller",
+        player_id=11,
+    )
+    debug = report["high_roller_debug"]
+    assert debug["player_computed_wins"] == 112
+    assert debug["player_qualifies"] is True
+    assert len(debug["player_existing_badge_rows"]) == 1
