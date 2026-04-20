@@ -366,7 +366,7 @@ def save_digest(
     }
     upserted = _safe_first(
         supabase.table("player_weekly_profile_digests")
-        .upsert(payload, on_conflict="club_id,player_id,week_start")
+        .upsert(payload, on_conflict="club_id,player_id,week_start,week_end")
         .execute()
     )
     if upserted is None:
@@ -428,7 +428,7 @@ def create_outbox_row(
         )
     except Exception as exc:
         if _is_unique_violation(exc):
-            raise ValueError("An outbox row already exists for this subscriber and week_start.") from exc
+            raise ValueError("An outbox row already exists for this subscriber and date window.") from exc
         raise
     if row is None:
         raise RuntimeError("Outbox row could not be created")

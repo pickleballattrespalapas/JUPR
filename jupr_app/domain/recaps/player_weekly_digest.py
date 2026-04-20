@@ -155,8 +155,33 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     overall_series = build_player_overall_rating_series(supabase, club_id, int(player_id), limit=1200)
     window_series = filter_rating_series_for_window(overall_series, start_date, end_date, tz_name=tz_name)
 
-    before = _safe_float(window_series["Overall After"].iloc[0]) if not window_series.empty else None
+    before = None
     after = _safe_float(window_series["Overall After"].iloc[-1]) if not window_series.empty else None
+    if not window_series.empty:
+        first_window_row = window_series.iloc[0]
+        first_window_id = first_window_row.get("id")
+        overall_sorted = overall_series.copy()
+        overall_sorted["Date"] = pd.to_datetime(overall_sorted.get("Date"), utc=True, errors="coerce")
+        overall_sorted["id"] = pd.to_numeric(overall_sorted.get("id"), errors="coerce")
+        overall_sorted = overall_sorted.dropna(subset=["Date"]).sort_values(["Date", "id"], ascending=[True, True])
+
+        if pd.notna(first_window_id):
+            first_window_id_num = pd.to_numeric(first_window_id, errors="coerce")
+            prior_rows = overall_sorted[
+                (overall_sorted["Date"] < first_window_row.get("Date"))
+                | ((overall_sorted["Date"] == first_window_row.get("Date")) & (overall_sorted["id"] < first_window_id_num))
+            ]
+        else:
+            prior_rows = overall_sorted[overall_sorted["Date"] < first_window_row.get("Date")]
+
+        if not prior_rows.empty:
+            before = _safe_float(prior_rows["Overall After"].iloc[-1])
+        if before is None:
+            first_after = _safe_float(first_window_row.get("Overall After"))
+            first_delta = _safe_float(first_window_row.get("Overall Δ"))
+            if first_after is not None and first_delta is not None:
+                before = first_after - first_delta
+
     overall_delta = None
     if before is not None and after is not None:
         overall_delta = after - before

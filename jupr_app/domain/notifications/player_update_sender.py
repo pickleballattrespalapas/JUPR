@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any
+from urllib.parse import urlencode
 
 import streamlit as st
 
@@ -42,7 +43,13 @@ def _safe_subscription(supabase, subscription_id: str) -> dict | None:
         return None
 
 
-def _safe_digest_for_week(supabase, club_id: str, player_id: int, week_start: date) -> dict | None:
+def _safe_digest_for_week(
+    supabase,
+    club_id: str,
+    player_id: int,
+    week_start: date,
+    week_end: date,
+) -> dict | None:
     try:
         resp = (
             supabase.table("player_weekly_profile_digests")
@@ -50,6 +57,7 @@ def _safe_digest_for_week(supabase, club_id: str, player_id: int, week_start: da
             .eq("club_id", str(club_id))
             .eq("player_id", int(player_id))
             .eq("week_start", week_start.isoformat())
+            .eq("week_end", week_end.isoformat())
             .limit(1)
             .execute()
         )
@@ -59,11 +67,35 @@ def _safe_digest_for_week(supabase, club_id: str, player_id: int, week_start: da
         return None
 
 
+def _public_base_url() -> str:
+    base = str(st.session_state.get("base_url", "") or "").strip().rstrip("/")
+    if base:
+        return base
+    try:
+        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+        if base:
+            return base
+    except Exception:
+        pass
+    return "http://localhost:8501"
+
+
+def _build_public_players_url(params: dict[str, str]) -> str:
+    query = {"page": "players", "public": "1"}
+    for key, value in (params or {}).items():
+        query[str(key)] = str(value)
+    return f"{_public_base_url()}/?{urlencode(query)}"
+
+
 def _merge_links_for_send(*, digest: dict[str, Any], player_id: int, subscription_id: str) -> dict[str, Any]:
     links = dict((digest or {}).get("links") or {})
-    links["player_profile"] = f"/?page=players&public=1&pid={int(player_id)}"
-    links["unsubscribe"] = (
-        f"/?page=players&public=1&pid={int(player_id)}&unsubscribe=1&sid={subscription_id}"
+    links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))})
+    links["unsubscribe"] = _build_public_players_url(
+        {
+            "pid": str(int(player_id)),
+            "unsubscribe": "1",
+            "sid": str(subscription_id),
+        }
     )
     merged = dict(digest or {})
     merged["links"] = links
@@ -158,7 +190,7 @@ def send_pending_player_update_emails(ctx, *, limit: int = 100) -> dict[str, int
             week_end = date.fromisoformat(str(outbox.get("week_end")))
             player_id = int(outbox.get("player_id"))
 
-            digest_row = _safe_digest_for_week(supabase, club_id, player_id, week_start)
+            digest_row = _safe_digest_for_week(supabase, club_id, player_id, week_start, week_end)
             digest = (digest_row or {}).get("final_json") or (digest_row or {}).get("generated_json") or {}
             if not digest:
                 digest = compute_player_weekly_digest(ctx, player_id=player_id, start_date=week_start, end_date=week_end)
