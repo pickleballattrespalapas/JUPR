@@ -327,6 +327,7 @@ def main():
             league_printout,
             league_results,
             match_explorer,
+            match_canonical_audit,
             match_log,
             match_uploader,
             moneyball,
@@ -355,6 +356,7 @@ def main():
             "📼 Badge Codex": badge_codex,
             "🧪 Badge Debug": badge_debug,
             "🧾 Badge Audit": badge_audit,
+            "🧩 Match Canonical Audit": match_canonical_audit,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
             # Admin-only

@@ -21,6 +21,7 @@ PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("badge_codex", "📼 Badge Codex", public=True),
     PageDefinition("badge_debug", "🧪 Badge Debug", admin_only=True),
     PageDefinition("badge_audit", "🧾 Badge Audit", admin_only=True),
+    PageDefinition("match_canonical_audit", "🧩 Match Canonical Audit", admin_only=True),
     PageDefinition("challenge_ladder", "🪜 Challenge Ladder", public=True),
     PageDefinition("faqs", "❓ FAQs", public=True),
     PageDefinition("league_manager", "🏟️ League Manager", admin_only=True),
