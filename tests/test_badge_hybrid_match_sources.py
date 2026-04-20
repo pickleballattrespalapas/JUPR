@@ -120,3 +120,46 @@ def test_compute_lifetime_games_counts_legacy_safe_rows_with_dedupe():
     )
     counts = compute_lifetime_games(_ctx(df_matches))
     assert counts == {1: 1, 2: 1}
+
+
+def test_high_roller_joe_style_threshold_met_only_with_hybrid_legacy_fill():
+    rows = []
+    for i in range(99):
+        rows.append(
+            {
+                "id": f"canonical-{i}",
+                "club_id": "club",
+                "date": f"2024-02-{(i % 28) + 1:02d}",
+                "league": "Open",
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 11,
+                "score_t2": 6,
+                "t1_p1_r": 1200.0,
+                "t2_p1_r": 1200.0,
+            }
+        )
+    rows.append(
+        {
+            "id": "legacy-100",
+            "club_id": "club",
+            "date": "2024-03-01",
+            "league_name": "Open",
+            "team1_player1": 1,
+            "team2_player1": 2,
+            "team1_score": 11,
+            "team2_score": 7,
+        }
+    )
+    ctx = _ctx(pd.DataFrame(rows))
+    canonical = build_canonical_player_match_facts(ctx)
+    hybrid = build_hybrid_player_match_facts(ctx)
+
+    canonical_wins = canonical[(canonical["player_id"] == 1) & (canonical["win"] == True)]["match_id"].nunique()
+    hybrid_wins = hybrid[(hybrid["player_id"] == 1) & (hybrid["win"] == True)]["match_id"].nunique()
+    assert canonical_wins == 99
+    assert hybrid_wins == 100
+
+    candidates = list(compute_candidates_for_club("club", ctx=ctx))
+    awarded = {(c.player_id, c.badge_id) for c in candidates}
+    assert (1, "high_roller") in awarded
