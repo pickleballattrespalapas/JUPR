@@ -61,6 +61,7 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
     <html>
       <body style=\"font-family:Arial,sans-serif;line-height:1.5;color:#111;\">
         <h2>Verified Player Update</h2>
+        <p style=\"font-size:13px;color:#555;\">You’re receiving this email because you subscribed to JUPR player profile updates.</p>
         <p><strong>Player:</strong> {player_name}<br/>
            <strong>Date range:</strong> {display_range}<br/>
            <strong>Current overall JUPR:</strong> {overall_text}</p>
@@ -104,6 +105,7 @@ def build_player_update_email_text(digest_json: dict) -> str:
     return "\n".join(
         [
             "Verified Player Update",
+            "You’re receiving this email because you subscribed to JUPR player profile updates.",
             f"Player: {_s(digest.get('player_name'))}",
             f"Date range: {_s(digest.get('display_range'))}",
             f"Current overall JUPR: {summary.get('overall_jupr_after')}",

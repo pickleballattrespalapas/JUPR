@@ -233,6 +233,7 @@ def send_pending_player_update_emails(ctx, *, limit: int = 100) -> dict[str, int
                 text_body=text_body,
                 chart_png_bytes=chart_png,
                 chart_cid=chart_cid if chart_png else None,
+                unsubscribe_url=str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None,
             )
 
             update_outbox_status(
