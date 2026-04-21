@@ -9,8 +9,9 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     approve_request,
     list_active_subscriptions,
     list_digests_for_range,
-    list_pending_requests,
     list_outbox_rows,
+    list_pending_requests,
+    list_recent_digests,
     mark_unsubscribed,
     reject_request,
     reset_outbox_rows_to_pending,
@@ -18,11 +19,10 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     save_digest,
 )
 from jupr_app.domain.notifications.player_update_sender import (
-    queue_digest_outbox_rows_for_range,
+    generate_digests_for_active_subscriptions,
+    queue_saved_digest_rows,
     send_pending_player_update_emails,
-    send_test_player_update_email,
 )
-from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.ui.layout import page_shell
 
@@ -141,20 +141,39 @@ def _friendly_error(exc: Exception) -> str:
     return text or "Unknown error."
 
 
-def _smtp_not_ready_message(smtp_status: dict) -> str:
-    missing = smtp_status.get("missing") or []
-    if missing:
-        return f"Mail config missing required keys: {', '.join(missing)}."
-    if smtp_status.get("port_error"):
-        return str(smtp_status.get("port_error"))
-    return "Mail config is not ready."
+def _digest_lookup_key(row: dict) -> tuple[int, str, str] | None:
+    try:
+        return (
+            int(row.get("player_id")),
+            str(row.get("week_start") or ""),
+            str(row.get("week_end") or ""),
+        )
+    except Exception:
+        return None
+
+
+def _saved_digest_payload(row: dict) -> dict:
+    payload = row.get("final_json") or row.get("generated_json") or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _saved_digest_label(ctx, row: dict, *, queue_status: str | None = None) -> str:
+    pid = row.get("player_id")
+    player_label = f"#{pid}"
+    name = _player_name(ctx, pid)
+    if name:
+        player_label = f"{name} (#{pid})"
+    range_label = f"{row.get('week_start') or 'n/a'} → {row.get('week_end') or 'n/a'}"
+    if queue_status:
+        return f"{player_label} · {range_label} · {queue_status}"
+    return f"{player_label} · {range_label}"
 
 
 def render(ctx) -> None:
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell(
         "📬 Player Updates Admin",
-        "Review verified player update requests and monitor delivery pipeline.",
+        "Review verified player update requests and manage player digest generation and delivery.",
         mode_label=mode_label,
     )
 
@@ -342,9 +361,9 @@ def render(ctx) -> None:
         selected_label = st.selectbox("Player", options=labels, index=0 if labels else None)
         selected_pid = label_to_pid.get(selected_label) if selected_label else None
 
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("Generate Digest", disabled=selected_pid is None):
+            if st.button("Generate Selected Digest", disabled=selected_pid is None):
                 try:
                     digest = compute_player_weekly_digest(
                         ctx,
@@ -367,7 +386,7 @@ def render(ctx) -> None:
                     st.error(f"Digest generation failed: {_friendly_error(exc)}")
 
         with c2:
-            if st.button("Preview Digest", disabled=selected_pid is None):
+            if st.button("Preview Selected Digest", disabled=selected_pid is None):
                 try:
                     digest = compute_player_weekly_digest(
                         ctx,
@@ -380,31 +399,22 @@ def render(ctx) -> None:
                 except Exception as exc:
                     st.error(f"Digest preview failed: {_friendly_error(exc)}")
 
-        with st.expander("Generate / Preview by Active Subscription", expanded=False):
-            if not active_rows:
-                st.caption("No active subscriptions.")
-            for row in active_rows:
-                pid = row.get("player_id")
-                name = _player_name(ctx, pid)
-                label = f"{name} (#{pid})" if name else f"#{pid}"
-                cols = st.columns([4, 1, 1])
-                cols[0].write(label)
-                if cols[1].button("Generate", key=f"digest_generate_row_{pid}"):
-                    digest = compute_player_weekly_digest(ctx, int(pid), start_date, end_date)
-                    save_digest(
-                        supabase,
-                        club_id=club_id,
-                        player_id=int(pid),
-                        week_start=start_date,
-                        week_end=end_date,
-                        generated_json=digest,
-                        final_json=digest,
+        with c3:
+            if st.button("Generate for All Subscribed Players", disabled=not active_rows):
+                try:
+                    result = generate_digests_for_active_subscriptions(
+                        ctx,
+                        start_date=start_date,
+                        end_date=end_date,
                     )
-                    st.session_state["player_updates_digest_preview"] = digest
-                    st.success(f"Saved digest for {label}.")
-                if cols[2].button("Preview", key=f"digest_preview_row_{pid}"):
-                    digest = compute_player_weekly_digest(ctx, int(pid), start_date, end_date)
-                    st.session_state["player_updates_digest_preview"] = digest
+                    st.success(
+                        "Bulk generation complete: "
+                        f"active={result['active_subscriptions']} · "
+                        f"saved={result['saved']} · "
+                        f"failed={result['failed']}"
+                    )
+                except Exception as exc:
+                    st.error(f"Bulk digest generation failed: {_friendly_error(exc)}")
 
         preview_digest = st.session_state.get("player_updates_digest_preview")
         if isinstance(preview_digest, dict) and preview_digest:
@@ -442,95 +452,108 @@ def render(ctx) -> None:
 
     with queue_tab:
         st.subheader("Send Queue")
+        st.caption("Choose from digests that have already been generated, then queue and send them.")
 
-        today = date.today()
-        queue_start = st.date_input(
-            "Queue Start Date",
-            value=today - timedelta(days=7),
-            key="player_updates_queue_start",
-            help="Queue rows for any custom date window.",
-        )
-        queue_end = st.date_input(
-            "Queue End Date",
-            value=today,
-            key="player_updates_queue_end",
-            help="Must be on or after Queue Start Date.",
-        )
+        active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+        active_by_player: dict[int, dict] = {}
+        for row in active_rows:
+            try:
+                active_by_player[int(row.get("player_id"))] = row
+            except Exception:
+                continue
 
-        if queue_end < queue_start:
-            st.error("Queue End Date must be on or after Queue Start Date.")
-            return
+        try:
+            saved_digest_rows = list_recent_digests(supabase, club_id, limit=500)
+        except Exception as exc:
+            st.warning(f"Unable to load generated digests: {exc}")
+            saved_digest_rows = []
 
-        smtp_status = get_smtp_config_status()
-        missing = smtp_status.get("missing") or []
-        mail_ready = bool(smtp_status.get("ok"))
-        if mail_ready:
-            st.success(
-                "Mail Config Status: Ready"
-                f" · host={smtp_status.get('host')}"
-                f" · port={smtp_status.get('port')}"
-                f" · from_email={smtp_status.get('from_email')}"
-                f" · tls={'on' if smtp_status.get('use_tls') else 'off'}"
+        try:
+            outbox_rows = list_outbox_rows(supabase, club_id, limit=1000)
+        except Exception as exc:
+            st.warning(f"Unable to load outbox rows: {exc}")
+            outbox_rows = []
+
+        outbox_by_digest_key: dict[tuple[int, str, str], dict] = {}
+        for row in outbox_rows:
+            key = _digest_lookup_key(row)
+            if key is not None and key not in outbox_by_digest_key:
+                outbox_by_digest_key[key] = row
+
+        digest_display_rows: list[dict] = []
+        digest_options: dict[str, dict] = {}
+
+        for row in saved_digest_rows:
+            key = _digest_lookup_key(row)
+            if key is None:
+                continue
+            pid = key[0]
+            outbox = outbox_by_digest_key.get(key)
+            active_subscription = active_by_player.get(pid)
+            queue_status = str((outbox or {}).get("send_status") or "not_queued")
+            digest_display_rows.append(
+                {
+                    "player_id": pid,
+                    "player_name": _player_name(ctx, pid),
+                    "week_start": row.get("week_start"),
+                    "week_end": row.get("week_end"),
+                    "queue_status": queue_status,
+                    "email": (active_subscription or {}).get("email"),
+                    "updated_at": row.get("updated_at"),
+                }
             )
-        else:
-            detail = f"Missing: {', '.join(missing)}." if missing else ""
-            if smtp_status.get("port_error"):
-                detail = f"{detail} {smtp_status.get('port_error')}".strip()
-            st.warning(f"Mail Config Status: Not Ready. {detail}".strip())
+            if active_subscription is None:
+                continue
+            label = _saved_digest_label(ctx, row, queue_status=queue_status)
+            if label not in digest_options:
+                digest_options[label] = row
 
-        q1, q2, q3, q4 = st.columns(4)
+        if digest_display_rows:
+            st.dataframe(pd.DataFrame(digest_display_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No generated digests available yet. Generate digests first in Weekly Digests.")
+
+        selected_digest_labels = st.multiselect(
+            "Generated digests to queue",
+            options=list(digest_options.keys()),
+            help="Only players with an active verified subscriber are available for queueing.",
+        )
+        selected_digest_rows = [digest_options[label] for label in selected_digest_labels if label in digest_options]
+
+        q1, q2, q3 = st.columns(3)
         with q1:
-            if st.button("Queue Pending for Date Range"):
+            if st.button("Queue Selected Digests", disabled=not selected_digest_rows):
                 try:
-                    result = queue_digest_outbox_rows_for_range(ctx, start_date=queue_start, end_date=queue_end)
+                    result = queue_saved_digest_rows(ctx, digest_rows=selected_digest_rows)
                     st.success(
-                        f"Queued: {result['queued']} · Existing: {result['already_exists']} · Failed: {result['failed']}"
+                        "Queue complete: "
+                        f"queued={result['queued']} · "
+                        f"already_exists={result['already_exists']} · "
+                        f"no_active_subscription={result['no_active_subscription']} · "
+                        f"failed={result['failed']}"
                     )
+                    st.rerun()
                 except Exception as exc:
                     st.error(f"Queue failed: {_friendly_error(exc)}")
 
         with q2:
-            send_pending_disabled_reason = _smtp_not_ready_message(smtp_status)
-            if st.button(
-                "Send Pending",
-                disabled=not mail_ready,
-                help=None if mail_ready else send_pending_disabled_reason,
-            ):
+            if st.button("Send Pending"):
                 try:
                     result = send_pending_player_update_emails(ctx, limit=500)
                     st.success(
                         f"Attempted: {result['attempted']} · Sent: {result['sent']} · "
                         f"Skipped: {result['skipped']} · Errors: {result['errors']}"
                     )
+                    st.rerun()
                 except Exception as exc:
                     st.error(f"Send pending failed: {_friendly_error(exc)}")
 
         with q3:
-            if st.button(
-                "Send Test to Admin",
-                disabled=not mail_ready,
-                help=None if mail_ready else _smtp_not_ready_message(smtp_status),
-            ):
-                try:
-                    result = send_test_player_update_email(ctx, start_date=queue_start, end_date=queue_end)
-                    st.success(f"Sent test email to {result['to_email']}.")
-                except Exception as exc:
-                    if "Missing SMTP configuration:" in str(exc):
-                        st.error(f"Send test failed: {_smtp_not_ready_message(smtp_status)}")
-                    else:
-                        st.error(f"Send test failed: {_friendly_error(exc)}")
-
-        with q4:
-            if st.button(
-                "Retry Errored Rows",
-                help="Reset errored rows in the selected date window back to pending.",
-            ):
+            if st.button("Retry Errored Rows", help="Reset all errored outbox rows back to pending."):
                 try:
                     result = reset_outbox_rows_to_pending(
                         supabase,
                         club_id=club_id,
-                        week_start_from=queue_start,
-                        week_start_to=queue_end,
                         only_status="error",
                     )
                     st.success(
@@ -543,13 +566,15 @@ def render(ctx) -> None:
                 except Exception as exc:
                     st.error(f"Retry errored rows failed: {_friendly_error(exc)}")
 
-        st.divider()
-        try:
-            outbox_rows = list_outbox_rows(supabase, club_id, limit=500)
-        except Exception as exc:
-            st.warning(f"Unable to load outbox rows: {exc}")
-            outbox_rows = []
+        if selected_digest_rows:
+            preview_label = selected_digest_labels[0]
+            preview_row = digest_options.get(preview_label)
+            preview_payload = _saved_digest_payload(preview_row or {})
+            if preview_payload:
+                _render_digest_preview(preview_payload)
 
+        st.divider()
+        st.markdown("#### Outbox")
         if outbox_rows:
             display_rows = []
             for row in outbox_rows:
