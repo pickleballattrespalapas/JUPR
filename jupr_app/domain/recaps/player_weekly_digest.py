@@ -201,10 +201,12 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     }
 
     points = []
-    for _, row in window_series.sort_values(["Date", "id"], ascending=[True, True]).iterrows():
+    ordered_window_series = window_series.sort_values(["Date", "id"], ascending=[True, True])
+    for match_number, (_, row) in enumerate(ordered_window_series.iterrows(), start=1):
         points.append(
             {
                 "id": int(row.get("id")) if pd.notna(row.get("id")) else None,
+                "match_number": match_number,
                 "date": pd.to_datetime(row.get("Date"), utc=True, errors="coerce").isoformat()
                 if pd.notna(pd.to_datetime(row.get("Date"), utc=True, errors="coerce"))
                 else None,
@@ -235,7 +237,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         "subject_line": f"{player_name} weekly digest · {display_range}",
         "summary": summary,
         "chart": {
-            "title": "Overall JUPR Trend",
+            "title": "Overall JUPR by Match",
             "window_label": display_range,
             "series_key": "overall_after",
             "points": points,
