@@ -405,6 +405,7 @@ def send_test_player_update_email(
     subject = f"[TEST] {build_player_update_email_subject(digest)}"
     html_body = build_player_update_email_html(digest, chart_cid if chart_png else None)
     text_body = build_player_update_email_text(digest)
+    unsubscribe_url = str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None
 
     provider_message_id = send_email_with_inline_chart(
         to_email=admin_email,
@@ -413,5 +414,6 @@ def send_test_player_update_email(
         text_body=text_body,
         chart_png_bytes=chart_png,
         chart_cid=chart_cid if chart_png else None,
+        unsubscribe_url=unsubscribe_url,
     )
     return {"to_email": admin_email, "provider_message_id": provider_message_id}
