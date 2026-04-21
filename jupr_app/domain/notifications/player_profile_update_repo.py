@@ -501,3 +501,53 @@ def update_outbox_status(
     if updated is None:
         raise RuntimeError("Outbox row could not be updated")
     return updated
+
+
+def reset_outbox_rows_to_pending(
+    supabase,
+    *,
+    club_id: str,
+    week_start_from: date | None = None,
+    week_start_to: date | None = None,
+    only_status: str = SEND_STATUS_ERROR,
+) -> dict[str, int]:
+    club_id = _require_nonempty(club_id, "club_id")
+    normalized_status = str(only_status or "").strip().lower()
+    if normalized_status not in {SEND_STATUS_PENDING, SEND_STATUS_SENT, SEND_STATUS_SKIPPED, SEND_STATUS_ERROR}:
+        raise ValueError("Invalid only_status")
+
+    query = (
+        supabase.table("player_profile_update_outbox")
+        .select("id")
+        .eq("club_id", club_id)
+        .eq("send_status", normalized_status)
+    )
+    if week_start_from is not None:
+        query = query.gte("week_start", week_start_from.isoformat())
+    if week_start_to is not None:
+        query = query.lte("week_start", week_start_to.isoformat())
+
+    rows = _safe_data(query.execute())
+    if not rows:
+        return {"matched": 0, "reset_to_pending": 0, "failed": 0}
+
+    row_ids = [str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()]
+    if not row_ids:
+        return {"matched": len(rows), "reset_to_pending": 0, "failed": 0}
+
+    payload = {
+        "send_status": SEND_STATUS_PENDING,
+        "error_text": None,
+        "provider_message_id": None,
+        "sent_at": None,
+    }
+    updated_rows = _safe_data(
+        supabase.table("player_profile_update_outbox")
+        .update(payload)
+        .eq("club_id", club_id)
+        .in_("id", row_ids)
+        .execute()
+    )
+    reset_count = len(updated_rows)
+    failed_count = max(0, len(row_ids) - reset_count)
+    return {"matched": len(row_ids), "reset_to_pending": reset_count, "failed": failed_count}
