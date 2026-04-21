@@ -397,6 +397,31 @@ def list_digests_for_range(
     return _safe_data(query.execute())
 
 
+def list_recent_digests(
+    supabase,
+    club_id: str,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    player_id: int | None = None,
+) -> list[dict[str, Any]]:
+    club_id = _require_nonempty(club_id, "club_id")
+    upper = max(0, int(limit) - 1)
+    start = max(0, int(offset))
+    end = start + upper
+
+    query = (
+        supabase.table("player_weekly_profile_digests")
+        .select("*")
+        .eq("club_id", club_id)
+        .order("updated_at", desc=True)
+        .range(start, end)
+    )
+    if player_id is not None:
+        query = query.eq("player_id", _safe_int(player_id))
+    return _safe_data(query.execute())
+
+
 def create_outbox_row(
     supabase,
     *,
