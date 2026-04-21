@@ -13,6 +13,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     list_outbox_rows,
     mark_unsubscribed,
     reject_request,
+    reset_outbox_rows_to_pending,
     replace_verified_subscriber,
     save_digest,
 )
@@ -21,6 +22,7 @@ from jupr_app.domain.notifications.player_update_sender import (
     send_pending_player_update_emails,
     send_test_player_update_email,
 )
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.ui.layout import page_shell
 
@@ -137,6 +139,15 @@ def _render_digest_preview(digest: dict) -> None:
 def _friendly_error(exc: Exception) -> str:
     text = str(exc or "").strip()
     return text or "Unknown error."
+
+
+def _smtp_not_ready_message(smtp_status: dict) -> str:
+    missing = smtp_status.get("missing") or []
+    if missing:
+        return f"Mail config missing required keys: {', '.join(missing)}."
+    if smtp_status.get("port_error"):
+        return str(smtp_status.get("port_error"))
+    return "Mail config is not ready."
 
 
 def render(ctx) -> None:
@@ -450,7 +461,24 @@ def render(ctx) -> None:
             st.error("Queue End Date must be on or after Queue Start Date.")
             return
 
-        q1, q2, q3 = st.columns(3)
+        smtp_status = get_smtp_config_status()
+        missing = smtp_status.get("missing") or []
+        mail_ready = bool(smtp_status.get("ok"))
+        if mail_ready:
+            st.success(
+                "Mail Config Status: Ready"
+                f" · host={smtp_status.get('host')}"
+                f" · port={smtp_status.get('port')}"
+                f" · from_email={smtp_status.get('from_email')}"
+                f" · tls={'on' if smtp_status.get('use_tls') else 'off'}"
+            )
+        else:
+            detail = f"Missing: {', '.join(missing)}." if missing else ""
+            if smtp_status.get("port_error"):
+                detail = f"{detail} {smtp_status.get('port_error')}".strip()
+            st.warning(f"Mail Config Status: Not Ready. {detail}".strip())
+
+        q1, q2, q3, q4 = st.columns(4)
         with q1:
             if st.button("Queue Pending for Date Range"):
                 try:
@@ -462,7 +490,12 @@ def render(ctx) -> None:
                     st.error(f"Queue failed: {_friendly_error(exc)}")
 
         with q2:
-            if st.button("Send Pending"):
+            send_pending_disabled_reason = _smtp_not_ready_message(smtp_status)
+            if st.button(
+                "Send Pending",
+                disabled=not mail_ready,
+                help=None if mail_ready else send_pending_disabled_reason,
+            ):
                 try:
                     result = send_pending_player_update_emails(ctx, limit=500)
                     st.success(
@@ -473,12 +506,42 @@ def render(ctx) -> None:
                     st.error(f"Send pending failed: {_friendly_error(exc)}")
 
         with q3:
-            if st.button("Send Test to Admin"):
+            if st.button(
+                "Send Test to Admin",
+                disabled=not mail_ready,
+                help=None if mail_ready else _smtp_not_ready_message(smtp_status),
+            ):
                 try:
                     result = send_test_player_update_email(ctx, start_date=queue_start, end_date=queue_end)
                     st.success(f"Sent test email to {result['to_email']}.")
                 except Exception as exc:
-                    st.error(f"Send test failed: {_friendly_error(exc)}")
+                    if "Missing SMTP configuration:" in str(exc):
+                        st.error(f"Send test failed: {_smtp_not_ready_message(smtp_status)}")
+                    else:
+                        st.error(f"Send test failed: {_friendly_error(exc)}")
+
+        with q4:
+            if st.button(
+                "Retry Errored Rows",
+                help="Reset errored rows in the selected date window back to pending.",
+            ):
+                try:
+                    result = reset_outbox_rows_to_pending(
+                        supabase,
+                        club_id=club_id,
+                        week_start_from=queue_start,
+                        week_start_to=queue_end,
+                        only_status="error",
+                    )
+                    st.success(
+                        "Retry reset complete: "
+                        f"matched={result['matched']} · "
+                        f"reset_to_pending={result['reset_to_pending']} · "
+                        f"failed={result['failed']}"
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Retry errored rows failed: {_friendly_error(exc)}")
 
         st.divider()
         try:

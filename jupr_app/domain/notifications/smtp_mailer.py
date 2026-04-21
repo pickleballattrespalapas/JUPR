@@ -31,7 +31,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return val in {"1", "true", "yes", "y", "on"}
 
 
-def _smtp_config_from_env() -> dict:
+def _read_smtp_config_raw() -> dict:
     host = _secret_or_env("SMTP_HOST")
     port_raw = _secret_or_env("SMTP_PORT")
     username = _secret_or_env("SMTP_USERNAME")
@@ -40,33 +40,67 @@ def _smtp_config_from_env() -> dict:
     from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR"
     use_tls = _env_bool("SMTP_USE_TLS", default=True)
 
-    missing = [
-        name
-        for name, value in [
-            ("SMTP_HOST", host),
-            ("SMTP_PORT", port_raw),
-            ("SMTP_USERNAME", username),
-            ("SMTP_PASSWORD", password),
-            ("SMTP_FROM_EMAIL", from_email),
-        ]
-        if not value
-    ]
-    if missing:
-        raise ValueError(f"Missing SMTP configuration: {', '.join(missing)}")
-
-    try:
-        port = int(port_raw)
-    except Exception as exc:
-        raise ValueError("SMTP_PORT must be an integer") from exc
-
     return {
         "host": host,
-        "port": port,
+        "port_raw": port_raw,
         "username": username,
         "password": password,
         "from_email": from_email,
         "from_name": from_name,
         "use_tls": use_tls,
+    }
+
+
+def get_smtp_config_status() -> dict:
+    raw = _read_smtp_config_raw()
+    missing = [
+        key
+        for key, value in [
+            ("SMTP_HOST", raw.get("host")),
+            ("SMTP_PORT", raw.get("port_raw")),
+            ("SMTP_USERNAME", raw.get("username")),
+            ("SMTP_PASSWORD", raw.get("password")),
+            ("SMTP_FROM_EMAIL", raw.get("from_email")),
+        ]
+        if not value
+    ]
+
+    port: int | None = None
+    port_error: str | None = None
+    if raw.get("port_raw"):
+        try:
+            port = int(raw["port_raw"])
+        except Exception:
+            port_error = "SMTP_PORT must be an integer"
+
+    return {
+        "ok": len(missing) == 0 and port_error is None,
+        "missing": missing,
+        "host": raw.get("host"),
+        "port": port,
+        "from_email": raw.get("from_email"),
+        "from_name": raw.get("from_name"),
+        "use_tls": bool(raw.get("use_tls", True)),
+        "port_error": port_error,
+    }
+
+
+def _smtp_config_from_env() -> dict:
+    status = get_smtp_config_status()
+    if status["missing"]:
+        raise ValueError(f"Missing SMTP configuration: {', '.join(status['missing'])}")
+    if status.get("port_error"):
+        raise ValueError(str(status["port_error"]))
+
+    raw = _read_smtp_config_raw()
+    return {
+        "host": status["host"],
+        "port": int(status["port"]),
+        "username": raw["username"],
+        "password": raw["password"],
+        "from_email": status["from_email"],
+        "from_name": status["from_name"],
+        "use_tls": status["use_tls"],
     }
 
 
