@@ -124,11 +124,6 @@ def _coerce_date(value: Any) -> date:
     return date.fromisoformat(text[:10])
 
 
-def _is_duplicate_queue_error(exc: Exception) -> bool:
-    err = str(exc or "").lower()
-    return "duplicate key" in err or "unique" in err or "already exists" in err
-
-
 def _find_active_subscription_for_player(active_rows: list[dict[str, Any]], player_id: int) -> dict[str, Any] | None:
     for row in active_rows:
         try:
@@ -207,21 +202,14 @@ def generate_and_queue_digests_for_active_subscriptions(ctx, *, start_date: date
     active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
     saved = 0
     queued = 0
-    already_queued = 0
     failed = 0
 
     for sub in active_rows:
         try:
             _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
             saved += 1
-            try:
-                _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
-                queued += 1
-            except Exception as exc:
-                if _is_duplicate_queue_error(exc):
-                    already_queued += 1
-                else:
-                    raise
+            _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            queued += 1
         except Exception:
             failed += 1
 
@@ -229,7 +217,6 @@ def generate_and_queue_digests_for_active_subscriptions(ctx, *, start_date: date
         "active_subscriptions": len(active_rows),
         "saved": saved,
         "queued": queued,
-        "already_queued": already_queued,
         "failed": failed,
     }
 
@@ -249,23 +236,13 @@ def generate_and_queue_digest_for_player(
         raise ValueError("No active verified subscriber exists for that player.")
 
     digest = _save_digest_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
-    queued = 0
-    already_queued = 0
-    try:
-        _queue_outbox_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
-        queued = 1
-    except Exception as exc:
-        if _is_duplicate_queue_error(exc):
-            already_queued = 1
-        else:
-            raise
+    _queue_outbox_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
 
     return {
         "player_id": int(player_id),
         "digest": digest,
         "saved": 1,
-        "queued": queued,
-        "already_queued": already_queued,
+        "queued": 1,
     }
 
 
@@ -275,7 +252,6 @@ def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date)
 
     active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
     queued = 0
-    already_exists = 0
     failed = 0
 
     for sub in active_rows:
@@ -283,15 +259,11 @@ def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date)
             _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
             _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
             queued += 1
-        except Exception as exc:
-            if _is_duplicate_queue_error(exc):
-                already_exists += 1
-            else:
-                failed += 1
+        except Exception:
+            failed += 1
 
     return {
         "queued": queued,
-        "already_exists": already_exists,
         "failed": failed,
     }
 
@@ -309,7 +281,6 @@ def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[s
             continue
 
     queued = 0
-    already_exists = 0
     no_active_subscription = 0
     failed = 0
 
@@ -331,15 +302,11 @@ def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[s
                 email=str(subscription.get("email") or ""),
             )
             queued += 1
-        except Exception as exc:
-            if _is_duplicate_queue_error(exc):
-                already_exists += 1
-            else:
-                failed += 1
+        except Exception:
+            failed += 1
 
     return {
         "queued": queued,
-        "already_exists": already_exists,
         "no_active_subscription": no_active_subscription,
         "failed": failed,
     }
