@@ -115,6 +115,47 @@ def _is_send_only_if_changed_and_unchanged(subscription: dict, digest: dict) -> 
     return matches_played == 0 and len(badges) == 0 and len(trophies) == 0
 
 
+def _coerce_date(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("Date value is required")
+    return date.fromisoformat(text[:10])
+
+
+def generate_digests_for_active_subscriptions(ctx, *, start_date: date, end_date: date) -> dict[str, int]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+
+    active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    saved = 0
+    failed = 0
+
+    for sub in active_rows:
+        try:
+            player_id = int(sub.get("player_id"))
+            digest = compute_player_weekly_digest(ctx, player_id=player_id, start_date=start_date, end_date=end_date)
+            save_digest(
+                supabase,
+                club_id=club_id,
+                player_id=player_id,
+                week_start=start_date,
+                week_end=end_date,
+                generated_json=digest,
+                final_json=digest,
+            )
+            saved += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "active_subscriptions": len(active_rows),
+        "saved": saved,
+        "failed": failed,
+    }
+
+
 def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date) -> dict[str, int]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
@@ -157,6 +198,56 @@ def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date)
     return {
         "queued": queued,
         "already_exists": already_exists,
+        "failed": failed,
+    }
+
+
+def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[str, int]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+
+    active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    active_by_player: dict[int, dict[str, Any]] = {}
+    for row in active_rows:
+        try:
+            active_by_player[int(row.get("player_id"))] = row
+        except Exception:
+            continue
+
+    queued = 0
+    already_exists = 0
+    no_active_subscription = 0
+    failed = 0
+
+    for digest_row in digest_rows:
+        try:
+            player_id = int(digest_row.get("player_id"))
+            subscription = active_by_player.get(player_id)
+            if not subscription:
+                no_active_subscription += 1
+                continue
+
+            create_outbox_row(
+                supabase,
+                subscription_id=str(subscription.get("id") or ""),
+                club_id=club_id,
+                player_id=player_id,
+                week_start=_coerce_date(digest_row.get("week_start")),
+                week_end=_coerce_date(digest_row.get("week_end")),
+                email=str(subscription.get("email") or ""),
+            )
+            queued += 1
+        except Exception as exc:
+            err = str(exc).lower()
+            if "duplicate key" in err or "unique" in err or "already exists" in err:
+                already_exists += 1
+            else:
+                failed += 1
+
+    return {
+        "queued": queued,
+        "already_exists": already_exists,
+        "no_active_subscription": no_active_subscription,
         "failed": failed,
     }
 
