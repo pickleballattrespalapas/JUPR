@@ -359,67 +359,71 @@ def render(ctx) -> None:
         active_rows = list_active_subscriptions(supabase, club_id, limit=500)
         labels, label_to_pid = _digest_player_options(ctx, active_rows)
 
-        selected_label = st.selectbox("Player", options=labels, index=0 if labels else None)
-        selected_pid = label_to_pid.get(selected_label) if selected_label else None
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("Generate Selected Digest", disabled=selected_pid is None):
-                try:
-                    digest = compute_player_weekly_digest(
-                        ctx,
-                        player_id=int(selected_pid),
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                    save_digest(
-                        supabase,
-                        club_id=club_id,
-                        player_id=int(selected_pid),
-                        week_start=start_date,
-                        week_end=end_date,
-                        generated_json=digest,
-                        final_json=digest,
-                    )
-                    st.session_state["player_updates_digest_preview"] = digest
-                    st.success("Digest generated and saved.")
-                except Exception as exc:
-                    st.error(f"Digest generation failed: {_friendly_error(exc)}")
-
-        with c2:
-            if st.button("Preview Selected Digest", disabled=selected_pid is None):
-                try:
-                    digest = compute_player_weekly_digest(
-                        ctx,
-                        player_id=int(selected_pid),
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                    st.session_state["player_updates_digest_preview"] = digest
-                    st.success("Digest preview loaded.")
-                except Exception as exc:
-                    st.error(f"Digest preview failed: {_friendly_error(exc)}")
-
-        with c3:
-            if st.button("Generate for All Subscribed Players", disabled=not active_rows):
-                try:
-                    result = generate_digests_for_active_subscriptions(
-                        ctx,
-                        start_date=start_date,
-                        end_date=end_date,
-                    )
-                    st.success(
-                        "Bulk generation complete: "
-                        f"active={result['active_subscriptions']} · "
-                        f"saved={result['saved']} · "
-                        f"failed={result['failed']}"
-                    )
-                except Exception as exc:
-                    st.error(f"Bulk digest generation failed: {_friendly_error(exc)}")
+        st.markdown("#### Generate for all subscribed players")
+        st.caption("This is the default digest generation flow.")
+        if st.button("Generate for All Subscribed Players", disabled=not active_rows, use_container_width=True):
+            try:
+                result = generate_digests_for_active_subscriptions(
+                    ctx,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                st.success(
+                    "Bulk generation complete: "
+                    f"active={result['active_subscriptions']} · "
+                    f"saved={result['saved']} · "
+                    f"failed={result['failed']}"
+                )
+            except Exception as exc:
+                st.error(f"Bulk digest generation failed: {_friendly_error(exc)}")
 
         preview_digest = st.session_state.get("player_updates_digest_preview")
         if isinstance(preview_digest, dict) and preview_digest:
             _render_digest_preview(preview_digest)
+
+        st.divider()
+        with st.expander("Single player options", expanded=False):
+            st.caption("Use this only when you want to preview or regenerate one player manually.")
+            selected_label = st.selectbox("Player", options=labels, index=0 if labels else None)
+            selected_pid = label_to_pid.get(selected_label) if selected_label else None
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Generate Selected Digest", disabled=selected_pid is None):
+                    try:
+                        digest = compute_player_weekly_digest(
+                            ctx,
+                            player_id=int(selected_pid),
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        save_digest(
+                            supabase,
+                            club_id=club_id,
+                            player_id=int(selected_pid),
+                            week_start=start_date,
+                            week_end=end_date,
+                            generated_json=digest,
+                            final_json=digest,
+                        )
+                        st.session_state["player_updates_digest_preview"] = digest
+                        st.success("Digest generated and saved.")
+                    except Exception as exc:
+                        st.error(f"Digest generation failed: {_friendly_error(exc)}")
+
+            with c2:
+                if st.button("Preview Selected Digest", disabled=selected_pid is None):
+                    try:
+                        digest = compute_player_weekly_digest(
+                            ctx,
+                            player_id=int(selected_pid),
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
+                        st.session_state["player_updates_digest_preview"] = digest
+                        st.success("Digest preview loaded.")
+                    except Exception as exc:
+                        st.error(f"Digest preview failed: {_friendly_error(exc)}")
 
         st.divider()
         st.markdown("#### Saved digests in selected range")
@@ -429,7 +433,7 @@ def render(ctx) -> None:
                 club_id,
                 week_start_from=start_date,
                 week_start_to=end_date,
-                player_id=int(selected_pid) if selected_pid is not None else None,
+                player_id=None,
             )
         except Exception as exc:
             st.warning(f"Unable to load saved digests: {exc}")
