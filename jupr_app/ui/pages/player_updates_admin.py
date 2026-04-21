@@ -361,7 +361,6 @@ def render(ctx) -> None:
                     f"active={result['active_subscriptions']} · "
                     f"saved={result['saved']} · "
                     f"queued={result['queued']} · "
-                    f"already_queued={result['already_queued']} · "
                     f"failed={result['failed']}"
                 )
             except Exception as exc:
@@ -390,7 +389,7 @@ def render(ctx) -> None:
                         st.session_state["player_updates_digest_preview"] = result.get("digest") or {}
                         st.success(
                             "Digest generated: "
-                            f"saved={result['saved']} · queued={result['queued']} · already_queued={result['already_queued']}"
+                            f"saved={result['saved']} · queued={result['queued']}"
                         )
                     except Exception as exc:
                         st.error(f"Digest generation failed: {_friendly_error(exc)}")
