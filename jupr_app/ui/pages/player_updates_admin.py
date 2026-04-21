@@ -23,6 +23,7 @@ from jupr_app.domain.notifications.player_update_sender import (
     queue_saved_digest_rows,
     send_pending_player_update_emails,
 )
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.ui.layout import page_shell
 
@@ -453,6 +454,27 @@ def render(ctx) -> None:
     with queue_tab:
         st.subheader("Send Queue")
         st.caption("Choose from digests that have already been generated, then queue and send them.")
+        st.markdown("#### Mail Config Status")
+        smtp_status = get_smtp_config_status()
+        st.write(
+            {
+                "from_email": smtp_status.get("from_email") or "",
+                "from_name": smtp_status.get("from_name") or "",
+                "reply_to": smtp_status.get("reply_to") or "",
+                "reply_to_configured": bool(smtp_status.get("reply_to_configured")),
+                "use_tls": bool(smtp_status.get("use_tls")),
+                "missing_required_smtp_keys": smtp_status.get("missing") or [],
+            }
+        )
+        if smtp_status.get("port_error"):
+            st.warning(f"SMTP config warning: {smtp_status['port_error']}")
+        elif smtp_status.get("missing"):
+            st.warning(
+                "SMTP config missing required keys: "
+                + ", ".join(str(key) for key in (smtp_status.get("missing") or []))
+            )
+        else:
+            st.caption("SMTP config appears complete.")
 
         active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
         active_by_player: dict[int, dict] = {}
