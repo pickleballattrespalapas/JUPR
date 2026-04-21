@@ -37,7 +37,8 @@ def _read_smtp_config_raw() -> dict:
     username = _secret_or_env("SMTP_USERNAME")
     password = _secret_or_env("SMTP_PASSWORD")
     from_email = _secret_or_env("SMTP_FROM_EMAIL")
-    from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR"
+    from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR Updates"
+    reply_to = _secret_or_env("SMTP_REPLY_TO")
     use_tls = _env_bool("SMTP_USE_TLS", default=True)
 
     return {
@@ -47,6 +48,7 @@ def _read_smtp_config_raw() -> dict:
         "password": password,
         "from_email": from_email,
         "from_name": from_name,
+        "reply_to": reply_to,
         "use_tls": use_tls,
     }
 
@@ -80,6 +82,8 @@ def get_smtp_config_status() -> dict:
         "port": port,
         "from_email": raw.get("from_email"),
         "from_name": raw.get("from_name"),
+        "reply_to": raw.get("reply_to"),
+        "reply_to_configured": bool(raw.get("reply_to")),
         "use_tls": bool(raw.get("use_tls", True)),
         "port_error": port_error,
     }
@@ -100,6 +104,7 @@ def _smtp_config_from_env() -> dict:
         "password": raw["password"],
         "from_email": status["from_email"],
         "from_name": status["from_name"],
+        "reply_to": raw["reply_to"],
         "use_tls": status["use_tls"],
     }
 
@@ -112,6 +117,7 @@ def send_email_with_inline_chart(
     text_body: str,
     chart_png_bytes: bytes | None = None,
     chart_cid: str | None = None,
+    unsubscribe_url: str | None = None,
 ) -> str:
     cfg = _smtp_config_from_env()
 
@@ -119,6 +125,13 @@ def send_email_with_inline_chart(
     msg["Subject"] = str(subject)
     msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
     msg["To"] = str(to_email).strip()
+    if cfg.get("reply_to"):
+        msg["Reply-To"] = str(cfg["reply_to"]).strip()
+
+    normalized_unsubscribe_url = str(unsubscribe_url or "").strip()
+    if normalized_unsubscribe_url:
+        msg["List-Unsubscribe"] = f"<{normalized_unsubscribe_url}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(text_body or "", "plain", "utf-8"))
