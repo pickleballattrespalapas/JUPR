@@ -197,6 +197,7 @@ def build_player_update_email_text(digest_json: dict) -> str:
     return "\n".join(
         [
             "Verified Player Update",
+            "You’re receiving this email because you subscribed to JUPR player profile updates.",
             f"Player: {_s(digest.get('player_name'))}",
             f"Date range: {_s(digest.get('display_range'))}",
             f"Current overall JUPR: {_num(summary.get('overall_jupr_after'), digits=3)}",

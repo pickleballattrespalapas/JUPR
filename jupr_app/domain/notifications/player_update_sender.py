@@ -115,48 +115,199 @@ def _is_send_only_if_changed_and_unchanged(subscription: dict, digest: dict) -> 
     return matches_played == 0 and len(badges) == 0 and len(trophies) == 0
 
 
+def _coerce_date(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("Date value is required")
+    return date.fromisoformat(text[:10])
+
+
+def _find_active_subscription_for_player(active_rows: list[dict[str, Any]], player_id: int) -> dict[str, Any] | None:
+    for row in active_rows:
+        try:
+            if int(row.get("player_id")) == int(player_id):
+                return row
+        except Exception:
+            continue
+    return None
+
+
+def _save_digest_for_subscription(ctx, *, subscription: dict[str, Any], start_date: date, end_date: date) -> dict[str, Any]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+    player_id = int(subscription.get("player_id"))
+    digest = compute_player_weekly_digest(ctx, player_id=player_id, start_date=start_date, end_date=end_date)
+    save_digest(
+        supabase,
+        club_id=club_id,
+        player_id=player_id,
+        week_start=start_date,
+        week_end=end_date,
+        generated_json=digest,
+        final_json=digest,
+    )
+    return digest
+
+
+def _queue_outbox_for_subscription(
+    ctx,
+    *,
+    subscription: dict[str, Any],
+    start_date: date,
+    end_date: date,
+) -> str:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+    player_id = int(subscription.get("player_id"))
+    create_outbox_row(
+        supabase,
+        subscription_id=str(subscription.get("id") or ""),
+        club_id=club_id,
+        player_id=player_id,
+        week_start=start_date,
+        week_end=end_date,
+        email=str(subscription.get("email") or ""),
+    )
+    return "queued"
+
+
+def generate_digests_for_active_subscriptions(ctx, *, start_date: date, end_date: date) -> dict[str, int]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+
+    active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    saved = 0
+    failed = 0
+
+    for sub in active_rows:
+        try:
+            _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            saved += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "active_subscriptions": len(active_rows),
+        "saved": saved,
+        "failed": failed,
+    }
+
+
+def generate_and_queue_digests_for_active_subscriptions(ctx, *, start_date: date, end_date: date) -> dict[str, int]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+
+    active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    saved = 0
+    queued = 0
+    failed = 0
+
+    for sub in active_rows:
+        try:
+            _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            saved += 1
+            _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            queued += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "active_subscriptions": len(active_rows),
+        "saved": saved,
+        "queued": queued,
+        "failed": failed,
+    }
+
+
+def generate_and_queue_digest_for_player(
+    ctx,
+    *,
+    player_id: int,
+    start_date: date,
+    end_date: date,
+) -> dict[str, Any]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+    active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    subscription = _find_active_subscription_for_player(active_rows, int(player_id))
+    if subscription is None:
+        raise ValueError("No active verified subscriber exists for that player.")
+
+    digest = _save_digest_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
+    _queue_outbox_for_subscription(ctx, subscription=subscription, start_date=start_date, end_date=end_date)
+
+    return {
+        "player_id": int(player_id),
+        "digest": digest,
+        "saved": 1,
+        "queued": 1,
+    }
+
+
 def queue_digest_outbox_rows_for_range(ctx, *, start_date: date, end_date: date) -> dict[str, int]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
 
     active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
     queued = 0
-    already_exists = 0
     failed = 0
 
     for sub in active_rows:
         try:
-            player_id = int(sub.get("player_id"))
-            digest = compute_player_weekly_digest(ctx, player_id=player_id, start_date=start_date, end_date=end_date)
-            save_digest(
-                supabase,
-                club_id=club_id,
-                player_id=player_id,
-                week_start=start_date,
-                week_end=end_date,
-                generated_json=digest,
-                final_json=digest,
-            )
-            create_outbox_row(
-                supabase,
-                subscription_id=str(sub.get("id") or ""),
-                club_id=club_id,
-                player_id=player_id,
-                week_start=start_date,
-                week_end=end_date,
-                email=str(sub.get("email") or ""),
-            )
+            _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
+            _queue_outbox_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
             queued += 1
-        except Exception as exc:
-            err = str(exc).lower()
-            if "duplicate key" in err or "unique" in err or "already exists" in err:
-                already_exists += 1
-            else:
-                failed += 1
+        except Exception:
+            failed += 1
 
     return {
         "queued": queued,
-        "already_exists": already_exists,
+        "failed": failed,
+    }
+
+
+def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[str, int]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+
+    active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    active_by_player: dict[int, dict[str, Any]] = {}
+    for row in active_rows:
+        try:
+            active_by_player[int(row.get("player_id"))] = row
+        except Exception:
+            continue
+
+    queued = 0
+    no_active_subscription = 0
+    failed = 0
+
+    for digest_row in digest_rows:
+        try:
+            player_id = int(digest_row.get("player_id"))
+            subscription = active_by_player.get(player_id)
+            if not subscription:
+                no_active_subscription += 1
+                continue
+
+            create_outbox_row(
+                supabase,
+                subscription_id=str(subscription.get("id") or ""),
+                club_id=club_id,
+                player_id=player_id,
+                week_start=_coerce_date(digest_row.get("week_start")),
+                week_end=_coerce_date(digest_row.get("week_end")),
+                email=str(subscription.get("email") or ""),
+            )
+            queued += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "queued": queued,
+        "no_active_subscription": no_active_subscription,
         "failed": failed,
     }
 
@@ -233,6 +384,7 @@ def send_pending_player_update_emails(ctx, *, limit: int = 100) -> dict[str, int
                 text_body=text_body,
                 chart_png_bytes=chart_png,
                 chart_cid=chart_cid if chart_png else None,
+                unsubscribe_url=str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None,
             )
 
             update_outbox_status(
@@ -313,6 +465,7 @@ def send_test_player_update_email(
     subject = f"[TEST] {build_player_update_email_subject(digest)}"
     html_body = build_player_update_email_html(digest, chart_cid if chart_png else None)
     text_body = build_player_update_email_text(digest)
+    unsubscribe_url = str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None
 
     provider_message_id = send_email_with_inline_chart(
         to_email=admin_email,
@@ -321,5 +474,6 @@ def send_test_player_update_email(
         text_body=text_body,
         chart_png_bytes=chart_png,
         chart_cid=chart_cid if chart_png else None,
+        unsubscribe_url=unsubscribe_url,
     )
     return {"to_email": admin_email, "provider_message_id": provider_message_id}

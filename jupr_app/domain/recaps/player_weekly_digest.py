@@ -554,7 +554,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         "people": people,
         "notable_results": notable_results,
         "chart": {
-            "title": "Overall JUPR Trend",
+            "title": "Overall JUPR by Match",
             "window_label": display_range,
             "series_key": "overall_after",
             "points": points,
