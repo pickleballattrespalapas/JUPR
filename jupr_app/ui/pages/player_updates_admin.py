@@ -22,6 +22,7 @@ from jupr_app.domain.notifications.player_update_sender import (
     send_pending_player_update_emails,
 )
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
+from jupr_app.ui.components.player_digest_layout import render_player_digest
 from jupr_app.ui.layout import page_shell
 
 
@@ -112,26 +113,17 @@ def _digest_player_options(ctx, active_rows: list[dict]) -> tuple[list[str], dic
 
 def _render_digest_preview(digest: dict) -> None:
     st.markdown("#### Preview")
-    st.write(
-        {
-            "player": digest.get("player_name"),
-            "range": digest.get("display_range"),
-            "subject_line": digest.get("subject_line"),
-        }
-    )
-    st.json(digest.get("summary") or {})
+    render_player_digest(digest)
 
-    points = (digest.get("chart") or {}).get("points") or []
-    if points:
-        st.dataframe(pd.DataFrame(points), use_container_width=True, hide_index=True)
-    else:
-        st.caption("No chart points available in selected date range.")
+    with st.expander("Debug payload", expanded=False):
+        st.json(digest)
 
-    highlights = digest.get("highlights") or []
-    if highlights:
-        st.markdown("**Highlights**")
-        for line in highlights:
-            st.write(f"• {line}")
+    with st.expander("Raw chart points", expanded=False):
+        points = (digest.get("chart") or {}).get("points") or []
+        if points:
+            st.dataframe(pd.DataFrame(points), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No chart points available in selected date range.")
 
 
 def _friendly_error(exc: Exception) -> str:

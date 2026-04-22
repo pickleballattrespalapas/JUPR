@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime, timezone
 
 import pandas as pd
@@ -17,6 +18,15 @@ def _safe_float(value) -> float | None:
         if value is None or str(value).strip() == "":
             return None
         return float(value)
+    except Exception:
+        return None
+
+
+def _safe_int(value) -> int | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return int(float(value))
     except Exception:
         return None
 
@@ -52,6 +62,22 @@ def _player_name(ctx, player_id: int) -> str:
     except Exception:
         pass
     return f"Player #{int(player_id)}"
+
+
+def _format_record(wins: int, losses: int) -> str:
+    return f"{int(wins)}-{int(losses)}"
+
+
+def _format_delta(delta: float | None, decimals: int = 3) -> str:
+    if delta is None:
+        return "—"
+    return f"{delta:+.{decimals}f}"
+
+
+def _format_pct(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "0.0%"
+    return f"{(100.0 * float(numerator) / float(denominator)):.1f}%"
 
 
 def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime) -> list[dict]:
@@ -127,24 +153,280 @@ def _load_trophies_earned(supabase, club_id: str, player_id: int, start_dt_utc: 
     return kept
 
 
-def _build_highlights(summary: dict, badges_earned: list[dict], trophies_earned: list[dict]) -> list[str]:
+def _league_breakdown(window_series: pd.DataFrame) -> list[dict]:
+    if window_series.empty:
+        return []
+
+    rows: list[dict] = []
+    grouped = window_series.copy()
+    grouped["League"] = grouped.get("League", "").fillna("Unspecified").astype(str)
+
+    for league_name, league_df in grouped.groupby("League"):
+        matches = int(len(league_df.index))
+        wins = int((league_df.get("Result") == "WIN").sum())
+        losses = int((league_df.get("Result") == "LOSS").sum())
+        delta = pd.to_numeric(league_df.get("Overall Δ"), errors="coerce").fillna(0.0).sum()
+        rows.append(
+            {
+                "league_name": str(league_name or "Unspecified"),
+                "matches": matches,
+                "wins": wins,
+                "losses": losses,
+                "record": _format_record(wins, losses),
+                "overall_delta": round(float(delta), 4),
+            }
+        )
+
+    rows.sort(key=lambda item: (-int(item.get("matches", 0)), -int(item.get("wins", 0)), str(item.get("league_name", ""))))
+    return rows
+
+
+def _is_player_on_t1(row: pd.Series, player_id: int) -> bool | None:
+    p = int(player_id)
+    t1 = {_safe_int(row.get("t1_p1")), _safe_int(row.get("t1_p2"))}
+    t2 = {_safe_int(row.get("t2_p1")), _safe_int(row.get("t2_p2"))}
+    if p in t1:
+        return True
+    if p in t2:
+        return False
+    return None
+
+
+def _aggregate_people(ctx, window_series: pd.DataFrame, player_id: int) -> dict:
+    partner_stats: dict[int, dict] = defaultdict(lambda: {"matches": 0, "wins": 0, "losses": 0, "point_diff": 0})
+    opponent_stats: dict[int, dict] = defaultdict(lambda: {"matches": 0, "wins": 0, "losses": 0, "point_diff": 0})
+
+    if window_series.empty:
+        return {
+            "top_partners": [],
+            "top_opponents": [],
+            "best_partner": None,
+            "most_faced_opponent": None,
+        }
+
+    for _, row in window_series.iterrows():
+        player_on_t1 = _is_player_on_t1(row, player_id)
+        if player_on_t1 is None:
+            continue
+
+        if player_on_t1:
+            partner_id = _safe_int(row.get("t1_p2")) if _safe_int(row.get("t1_p1")) == int(player_id) else _safe_int(row.get("t1_p1"))
+            opponent_ids = [_safe_int(row.get("t2_p1")), _safe_int(row.get("t2_p2"))]
+            my_score = _safe_int(row.get("score_t1"))
+            opp_score = _safe_int(row.get("score_t2"))
+        else:
+            partner_id = _safe_int(row.get("t2_p2")) if _safe_int(row.get("t2_p1")) == int(player_id) else _safe_int(row.get("t2_p1"))
+            opponent_ids = [_safe_int(row.get("t1_p1")), _safe_int(row.get("t1_p2"))]
+            my_score = _safe_int(row.get("score_t2"))
+            opp_score = _safe_int(row.get("score_t1"))
+
+        result = str(row.get("Result") or "").upper()
+        won = result == "WIN"
+        if result not in {"WIN", "LOSS"} and my_score is not None and opp_score is not None:
+            won = my_score > opp_score
+        point_diff = (my_score - opp_score) if (my_score is not None and opp_score is not None) else 0
+
+        if partner_id is not None and partner_id != int(player_id):
+            entry = partner_stats[int(partner_id)]
+            entry["matches"] += 1
+            entry["wins"] += int(won)
+            entry["losses"] += int(not won)
+            entry["point_diff"] += int(point_diff)
+
+        for opp_id in opponent_ids:
+            if opp_id is None or opp_id == int(player_id):
+                continue
+            entry = opponent_stats[int(opp_id)]
+            entry["matches"] += 1
+            entry["wins"] += int(won)
+            entry["losses"] += int(not won)
+            entry["point_diff"] += int(point_diff)
+
+    def _finalize(stat_map: dict[int, dict]) -> list[dict]:
+        out: list[dict] = []
+        for pid, vals in stat_map.items():
+            wins = int(vals.get("wins", 0))
+            losses = int(vals.get("losses", 0))
+            out.append(
+                {
+                    "player_id": int(pid),
+                    "player_name": _player_name(ctx, int(pid)),
+                    "matches": int(vals.get("matches", 0)),
+                    "wins": wins,
+                    "losses": losses,
+                    "record": _format_record(wins, losses),
+                    "point_diff": int(vals.get("point_diff", 0)),
+                }
+            )
+        out.sort(key=lambda item: (-int(item.get("matches", 0)), -int(item.get("wins", 0)), -int(item.get("point_diff", 0))))
+        return out
+
+    top_partners = _finalize(partner_stats)[:3]
+    top_opponents = _finalize(opponent_stats)[:3]
+
+    best_partner = None
+    for entry in _finalize(partner_stats):
+        if int(entry.get("matches", 0)) >= 3:
+            best_partner = entry
+            break
+
+    most_faced_opponent = top_opponents[0] if top_opponents else None
+    return {
+        "top_partners": top_partners,
+        "top_opponents": top_opponents,
+        "best_partner": best_partner,
+        "most_faced_opponent": most_faced_opponent,
+    }
+
+
+def _build_week_at_a_glance(
+    *,
+    player_name: str,
+    summary: dict,
+    league_breakdown: list[dict],
+    people: dict,
+) -> list[str]:
+    lines: list[str] = []
+    matches_played = int(summary.get("matches_played", 0) or 0)
+    lines.append(f"{player_name} logged {matches_played} matches in this window.")
+
+    before_val = _safe_float(summary.get("overall_jupr_before"))
+    after_val = _safe_float(summary.get("overall_jupr_after"))
+    delta_val = _safe_float(summary.get("overall_delta"))
+    if after_val is not None:
+        if before_val is not None and delta_val is not None:
+            lines.append(f"Overall JUPR moved {_format_delta(delta_val)} to {after_val:.3f}.")
+        else:
+            lines.append(f"Overall JUPR closed at {after_val:.3f}.")
+
+    if league_breakdown:
+        top = league_breakdown[0]
+        lines.append(
+            f"Most of the volume came in {top.get('league_name')} ({int(top.get('matches', 0))} matches, {top.get('record')})."
+        )
+
+    top_partner = (people or {}).get("top_partners") or []
+    top_opp = (people or {}).get("top_opponents") or []
+    if top_partner:
+        p = top_partner[0]
+        lines.append(
+            f"Most played with {p.get('player_name')} ({int(p.get('matches', 0))} matches, {p.get('record')})."
+        )
+    elif top_opp:
+        o = top_opp[0]
+        lines.append(f"Most often faced {o.get('player_name')} ({int(o.get('matches', 0))} meetings).")
+
+    return lines[:4]
+
+
+def _build_notable_results(window_series: pd.DataFrame) -> list[dict]:
+    if window_series.empty:
+        return []
+
+    df = window_series.copy()
+    df["overall_delta"] = pd.to_numeric(df.get("Overall Δ"), errors="coerce")
+    df["player_on_t1"] = df.apply(lambda row: _is_player_on_t1(row, _safe_int(row.get("player_id") or -1) or -1), axis=1)
+    # margin from player perspective
+    def _row_margin(row) -> float | None:
+        on_t1 = _is_player_on_t1(row, _safe_int(row.get("player_id") or -1) or -1)
+        s1 = _safe_float(row.get("score_t1"))
+        s2 = _safe_float(row.get("score_t2"))
+        if s1 is None or s2 is None or on_t1 is None:
+            return None
+        return float(s1 - s2) if on_t1 else float(s2 - s1)
+
+    df["margin"] = df.apply(_row_margin, axis=1)
+
+    def _note(row: pd.Series, title: str, detail: str) -> dict:
+        played_at = pd.to_datetime(row.get("Date"), utc=True, errors="coerce")
+        date_text = played_at.date().isoformat() if pd.notna(played_at) else "Unknown date"
+        league = str(row.get("League") or "Unspecified league")
+        score = str(row.get("Score") or "")
+        suffix = f" · {score}" if score else ""
+        return {"title": title, "detail": f"{date_text} · {league}{suffix}. {detail}"}
+
+    notes: list[dict] = []
+    if not df["overall_delta"].dropna().empty:
+        best_jump = df.loc[df["overall_delta"].idxmax()]
+        if _safe_float(best_jump.get("overall_delta")) and float(best_jump.get("overall_delta")) > 0:
+            notes.append(
+                _note(
+                    best_jump,
+                    "Biggest ratings lift",
+                    f"Overall moved {_format_delta(float(best_jump.get('overall_delta')), 4)} in this match.",
+                )
+            )
+
+    losses = df[df.get("Result") == "LOSS"]
+    if not losses.empty and not losses["margin"].dropna().empty:
+        tough = losses.loc[losses["margin"].idxmin()]
+        notes.append(_note(tough, "Toughest loss", "Largest negative margin in the date window."))
+
+    wins = df[df.get("Result") == "WIN"]
+    if not wins.empty and not wins["margin"].dropna().empty:
+        strong = wins.loc[wins["margin"].idxmax()]
+        notes.append(_note(strong, "Strongest scoreline win", "Best positive margin in the date window."))
+
+    close = df[df["margin"].notna()]
+    if not close.empty:
+        close_row = close.iloc[(close["margin"].abs()).argsort().iloc[0]]
+        result = str(close_row.get("Result") or "match").lower()
+        notes.append(_note(close_row, "Closest finish", f"A one-score style {result} by margin."))
+
+    unique: list[dict] = []
+    seen = set()
+    for item in notes:
+        key = (item.get("title"), item.get("detail"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique[:5]
+
+
+def _build_highlights(
+    *,
+    summary: dict,
+    badges_earned: list[dict],
+    trophies_earned: list[dict],
+    people: dict,
+    league_breakdown: list[dict],
+) -> list[str]:
     lines: list[str] = []
     before_val = _safe_float(summary.get("overall_jupr_before"))
     after_val = _safe_float(summary.get("overall_jupr_after"))
-    if before_val is not None and after_val is not None:
-        lines.append(f"Overall JUPR moved from {before_val:.3f} to {after_val:.3f}.")
+    delta_val = _safe_float(summary.get("overall_delta"))
+    if before_val is not None and after_val is not None and delta_val is not None:
+        lines.append(f"Overall JUPR moved {_format_delta(delta_val)} from {before_val:.3f} to {after_val:.3f}.")
 
-    lines.append(
-        f"Finished the week {summary.get('record', '0-0')} across {int(summary.get('matches_played', 0) or 0)} matches."
-    )
+    matches_played = int(summary.get("matches_played", 0) or 0)
+    lines.append(f"Finished {_format_record(int(summary.get('wins', 0) or 0), int(summary.get('losses', 0) or 0))} across {matches_played} matches.")
+
+    top_partner = (people or {}).get("top_partners") or []
+    if top_partner:
+        p = top_partner[0]
+        lines.append(
+            f"Most played with {p.get('player_name')} — {int(p.get('matches', 0))} matches, {p.get('record')}."
+        )
+
+    top_opp = (people or {}).get("top_opponents") or []
+    if top_opp:
+        o = top_opp[0]
+        lines.append(f"Most faced {o.get('player_name')} — {int(o.get('matches', 0))} meetings, {o.get('record')}.")
+
+    if league_breakdown:
+        top_league = league_breakdown[0]
+        lines.append(
+            f"Heaviest league segment: {top_league.get('league_name')} ({int(top_league.get('matches', 0))} matches)."
+        )
 
     if badges_earned:
-        lines.append(f"Earned {str(badges_earned[0].get('name') or 'a badge')}.")
-    elif trophies_earned:
-        t_name = str(trophies_earned[0].get("tournament_name") or "a tournament")
-        lines.append(f"Reached the podium in {t_name}.")
+        lines.append(f"Earned badge: {str(badges_earned[0].get('name') or 'Badge')}.")
+    if trophies_earned:
+        t_name = str(trophies_earned[0].get("tournament_name") or trophies_earned[0].get("league_name") or "Tournament")
+        lines.append(f"Podium finish recorded in {t_name}.")
 
-    return lines[:3]
+    return lines[:6]
 
 
 def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date: date, tz_name: str = "America/Mazatlan") -> dict:
@@ -153,7 +435,9 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     club_id = str(getattr(ctx, "club_id", "") or "")
 
     overall_series = build_player_overall_rating_series(supabase, club_id, int(player_id), limit=1200)
-    window_series = filter_rating_series_for_window(overall_series, start_date, end_date, tz_name=tz_name)
+    window_series = filter_rating_series_for_window(overall_series, start_date, end_date, tz_name=tz_name).copy()
+    if not window_series.empty:
+        window_series["player_id"] = int(player_id)
 
     before = None
     after = _safe_float(window_series["Overall After"].iloc[-1]) if not window_series.empty else None
@@ -201,15 +485,12 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     }
 
     points = []
-    ordered_window_series = window_series.sort_values(["Date", "id"], ascending=[True, True])
-    for match_number, (_, row) in enumerate(ordered_window_series.iterrows(), start=1):
+    for _, row in window_series.sort_values(["Date", "id"], ascending=[True, True]).iterrows():
+        dt = pd.to_datetime(row.get("Date"), utc=True, errors="coerce")
         points.append(
             {
                 "id": int(row.get("id")) if pd.notna(row.get("id")) else None,
-                "match_number": match_number,
-                "date": pd.to_datetime(row.get("Date"), utc=True, errors="coerce").isoformat()
-                if pd.notna(pd.to_datetime(row.get("Date"), utc=True, errors="coerce"))
-                else None,
+                "date": dt.isoformat() if pd.notna(dt) else None,
                 "overall_after": round(float(row.get("Overall After")), 3)
                 if pd.notna(row.get("Overall After"))
                 else None,
@@ -227,6 +508,37 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     player_name = _player_name(ctx, int(player_id))
     display_range = _display_range(start_date, end_date)
 
+    league_breakdown = _league_breakdown(window_series)
+    people = _aggregate_people(ctx, window_series, int(player_id))
+    highlights = _build_highlights(
+        summary=summary,
+        badges_earned=badges_earned,
+        trophies_earned=trophies_earned,
+        people=people,
+        league_breakdown=league_breakdown,
+    )
+    week_at_a_glance = _build_week_at_a_glance(
+        player_name=player_name,
+        summary=summary,
+        league_breakdown=league_breakdown,
+        people=people,
+    )
+    notable_results = _build_notable_results(window_series)
+
+    win_pct = _format_pct(wins, matches_played)
+    numbers_cards = [
+        {"key": "matches", "label": "Matches", "value": matches_played},
+        {"key": "record", "label": "Record", "value": summary.get("record")},
+        {"key": "win_pct", "label": "Win %", "value": win_pct},
+        {"key": "overall_delta", "label": "Overall Δ", "value": _format_delta(summary.get("overall_delta"), 4)},
+        {"key": "leagues", "label": "Leagues", "value": len(league_breakdown)},
+        {
+            "key": "awards",
+            "label": "Badges/Trophies",
+            "value": f"{len(badges_earned)}/{len(trophies_earned)}",
+        },
+    ]
+
     digest = {
         "club_id": club_id,
         "player_id": int(player_id),
@@ -236,6 +548,11 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         "display_range": display_range,
         "subject_line": f"{player_name} weekly digest · {display_range}",
         "summary": summary,
+        "numbers_cards": numbers_cards,
+        "week_at_a_glance": week_at_a_glance,
+        "league_breakdown": league_breakdown,
+        "people": people,
+        "notable_results": notable_results,
         "chart": {
             "title": "Overall JUPR by Match",
             "window_label": display_range,
@@ -244,7 +561,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         },
         "badges_earned": badges_earned,
         "trophies_earned": trophies_earned,
-        "highlights": _build_highlights(summary, badges_earned, trophies_earned),
+        "highlights": highlights,
         "links": {
             "player_profile": f"/?page=players&pid={int(player_id)}",
         },
