@@ -545,6 +545,14 @@ def main():
             render_fn(ctx)
         except Exception as exc:
             target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
+            requested_page_key = qp_get("page", "").strip().lower()
+            route_info = {
+                "selected_label": sel,
+                "target_page_key": target_page_key,
+                "requested_page_key": requested_page_key,
+                "public_mode": PUBLIC_MODE,
+            }
+            st.session_state["last_page_render_error"] = route_info
             logger.exception(
                 "Page render failed. sel=%s target_page_key=%s public_mode=%s query=%s",
                 sel,
@@ -552,7 +560,13 @@ def main():
                 PUBLIC_MODE,
                 dict(st.query_params),
             )
-            st.error("This page failed to render.")
+            st.error("This page failed to render, and navigation has been paused on this route.")
+            st.caption(
+                "If you reached this view from a deep link, keep the same URL and retry after fixing the underlying error."
+            )
+            st.caption(
+                f"Route context: requested page '{requested_page_key or '(none)'}', resolved page '{target_page_key or '(none)'}'."
+            )
             if debug_exceptions:
                 st.exception(exc)
             else:
