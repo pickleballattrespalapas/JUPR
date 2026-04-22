@@ -405,7 +405,8 @@ def main():
         # -------------------------
         # Deep link resolution
         # -------------------------
-        deep_page_key = qp_get("page", "").strip().lower()
+        incoming_page_param = qp_get("page", "").strip().lower()
+        deep_page_key = incoming_page_param
         if not deep_page_key and is_recovery_flow_query():
             deep_page_key = "reset_password"
 
@@ -438,10 +439,13 @@ def main():
             elif deep_label in visible_labels:
                 valid_admin_deep_label = deep_label
 
+            last_seen_page_param = st.session_state.get("_last_seen_page_param")
+            if incoming_page_param != last_seen_page_param:
+                st.session_state["_last_seen_page_param"] = incoming_page_param
+                if valid_admin_deep_label:
+                    st.session_state["main_nav"] = valid_admin_deep_label
+
             current_nav = st.session_state.get("main_nav")
-            if valid_admin_deep_label and current_nav != valid_admin_deep_label:
-                st.session_state["main_nav"] = valid_admin_deep_label
-                current_nav = valid_admin_deep_label
 
             if (
                 "main_nav" not in st.session_state

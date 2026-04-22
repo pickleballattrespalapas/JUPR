@@ -44,7 +44,9 @@ def _parse_optional_date(value: Any) -> str | None:
 
 def _go_to_page(page: str, tournament_id: Any) -> None:
     st.query_params["page"] = page
-    st.query_params["tournament_id"] = tournament_id
+    current_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+    if current_tournament_id != str(tournament_id):
+        st.query_params["tournament_id"] = tournament_id
     st.rerun()
 
 
@@ -160,7 +162,9 @@ def render(ctx):
     picked = st.selectbox("Select tournament", labels, index=default_index)
     tournament = tournaments[labels.index(picked)]
     tournament_id = tournament["id"]
-    st.query_params["tournament_id"] = tournament_id
+    current_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+    if current_tournament_id != str(tournament_id):
+        st.query_params["tournament_id"] = tournament_id
 
     st.subheader("Tournament Overview")
     settings = get_registration_settings(supabase, tournament_id, tournament_name=_safe_text(tournament.get("name")))

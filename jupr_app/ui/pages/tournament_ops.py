@@ -80,7 +80,9 @@ def _parse_optional_date(value: Any) -> str | None:
 
 def _go_to_tournament_manager(tournament_id: Any) -> None:
     st.query_params["page"] = "tournament_manager"
-    st.query_params["tournament_id"] = tournament_id
+    current_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+    if current_tournament_id != str(tournament_id):
+        st.query_params["tournament_id"] = tournament_id
     st.rerun()
 
 
@@ -311,7 +313,9 @@ def render(ctx):
     selected_label = st.selectbox("Select tournament", tournament_labels, index=default_index)
     tournament = tournaments[tournament_labels.index(selected_label)]
     tournament_id = tournament["id"]
-    st.query_params["tournament_id"] = tournament_id
+    current_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+    if current_tournament_id != str(tournament_id):
+        st.query_params["tournament_id"] = tournament_id
 
     available, _ = registration_feature_available(supabase)
     registration_bridge = None
@@ -431,7 +435,9 @@ def render(ctx):
             st.rerun()
         if action_cols[1].button("Configure registration", key=f"goto_reg_{tournament_id}"):
             st.query_params["page"] = "tournament_manager"
-            st.query_params["tournament_id"] = tournament_id
+            current_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+            if current_tournament_id != str(tournament_id):
+                st.query_params["tournament_id"] = tournament_id
             st.rerun()
         if action_cols[2].button("Refresh draw list", key=f"refresh_draws_{tournament_id}"):
             st.rerun()
