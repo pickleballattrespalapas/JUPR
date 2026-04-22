@@ -50,6 +50,12 @@ PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("weekly_recap_admin", "🗞️ Weekly Recap Admin", admin_only=True),
     PageDefinition("player_updates_admin", "📬 Player Updates Admin", admin_only=True),
     PageDefinition("reset_password", "🔐 Reset Password", show_in_nav=False),
+    PageDefinition(
+        "verified_updates_request",
+        "📬 Verified Updates Request",
+        public=True,
+        show_in_nav=False,
+    ),
 )
 
 PAGE_KEY_TO_LABEL = {page.key: page.label for page in PAGE_DEFINITIONS}
