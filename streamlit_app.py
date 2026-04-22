@@ -148,7 +148,7 @@ def main():
         st.session_state["base_url"] = PUBLIC_BASE_URL
 
         # ---- Session defaults ----
-        st.session_state.setdefault("deep_link_applied", False)
+        st.session_state.setdefault("_last_rendered_nav", None)
 
         # Admin auth uses Supabase email/password + allowlist and can restore
         # a previously persisted browser token pair after refresh.
@@ -182,11 +182,14 @@ def main():
 
             if not authenticated:
                 with st.sidebar.expander("🔒 Admin Login"):
-                    email = st.text_input("Email", key="admin_email")
-                    password = st.text_input("Password", type="password", key="admin_pwd")
                     show_forgot_password = st.session_state.get("show_forgot_password", False)
 
-                    if st.button("Login", key="admin_login_btn"):
+                    with st.form("admin_login_form", clear_on_submit=False):
+                        email = st.text_input("Email", key="admin_email")
+                        password = st.text_input("Password", type="password", key="admin_pwd")
+                        login_submitted = st.form_submit_button("Login")
+
+                    if login_submitted:
                         if not admin_allowlist:
                             auth_config_error = "Supabase auth is not configured. Set SUPABASE_URL, SUPABASE_ANON_KEY, and admin.allowed_emails."
                         else:
@@ -209,8 +212,11 @@ def main():
                         st.rerun()
 
                     if st.session_state.get("show_forgot_password", False):
-                        reset_email = st.text_input("Email for reset link", key="admin_reset_email")
-                        if st.button("Send reset email", key="admin_send_reset_email_btn"):
+                        with st.form("admin_reset_password_form", clear_on_submit=False):
+                            reset_email = st.text_input("Email for reset link", key="admin_reset_email")
+                            send_reset_submitted = st.form_submit_button("Send reset email")
+
+                        if send_reset_submitted:
                             try:
                                 send_password_reset_email(
                                     reset_email,
@@ -426,18 +432,17 @@ def main():
         else:
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 
-            # Recovery links should always land on reset_password when detected.
+            valid_admin_deep_label = ""
             if deep_label in HIDDEN_PAGE_LABELS and is_recovery_flow_query():
-                st.session_state["main_nav"] = deep_label
-
-            # Apply deep link once (including hidden pages like reset_password)
-            if (not bool(st.session_state.get("deep_link_applied", False))) and (
-                deep_label in visible_labels or deep_label in HIDDEN_PAGE_LABELS
-            ):
-                st.session_state["main_nav"] = deep_label
-                st.session_state["deep_link_applied"] = True
+                valid_admin_deep_label = deep_label
+            elif deep_label in visible_labels:
+                valid_admin_deep_label = deep_label
 
             current_nav = st.session_state.get("main_nav")
+            if valid_admin_deep_label and current_nav != valid_admin_deep_label:
+                st.session_state["main_nav"] = valid_admin_deep_label
+                current_nav = valid_admin_deep_label
+
             if (
                 "main_nav" not in st.session_state
                 or (current_nav not in visible_labels and current_nav not in HIDDEN_PAGE_LABELS)
@@ -471,7 +476,10 @@ def main():
         try:
             target_page = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
             current_page = qp_get("page", "").strip()
-            if current_page != target_page:
+            last_rendered_nav = st.session_state.get("_last_rendered_nav")
+            nav_changed = sel != last_rendered_nav
+
+            if nav_changed and current_page != target_page:
                 st.query_params["page"] = target_page
 
             current_public = qp_get("public", "").strip().lower()
@@ -481,6 +489,8 @@ def main():
             else:
                 if "public" in st.query_params:
                     st.query_params.pop("public", None)
+
+            st.session_state["_last_rendered_nav"] = sel
         except Exception:
             pass
 

@@ -19,6 +19,7 @@ _BROWSER_REFRESH_TOKEN_KEY = "jupr_admin_refresh_token"
 _BROWSER_RESTORE_FLAG_KEY = "jupr_admin_restore_from_storage"
 _BROWSER_SYNC_PAYLOAD_KEY = "_admin_browser_sync_payload"
 _BROWSER_CLEAR_PENDING_KEY = "_admin_browser_clear_pending"
+_BROWSER_RESTORE_ATTEMPTED_SESSION_KEY = "jupr_admin_restore_attempted"
 
 
 class AdminAuthError(RuntimeError):
@@ -357,7 +358,9 @@ def restore_admin_browser_session() -> dict[str, str] | None:
           const appUrl = new URL(appWindow.location.href);
           const params = appUrl.searchParams;
           const hasHandshake = params.get("{_BROWSER_RESTORE_FLAG_KEY}") === "1";
-          if (access && refresh && !hasHandshake) {{
+          const restoreAttempted = appWindow.sessionStorage.getItem("{_BROWSER_RESTORE_ATTEMPTED_SESSION_KEY}") === "1";
+          if (access && refresh && !hasHandshake && !restoreAttempted) {{
+            appWindow.sessionStorage.setItem("{_BROWSER_RESTORE_ATTEMPTED_SESSION_KEY}", "1");
             params.set("jupr_admin_access_token", access);
             params.set("jupr_admin_refresh_token", refresh);
             params.set("{_BROWSER_RESTORE_FLAG_KEY}", "1");
