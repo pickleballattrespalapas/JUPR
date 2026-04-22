@@ -38,6 +38,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
 )
 
 logger = logging.getLogger(__name__)
+_PLAYER_STORIES_MISSING_TABLE_LOGGED = False
 
 try:
     import altair as alt
@@ -168,6 +169,36 @@ def fetch_badge_definitions(_supabase) -> pd.DataFrame:
 
 @st.cache_data(ttl=60)
 def fetch_player_stories(_supabase, club_id: str, pid: int, limit: int = 6) -> pd.DataFrame:
+    def _error_payload_text(exc: Exception) -> str:
+        pieces = [str(exc)]
+        for attr in ("code", "message", "details", "hint"):
+            value = getattr(exc, attr, None)
+            if value:
+                pieces.append(str(value))
+        response = getattr(exc, "response", None)
+        if response is not None:
+            text = getattr(response, "text", None)
+            if text:
+                pieces.append(str(text))
+            json_fn = getattr(response, "json", None)
+            if callable(json_fn):
+                try:
+                    payload = json_fn()
+                except Exception:
+                    payload = None
+                if payload:
+                    pieces.append(str(payload))
+        return " | ".join(pieces).lower()
+
+    def _is_missing_player_stories_table_error(exc: Exception) -> bool:
+        payload = _error_payload_text(exc)
+        if not payload:
+            return False
+        has_missing_code = "pgrst205" in payload or "42p01" in payload
+        if not has_missing_code:
+            return False
+        return "player_stories" in payload and ("table" in payload or "relation" in payload)
+
     try:
         resp = (
             _supabase.table("player_stories")
@@ -179,7 +210,16 @@ def fetch_player_stories(_supabase, club_id: str, pid: int, limit: int = 6) -> p
             .execute()
         )
         return pd.DataFrame(resp.data or [])
-    except Exception:
+    except Exception as exc:
+        if _is_missing_player_stories_table_error(exc):
+            global _PLAYER_STORIES_MISSING_TABLE_LOGGED
+            if not _PLAYER_STORIES_MISSING_TABLE_LOGGED:
+                _PLAYER_STORIES_MISSING_TABLE_LOGGED = True
+                logger.warning(
+                    "Optional table player_stories is missing for club_id=%s; story cards will be hidden until migrations are applied.",
+                    str(club_id),
+                )
+            return pd.DataFrame()
         logger.exception("Failed to load player stories")
         return pd.DataFrame()
 
@@ -1988,31 +2028,37 @@ def render(ctx):
             if story_df.empty:
                 st.caption("No new stories in the tape room yet.")
             else:
-                story_df = story_df.drop_duplicates(subset=["story_type", "context_id"], keep="first")
-                story_df = story_df.sort_values("created_at", ascending=False)
-                highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
-                foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
-                highlight_col, foreshadow_col = st.columns(2)
-                with highlight_col:
-                    st.markdown("**Highlights**")
-                    if highlights.empty:
-                        st.caption("No highlights yet.")
-                    else:
-                        for _, row in highlights.iterrows():
-                            title = html.escape(str(row.get("title") or "Highlight"))
-                            body = html.escape(str(row.get("body") or ""))
-                            st.markdown(f"**{title}**")
-                            st.caption(body)
-                with foreshadow_col:
-                    st.markdown("**Foreshadowing**")
-                    if foreshadow.empty:
-                        st.caption("No foreshadowing yet.")
-                    else:
-                        for _, row in foreshadow.iterrows():
-                            title = html.escape(str(row.get("title") or "Foreshadowing"))
-                            body = html.escape(str(row.get("body") or ""))
-                            st.markdown(f"**{title}**")
-                            st.caption(body)
+                dedupe_subset = [col for col in ["story_type", "context_id"] if col in story_df.columns]
+                if dedupe_subset:
+                    story_df = story_df.drop_duplicates(subset=dedupe_subset, keep="first")
+                if "created_at" in story_df.columns:
+                    story_df = story_df.sort_values("created_at", ascending=False)
+                if "story_type" not in story_df.columns:
+                    st.caption("No structured story types are available for this player yet.")
+                else:
+                    highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
+                    foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
+                    highlight_col, foreshadow_col = st.columns(2)
+                    with highlight_col:
+                        st.markdown("**Highlights**")
+                        if highlights.empty:
+                            st.caption("No highlights yet.")
+                        else:
+                            for _, row in highlights.iterrows():
+                                title = html.escape(str(row.get("title") or "Highlight"))
+                                body = html.escape(str(row.get("body") or ""))
+                                st.markdown(f"**{title}**")
+                                st.caption(body)
+                    with foreshadow_col:
+                        st.markdown("**Foreshadowing**")
+                        if foreshadow.empty:
+                            st.caption("No foreshadowing yet.")
+                        else:
+                            for _, row in foreshadow.iterrows():
+                                title = html.escape(str(row.get("title") or "Foreshadowing"))
+                                body = html.escape(str(row.get("body") or ""))
+                                st.markdown(f"**{title}**")
+                                st.caption(body)
 
     def render_ratings_tab():
         # -------------------------
