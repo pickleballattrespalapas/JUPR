@@ -241,6 +241,42 @@ def resolve_player_badges_for_profile(ctx, _supabase, club_id: str, pid: int) ->
     return normalized_fetched[normalized_fetched["player_id"] == int(pid)].copy()
 
 
+def _looks_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if not text:
+        return False
+    return text in {"1", "true", "yes", "y", "claimed", "verified"}
+
+
+def _player_is_claimed_or_verified(player_row: pd.Series) -> bool:
+    explicit_flags = (
+        "is_claimed",
+        "claimed",
+        "claimed_profile",
+        "profile_claimed",
+        "is_verified",
+        "verified",
+        "verified_profile",
+        "profile_verified",
+        "is_public_profile_verified",
+    )
+    timestamp_flags = ("claimed_at", "verified_at")
+
+    for col in explicit_flags:
+        if col in player_row.index and _looks_truthy(player_row.get(col)):
+            return True
+    for col in timestamp_flags:
+        if col in player_row.index and str(player_row.get(col) or "").strip():
+            return True
+    return False
+
+
 def select_featured_cuts(unlocked_badges: list[dict], limit: int = 3) -> list[dict]:
     prestige_sorted = sorted(
         unlocked_badges,
@@ -1103,7 +1139,7 @@ def render(ctx):
     pid_q = qp_get("pid", "").strip()
     unsub_q = qp_get("unsubscribe", "").strip()
     sid_q = qp_get("sid", "").strip()
-    show_verified_updates_q = qp_get("show_verified_updates", "").strip() == "1"
+    verified_updates_view_q = qp_get("view", "").strip().lower()
     pid_sig = f"pid:{pid_q}" if pid_q else ""
     last_sig = st.session_state.get("player_pid_sig_applied", "")
 
@@ -1174,6 +1210,7 @@ def render(ctx):
             except Exception:
                 pass
     pick_name = str(row["name"])
+    claimed_or_verified_profile = _player_is_claimed_or_verified(row)
 
     try:
         current_overall_elo = float(row.get("rating", 1200.0) or 1200.0)
@@ -1183,8 +1220,7 @@ def render(ctx):
 
     c1, c2 = st.columns(2)
     verified_updates_manage_url = ""
-    verified_updates_open_url = ""
-    verified_updates_close_url = ""
+    verified_updates_request_url = ""
     open_or_active = None
     request_status = ""
     if PUBLIC_MODE:
@@ -1193,73 +1229,92 @@ def render(ctx):
 
         verified_updates_manage_params = {"page": "players", "public": 1, "pid": int(pid)}
         verified_updates_manage_url = f"/?{urlencode(verified_updates_manage_params)}"
-        verified_updates_open_params = dict(verified_updates_manage_params)
-        verified_updates_open_params["show_verified_updates"] = 1
-        verified_updates_open_url = f"/?{urlencode(verified_updates_open_params)}"
-        verified_updates_close_url = verified_updates_manage_url
+        verified_updates_request_params = dict(verified_updates_manage_params)
+        verified_updates_request_params["view"] = "verified_updates_request"
+        verified_updates_request_url = f"/?{urlencode(verified_updates_request_params)}"
 
     with c1:
         st.caption("Player")
-        st.markdown(f"### {pick_name}")
+        if claimed_or_verified_profile:
+            st.markdown(
+                (
+                    f"""<h3 style="margin-bottom:0.2rem;">{html.escape(pick_name)}
+                    <span style="
+                        display:inline-flex;
+                        align-items:center;
+                        gap:0.35rem;
+                        margin-left:0.5rem;
+                        padding:0.15rem 0.55rem;
+                        border-radius:999px;
+                        font-size:0.78rem;
+                        font-weight:700;
+                        color:#e6f0ff;
+                        background:linear-gradient(135deg,#246BFD,#11A6FF);
+                        box-shadow:0 1px 6px rgba(36,107,253,0.35);
+                        vertical-align:middle;
+                        white-space:nowrap;
+                    ">✓ Verified</span></h3>"""
+                ),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(f"### {pick_name}")
         if PUBLIC_MODE:
-            if request_status == REQUEST_STATUS_ACTIVE:
+            if claimed_or_verified_profile or request_status == REQUEST_STATUS_ACTIVE:
                 st.caption("Verified updates enabled")
             elif request_status == REQUEST_STATUS_PENDING:
                 st.caption("Verified updates request pending")
-            st.markdown(f"[Request verified player updates]({verified_updates_open_url})")
+            if not claimed_or_verified_profile and request_status not in {
+                REQUEST_STATUS_ACTIVE,
+                REQUEST_STATUS_PENDING,
+            }:
+                st.markdown(f"[Subscribe to verified updates]({verified_updates_request_url})")
     c2.metric("Overall JUPR", f"{current_jupr:.3f}")
 
-    if PUBLIC_MODE:
-        should_render_verified_updates_section = bool(
-            show_verified_updates_q
-            or request_status in {REQUEST_STATUS_ACTIVE, REQUEST_STATUS_PENDING}
-        )
-        if should_render_verified_updates_section:
-            with st.expander("Verified player updates", expanded=show_verified_updates_q):
-                st.caption(
-                    "One verified email may receive weekly updates for this player profile. "
-                    "Requests are reviewed by admin."
-                )
-                st.caption(f"[Close]({verified_updates_close_url})")
+    if PUBLIC_MODE and verified_updates_view_q == "verified_updates_request":
+        st.markdown("---")
+        st.markdown("### Subscribe to verified updates")
+        st.caption(f"You’re subscribing to updates for **{pick_name}**.")
+        st.caption("One verified email may receive weekly updates for this player profile.")
 
-                if request_status == REQUEST_STATUS_ACTIVE:
+        if claimed_or_verified_profile or request_status == REQUEST_STATUS_ACTIVE:
+            st.info("This player profile already has verified updates enabled.")
+        elif request_status == REQUEST_STATUS_PENDING:
+            st.info("A verified updates request is already pending for this player profile.")
+        else:
+            with st.form(f"verified_updates_public_request_{pid}"):
+                request_email = st.text_input("Email")
+                request_note = st.text_area("Note for admin (optional)")
+                submit_request = st.form_submit_button("Submit request")
+
+            if submit_request:
+                open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
+                status_now = str((open_or_active or {}).get("request_status") or "").strip().lower()
+                if status_now == REQUEST_STATUS_ACTIVE:
                     st.info("This player profile already has verified updates enabled.")
-                elif request_status == REQUEST_STATUS_PENDING:
+                elif status_now == REQUEST_STATUS_PENDING:
                     st.info("A verified updates request is already pending for this player profile.")
                 else:
-                    with st.form(f"verified_updates_public_request_{pid}"):
-                        request_email = st.text_input("Email", key=f"verified_updates_email_{pid}")
-                        request_note = st.text_area(
-                            "Note for admin (optional)",
-                            key=f"verified_updates_note_{pid}",
+                    try:
+                        create_public_request(
+                            _supabase,
+                            club_id=str(club_id),
+                            player_id=pid,
+                            email=request_email,
+                            request_note=request_note,
                         )
-                        submit_request = st.form_submit_button("Request updates")
-
-                    if submit_request:
-                        open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
-                        status_now = str((open_or_active or {}).get("request_status") or "").strip().lower()
-                        if status_now == REQUEST_STATUS_ACTIVE:
+                        st.success("Success! Your verified updates request was submitted for admin review.")
+                    except Exception as exc:
+                        msg = str(exc or "").strip().lower()
+                        if "already has an active verified subscriber" in msg:
                             st.info("This player profile already has verified updates enabled.")
-                        elif status_now == REQUEST_STATUS_PENDING:
+                        elif "already pending" in msg or "already exists" in msg:
                             st.info("A verified updates request is already pending for this player profile.")
                         else:
-                            try:
-                                create_public_request(
-                                    _supabase,
-                                    club_id=str(club_id),
-                                    player_id=pid,
-                                    email=request_email,
-                                    request_note=request_note,
-                                )
-                                st.success("Request submitted for admin review.")
-                            except Exception as exc:
-                                msg = str(exc or "").strip().lower()
-                                if "already has an active verified subscriber" in msg:
-                                    st.info("This player profile already has verified updates enabled.")
-                                elif "already pending" in msg or "already exists" in msg:
-                                    st.info("A verified updates request is already pending for this player profile.")
-                                else:
-                                    st.error(f"Could not submit request: {exc}")
+                            st.error(f"Could not submit request: {exc}")
+
+        st.caption(f"[Back to player profile]({verified_updates_manage_url})")
+        return
 
     tape_tab, ratings_tab, social_tab = st.tabs(["Trophy Room", "Ratings", "Social"])
 
