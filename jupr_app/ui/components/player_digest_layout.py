@@ -61,8 +61,9 @@ def render_player_digest(digest: dict) -> None:
     glance = digest.get("week_at_a_glance") or []
     leagues = digest.get("league_breakdown") or []
     people = digest.get("people") or {}
-    badges = digest.get("badges_earned") or []
+    badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
     trophies = digest.get("trophies_earned") or []
+    matches = digest.get("matches_played_rows") or []
     notable = digest.get("notable_results") or []
 
     _inject_styles()
@@ -105,14 +106,6 @@ def render_player_digest(digest: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    with st.container(border=True):
-        st.markdown("#### Week at a glance")
-        if glance:
-            for line in glance:
-                st.write(f"• {line}")
-        else:
-            st.caption("Quiet week — no match activity in this date range.")
-
     chart_points = (digest.get("chart") or {}).get("points") or []
     with st.container(border=True):
         st.markdown("#### Overall JUPR Trend")
@@ -127,6 +120,14 @@ def render_player_digest(digest: dict) -> None:
                 st.caption("No chartable points in selected range.")
         else:
             st.caption("No chart points available in selected date range.")
+
+    with st.container(border=True):
+        st.markdown("#### Short Summary")
+        if glance:
+            for line in glance:
+                st.write(f"• {line}")
+        else:
+            st.caption("Quiet week — no match activity in this date range.")
 
     left, right = st.columns(2)
     with left:
@@ -159,25 +160,35 @@ def render_player_digest(digest: dict) -> None:
             )
 
     with st.container(border=True):
-        st.markdown("#### Awards")
-        badge_names = [str(item.get("name") or item.get("badge_id") or "Badge") for item in badges[:6]]
-        trophy_names = [str(item.get("tournament_name") or item.get("league_name") or "Trophy") for item in trophies[:6]]
+        st.markdown("#### Badges earned")
+        for badge in badges[:10]:
+            count = int(badge.get("count") or 1)
+            label = f"{badge.get('name') or badge.get('badge_id') or 'Badge'} x{count}" if count > 1 else str(
+                badge.get("name") or badge.get("badge_id") or "Badge"
+            )
+            st.markdown(f"**{label}**")
+            st.caption(str(badge.get("description") or "Award earned during this update window."))
+        if not badges:
+            st.caption("No badges earned in this date range.")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Badges earned**")
-            for name in badge_names or ["None this period."]:
-                st.write(f"• {name}")
-        with c2:
-            st.markdown("**Trophies earned**")
-            for name in trophy_names or ["None this period."]:
-                st.write(f"• {name}")
+    with st.container(border=True):
+        st.markdown("#### Matches Played")
+        for item in matches:
+            st.write(f"• {item.get('summary')}")
+        if not matches:
+            st.caption("No matches in this date range.")
 
     if notable:
         with st.container(border=True):
             st.markdown("#### Notable Results")
             for item in notable[:5]:
                 st.write(f"**{item.get('title')}:** {item.get('detail')}")
+
+    if trophies:
+        with st.container(border=True):
+            st.markdown("#### Trophies")
+            for name in [str(item.get("tournament_name") or item.get("league_name") or "Trophy") for item in trophies[:6]]:
+                st.write(f"• {name}")
 
     links = digest.get("links") or {}
     profile_link = links.get("player_profile")

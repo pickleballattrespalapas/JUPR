@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 
 import pandas as pd
 
+from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
 from jupr_app.domain.player_rating_series import (
     build_player_overall_rating_series,
@@ -32,7 +33,32 @@ def _safe_int(value) -> int | None:
 
 
 def _display_range(start_date: date, end_date: date) -> str:
-    return f"{start_date.isoformat()} – {end_date.isoformat()}"
+    return f"{_format_display_date(start_date)} – {_format_display_date(end_date)}"
+
+
+def _ordinal_suffix(day: int) -> str:
+    if 11 <= (day % 100) <= 13:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+
+
+def _format_display_date(value: date | datetime | pd.Timestamp | None) -> str:
+    if value is None:
+        return "Unknown date"
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return "Unknown date"
+        day_value = value.date()
+    elif isinstance(value, datetime):
+        day_value = value.date()
+    elif isinstance(value, date):
+        day_value = value
+    else:
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.isna(dt):
+            return "Unknown date"
+        day_value = dt.date()
+    return f"{day_value.strftime('%B')} {day_value.day}{_ordinal_suffix(day_value.day)}"
 
 
 def _player_name(ctx, player_id: int) -> str:
@@ -102,6 +128,12 @@ def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: da
 
     badge_ids = sorted({str(row.get("badge_id") or "").strip() for row in badge_rows if row.get("badge_id")})
     badge_name_map: dict[str, str] = {}
+    badge_desc_map: dict[str, str] = {}
+    for badge_id, schema in badge_schema_by_id().items():
+        badge_name_map[str(badge_id)] = str(schema.title or badge_id)
+        badge_desc_map[str(badge_id)] = str(
+            schema.display.flavor or schema.display.requirements or "Award earned during this update window."
+        ).strip()
     if badge_ids:
         try:
             badge_defs = (
@@ -112,12 +144,14 @@ def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: da
                 .data
                 or []
             )
-            badge_name_map = {
-                str(row.get("badge_id")): str(row.get("name") or row.get("badge_id") or "Badge")
-                for row in badge_defs
-            }
+            badge_name_map.update(
+                {
+                    str(row.get("badge_id")): str(row.get("name") or row.get("badge_id") or "Badge")
+                    for row in badge_defs
+                }
+            )
         except Exception:
-            badge_name_map = {}
+            pass
 
     out: list[dict] = []
     for row in badge_rows:
@@ -128,12 +162,37 @@ def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: da
             {
                 "badge_id": bid,
                 "name": badge_name_map.get(bid, bid),
+                "description": badge_desc_map.get(bid, "Award earned during this update window."),
                 "earned_at": row.get("earned_at"),
                 "context_type": row.get("context_type"),
                 "context_id": row.get("context_id"),
             }
         )
     return out
+
+
+def _group_badges_for_display(badges: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for badge in badges or []:
+        badge_id = str(badge.get("badge_id") or "").strip()
+        name = str(badge.get("name") or badge_id or "Badge").strip() or "Badge"
+        key = badge_id or name.lower()
+        if key not in grouped:
+            grouped[key] = {
+                "badge_id": badge_id or None,
+                "name": name,
+                "description": str(badge.get("description") or "Award earned during this update window.").strip(),
+                "count": 0,
+                "last_earned_at": None,
+            }
+        grouped[key]["count"] = int(grouped[key]["count"]) + 1
+        earned_at = badge.get("earned_at")
+        if earned_at and (grouped[key]["last_earned_at"] is None or str(earned_at) > str(grouped[key]["last_earned_at"])):
+            grouped[key]["last_earned_at"] = earned_at
+
+    grouped_items = list(grouped.values())
+    grouped_items.sort(key=lambda item: str(item.get("last_earned_at") or ""), reverse=True)
+    return grouped_items
 
 
 def _load_trophies_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime) -> list[dict]:
@@ -339,7 +398,7 @@ def _build_notable_results(window_series: pd.DataFrame) -> list[dict]:
 
     def _note(row: pd.Series, title: str, detail: str) -> dict:
         played_at = pd.to_datetime(row.get("Date"), utc=True, errors="coerce")
-        date_text = played_at.date().isoformat() if pd.notna(played_at) else "Unknown date"
+        date_text = _format_display_date(played_at) if pd.notna(played_at) else "Unknown date"
         league = str(row.get("League") or "Unspecified league")
         score = str(row.get("Score") or "")
         suffix = f" · {score}" if score else ""
@@ -484,12 +543,28 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         "record": f"{wins}-{losses}",
     }
 
+    start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
     points = []
-    for _, row in window_series.sort_values(["Date", "id"], ascending=[True, True]).iterrows():
+    if before is not None and not window_series.empty:
+        points.append(
+            {
+                "id": "anchor",
+                "match_number": 0,
+                "date": start_dt_utc.isoformat(),
+                "overall_after": round(float(before), 3),
+                "overall_delta": 0.0,
+                "league": "",
+                "score": "",
+                "result": "ANCHOR",
+                "is_anchor": True,
+            }
+        )
+    for idx, (_, row) in enumerate(window_series.sort_values(["Date", "id"], ascending=[True, True]).iterrows(), start=1):
         dt = pd.to_datetime(row.get("Date"), utc=True, errors="coerce")
         points.append(
             {
                 "id": int(row.get("id")) if pd.notna(row.get("id")) else None,
+                "match_number": idx,
                 "date": dt.isoformat() if pd.notna(dt) else None,
                 "overall_after": round(float(row.get("Overall After")), 3)
                 if pd.notna(row.get("Overall After"))
@@ -501,8 +576,8 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             }
         )
 
-    start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
     badges_earned = _load_badges_earned(supabase, club_id, int(player_id), start_dt_utc, end_dt_utc)
+    badges_grouped = _group_badges_for_display(badges_earned)
     trophies_earned = _load_trophies_earned(supabase, club_id, int(player_id), start_dt_utc, end_dt_utc)
 
     player_name = _player_name(ctx, int(player_id))
@@ -524,6 +599,40 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         people=people,
     )
     notable_results = _build_notable_results(window_series)
+    matches_played_rows: list[dict] = []
+    for _, row in window_series.sort_values(["Date", "id"], ascending=[False, False]).iterrows():
+        player_on_t1 = _is_player_on_t1(row, int(player_id))
+        if player_on_t1 is None:
+            continue
+
+        if player_on_t1:
+            partner_ids = [pid for pid in [_safe_int(row.get("t1_p1")), _safe_int(row.get("t1_p2"))] if pid not in {None, int(player_id)}]
+            opponent_ids = [pid for pid in [_safe_int(row.get("t2_p1")), _safe_int(row.get("t2_p2"))] if pid is not None]
+        else:
+            partner_ids = [pid for pid in [_safe_int(row.get("t2_p1")), _safe_int(row.get("t2_p2"))] if pid not in {None, int(player_id)}]
+            opponent_ids = [pid for pid in [_safe_int(row.get("t1_p1")), _safe_int(row.get("t1_p2"))] if pid is not None]
+
+        result = str(row.get("Result") or "").upper()
+        result_short = "W" if result == "WIN" else ("L" if result == "LOSS" else (result[:1] if result else "—"))
+        score = str(row.get("Score") or "").strip() or None
+        played_at = pd.to_datetime(row.get("Date"), utc=True, errors="coerce")
+        date_text = _format_display_date(played_at) if pd.notna(played_at) else "Unknown date"
+        partners = " / ".join(_player_name(ctx, int(pid)) for pid in partner_ids) if partner_ids else "No partner listed"
+        opponents = " / ".join(_player_name(ctx, int(pid)) for pid in opponent_ids) if opponent_ids else "Unknown opponents"
+        summary_line = f"{date_text} — with {partners} vs {opponents} — {result_short}"
+        if score:
+            summary_line = f"{summary_line} {score}"
+        matches_played_rows.append(
+            {
+                "date": played_at.isoformat() if pd.notna(played_at) else None,
+                "date_display": date_text,
+                "partners": partners,
+                "opponents": opponents,
+                "result": result_short,
+                "score": score,
+                "summary": summary_line,
+            }
+        )
 
     win_pct = _format_pct(wins, matches_played)
     numbers_cards = [
@@ -560,7 +669,9 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             "points": points,
         },
         "badges_earned": badges_earned,
+        "badges_grouped": badges_grouped,
         "trophies_earned": trophies_earned,
+        "matches_played_rows": matches_played_rows,
         "highlights": highlights,
         "links": {
             "player_profile": f"/?page=players&pid={int(player_id)}",
