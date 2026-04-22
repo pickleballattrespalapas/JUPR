@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Mapping
+import logging
 
 import pandas as pd  # kept because pages may rely on it
 import streamlit as st
@@ -37,6 +38,8 @@ from jupr_app.ui.page_registry import (
 from jupr_app.ui.public_nav import render_public_top_nav
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
+
+logger = logging.getLogger(__name__)
 
 
 # -------------------------
@@ -388,6 +391,7 @@ def main():
             "🧾 Top Active Players PDF": top_players_printable,
             # Hidden deep-link page
             "🔐 Reset Password": reset_password,
+            "📬 Verified Updates Request": players,
             # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
             "📬 Player Updates Admin": player_updates_admin,
@@ -415,11 +419,20 @@ def main():
         if PUBLIC_MODE:
             # Block admin-only deep links in public mode
             if deep_label in ADMIN_ONLY_LABELS:
+                logger.warning(
+                    "Public route request blocked for admin-only page. page=%s",
+                    incoming_page_param,
+                )
                 deep_label = ""
 
             if deep_label in HIDDEN_PAGE_LABELS:
                 sel = deep_label
             else:
+                if incoming_page_param and not deep_label:
+                    logger.warning(
+                        "Public route fallback to default page due to unknown page key. page=%s",
+                        incoming_page_param,
+                    )
                 current_label = (
                     deep_label
                     if deep_label in public_labels_in_order

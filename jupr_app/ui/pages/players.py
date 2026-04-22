@@ -1113,6 +1113,7 @@ def build_league_snapshot_map(_supabase, club_id: str, league_name: str, df_meta
 
 def render(ctx):
     PUBLIC_MODE = bool(getattr(ctx, "public_mode", False))
+    current_page_key = qp_get("page", "").strip().lower()
     mode_label = "Public" if PUBLIC_MODE else "Admin"
     page_shell("🔍 Player Search", "Find players and view ratings.", mode_label=mode_label)
 
@@ -1137,21 +1138,20 @@ def render(ctx):
     players_df["id"] = players_df["id"].astype(int)
 
     pid_q = qp_get("pid", "").strip()
+    player_id_q = qp_get("player_id", "").strip()
     unsub_q = qp_get("unsubscribe", "").strip()
     sid_q = qp_get("sid", "").strip()
     verified_updates_view_q = qp_get("view", "").strip().lower()
-    pid_sig = f"pid:{pid_q}" if pid_q else ""
+    route_requests_verified_updates = current_page_key == "verified_updates_request"
+    selected_pid_q = player_id_q or pid_q
+    pid_sig = f"pid:{selected_pid_q}" if selected_pid_q else ""
     last_sig = st.session_state.get("player_pid_sig_applied", "")
 
-    if pid_q.isdigit() and pid_sig != last_sig:
-        pid_int = int(pid_q)
+    if selected_pid_q.isdigit() and pid_sig != last_sig:
+        pid_int = int(selected_pid_q)
         hit = players_df[players_df["id"] == pid_int]
         if not hit.empty:
             st.session_state["player_search_id"] = int(hit.iloc[0]["id"])
-            try:
-                st.query_params.pop("pid", None)
-            except Exception:
-                pass
         st.session_state["player_pid_sig_applied"] = pid_sig
 
     players_df = players_df.sort_values("name").copy()
@@ -1177,6 +1177,15 @@ def render(ctx):
         return
 
     pid = int(pick_id)
+    if PUBLIC_MODE:
+        try:
+            st.query_params["pid"] = str(pid)
+            st.query_params["player_id"] = str(pid)
+            if str(qp_get("club_id", "")).strip() == "":
+                st.query_params["club_id"] = str(getattr(ctx, "club_id", ""))
+        except Exception:
+            pass
+
     row = players_df[players_df["id"] == pid].iloc[0]
     _supabase = ctx.supabase
     club_id = ctx.club_id
@@ -1227,10 +1236,21 @@ def render(ctx):
         open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
         request_status = str((open_or_active or {}).get("request_status") or "").strip().lower()
 
-        verified_updates_manage_params = {"page": "players", "public": 1, "pid": int(pid)}
+        verified_updates_manage_params = {
+            "page": "players",
+            "public": 1,
+            "club_id": str(club_id),
+            "pid": int(pid),
+            "player_id": int(pid),
+        }
         verified_updates_manage_url = f"/?{urlencode(verified_updates_manage_params)}"
-        verified_updates_request_params = dict(verified_updates_manage_params)
-        verified_updates_request_params["view"] = "verified_updates_request"
+        verified_updates_request_params = {
+            "page": "verified_updates_request",
+            "public": 1,
+            "club_id": str(club_id),
+            "pid": int(pid),
+            "player_id": int(pid),
+        }
         verified_updates_request_url = f"/?{urlencode(verified_updates_request_params)}"
 
     with c1:
@@ -1271,7 +1291,9 @@ def render(ctx):
                 st.markdown(f"[Subscribe to verified updates]({verified_updates_request_url})")
     c2.metric("Overall JUPR", f"{current_jupr:.3f}")
 
-    if PUBLIC_MODE and verified_updates_view_q == "verified_updates_request":
+    if PUBLIC_MODE and (
+        route_requests_verified_updates or verified_updates_view_q == "verified_updates_request"
+    ):
         st.markdown("---")
         st.markdown("### Subscribe to verified updates")
         st.caption(f"You’re subscribing to updates for **{pick_name}**.")
