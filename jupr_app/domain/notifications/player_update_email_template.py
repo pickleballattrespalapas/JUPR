@@ -31,6 +31,19 @@ def _people_html(items: list[dict], empty_text: str) -> str:
     return "".join(rows)
 
 
+def _badge_line(item: dict) -> str:
+    name = _s(item.get("name")) or _s(item.get("badge_id")) or "Badge"
+    count = int(item.get("count") or 1)
+    label = f"{name} x{count}" if count > 1 else name
+    desc = _s(item.get("description")) or "Award earned during this update window."
+    return (
+        "<tr><td style='padding:4px 0;'>"
+        f"<div><strong>{html.escape(label)}</strong></div>"
+        f"<div style='color:#5A6678;font-size:12px;line-height:1.3;'>{html.escape(desc)}</div>"
+        "</td></tr>"
+    )
+
+
 def build_player_update_email_subject(digest_json: dict) -> str:
     player_name = _s((digest_json or {}).get("player_name")) or "Verified Player"
     display_range = _s((digest_json or {}).get("display_range"))
@@ -42,8 +55,9 @@ def build_player_update_email_subject(digest_json: dict) -> str:
 def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> str:
     digest = digest_json or {}
     summary = digest.get("summary") or {}
-    badges = digest.get("badges_earned") or []
+    badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
     trophies = digest.get("trophies_earned") or []
+    matches = digest.get("matches_played_rows") or []
     highlights = digest.get("highlights") or []
     glance = digest.get("week_at_a_glance") or []
     people = digest.get("people") or {}
@@ -67,13 +81,15 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
         if _s(line)
     )
 
-    badge_items = "".join(
-        f"<tr><td style='padding:3px 0;'>• {html.escape(_s(item.get('name')) or _s(item.get('badge_id')) or 'Badge')}</td></tr>"
-        for item in badges[:8]
-    )
+    badge_items = "".join(_badge_line(item) for item in badges[:10])
     trophy_items = "".join(
         f"<tr><td style='padding:3px 0;'>• {html.escape(_s(item.get('tournament_name')) or _s(item.get('league_name')) or 'Trophy')}</td></tr>"
         for item in trophies[:8]
+    )
+    match_items = "".join(
+        f"<tr><td style='padding:5px 0;font-size:13px;line-height:1.35;'>{html.escape(_s(item.get('summary')))}</td></tr>"
+        for item in matches
+        if _s(item.get("summary"))
     )
 
     profile_link = html.escape(_s(links.get("player_profile")))
@@ -114,12 +130,24 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
                 </table>
               </td>
             </tr>
-            <tr><td style="padding:14px 24px 0;"><div style="font-size:17px;font-weight:700;">Week at a glance</div><table role="presentation" width="100%">{glance_items or "<tr><td style='padding:4px 0;color:#5A6678;'>No activity in this date window.</td></tr>"}</table></td></tr>
             <tr><td style="padding:16px 24px 0;"><div style="font-size:17px;font-weight:700;margin-bottom:8px;">Overall JUPR Trend</div>{chart_block}</td></tr>
+            <tr><td style="padding:14px 24px 0;"><div style="font-size:17px;font-weight:700;">Short Summary</div><table role="presentation" width="100%">{glance_items or "<tr><td style='padding:4px 0;color:#5A6678;'>No activity in this date window.</td></tr>"}</table></td></tr>
             <tr>
               <td style="padding:18px 24px 0;">
                 <div style="font-size:17px;font-weight:700;margin-bottom:6px;">Highlights</div>
                 <table role="presentation" width="100%">{highlight_items or "<tr><td style='padding:4px 0;color:#5A6678;'>No highlights available.</td></tr>"}</table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 24px 0;">
+                <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Badges earned</div>
+                <table role='presentation' width='100%'>{badge_items or "<tr><td style='padding:3px 0;color:#5A6678;'>None this period.</td></tr>"}</table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:14px 24px 0;">
+                <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Matches Played</div>
+                <table role='presentation' width='100%'>{match_items or "<tr><td style='padding:3px 0;color:#5A6678;'>No matches in this date range.</td></tr>"}</table>
               </td>
             </tr>
             <tr>
@@ -138,16 +166,7 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
                 </table>
               </td>
             </tr>
-            <tr>
-              <td style="padding:18px 24px 0;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                  <tr>
-                    <td width="50%" valign="top" style="padding-right:8px;"><div style="font-size:16px;font-weight:700;margin-bottom:6px;">Badges</div><table role='presentation' width='100%'>{badge_items or "<tr><td style='padding:3px 0;color:#5A6678;'>None this period.</td></tr>"}</table></td>
-                    <td width="50%" valign="top" style="padding-left:8px;"><div style="font-size:16px;font-weight:700;margin-bottom:6px;">Trophies</div><table role='presentation' width='100%'>{trophy_items or "<tr><td style='padding:3px 0;color:#5A6678;'>None this period.</td></tr>"}</table></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+            {"<tr><td style='padding:18px 24px 0;'><div style='font-size:16px;font-weight:700;margin-bottom:6px;'>Trophies</div><table role='presentation' width='100%'>" + trophy_items + "</table></td></tr>" if trophy_items else ""}
             <tr>
               <td align="center" style="padding:22px 24px 10px;">
                 <a href="{profile_link}" style="display:inline-block;background:#14223A;color:#FFFFFF;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:700;font-size:14px;">View player profile</a>
@@ -170,20 +189,27 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
 def build_player_update_email_text(digest_json: dict) -> str:
     digest = digest_json or {}
     summary = digest.get("summary") or {}
-    badges = digest.get("badges_earned") or []
+    badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
     trophies = digest.get("trophies_earned") or []
+    matches = digest.get("matches_played_rows") or []
     highlights = digest.get("highlights") or []
     glance = digest.get("week_at_a_glance") or []
     people = digest.get("people") or {}
     links = digest.get("links") or {}
 
-    badge_lines = [f"- {_s(item.get('name')) or _s(item.get('badge_id')) or 'Badge'}" for item in badges[:10]]
+    badge_lines = []
+    for item in badges[:10]:
+        name = _s(item.get("name")) or _s(item.get("badge_id")) or "Badge"
+        count = int(item.get("count") or 1)
+        label = f"{name} x{count}" if count > 1 else name
+        badge_lines.append(f"- {label}: {_s(item.get('description')) or 'Award earned during this update window.'}")
     trophy_lines = [
         f"- {_s(item.get('tournament_name')) or _s(item.get('league_name')) or 'Trophy'}"
         for item in trophies[:10]
     ]
     highlight_lines = [f"- {_s(line)}" for line in highlights[:10] if _s(line)]
     glance_lines = [f"- {_s(line)}" for line in glance[:6] if _s(line)]
+    match_lines = [f"- {_s(item.get('summary'))}" for item in matches if _s(item.get("summary"))]
 
     partner_lines = [
         f"- {_s(item.get('player_name')) or ('Player #' + _s(item.get('player_id')))} · {int(item.get('matches') or 0)} matches · {_s(item.get('record')) or '0-0'}"
@@ -208,6 +234,9 @@ def build_player_update_email_text(digest_json: dict) -> str:
             "Week at a glance:",
             *(glance_lines or ["- No activity in this date window."]),
             "",
+            "Matches played:",
+            *(match_lines or ["- No matches in this date window."]),
+            "",
             "Highlights:",
             *(highlight_lines or ["- No highlights available."]),
             "",
@@ -219,9 +248,11 @@ def build_player_update_email_text(digest_json: dict) -> str:
             "",
             "Badges earned:",
             *(badge_lines or ["- None this period."]),
-            "",
-            "Trophies earned:",
-            *(trophy_lines or ["- None this period."]),
+            *(
+                ["", "Trophies earned:", *trophy_lines]
+                if trophy_lines
+                else []
+            ),
             "",
             f"Profile link: {_s(links.get('player_profile'))}",
             f"Unsubscribe: {_s(links.get('unsubscribe'))}",
