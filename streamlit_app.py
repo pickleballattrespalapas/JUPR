@@ -1,6 +1,7 @@
 # jupr/streamlit_app.py
 from __future__ import annotations
 
+import os
 import traceback
 from collections.abc import Mapping
 import logging
@@ -40,6 +41,19 @@ from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_exceptions_enabled() -> bool:
+    qp_debug = str(qp_get("debug", "")).strip().lower()
+    if qp_debug in {"1", "true", "yes", "y", "on"}:
+        return True
+
+    env_debug = str(os.getenv("JUPR_DEBUG", "")).strip().lower()
+    if env_debug in {"1", "true", "yes", "y", "on", "dev", "debug"}:
+        return True
+
+    env_name = str(os.getenv("ENV", "")).strip().lower()
+    return env_name in {"dev", "development", "local"}
 
 
 # -------------------------
@@ -145,6 +159,7 @@ def main():
 
         # ---- Public mode ----
         PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
+        debug_exceptions = _debug_exceptions_enabled()
 
         # Make base_url available to all pages (leaderboards uses this for share links)
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
@@ -509,7 +524,9 @@ def main():
 
             st.session_state["_last_rendered_nav"] = sel
         except Exception:
-            pass
+            logger.exception("Failed to sync canonical query params for page selection.")
+            if debug_exceptions:
+                st.warning("Failed to sync URL query params for the selected page.")
 
         # -------------------------
         # Render page
@@ -524,9 +541,26 @@ def main():
             st.error(f"Page module for '{sel}' has no render(ctx) function.")
             st.stop()
 
-        render_fn(ctx)
+        try:
+            render_fn(ctx)
+        except Exception as exc:
+            target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
+            logger.exception(
+                "Page render failed. sel=%s target_page_key=%s public_mode=%s query=%s",
+                sel,
+                target_page_key,
+                PUBLIC_MODE,
+                dict(st.query_params),
+            )
+            st.error("This page failed to render.")
+            if debug_exceptions:
+                st.exception(exc)
+            else:
+                st.caption("Append ?debug=1 to the URL to view exception details in development.")
+            st.stop()
 
     except Exception:
+        logger.exception("streamlit_app.main() crashed before page render.")
         st.error("streamlit_app.main() crashed")
         st.code(traceback.format_exc())
         st.stop()

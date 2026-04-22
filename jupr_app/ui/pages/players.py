@@ -1165,6 +1165,10 @@ def render(ctx):
             return f"#{x}"
         return f"{str(r.iloc[0]['name'])}  (#{int(x)})"
 
+    current_pick = st.session_state.get("player_search_id", "")
+    if current_pick not in options:
+        st.session_state["player_search_id"] = ""
+
     pick_id = st.selectbox(
         "Select a player",
         options=options,
@@ -1173,6 +1177,19 @@ def render(ctx):
     )
 
     if pick_id == "":
+        if PUBLIC_MODE and route_requests_verified_updates:
+            bad_player_id = player_id_q or pid_q
+            if bad_player_id:
+                st.error(
+                    "Player not found for verified updates request. "
+                    "Please check the URL player_id and try again."
+                )
+            else:
+                st.error(
+                    "Missing required player_id for verified updates request. "
+                    "Please open this page from a player profile."
+                )
+            return
         st.info("Select a player to view details.")
         return
 
