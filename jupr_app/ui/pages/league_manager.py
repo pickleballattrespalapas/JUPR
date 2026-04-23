@@ -221,6 +221,103 @@ def _summarize_roster(roster_df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(["court", "slot"]).reset_index(drop=True)
 
 
+def _validate_pending_round_matches(pending_matches: list[dict]) -> tuple[dict[int, list[str]], list[str]]:
+    errors: dict[int, list[str]] = {}
+    warnings: list[str] = []
+    for idx, match in enumerate(pending_matches):
+        court = int(match.get("court") or 0)
+        label = str(match.get("label") or f"Match {idx + 1}")
+        score_1 = match.get("s1")
+        score_2 = match.get("s2")
+        players = [match.get("t1_p1"), match.get("t1_p2"), match.get("t2_p1"), match.get("t2_p2")]
+        match_errors: list[str] = []
+
+        if any(p in (None, "", 0) for p in players):
+            match_errors.append(f"{label}: all 4 player slots are required.")
+        else:
+            player_ids = [int(p) for p in players]
+            if len(set(player_ids)) != 4:
+                match_errors.append(f"{label}: duplicate player detected on the same match.")
+
+        if score_1 in (None, "") and score_2 in (None, ""):
+            match_errors.append(f"{label}: score cannot be blank for both teams.")
+        else:
+            try:
+                score_1 = int(score_1)
+                score_2 = int(score_2)
+            except Exception:
+                match_errors.append(f"{label}: scores must be integers.")
+
+        if isinstance(score_1, int) and isinstance(score_2, int):
+            if score_1 == 0 and score_2 == 0:
+                match_errors.append(f"{label}: score cannot be 0-0.")
+            if score_1 > 30 or score_2 > 30:
+                warnings.append(f"Court {court} {label}: unusual high score ({score_1}-{score_2}).")
+
+        if match_errors:
+            errors.setdefault(court, []).extend(match_errors)
+
+    return errors, warnings
+
+
+def _sync_live_roster_from_pending(roster_df: pd.DataFrame, pending_matches: list[dict]) -> pd.DataFrame:
+    if roster_df is None or roster_df.empty or not pending_matches:
+        return roster_df
+    new_roster = roster_df.copy()
+    id_name_map: dict[int, str] = {}
+    id_rating_map: dict[int, float] = {}
+    if "player_id" in new_roster.columns and "name" in new_roster.columns:
+        id_name_map = {
+            int(pid): str(name)
+            for pid, name in zip(
+                pd.to_numeric(new_roster["player_id"], errors="coerce").fillna(0).astype(int).tolist(),
+                new_roster["name"].astype(str).tolist(),
+            )
+            if int(pid) > 0
+        }
+    if "player_id" in new_roster.columns and "rating" in new_roster.columns:
+        id_rating_map = {
+            int(pid): float(rating)
+            for pid, rating in zip(
+                pd.to_numeric(new_roster["player_id"], errors="coerce").fillna(0).astype(int).tolist(),
+                pd.to_numeric(new_roster["rating"], errors="coerce").fillna(1200.0).astype(float).tolist(),
+            )
+            if int(pid) > 0
+        }
+    by_court: dict[int, list[int]] = {}
+    for match in pending_matches:
+        court = int(match.get("court") or 0)
+        ordered = [
+            match.get("t1_p1"),
+            match.get("t1_p2"),
+            match.get("t2_p1"),
+            match.get("t2_p2"),
+        ]
+        bucket = by_court.setdefault(court, [])
+        for pid in ordered:
+            if pid in (None, "", 0):
+                continue
+            ipid = int(pid)
+            if ipid not in bucket:
+                bucket.append(ipid)
+
+    for court, ordered_ids in by_court.items():
+        court_mask = pd.to_numeric(new_roster.get("court"), errors="coerce").fillna(0).astype(int) == int(court)
+        court_rows = new_roster[court_mask].sort_values("slot")
+        if court_rows.empty:
+            continue
+        for idx, ridx in enumerate(court_rows.index.tolist()):
+            if idx >= len(ordered_ids):
+                break
+            pid = int(ordered_ids[idx])
+            new_roster.at[ridx, "player_id"] = pid
+            if "name" in new_roster.columns:
+                new_roster.at[ridx, "name"] = id_name_map.get(pid, str(new_roster.at[ridx, "name"]))
+            if "rating" in new_roster.columns:
+                new_roster.at[ridx, "rating"] = float(id_rating_map.get(pid, float(new_roster.at[ridx, "rating"])))
+    return compress_courts(normalize_slots(new_roster))
+
+
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
     page_shell("🏟️ League Manager", "Run live events and manage ladders.", mode_label=mode_label)
@@ -235,6 +332,9 @@ def render(ctx):
     st.session_state.setdefault("ladder_total_rounds", 5)
     st.session_state.setdefault("ladder_roster", [])
     st.session_state.setdefault("ladder_court_sizes", [])
+    st.session_state.setdefault("ladder_pending_matches", [])
+    st.session_state.setdefault("ladder_review_mode", False)
+    st.session_state.setdefault("ladder_score_form_version", 0)
 
     df_players_all = ctx.df_players_all
     df_leagues = ctx.df_leagues
@@ -751,7 +851,8 @@ def render(ctx):
                 st.session_state.current_schedule_round = current_r
 
             all_results = []
-            with st.form("round_score_form"):
+            form_version = int(st.session_state.get("ladder_score_form_version", 0))
+            with st.form(f"round_score_form_v{form_version}"):
                 for c_data in st.session_state.current_schedule:
                     st.markdown(f"### Court {c_data['c']}")
                     for m_idx, mm in enumerate(c_data["matches"]):
@@ -766,61 +867,202 @@ def render(ctx):
 
                         c1, c2, c3, c4 = st.columns([3, 1, 1, 3])
                         c1.text(f"{label}: {p1} & {p2}")
-                        s1 = c2.number_input("S1", 0, 99, 0, 1, key=f"s1_r{current_r}_c{c_data['c']}_{m_idx}")
-                        s2 = c3.number_input("S2", 0, 99, 0, 1, key=f"s2_r{current_r}_c{c_data['c']}_{m_idx}")
+                        s1 = c2.number_input("S1", 0, 99, 0, 1, key=f"s1_r{current_r}_c{c_data['c']}_{m_idx}_v{form_version}")
+                        s2 = c3.number_input("S2", 0, 99, 0, 1, key=f"s2_r{current_r}_c{c_data['c']}_{m_idx}_v{form_version}")
                         c4.text(f"{p3} & {p4}")
 
                         all_results.append({
+                            "court": int(c_data["c"]),
+                            "match_idx": int(m_idx),
+                            "label": str(label),
+                            "round_num": int(current_r),
+                            "league": st.session_state.get("saved_ladder_lg", ""),
+                            "week_tag": st.session_state.get("saved_ladder_wk", ""),
                             "t1_p1": int(t1[0]),
                             "t1_p2": int(t1[1]),
                             "t2_p1": int(t2[0]),
                             "t2_p2": int(t2[1]),
                             "s1": int(s1),
                             "s2": int(s2),
-                        })
-
-                submitted = st.form_submit_button("Submit Round & Calculate Movement")
-
-            if submitted:
-                # Build match payload
-                valid_matches = []
-                for r in all_results:
-                    if r["s1"] > 0 or r["s2"] > 0:
-                        valid_matches.append({
-                            **r,
                             "date": _utc_iso_now(),
-                            "league": st.session_state.get("saved_ladder_lg", ""),
                             "match_type": "Live Match",
-                            "week_tag": st.session_state.get("saved_ladder_wk", ""),
                             "is_popup": False,
                         })
 
-                if not valid_matches:
-                    st.warning("No scores entered (all matches 0–0).")
-                    st.stop()
+                submitted = st.form_submit_button("Review Submission")
 
-                # Save matches (refactored signature)
-                res = process_matches(
-                    valid_matches,
-                    supabase=ctx.supabase,
-                    club_id=str(ctx.club_id),
-                    name_to_id=name_to_id,
-                    df_players_all=ctx.df_players_all,
-                    df_leagues=ctx.df_leagues,
-                    df_meta=ctx.df_meta,
-                )
-                st.success(f"Matches saved ({res['inserted']}). Skipped incomplete: {res['skipped_incomplete']}.")
-
-                # Compute movement preview
-                roster_pids = roster_now["player_id"].astype(int).tolist()
-                stats = compute_round_stats(valid_matches, roster_pids)
-                max_court = int(roster_now["court"].max())
-                preview = build_movement_preview(roster_now, stats, max_court=max_court)
-
-                st.session_state.ladder_movement_preview = preview
-                st.session_state.ladder_state = "CONFIRM_MOVEMENT"
-                st.session_state.pop("current_schedule", None)
+            if submitted:
+                st.session_state.ladder_pending_matches = all_results
+                st.session_state.ladder_review_mode = True
                 st.rerun()
+
+            if st.session_state.get("ladder_review_mode", False):
+                st.divider()
+                st.markdown("### 🧾 Review Round Submission")
+                st.warning("Nothing has been submitted yet. Review carefully before confirming.")
+                pending_matches = list(st.session_state.get("ladder_pending_matches") or [])
+                if not pending_matches:
+                    st.info("No pending matches found. Return to score entry.")
+                else:
+                    summary_rows = []
+                    for row in pending_matches:
+                        t1_p1 = int(row.get("t1_p1", 0))
+                        t1_p2 = int(row.get("t1_p2", 0))
+                        t2_p1 = int(row.get("t2_p1", 0))
+                        t2_p2 = int(row.get("t2_p2", 0))
+                        summary_rows.append(
+                            {
+                                "Court": int(row.get("court", 0)),
+                                "Round": int(row.get("round_num", current_r)),
+                                "League": str(row.get("league", "")),
+                                "Week": str(row.get("week_tag", "")),
+                                "Team 1": f"{id_to_name.get(t1_p1, f'#{t1_p1}')} & {id_to_name.get(t1_p2, f'#{t1_p2}')}",
+                                "Score": f"{int(row.get('s1', 0))}-{int(row.get('s2', 0))}",
+                                "Team 2": f"{id_to_name.get(t2_p1, f'#{t2_p1}')} & {id_to_name.get(t2_p2, f'#{t2_p2}')}",
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+                    edited_pending = [dict(m) for m in pending_matches]
+                    for idx, match in enumerate(edited_pending):
+                        court_num = int(match.get("court", 0))
+                        court_players_df = roster_now[pd.to_numeric(roster_now["court"], errors="coerce").fillna(0).astype(int) == court_num]
+                        court_player_ids = court_players_df["player_id"].astype(int).tolist()
+                        if not court_player_ids:
+                            court_player_ids = [
+                                int(pid)
+                                for pid in sorted(
+                                    {
+                                        int(match.get("t1_p1", 0)),
+                                        int(match.get("t1_p2", 0)),
+                                        int(match.get("t2_p1", 0)),
+                                        int(match.get("t2_p2", 0)),
+                                    }
+                                )
+                                if int(pid) > 0
+                            ]
+                        if not court_player_ids:
+                            st.error(f"Court {court_num} has no available players to edit.")
+                            continue
+                        with st.expander(f"Court {court_num} — {match.get('label', f'Match {idx + 1}')}", expanded=False):
+                            score_cols = st.columns([1, 1, 1, 1])
+                            s1_edit = score_cols[0].number_input(
+                                "Team 1 Score",
+                                min_value=0,
+                                max_value=99,
+                                value=int(match.get("s1", 0)),
+                                step=1,
+                                key=f"review_s1_r{current_r}_{idx}",
+                            )
+                            s2_edit = score_cols[1].number_input(
+                                "Team 2 Score",
+                                min_value=0,
+                                max_value=99,
+                                value=int(match.get("s2", 0)),
+                                step=1,
+                                key=f"review_s2_r{current_r}_{idx}",
+                            )
+                            if score_cols[2].button("Swap Score", key=f"swap_score_r{current_r}_{idx}"):
+                                s1_edit, s2_edit = s2_edit, s1_edit
+                            match["s1"] = int(s1_edit)
+                            match["s2"] = int(s2_edit)
+
+                            if score_cols[3].button("Swap Team 1 / Team 2", key=f"swap_team_r{current_r}_{idx}"):
+                                match["t1_p1"], match["t2_p1"] = match["t2_p1"], match["t1_p1"]
+                                match["t1_p2"], match["t2_p2"] = match["t2_p2"], match["t1_p2"]
+                                match["s1"], match["s2"] = match["s2"], match["s1"]
+
+                            p_cols = st.columns(4)
+                            match["t1_p1"] = int(
+                                p_cols[0].selectbox(
+                                    "Team 1 - Player 1",
+                                    options=court_player_ids,
+                                    index=max(0, court_player_ids.index(int(match["t1_p1"]))) if int(match["t1_p1"]) in court_player_ids else 0,
+                                    key=f"review_t1p1_r{current_r}_{idx}",
+                                    format_func=lambda pid: id_to_name.get(int(pid), f"#{pid}"),
+                                )
+                            )
+                            match["t1_p2"] = int(
+                                p_cols[1].selectbox(
+                                    "Team 1 - Player 2",
+                                    options=court_player_ids,
+                                    index=max(0, court_player_ids.index(int(match["t1_p2"]))) if int(match["t1_p2"]) in court_player_ids else 0,
+                                    key=f"review_t1p2_r{current_r}_{idx}",
+                                    format_func=lambda pid: id_to_name.get(int(pid), f"#{pid}"),
+                                )
+                            )
+                            match["t2_p1"] = int(
+                                p_cols[2].selectbox(
+                                    "Team 2 - Player 1",
+                                    options=court_player_ids,
+                                    index=max(0, court_player_ids.index(int(match["t2_p1"]))) if int(match["t2_p1"]) in court_player_ids else 0,
+                                    key=f"review_t2p1_r{current_r}_{idx}",
+                                    format_func=lambda pid: id_to_name.get(int(pid), f"#{pid}"),
+                                )
+                            )
+                            match["t2_p2"] = int(
+                                p_cols[3].selectbox(
+                                    "Team 2 - Player 2",
+                                    options=court_player_ids,
+                                    index=max(0, court_player_ids.index(int(match["t2_p2"]))) if int(match["t2_p2"]) in court_player_ids else 0,
+                                    key=f"review_t2p2_r{current_r}_{idx}",
+                                    format_func=lambda pid: id_to_name.get(int(pid), f"#{pid}"),
+                                )
+                            )
+
+                    st.session_state.ladder_pending_matches = edited_pending
+                    updated_roster = _sync_live_roster_from_pending(st.session_state.ladder_live_roster, edited_pending)
+                    st.session_state.ladder_live_roster = updated_roster
+
+                    validation_errors, validation_warnings = _validate_pending_round_matches(edited_pending)
+                    if validation_warnings:
+                        st.info("\n".join(validation_warnings))
+                    if validation_errors:
+                        for court_num in sorted(validation_errors.keys()):
+                            st.error(f"Court {court_num}: " + " ".join(validation_errors[court_num]))
+
+                    action_cols = st.columns([1, 1, 2])
+                    if action_cols[0].button("Back to Editing", key=f"review_back_r{current_r}"):
+                        st.session_state.ladder_review_mode = False
+                        st.rerun()
+                    if action_cols[1].button("Cancel Review", key=f"review_cancel_r{current_r}"):
+                        st.session_state.ladder_review_mode = False
+                        st.session_state.ladder_pending_matches = []
+                        st.session_state.ladder_score_form_version = int(st.session_state.get("ladder_score_form_version", 0)) + 1
+                        st.rerun()
+                    if action_cols[2].button("Confirm & Submit Round", key=f"review_confirm_r{current_r}", type="primary"):
+                        if validation_errors:
+                            st.error("Please fix validation errors before confirming submission.")
+                            st.stop()
+
+                        valid_matches = [dict(m) for m in edited_pending if int(m.get("s1", 0)) > 0 or int(m.get("s2", 0)) > 0]
+                        if not valid_matches:
+                            st.warning("No scores entered (all matches 0–0).")
+                            st.stop()
+
+                        res = process_matches(
+                            valid_matches,
+                            supabase=ctx.supabase,
+                            club_id=str(ctx.club_id),
+                            name_to_id=name_to_id,
+                            df_players_all=ctx.df_players_all,
+                            df_leagues=ctx.df_leagues,
+                            df_meta=ctx.df_meta,
+                        )
+                        st.success(f"Matches saved ({res['inserted']}). Skipped incomplete: {res['skipped_incomplete']}.")
+
+                        roster_pids = st.session_state.ladder_live_roster["player_id"].astype(int).tolist()
+                        stats = compute_round_stats(valid_matches, roster_pids)
+                        max_court = int(st.session_state.ladder_live_roster["court"].max())
+                        preview = build_movement_preview(st.session_state.ladder_live_roster, stats, max_court=max_court)
+
+                        st.session_state.ladder_movement_preview = preview
+                        st.session_state.ladder_state = "CONFIRM_MOVEMENT"
+                        st.session_state.ladder_review_mode = False
+                        st.session_state.ladder_pending_matches = []
+                        st.session_state.ladder_score_form_version = int(st.session_state.get("ladder_score_form_version", 0)) + 1
+                        st.session_state.pop("current_schedule", None)
+                        st.rerun()
 
         # -------------------------
         # 5) CONFIRM MOVEMENT
