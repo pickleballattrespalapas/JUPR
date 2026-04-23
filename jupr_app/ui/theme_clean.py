@@ -216,6 +216,34 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         color: var(--muted);
         font-size: var(--font-sm);
       }}
+      .jupr-topbar-action {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 1.8rem;
+        padding: 0.2rem 0.7rem;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        background: var(--panel);
+        color: var(--text-primary);
+        font-size: 0.78rem;
+        font-weight: 700;
+        line-height: 1;
+        white-space: nowrap;
+        text-decoration: none;
+        box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
+        transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+      }}
+      .jupr-topbar-action:hover {{
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+        color: var(--text-primary);
+        transform: translateY(-1px);
+      }}
+      .jupr-topbar-action:focus-visible {{
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
+      }}
 
       /* Cards + sections */
       .jupr-card {{

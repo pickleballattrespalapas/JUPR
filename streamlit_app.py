@@ -205,6 +205,8 @@ def main():
         if public_requested and not effective_admin_shell:
             PUBLIC_MODE = True
         admin_logged_in = (not PUBLIC_MODE) and authenticated
+        st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
+        st.session_state["jupr_admin_entry_active"] = bool(effective_admin_shell)
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
