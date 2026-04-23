@@ -19,7 +19,7 @@ _BROWSER_REFRESH_TOKEN_KEY = "jupr_admin_refresh_token"
 _BROWSER_RESTORE_FLAG_KEY = "jupr_admin_restore_from_storage"
 _BROWSER_SYNC_PAYLOAD_KEY = "_admin_browser_sync_payload"
 _BROWSER_CLEAR_PENDING_KEY = "_admin_browser_clear_pending"
-_BROWSER_RESTORE_ATTEMPTED_SESSION_KEY = "jupr_admin_restore_attempted"
+_BROWSER_RESTORE_INFLIGHT_SESSION_KEY = "jupr_admin_restore_inflight_at"
 
 
 class AdminAuthError(RuntimeError):
@@ -302,11 +302,13 @@ def render_admin_browser_session_bridge() -> None:
           if (persistRequested) {{
             appWindow.localStorage.setItem("{_BROWSER_ACCESS_TOKEN_KEY}", {persist_access!r});
             appWindow.localStorage.setItem("{_BROWSER_REFRESH_TOKEN_KEY}", {persist_refresh!r});
+            appWindow.sessionStorage.removeItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}");
           }}
 
           if (clearPending) {{
             appWindow.localStorage.removeItem("{_BROWSER_ACCESS_TOKEN_KEY}");
             appWindow.localStorage.removeItem("{_BROWSER_REFRESH_TOKEN_KEY}");
+            appWindow.sessionStorage.removeItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}");
           }}
         }} catch (e) {{}}
         </script>
@@ -345,8 +347,25 @@ def restore_admin_browser_session() -> dict[str, str] | None:
     restore_flag = _query_param_text(_BROWSER_RESTORE_FLAG_KEY)
 
     if access and refresh and restore_flag == "1":
+        logger.info(
+            "Admin restore handshake consumed (full_reload=True): access+refresh tokens present in query params"
+        )
         _clear_sensitive_query_params()
+        components.html(
+            f"""
+            <script>
+            try {{
+              const appWindow = window.parent || window;
+              appWindow.sessionStorage.removeItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}");
+            }} catch (e) {{}}
+            </script>
+            """,
+            height=0,
+        )
         return {"access_token": access, "refresh_token": refresh}
+
+    if restore_flag == "1":
+        logger.info("Admin restore skipped: handshake flag present but token query params missing")
 
     components.html(
         f"""
@@ -358,9 +377,15 @@ def restore_admin_browser_session() -> dict[str, str] | None:
           const appUrl = new URL(appWindow.location.href);
           const params = appUrl.searchParams;
           const hasHandshake = params.get("{_BROWSER_RESTORE_FLAG_KEY}") === "1";
-          const restoreAttempted = appWindow.sessionStorage.getItem("{_BROWSER_RESTORE_ATTEMPTED_SESSION_KEY}") === "1";
-          if (access && refresh && !hasHandshake && !restoreAttempted) {{
-            appWindow.sessionStorage.setItem("{_BROWSER_RESTORE_ATTEMPTED_SESSION_KEY}", "1");
+          const inflightRaw = appWindow.sessionStorage.getItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}") || "";
+          const inflightAt = Number(inflightRaw || "0");
+          const now = Date.now();
+          const inflightActive = Number.isFinite(inflightAt) && inflightAt > 0 && (now - inflightAt) < 15000;
+          if (hasHandshake) {{
+            appWindow.sessionStorage.removeItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}");
+          }}
+          if (access && refresh && !hasHandshake && !inflightActive) {{
+            appWindow.sessionStorage.setItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}", String(now));
             params.set("jupr_admin_access_token", access);
             params.set("jupr_admin_refresh_token", refresh);
             params.set("{_BROWSER_RESTORE_FLAG_KEY}", "1");
@@ -387,13 +412,15 @@ def maybe_restore_admin_login_from_browser() -> bool:
     existing_user = get_current_admin_user()
     if existing_user is not None:
         existing_email = str(getattr(existing_user, "email", "") or "").strip().lower()
+        logger.info("Browser restore skipped: user already present in session state")
         return bool(
             existing_email and is_allowed_admin_email(existing_email, load_admin_allowlist())
         )
 
-    logger.info("Browser token restore attempted")
+    logger.info("Browser token restore attempt started")
     stored_tokens = restore_admin_browser_session()
     if not stored_tokens:
+        logger.info("Browser token restore skipped: no handshake tokens available yet")
         return False
 
     try:
@@ -419,7 +446,7 @@ def maybe_restore_admin_login_from_browser() -> bool:
             user_email, load_admin_allowlist()
         ):
             clear_local_admin_auth_state()
-            logger.info("Browser token restore failed")
+            logger.info("Browser token restore failed: invalid session/user or disallowed email")
             return False
 
         st.session_state[_AUTH_USER_KEY] = user

@@ -1,11 +1,11 @@
 import html
 import logging
-import urllib.parse
 from dataclasses import dataclass
 import streamlit as st
 import pandas as pd
 
 from jupr_app.domain.awards import build_top_performer_entries
+from jupr_app.ui.nav import navigate_to_player_profile
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.public_links import build_public_url, public_link_button
 from jupr_app.ui.layout import page_shell
@@ -90,9 +90,15 @@ def _delta_class(delta_value: float | None) -> str:
     return "zero"
 
 
-def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> None:
-    profile_url = row.get("_profile_url")
+def render_leaderboard_row(
+    row,
+    rank: int,
+    badges: list[LeaderboardBadge],
+    public_mode: bool,
+    ctx=None,
+) -> None:
     player_name = str(row.get("name", "Player") or "Player")
+    player_id = safe_int(row.get("_pid"))
     wins = safe_int(row.get("wins")) or 0
     losses = safe_int(row.get("losses")) or 0
     rating = safe_float(row.get("JUPR"))
@@ -109,16 +115,26 @@ def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> No
 
     with st.container():
         left_col, right_col = st.columns([0.7, 0.3])
-        if profile_url:
-            left_col.markdown(
-                f"<p class='lb-player-name'><strong>#{rank} <a href='{profile_url}' target='_self'>{_safe_text(player_name)}</a></strong></p>",
-                unsafe_allow_html=True,
-            )
+        left_col.markdown(
+            f"<p class='lb-player-name'><strong>#{rank}</strong></p>",
+            unsafe_allow_html=True,
+        )
+        if player_id is not None:
+            nav_extra = {}
+            if public_mode and getattr(ctx, "club_id", None):
+                nav_extra["club_id"] = str(ctx.club_id)
+            if left_col.button(
+                player_name,
+                key=f"lb_row_nav_{rank}_{player_id}",
+                use_container_width=False,
+            ):
+                navigate_to_player_profile(
+                    player_id,
+                    public_mode=public_mode,
+                    extra_params=nav_extra,
+                )
         else:
-            left_col.markdown(
-                f"<p class='lb-player-name'><strong>#{rank} {_safe_text(player_name)}</strong></p>",
-                unsafe_allow_html=True,
-            )
+            left_col.markdown(f"**{_safe_text(player_name)}**")
         left_col.markdown(f"<p class='lb-wl'>W-L: {wins}–{losses}</p>", unsafe_allow_html=True)
 
         rating_display = f"{rating:.3f}" if rating is not None else "—"
@@ -159,30 +175,6 @@ def render_leaderboard_row(row, rank: int, badges: list[LeaderboardBadge]) -> No
             )
 
         st.divider()
-
-def _player_profile_url(pid, public_mode, ctx):
-    if pd.isna(pid):
-        return None
-    try:
-        player_id = int(pid)
-    except Exception:
-        return None
-    params = {"page": "players", "pid": str(player_id)}
-    if public_mode:
-        params["public"] = "1"
-        if getattr(ctx, "club_id", None):
-            params["club_id"] = str(ctx.club_id)
-    query = urllib.parse.urlencode(params, quote_via=urllib.parse.quote_plus)
-    return f"/?{query}"
-
-
-def _build_player_link(pid, name, public_mode, ctx):
-    safe_name = _safe_text(name)
-    url = _player_profile_url(pid, public_mode, ctx)
-    if not url:
-        return safe_name
-    return f'<a href="{url}" target="_self" class="lb-link">{safe_name}</a>'
-
 
 def select_leaderboard_players(
     df_players_active: pd.DataFrame | None,
@@ -437,16 +429,11 @@ def render_top_performers_cards(
             for entry in category.get("entries", []):
                 name = entry.get("name", "")
                 pid = entry.get("player_id")
-                name_html = (
-                    _build_player_link(pid, name, public_mode, ctx)
-                    if ctx is not None
-                    else html.escape(str(name))
-                )
                 rows.append(
                     {
                         "value": entry.get("metric_display", "—"),
                         "name": str(name),
-                        "name_html": name_html,
+                        "player_id": safe_int(pid),
                     }
                 )
             top_perf_dict.append(
@@ -523,19 +510,34 @@ def render_top_performers_cards(
         secondary = entries[1:5]
         list_items = "".join(
             f'<div class="tp-list-item"><span class="tp-list-value">{html.escape(entry["value"])}</span>'
-            f'<span class="tp-list-name">{entry.get("name_html", html.escape(entry["name"]))}</span></div>'
+            f'<span class="tp-list-name">{html.escape(entry["name"])}</span></div>'
             for entry in secondary
         )
         card_html = f"""
         <div class="tp-card" style="--tp-accent: {accent};">
             <div class="tp-label">{html.escape(str(card.get("label", "")))}</div>
             <div class="tp-value">{html.escape(primary["value"])}</div>
-            <div class="tp-name">{primary.get("name_html", html.escape(primary["name"]))}</div>
+            <div class="tp-name">{html.escape(primary["name"])}</div>
             <div class="tp-list">{list_items}</div>
         </div>
         """
         with col:
             st.markdown(card_html, unsafe_allow_html=True)
+            if ctx is not None:
+                nav_extra = {}
+                if public_mode and getattr(ctx, "club_id", None):
+                    nav_extra["club_id"] = str(ctx.club_id)
+                primary_pid = safe_int(primary.get("player_id"))
+                if primary_pid is not None and st.button(
+                    f"View {primary['name']}",
+                    key=f"tp_primary_nav_{idx}_{primary_pid}",
+                    use_container_width=True,
+                ):
+                    navigate_to_player_profile(
+                        primary_pid,
+                        public_mode=public_mode,
+                        extra_params=nav_extra,
+                    )
 
 
 def render(ctx):
@@ -1208,11 +1210,12 @@ def render(ctx):
                 player_badges = []
 
         row_payload = row.copy()
-        row_payload["_profile_url"] = _player_profile_url(row.get("_pid"), PUBLIC_MODE, ctx)
         render_leaderboard_row(
             row_payload,
             rank=safe_int(row.get("RankNum")) or 0,
             badges=player_badges,
+            public_mode=PUBLIC_MODE,
+            ctx=ctx,
         )
 
     if len(standings) > limit:

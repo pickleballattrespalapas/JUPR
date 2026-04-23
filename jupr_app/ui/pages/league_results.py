@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.ui.layout import page_shell
-from jupr_app.ui.pages.leaderboards import _build_player_link
+from jupr_app.ui.nav import navigate_to_player_profile
 
 try:
     import altair as alt
@@ -291,6 +291,42 @@ def _render_html_table(headers: list[str], rows: list[list[str]]) -> None:
     st.markdown(table_html, unsafe_allow_html=True)
 
 
+def _render_player_table(
+    title: str,
+    rows: list[dict],
+    public_mode: bool,
+    club_id: str | None = None,
+) -> None:
+    if title:
+        st.markdown(title)
+    if not rows:
+        st.caption("No rows to display.")
+        return
+
+    headers = [key for key in rows[0].keys() if not str(key).startswith("_")]
+    header_cols = st.columns([1.8] + [1] * (len(headers) - 1))
+    for idx, header in enumerate(headers):
+        header_cols[idx].markdown(f"**{header}**")
+
+    nav_extra = {"club_id": str(club_id)} if public_mode and club_id else {}
+    for index, row in enumerate(rows):
+        cols = st.columns([1.8] + [1] * (len(headers) - 1))
+        pid = _safe_int(row.get("_pid"))
+        for cidx, header in enumerate(headers):
+            value = row.get(header, "—")
+            if header == "Player":
+                label = str(value or "Player")
+                if pid is not None and cols[cidx].button(
+                    label,
+                    key=f"league_results_nav_{title}_{index}_{pid}",
+                    use_container_width=True,
+                ):
+                    navigate_to_player_profile(pid, public_mode=public_mode, extra_params=nav_extra)
+            else:
+                cols[cidx].write(value)
+        st.divider()
+
+
 def _replay_league_ratings(
     df_matches: pd.DataFrame,
     league_name: str,
@@ -542,27 +578,24 @@ def render(ctx):
         else:
             table_rows = []
             for _, row in standings.iterrows():
-                player_link = _build_player_link(row["player_id"], row["player_name"], PUBLIC_MODE, ctx)
                 win_pct = f"{float(row['win_pct']):.1f}%" if pd.notna(row["win_pct"]) else "—"
                 rating_delta = row.get("rating_delta")
                 rating_delta_display = f"{float(rating_delta):+.3f}" if pd.notna(rating_delta) else "—"
                 table_rows.append(
-                    [
-                        str(int(row["rank"])),
-                        player_link,
-                        f"{float(row['JUPR']):.3f}",
-                        str(int(row["games"])),
-                        str(int(row["wins"])),
-                        str(int(row["losses"])),
-                        win_pct,
-                        rating_delta_display,
-                    ]
+                    {
+                        "Rank": str(int(row["rank"])),
+                        "Player": str(row["player_name"]),
+                        "Rating (JUPR)": f"{float(row['JUPR']):.3f}",
+                        "Games": str(int(row["games"])),
+                        "Wins": str(int(row["wins"])),
+                        "Losses": str(int(row["losses"])),
+                        "Win %": win_pct,
+                        "Rating Δ": rating_delta_display,
+                        "_pid": int(row["player_id"]),
+                    }
                 )
 
-            _render_html_table(
-                ["Rank", "Player", "Rating (JUPR)", "Games", "Wins", "Losses", "Win %", "Rating Δ"],
-                table_rows,
-            )
+            _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
 
         st.markdown("### League Match Totals")
         if overall_stats.empty:
@@ -571,18 +604,18 @@ def render(ctx):
             overall_stats = overall_stats.sort_values(["wins", "games"], ascending=[False, False])
             table_rows = []
             for _, row in overall_stats.iterrows():
-                player_link = _build_player_link(row["player_id"], row["player_name"], PUBLIC_MODE, ctx)
                 win_pct = f"{float(row['win_pct']):.1f}%" if pd.notna(row["win_pct"]) else "—"
                 table_rows.append(
-                    [
-                        player_link,
-                        str(int(row["games"])),
-                        str(int(row["wins"])),
-                        str(int(row["losses"])),
-                        win_pct,
-                    ]
+                    {
+                        "Player": str(row["player_name"]),
+                        "Games": str(int(row["games"])),
+                        "Wins": str(int(row["wins"])),
+                        "Losses": str(int(row["losses"])),
+                        "Win %": win_pct,
+                        "_pid": int(row["player_id"]),
+                    }
                 )
-            _render_html_table(["Player", "Games", "Wins", "Losses", "Win %"], table_rows)
+            _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
 
     with tabs[1]:
         st.subheader("Weekly Results")
@@ -608,28 +641,25 @@ def render(ctx):
         else:
             table_rows = []
             for _, row in weekly_view.iterrows():
-                player_link = _build_player_link(row["player_id"], row["player_name"], PUBLIC_MODE, ctx)
                 win_pct = f"{float(row['win_pct']):.1f}%" if pd.notna(row["win_pct"]) else "—"
                 rating_delta = row.get("rating_delta")
                 rating_delta_display = f"{float(rating_delta):+.3f}" if pd.notna(rating_delta) else "—"
                 rank_delta = row.get("rank_delta")
                 rank_delta_display = f"{int(rank_delta):+d}" if pd.notna(rank_delta) else "—"
                 table_rows.append(
-                    [
-                        player_link,
-                        str(int(row["games"])),
-                        str(int(row["wins"])),
-                        str(int(row["losses"])),
-                        win_pct,
-                        rating_delta_display,
-                        rank_delta_display,
-                    ]
+                    {
+                        "Player": str(row["player_name"]),
+                        "Games": str(int(row["games"])),
+                        "Wins": str(int(row["wins"])),
+                        "Losses": str(int(row["losses"])),
+                        "Win %": win_pct,
+                        "Weekly Rating Δ": rating_delta_display,
+                        "Rank Δ": rank_delta_display,
+                        "_pid": int(row["player_id"]),
+                    }
                 )
 
-            _render_html_table(
-                ["Player", "Games", "Wins", "Losses", "Win %", "Weekly Rating Δ", "Rank Δ"],
-                table_rows,
-            )
+            _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
 
         st.markdown("### Weekly Highlights")
         highlight_cols = st.columns(3)
