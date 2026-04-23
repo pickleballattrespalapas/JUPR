@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 REQUEST_STATUS_PENDING = "pending_admin_review"
@@ -45,6 +45,31 @@ def _safe_int(value: Any) -> int:
 def _is_unique_violation(exc: Exception) -> bool:
     text = str(exc or "").lower()
     return "duplicate key" in text or "unique" in text
+
+
+def _coerce_date(value: date | datetime | str | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).date()
+    except Exception:
+        try:
+            return date.fromisoformat(text[:10])
+        except Exception:
+            return None
+
+
+def _week_window_for_day(day: date) -> tuple[date, date]:
+    week_start = day - timedelta(days=day.weekday())
+    week_end = week_start + timedelta(days=6)
+    return week_start, week_end
 
 
 def normalize_email(email: str) -> str:
@@ -458,6 +483,81 @@ def create_outbox_row(
     if row is None:
         raise RuntimeError("Outbox row could not be created")
     return row
+
+
+def queue_player_updates_for_affected_subscribers(
+    supabase,
+    *,
+    club_id: str,
+    affected_player_ids: list[int] | set[int] | tuple[int, ...],
+    match_dates: list[date | datetime | str] | tuple[date | datetime | str, ...] | None = None,
+) -> dict[str, int]:
+    club_id = _require_nonempty(club_id, "club_id")
+    unique_player_ids: list[int] = sorted({_safe_int(pid) for pid in (affected_player_ids or [])})
+    summary = {
+        "affected_players": len(unique_player_ids),
+        "active_subscriptions": 0,
+        "week_windows": 0,
+        "queued": 0,
+        "already_queued": 0,
+        "no_active_subscription": 0,
+        "failed": 0,
+    }
+    if not unique_player_ids:
+        return summary
+
+    week_windows: set[tuple[date, date]] = set()
+    for raw_date in match_dates or []:
+        parsed = _coerce_date(raw_date)
+        if parsed is None:
+            continue
+        week_windows.add(_week_window_for_day(parsed))
+    if not week_windows:
+        week_windows.add(_week_window_for_day(datetime.now(timezone.utc).date()))
+
+    summary["week_windows"] = len(week_windows)
+
+    active_subs = list_active_subscriptions(supabase, club_id, limit=max(500, len(unique_player_ids) * 5))
+    active_by_player: dict[int, dict[str, Any]] = {}
+    for row in active_subs:
+        pid_raw = row.get("player_id")
+        try:
+            pid = _safe_int(pid_raw)
+        except Exception:
+            continue
+        if pid not in unique_player_ids or pid in active_by_player:
+            continue
+        active_by_player[pid] = row
+    summary["active_subscriptions"] = len(active_by_player)
+    summary["no_active_subscription"] = max(0, len(unique_player_ids) - len(active_by_player))
+
+    for pid in unique_player_ids:
+        subscription = active_by_player.get(pid)
+        if subscription is None:
+            continue
+        subscription_id = str(subscription.get("id") or "").strip()
+        email = str(subscription.get("email") or "").strip()
+        if not subscription_id or not email:
+            summary["failed"] += len(week_windows)
+            continue
+        for week_start, week_end in sorted(week_windows):
+            try:
+                create_outbox_row(
+                    supabase,
+                    subscription_id=subscription_id,
+                    club_id=club_id,
+                    player_id=pid,
+                    week_start=week_start,
+                    week_end=week_end,
+                    email=email,
+                )
+                summary["queued"] += 1
+            except Exception as exc:
+                if isinstance(exc, ValueError) and "already exists" in str(exc).lower():
+                    summary["already_queued"] += 1
+                    continue
+                summary["failed"] += 1
+    return summary
 
 
 def list_outbox_rows(
