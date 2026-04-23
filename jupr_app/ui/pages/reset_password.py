@@ -158,4 +158,4 @@ def render(ctx):
 
         clear_local_admin_auth_state()
         st.success("Password updated successfully. Return to login and sign in with your new password.")
-        st.link_button("Return to login", "?page=leaderboards")
+        st.link_button("Return to login", "/?page=admin_login&admin=1")
