@@ -12,7 +12,9 @@ def get_base_url() -> str:
 def build_public_url(*, page: str, params: dict[str, str] | None = None) -> str:
     """
     Builds a canonical public URL using the configured Streamlit Cloud base.
-    Always includes public=1.
+    NOTE: public=1 is retained for backward compatibility with older links.
+    TODO: remove the public=1 requirement from generated links once all callers
+    have migrated to the public-first base URL behavior.
     """
     base = get_base_url()
     q = {"page": page, "public": "1"}

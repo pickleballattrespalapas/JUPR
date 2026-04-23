@@ -30,6 +30,7 @@ from jupr_app.ui.admin_auth import (
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.page_registry import (
     ADMIN_ONLY_LABELS,
+    ADMIN_ONLY_PAGE_KEYS,
     HIDDEN_PAGE_LABELS,
     LABEL_TO_PAGE_KEY,
     PAGE_KEY_TO_LABEL,
@@ -41,6 +42,7 @@ from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
 logger = logging.getLogger(__name__)
+DEFAULT_ADMIN_PAGE_KEY = "league_manager"
 
 
 def _debug_exceptions_enabled() -> bool:
@@ -157,8 +159,15 @@ def main():
             unsafe_allow_html=True,
         )
 
-        # ---- Public mode ----
-        PUBLIC_MODE = qp_get("public", "0").lower() in ("1", "true", "yes", "y")
+        def _is_truthy(value: str | None) -> bool:
+            return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        # ---- Route intent ----
+        public_requested = _is_truthy(qp_get("public", "0"))
+        admin_requested = _is_truthy(qp_get("admin", "0"))
+        incoming_page_param = qp_get("page", "").strip().lower()
+        requested_admin_page = incoming_page_param in ADMIN_ONLY_PAGE_KEYS
+        recovery_flow = is_recovery_flow_query()
         debug_exceptions = _debug_exceptions_enabled()
 
         # Make base_url available to all pages (leaderboards uses this for share links)
@@ -172,10 +181,30 @@ def main():
         # a previously persisted browser token pair after refresh.
         bootstrap_admin_auth()
         render_admin_browser_session_bridge()
-        maybe_restore_admin_login_from_browser()
 
         admin_allowlist = load_admin_allowlist()
         auth_config_error: str | None = None
+
+        should_restore_admin = admin_requested or requested_admin_page or recovery_flow
+        if should_restore_admin:
+            maybe_restore_admin_login_from_browser()
+
+        current_admin = get_current_admin_user()
+        current_admin_email = str(getattr(current_admin, "email", "") or "").strip().lower()
+        authenticated = bool(current_admin and current_admin_email)
+        authorized = authenticated and is_allowed_admin_email(current_admin_email, admin_allowlist)
+
+        if authenticated and not authorized:
+            logout_admin()
+            current_admin = None
+            current_admin_email = ""
+            authenticated = False
+
+        effective_admin_shell = admin_requested or requested_admin_page or recovery_flow
+        PUBLIC_MODE = not effective_admin_shell
+        if public_requested and not effective_admin_shell:
+            PUBLIC_MODE = True
+        admin_logged_in = (not PUBLIC_MODE) and authenticated
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE:
@@ -183,22 +212,9 @@ def main():
         else:
             st.sidebar.title("JUPR Leagues 🌵")
 
-            user = get_current_admin_user()
-            user_email = ""
-            if user is not None:
-                user_email = str(getattr(user, "email", "") or "").strip().lower()
-
-            authenticated = bool(user and user_email)
-            authorized = authenticated and is_allowed_admin_email(user_email, admin_allowlist)
-
-            if authenticated and not authorized:
-                logout_admin()
-                user = None
-                user_email = ""
-                authenticated = False
-                st.sidebar.error("Authenticated but not authorized for admin access.")
-
             if not authenticated:
+                if requested_admin_page:
+                    st.session_state["post_login_admin_page_key"] = incoming_page_param
                 with st.sidebar.expander("🔒 Admin Login"):
                     show_forgot_password = st.session_state.get("show_forgot_password", False)
 
@@ -219,6 +235,15 @@ def main():
                                     logout_admin()
                                     st.sidebar.error("Authenticated but not authorized for admin access.")
                                 else:
+                                    requested_key = (
+                                        st.session_state.pop("post_login_admin_page_key", "")
+                                        or incoming_page_param
+                                    )
+                                    if requested_key not in ADMIN_ONLY_PAGE_KEYS:
+                                        requested_key = DEFAULT_ADMIN_PAGE_KEY
+                                    st.query_params["admin"] = "1"
+                                    st.query_params.pop("public", None)
+                                    st.query_params["page"] = requested_key
                                     st.rerun()
                             except AdminAuthConfigError as exc:
                                 auth_config_error = str(exc)
@@ -252,16 +277,14 @@ def main():
                 if auth_config_error:
                     st.sidebar.error(auth_config_error)
             else:
-                st.sidebar.success(f"Logged In: {user_email}")
+                st.sidebar.success(f"Logged In: {current_admin_email}")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
                     logout_admin()
+                    st.session_state.pop("post_login_admin_page_key", None)
+                    st.query_params.pop("admin", None)
+                    st.query_params.pop("public", None)
+                    st.query_params.pop("page", None)
                     st.rerun()
-
-        # Canonical admin flag (never true in public mode)
-        current_admin = get_current_admin_user()
-        current_admin_email = str(getattr(current_admin, "email", "") or "").strip().lower()
-        authenticated_and_allowlisted = bool(current_admin and is_allowed_admin_email(current_admin_email, admin_allowlist))
-        admin_logged_in = (not PUBLIC_MODE) and authenticated_and_allowlisted
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
@@ -424,9 +447,8 @@ def main():
         # -------------------------
         # Deep link resolution
         # -------------------------
-        incoming_page_param = qp_get("page", "").strip().lower()
         deep_page_key = incoming_page_param
-        if not deep_page_key and is_recovery_flow_query():
+        if not deep_page_key and recovery_flow:
             deep_page_key = "reset_password"
 
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
@@ -496,7 +518,10 @@ def main():
             if st.session_state.get("main_nav") in HIDDEN_PAGE_LABELS:
                 sel = st.session_state["main_nav"]
             else:
-                sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
+                if admin_logged_in:
+                    sel = st.sidebar.radio("Go to:", visible_labels, key="main_nav")
+                else:
+                    sel = st.session_state.get("main_nav", visible_labels[0])
 
             if sel not in visible_labels and sel not in HIDDEN_PAGE_LABELS:
                 sel = visible_labels[0]
@@ -514,11 +539,14 @@ def main():
             if nav_changed and current_page != target_page:
                 st.query_params["page"] = target_page
 
-            current_public = qp_get("public", "").strip().lower()
             if PUBLIC_MODE:
-                if current_public != "1":
-                    st.query_params["public"] = "1"
+                st.query_params.pop("admin", None)
+                if target_page == "leaderboards":
+                    st.query_params.pop("page", None)
+                elif current_page != target_page:
+                    st.query_params["page"] = target_page
             else:
+                st.query_params["admin"] = "1"
                 if "public" in st.query_params:
                     st.query_params.pop("public", None)
 
@@ -541,10 +569,14 @@ def main():
             st.error(f"Page module for '{sel}' has no render(ctx) function.")
             st.stop()
 
+        target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
+        if target_page_key in ADMIN_ONLY_PAGE_KEYS and not admin_logged_in:
+            st.info("Admin login required to access this page.")
+            st.stop()
+
         try:
             render_fn(ctx)
         except Exception as exc:
-            target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
             requested_page_key = qp_get("page", "").strip().lower()
             route_info = {
                 "selected_label": sel,
