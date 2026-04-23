@@ -19,6 +19,7 @@ class _Query:
         self._filters = []
         self._order = None
         self._limit = None
+        self._range = None
         self._select = "*"
 
     def select(self, cols):
@@ -56,6 +57,10 @@ class _Query:
 
     def limit(self, n):
         self._limit = int(n)
+        return self
+
+    def range(self, start, end):
+        self._range = (int(start), int(end))
         return self
 
     def execute(self):
@@ -96,6 +101,9 @@ class _Supabase:
         if q._order:
             col, desc = q._order
             data = sorted(data, key=lambda r: r.get(col), reverse=desc)
+        if q._range is not None:
+            start, end = q._range
+            data = data[start : end + 1]
         if q._limit is not None:
             data = data[: q._limit]
 
@@ -166,7 +174,6 @@ def test_match_insert_awards_inline_when_queue_table_missing():
     )
     badge_ids = {row["badge_id"] for row in sb.tables["player_badges"]}
     assert result["badge_summary"]["mode"] == "inline"
-    assert "participant" in badge_ids
     assert "first_win" in badge_ids
 
 

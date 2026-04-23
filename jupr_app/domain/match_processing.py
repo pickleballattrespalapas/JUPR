@@ -15,6 +15,9 @@ from jupr_app.domain.player_activity import (
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
+from jupr_app.domain.notifications.player_profile_update_repo import (
+    queue_player_updates_for_affected_subscribers,
+)
 from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 
 
@@ -34,7 +37,7 @@ def process_matches(
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """
     - Applies overall rating updates to players table
     - Applies league rating updates to league_ratings table (skips PopUp)
@@ -56,6 +59,7 @@ def process_matches(
     last_game_updates: dict[int, datetime] = {}
     affected_players: set[int] = set()
     match_payloads: list[dict[str, Any]] = []
+    successful_match_dates: list[str] = []
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -305,6 +309,7 @@ def process_matches(
             }
         )
         match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})
+        successful_match_dates.append(dt_val)
 
     # -------------------------
     # Write match rows
@@ -453,9 +458,36 @@ def process_matches(
                 payload["inactive_at"] = None
                 sb_retry(lambda payload=payload: supabase.table("league_ratings").insert(payload).execute())
 
+    player_update_queue: dict[str, Any] = {
+        "mode": "skipped",
+        "affected_players": len(affected_players),
+        "week_windows": 0,
+        "queued": 0,
+        "already_queued": 0,
+        "no_active_subscription": 0,
+        "failed": 0,
+    }
+    if db_matches and affected_players:
+        try:
+            queue_summary = queue_player_updates_for_affected_subscribers(
+                supabase,
+                club_id=str(club_id),
+                affected_player_ids=sorted(affected_players),
+                match_dates=successful_match_dates,
+            )
+            player_update_queue = {"mode": "queued", **queue_summary}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Player update queueing failed after match processing: %s", exc)
+            player_update_queue = {
+                **player_update_queue,
+                "mode": "error",
+                "error": str(exc),
+            }
+
     return {
         "inserted": len(db_matches),
         "skipped_incomplete": int(skipped_incomplete),
         "skipped_empty": int(skipped_empty),
         "badge_summary": badge_summary,
+        "player_update_queue": player_update_queue,
     }
