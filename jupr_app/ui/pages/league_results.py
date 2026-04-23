@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 
 import pandas as pd
@@ -42,6 +43,29 @@ def _safe_float(value, default=None):
         return float(value)
     except Exception:
         return default
+
+
+def _sanitize_dataframe_for_ui(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Return a UI-safe copy where nested/unhashable objects are stringified."""
+    if df is None:
+        return pd.DataFrame()
+    if df.empty:
+        return df.copy()
+
+    data = df.copy()
+
+    def _sanitize_cell(value):
+        if isinstance(value, (dict, list, tuple, set)):
+            try:
+                return json.dumps(value, sort_keys=True, default=str)
+            except Exception:
+                return str(value)
+        return value
+
+    object_cols = data.select_dtypes(include=["object"]).columns
+    for col in object_cols:
+        data[col] = data[col].map(_sanitize_cell)
+    return data
 
 
 def _parse_week_num(week_tag: str) -> int | None:
@@ -319,7 +343,7 @@ def _render_player_table(
                 if pid is not None and cols[cidx].button(
                     label,
                     key=f"league_results_nav_{title}_{index}_{pid}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     navigate_to_player_profile(pid, public_mode=public_mode, extra_params=nav_extra)
             else:
@@ -568,16 +592,28 @@ def render(ctx):
     standings = _build_scoped_league_standings(overall_stats, replay_df, getattr(ctx, "id_to_name", {}))
     weeks_df = _build_league_weeks(df_meta, league_name, league_matches)
     league_week_nums = weeks_df["week_num"].tolist() if not weeks_df.empty else []
+    league_matches_ui = _sanitize_dataframe_for_ui(league_matches)
+    overall_stats_ui = _sanitize_dataframe_for_ui(overall_stats)
+    weekly_stats_ui = _sanitize_dataframe_for_ui(weekly_stats)
+    weekly_rating_ui = _sanitize_dataframe_for_ui(weekly_rating)
+    standings_ui = _sanitize_dataframe_for_ui(standings)
+    weeks_df_ui = _sanitize_dataframe_for_ui(weeks_df)
+    player_frame_ui = _sanitize_dataframe_for_ui(player_frame)
 
-    tabs = st.tabs(["Overall", "Weekly", "Player"])
+    section = st.segmented_control(
+        "Section",
+        options=["Overall", "Weekly", "Player"],
+        default="Overall",
+        width="stretch",
+    )
 
-    with tabs[0]:
+    if section == "Overall":
         st.subheader("Current Standings")
-        if standings.empty:
+        if standings_ui.empty:
             st.info("No league rating data found yet.")
         else:
             table_rows = []
-            for _, row in standings.iterrows():
+            for _, row in standings_ui.iterrows():
                 win_pct = f"{float(row['win_pct']):.1f}%" if pd.notna(row["win_pct"]) else "—"
                 rating_delta = row.get("rating_delta")
                 rating_delta_display = f"{float(rating_delta):+.3f}" if pd.notna(rating_delta) else "—"
@@ -598,12 +634,12 @@ def render(ctx):
             _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
 
         st.markdown("### League Match Totals")
-        if overall_stats.empty:
+        if overall_stats_ui.empty:
             st.info("No cumulative stats available yet.")
         else:
-            overall_stats = overall_stats.sort_values(["wins", "games"], ascending=[False, False])
+            overall_stats_sorted = overall_stats_ui.sort_values(["wins", "games"], ascending=[False, False])
             table_rows = []
-            for _, row in overall_stats.iterrows():
+            for _, row in overall_stats_sorted.iterrows():
                 win_pct = f"{float(row['win_pct']):.1f}%" if pd.notna(row["win_pct"]) else "—"
                 table_rows.append(
                     {
@@ -617,9 +653,9 @@ def render(ctx):
                 )
             _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
 
-    with tabs[1]:
+    elif section == "Weekly":
         st.subheader("Weekly Results")
-        week_nums = league_week_nums or sorted(player_frame["week_num"].dropna().astype(int).unique().tolist())
+        week_nums = league_week_nums or sorted(player_frame_ui["week_num"].dropna().astype(int).unique().tolist())
         if not week_nums:
             st.info("No week numbers found in league matches yet.")
             return
@@ -629,11 +665,11 @@ def render(ctx):
             "Week", week_nums, index=week_nums.index(default_week), format_func=lambda x: f"Week {x}"
         )
 
-        weekly_view = weekly_stats[weekly_stats["week_num"] == int(selected_week)].copy() if not weekly_stats.empty else pd.DataFrame()
+        weekly_view = weekly_stats_ui[weekly_stats_ui["week_num"] == int(selected_week)].copy() if not weekly_stats_ui.empty else pd.DataFrame()
         weekly_view = weekly_view.sort_values(["wins", "games"], ascending=[False, False])
 
-        if not weekly_rating.empty:
-            weekly_delta = weekly_rating[weekly_rating["week_num"] == int(selected_week)].copy()
+        if not weekly_rating_ui.empty:
+            weekly_delta = weekly_rating_ui[weekly_rating_ui["week_num"] == int(selected_week)].copy()
             weekly_view = weekly_view.merge(weekly_delta, on=["player_id", "week_num"], how="left")
 
         if weekly_view.empty:
@@ -693,14 +729,14 @@ def render(ctx):
             for _, row in active.iterrows():
                 st.write(f"{row['player_name']} ({int(row['games'])} games)")
 
-        if weekly_rating.empty:
+        if weekly_rating_ui.empty:
             st.caption("Weekly rating deltas are unavailable (no league replay data).")
 
-    with tabs[2]:
+    elif section == "Player":
         st.subheader("Player Summary")
-        player_ids = sorted(set(overall_stats["player_id"].tolist())) if not overall_stats.empty else []
-        if standings is not None and not standings.empty:
-            player_ids = sorted(set(player_ids + standings["player_id"].tolist()))
+        player_ids = sorted(set(overall_stats_ui["player_id"].tolist())) if not overall_stats_ui.empty else []
+        if standings_ui is not None and not standings_ui.empty:
+            player_ids = sorted(set(player_ids + standings_ui["player_id"].tolist()))
 
         if not player_ids:
             st.info("No players found for this league.")
@@ -717,13 +753,13 @@ def render(ctx):
 
         rank_value = "—"
         rating_value = "—"
-        if standings is not None and not standings.empty:
-            hit = standings[standings["player_id"] == player_id]
+        if standings_ui is not None and not standings_ui.empty:
+            hit = standings_ui[standings_ui["player_id"] == player_id]
             if not hit.empty:
                 rank_value = int(hit.iloc[0]["rank"])
                 rating_value = f"{float(hit.iloc[0]['JUPR']):.3f}"
 
-        player_stats = overall_stats[overall_stats["player_id"] == player_id]
+        player_stats = overall_stats_ui[overall_stats_ui["player_id"] == player_id]
         games_value = int(player_stats.iloc[0]["games"]) if not player_stats.empty else 0
         win_pct_value = (
             f"{float(player_stats.iloc[0]['win_pct']):.1f}%" if not player_stats.empty and pd.notna(player_stats.iloc[0]["win_pct"]) else "—"
@@ -736,9 +772,9 @@ def render(ctx):
         metric_cols[3].metric("Win %", win_pct_value)
 
         st.markdown("### Rank over time")
-        player_weekly_stats = weekly_stats[weekly_stats["player_id"] == player_id].copy() if not weekly_stats.empty else pd.DataFrame()
-        if not weeks_df.empty:
-            player_weekly_stats = weeks_df.merge(player_weekly_stats, on="week_num", how="left")
+        player_weekly_stats = weekly_stats_ui[weekly_stats_ui["player_id"] == player_id].copy() if not weekly_stats_ui.empty else pd.DataFrame()
+        if not weeks_df_ui.empty:
+            player_weekly_stats = weeks_df_ui.merge(player_weekly_stats, on="week_num", how="left")
             player_weekly_stats["games"] = player_weekly_stats["games"].fillna(0).astype(int)
             player_weekly_stats["wins"] = player_weekly_stats["wins"].fillna(0).astype(int)
             player_weekly_stats["losses"] = player_weekly_stats["losses"].fillna(0).astype(int)
@@ -747,14 +783,14 @@ def render(ctx):
 
         rank_series = pd.DataFrame()
         rank_label = "Weekly performance rank"
-        if not weekly_rating.empty:
-            rating_player = weekly_rating[weekly_rating["player_id"] == player_id].copy()
+        if not weekly_rating_ui.empty:
+            rating_player = weekly_rating_ui[weekly_rating_ui["player_id"] == player_id].copy()
             if not rating_player.empty:
                 rank_series = rating_player[["week_num", "rank"]].copy()
                 rank_label = "Rating rank (end of week)"
 
-        if rank_series.empty and not weekly_stats.empty:
-            perf = weekly_stats.copy()
+        if rank_series.empty and not weekly_stats_ui.empty:
+            perf = weekly_stats_ui.copy()
             perf = perf[pd.notna(perf["week_num"])].copy()
             perf["week_num"] = perf["week_num"].astype(int)
             perf = perf.sort_values(["week_num", "win_pct", "wins", "games"], ascending=[True, False, False, False])
@@ -767,10 +803,10 @@ def render(ctx):
         if rank_series.empty:
             st.caption("Not enough weekly data to build a rank series.")
         else:
-            if not weeks_df.empty:
-                rank_series = weeks_df.merge(rank_series, on="week_num", how="left")
+            if not weeks_df_ui.empty:
+                rank_series = weeks_df_ui.merge(rank_series, on="week_num", how="left")
             rank_series = _attach_week_label(rank_series).sort_values("week_num")
-            week_labels = _week_label_order(weeks_df, rank_series)
+            week_labels = _week_label_order(weeks_df_ui, rank_series)
             if alt is not None:
                 chart = (
                     alt.Chart(rank_series)
@@ -787,7 +823,7 @@ def render(ctx):
                     )
                     .properties(height=260)
                 )
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width="stretch")
             else:
                 st.line_chart(rank_series.set_index("week_num")["rank"])
 
@@ -798,7 +834,7 @@ def render(ctx):
             trend_cols = st.columns(2)
             games_series = player_weekly_stats[["week_num", "week_label", "games"]].copy()
             win_series = player_weekly_stats[["week_num", "week_label", "win_pct"]].copy()
-            week_labels = _week_label_order(weeks_df, player_weekly_stats)
+            week_labels = _week_label_order(weeks_df_ui, player_weekly_stats)
 
             with trend_cols[0]:
                 st.markdown("**Games by week**")
@@ -818,7 +854,7 @@ def render(ctx):
                         )
                         .properties(height=220)
                     )
-                    st.altair_chart(game_chart, use_container_width=True)
+                    st.altair_chart(game_chart, width="stretch")
                 else:
                     st.bar_chart(games_series.set_index("week_num")["games"])
 
@@ -842,17 +878,17 @@ def render(ctx):
                         )
                         .properties(height=220)
                     )
-                    st.altair_chart(win_chart, use_container_width=True)
+                    st.altair_chart(win_chart, width="stretch")
                 else:
                     st.line_chart(win_series.set_index("week_num")["win_pct"])
 
-            rating_weekly = weekly_rating[weekly_rating["player_id"] == player_id] if not weekly_rating.empty else pd.DataFrame()
+            rating_weekly = weekly_rating_ui[weekly_rating_ui["player_id"] == player_id] if not weekly_rating_ui.empty else pd.DataFrame()
             if not rating_weekly.empty:
                 st.markdown("**Weekly rating Δ**")
-                if not weeks_df.empty:
-                    rating_weekly = weeks_df.merge(rating_weekly, on="week_num", how="left")
+                if not weeks_df_ui.empty:
+                    rating_weekly = weeks_df_ui.merge(rating_weekly, on="week_num", how="left")
                 rating_weekly = _attach_week_label(rating_weekly).sort_values("week_num")
-                week_labels = _week_label_order(weeks_df, rating_weekly)
+                week_labels = _week_label_order(weeks_df_ui, rating_weekly)
                 if alt is not None:
                     delta_chart = (
                         alt.Chart(rating_weekly)
@@ -869,14 +905,14 @@ def render(ctx):
                         )
                         .properties(height=220)
                     )
-                    st.altair_chart(delta_chart, use_container_width=True)
+                    st.altair_chart(delta_chart, width="stretch")
                 else:
                     st.bar_chart(rating_weekly.set_index("week_num")["rating_delta"])
             else:
                 st.caption("Weekly rating delta unavailable.")
 
         st.markdown("### Recent matches")
-        recent = league_matches.copy()
+        recent = league_matches_ui.copy()
         recent = recent[
             (recent.get("t1_p1") == player_id)
             | (recent.get("t1_p2") == player_id)
