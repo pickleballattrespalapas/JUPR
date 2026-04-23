@@ -26,6 +26,7 @@ from jupr_app.domain.leagues import (
     mint_top_performer_badges,
     normalize_league_status,
 )
+from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.roster import (
     compress_courts,
@@ -187,21 +188,19 @@ def _league_week_options(meta_row: dict | None, default_weeks: int = 20) -> list
     return [f"Week {i}" for i in range(1, max_weeks + 1)] + ["Playoffs"]
 
 
-def _seed_rating_for_player(pid: int, league_name: str, df_players_all: pd.DataFrame, df_leagues: pd.DataFrame) -> float:
-    # League rating if exists, else overall
-    if df_leagues is not None and not df_leagues.empty:
-        hit = df_leagues[
-            (df_leagues["player_id"].astype(int) == int(pid))
-            & (df_leagues["league_name"].astype(str).str.strip() == str(league_name).strip())
-        ]
-        if not hit.empty:
-            return float(hit.iloc[0].get("rating", 1200.0) or 1200.0)
-
-    hit2 = df_players_all[df_players_all["id"].astype(int) == int(pid)]
-    if not hit2.empty:
-        return float(hit2.iloc[0].get("rating", 1200.0) or 1200.0)
-
-    return 1200.0
+def _seed_rating_for_player(
+    *,
+    pid: int,
+    league_name: str,
+    overall_map: dict[int, float],
+    league_map: dict[tuple[int, str], float],
+) -> float:
+    return current_seed_rating(
+        player_id=int(pid),
+        league_name=str(league_name),
+        overall_map=overall_map,
+        league_map=league_map,
+    )
 
 
 def _streamlit_theme_mode() -> str:
@@ -321,11 +320,25 @@ def render(ctx):
                 parsed = [x.strip() for x in (raw or "").replace("\n", ",").split(",") if x.strip()]
                 roster_data = []
                 new_ps = []
+                player_ids = {int(name_to_id[pn]) for pn in parsed if pn in name_to_id}
+                overall_map, league_map, _ = build_seed_rating_maps(
+                    supabase=ctx.supabase,
+                    club_id=str(ctx.club_id),
+                    player_ids=player_ids,
+                    league_names={str(lg_select)},
+                    df_players_all=df_players_all,
+                    df_leagues=df_leagues,
+                )
 
                 for n in parsed:
                     if n in name_to_id:
                         pid = int(name_to_id[n])
-                        r = _seed_rating_for_player(pid, lg_select, df_players_all, df_leagues)
+                        r = _seed_rating_for_player(
+                            pid=pid,
+                            league_name=lg_select,
+                            overall_map=overall_map,
+                            league_map=league_map,
+                        )
                         roster_data.append({"name": n, "rating": float(r), "id": pid})
                     else:
                         new_ps.append(n)
@@ -638,6 +651,53 @@ def render(ctx):
 
             roster_now = compress_courts(normalize_slots(st.session_state.ladder_live_roster.copy()))
             st.session_state.ladder_live_roster = roster_now
+            active_player_ids = {
+                int(pid)
+                for pid in pd.to_numeric(roster_now.get("player_id"), errors="coerce").dropna().astype(int).tolist()
+            }
+            seed_overall_map, seed_league_map, _ = build_seed_rating_maps(
+                supabase=ctx.supabase,
+                club_id=str(ctx.club_id),
+                player_ids=active_player_ids,
+                league_names={str(st.session_state.get("saved_ladder_lg", ""))},
+                df_players_all=df_players_all,
+                df_leagues=df_leagues,
+            )
+            mismatch_rows: list[str] = []
+            for _, row in roster_now.iterrows():
+                pid = int(row.get("player_id"))
+                roster_rating = float(row.get("rating", 1200.0) or 1200.0)
+                canonical_rating = current_seed_rating(
+                    player_id=pid,
+                    league_name=str(st.session_state.get("saved_ladder_lg", "")),
+                    overall_map=seed_overall_map,
+                    league_map=seed_league_map,
+                )
+                if abs(canonical_rating - roster_rating) >= 0.1:
+                    mismatch_rows.append(
+                        f"{row.get('name', f'#{pid}')}: roster {roster_rating/400.0:.3f} vs canonical {canonical_rating/400.0:.3f}"
+                    )
+            if mismatch_rows:
+                st.warning(
+                    "Active roster ratings differ from current canonical player ratings. "
+                    "Use refresh to reseed before entering corrected results.\n\n- "
+                    + "\n- ".join(mismatch_rows[:8])
+                )
+                if st.button("Refresh roster ratings from current player data", key=f"ladder_refresh_roster_ratings_r{current_r}"):
+                    refreshed = roster_now.copy()
+                    refreshed["rating"] = refreshed["player_id"].map(
+                        lambda pid: current_seed_rating(
+                            player_id=int(pid),
+                            league_name=str(st.session_state.get("saved_ladder_lg", "")),
+                            overall_map=seed_overall_map,
+                            league_map=seed_league_map,
+                        )
+                    )
+                    st.session_state.ladder_live_roster = refreshed
+                    st.session_state.pop("current_schedule", None)
+                    st.session_state.pop("current_schedule_round", None)
+                    st.success("Roster ratings refreshed from canonical player data.")
+                    st.rerun()
 
             # Quick edits
             with st.expander("✏️ Quick court edits (before scoring)", expanded=False):

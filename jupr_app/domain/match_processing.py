@@ -15,6 +15,7 @@ from jupr_app.domain.player_activity import (
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
+from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,43 @@ def process_matches(
     skipped_empty = 0
     has_non_popup_match = False
 
+    def as_pid(x):
+        """Accept int IDs OR numeric strings OR exact names. Returns int player_id or None."""
+        if x is None:
+            return None
+        if isinstance(x, int):
+            return int(x)
+
+        s = str(x).strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return int(s)
+
+        return name_to_id.get(s)
+
+    candidate_player_ids: set[int] = set()
+    candidate_league_names: set[str] = set()
+    for m in match_list:
+        for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            pid = as_pid(m.get(col))
+            if pid is not None:
+                candidate_player_ids.add(int(pid))
+        league_name = str(m.get("league", "") or "").strip()
+        if league_name:
+            candidate_league_names.add(league_name)
+
+    overall_seed_map, league_seed_map, ratings_from_live_tables = build_seed_rating_maps(
+        supabase=supabase,
+        club_id=str(club_id),
+        player_ids=candidate_player_ids,
+        league_names=candidate_league_names,
+        df_players_all=df_players_all,
+        df_leagues=df_leagues,
+    )
+    if not ratings_from_live_tables:
+        logger.warning("process_matches is using fallback rating DataFrames; live seed rating query failed.")
+
     def get_k(league_name: str) -> int:
         if df_meta is None or getattr(df_meta, "empty", True):
             return int(default_k_factor)
@@ -83,10 +121,15 @@ def process_matches(
             return
         pr = get_player_row(pid)
         if pr is None:
-            overall_updates[pid] = {"r": 1200.0, "w": 0, "l": 0, "mp": 0}
+            overall_updates[pid] = {
+                "r": float(overall_seed_map.get(pid, 1200.0)),
+                "w": 0,
+                "l": 0,
+                "mp": 0,
+            }
             return
         overall_updates[pid] = {
-            "r": float(pr.get("rating", 1200.0) or 1200.0),
+            "r": float(overall_seed_map.get(pid, pr.get("rating", 1200.0) or 1200.0)),
             "w": int(pr.get("wins", 0) or 0),
             "l": int(pr.get("losses", 0) or 0),
             "mp": int(pr.get("matches_played", 0) or 0),
@@ -98,23 +141,21 @@ def process_matches(
             return float(overall_updates[pid]["r"])
         pr = get_player_row(pid)
         if pr is None:
-            return 1200.0
-        return float(pr.get("rating", 1200.0) or 1200.0)
+            return float(overall_seed_map.get(pid, 1200.0))
+        return float(overall_seed_map.get(pid, pr.get("rating", 1200.0) or 1200.0))
 
     def get_island_r(pid: int, league_name: str) -> float:
         key = (int(pid), str(league_name))
         if key in island_updates:
             return float(island_updates[key]["r"])
 
-        if df_leagues is not None and not df_leagues.empty:
-            m = df_leagues[
-                (df_leagues["player_id"] == int(pid)) &
-                (df_leagues["league_name"] == str(league_name))
-            ]
-            if not m.empty:
-                return float(m.iloc[0].get("rating", 1200.0) or 1200.0)
-
-        return get_overall_r(int(pid))
+        return current_seed_rating(
+            player_id=int(pid),
+            league_name=str(league_name),
+            overall_map=overall_seed_map,
+            league_map=league_seed_map,
+            default_rating=get_overall_r(int(pid)),
+        )
 
     def ensure_island_entry(pid: int, league_name: str):
         key = (int(pid), str(league_name))
@@ -122,21 +163,6 @@ def process_matches(
             return
         start = float(get_island_r(int(pid), str(league_name)))
         island_updates[key] = {"r": start, "start": start, "w": 0, "l": 0, "mp": 0}
-
-    def as_pid(x):
-        """Accept int IDs OR numeric strings OR exact names. Returns int player_id or None."""
-        if x is None:
-            return None
-        if isinstance(x, int):
-            return int(x)
-
-        s = str(x).strip()
-        if not s:
-            return None
-        if s.isdigit():
-            return int(s)
-
-        return name_to_id.get(s)
 
     def apply_updates(pid: int, d_ov: float, d_isl: float, outcome, is_popup: bool, league_name: str) -> float:
         """

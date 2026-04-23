@@ -314,6 +314,7 @@ def render(ctx):
         st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
         st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
         st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
+        st.session_state["force_data_refresh"] = True
         st.success("Replay complete.")
         time.sleep(0.6)
         st.rerun()

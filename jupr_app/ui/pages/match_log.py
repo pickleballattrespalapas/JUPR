@@ -313,6 +313,7 @@ def render(ctx):
                                 f"Deleted {delete_result['deleted_count']} duplicate rated match(es). "
                                 "Ratings were rebuilt automatically via Replay ALL."
                             )
+                        st.session_state["force_data_refresh"] = True
                         st.rerun()
 
     st.divider()
@@ -653,6 +654,7 @@ def render(ctx):
             st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
             st.info(f"Matches rewritten: {result['matches_rewritten']}")
             st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
+            st.session_state["force_data_refresh"] = True
             st.rerun()
 
     st.divider()
@@ -704,4 +706,5 @@ def render(ctx):
                     f"Deleted {delete_result['deleted_count']} rated match(es). "
                     "Ratings were rebuilt automatically via Replay ALL."
                 )
+            st.session_state["force_data_refresh"] = True
             st.rerun()
