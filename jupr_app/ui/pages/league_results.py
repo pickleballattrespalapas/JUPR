@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from urllib.parse import urlencode
 
 import pandas as pd
 import streamlit as st
@@ -340,8 +341,30 @@ def _render_player_table(
     header_html = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
     colgroup_html = "".join(f'<col class="{col_class_map.get(h, "")}">' for h in headers)
     body_html = ""
+    nav_extra = {"club_id": str(club_id)} if public_mode and club_id else {}
+
+    def _build_player_cell(row: dict) -> str:
+        display_name = html.escape(str(row.get("Player", "—")))
+        pid = _safe_int(row.get("_pid"))
+        if pid is None:
+            return display_name
+        if public_mode:
+            query = {"page": "players", "pid": int(pid), "public": 1}
+            if club_id:
+                query["club_id"] = str(club_id)
+            href = f"?{urlencode(query)}"
+            return f'<a class="lb-player-link" href="{html.escape(href, quote=True)}">{display_name}</a>'
+        return display_name
+
     for row in rows:
-        cell_html = "".join(f"<td>{html.escape(str(row.get(h, '—')))}</td>" for h in headers)
+        cells: list[str] = []
+        for header in headers:
+            if header == "Player":
+                value_html = _build_player_cell(row)
+            else:
+                value_html = html.escape(str(row.get(header, "—")))
+            cells.append(f"<td>{value_html}</td>")
+        cell_html = "".join(cells)
         body_html += f"<tr>{cell_html}</tr>"
 
     st.markdown(
@@ -357,7 +380,6 @@ def _render_player_table(
         unsafe_allow_html=True,
     )
 
-    nav_extra = {"club_id": str(club_id)} if public_mode and club_id else {}
     nav_candidates: list[tuple[str, int]] = []
     seen_ids: set[int] = set()
     for row in rows:
@@ -539,13 +561,22 @@ def render(ctx):
     st.markdown(
         """
         <style>
-        .lb-link {
+        .lb-link,
+        .lb-player-link {
             color: inherit;
             text-decoration: none;
         }
-        .lb-link:hover {
+        .lb-link:visited,
+        .lb-player-link:visited {
+            color: inherit;
+        }
+        .lb-link:hover,
+        .lb-player-link:hover {
             text-decoration: underline;
             opacity: 0.95;
+        }
+        .lb-player-link {
+            font-weight: 500;
         }
         .lb-table-wrap {
             overflow-x: auto;
