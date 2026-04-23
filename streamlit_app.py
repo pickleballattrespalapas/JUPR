@@ -14,18 +14,14 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.admin_auth import (
-    AdminAuthConfigError,
-    AdminAuthError,
     bootstrap_admin_auth,
     get_current_admin_user,
     is_allowed_admin_email,
     is_recovery_flow_query,
     load_admin_allowlist,
-    login_admin,
     logout_admin,
     maybe_restore_admin_login_from_browser,
     render_admin_browser_session_bridge,
-    send_password_reset_email,
 )
 from jupr_app.ui.context import AppContext
 from jupr_app.ui.page_registry import (
@@ -42,7 +38,6 @@ from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
 logger = logging.getLogger(__name__)
-DEFAULT_ADMIN_PAGE_KEY = "league_manager"
 
 
 def _debug_exceptions_enabled() -> bool:
@@ -65,7 +60,6 @@ CLUB_ID = "tres_palapas"
 
 # Public base URL used for share links + link buttons (Streamlit Cloud)
 PUBLIC_BASE_URL = "https://juprtrespalapas.streamlit.app"
-RESET_PASSWORD_REDIRECT_URL = f"{PUBLIC_BASE_URL}/?page=reset_password&public=1"
 
 
 # -------------------------
@@ -166,6 +160,7 @@ def main():
         public_requested = _is_truthy(qp_get("public", "0"))
         admin_requested = _is_truthy(qp_get("admin", "0"))
         incoming_page_param = qp_get("page", "").strip().lower()
+        admin_login_requested = incoming_page_param == "admin_login"
         requested_admin_page = incoming_page_param in ADMIN_ONLY_PAGE_KEYS
         recovery_flow = is_recovery_flow_query()
         debug_exceptions = _debug_exceptions_enabled()
@@ -183,9 +178,9 @@ def main():
         render_admin_browser_session_bridge()
 
         admin_allowlist = load_admin_allowlist()
-        auth_config_error: str | None = None
-
-        should_restore_admin = admin_requested or requested_admin_page or recovery_flow
+        should_restore_admin = (
+            admin_requested or requested_admin_page or admin_login_requested or recovery_flow
+        )
         if should_restore_admin:
             maybe_restore_admin_login_from_browser()
 
@@ -200,85 +195,31 @@ def main():
             current_admin_email = ""
             authenticated = False
 
-        effective_admin_shell = admin_requested or requested_admin_page or recovery_flow
-        PUBLIC_MODE = not effective_admin_shell
-        if public_requested and not effective_admin_shell:
+        effective_admin_entry = (
+            admin_requested or requested_admin_page or admin_login_requested or recovery_flow
+        )
+        PUBLIC_MODE = not effective_admin_entry
+        if public_requested and not effective_admin_entry:
             PUBLIC_MODE = True
-        admin_logged_in = (not PUBLIC_MODE) and authenticated
+        unauthenticated_admin_page_request = requested_admin_page and not authenticated
+        if unauthenticated_admin_page_request:
+            st.session_state["post_login_admin_page_key"] = incoming_page_param
+            st.query_params["admin"] = "1"
+            st.query_params.pop("public", None)
+            st.query_params["page"] = "admin_login"
+            st.rerun()
+
+        admin_logged_in = authenticated and authorized and (not admin_login_requested)
         st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
-        st.session_state["jupr_admin_entry_active"] = bool(effective_admin_shell)
+        st.session_state["jupr_admin_entry_active"] = bool(effective_admin_entry)
+        st.session_state["admin_allowlist"] = admin_allowlist
 
         # ---- Sidebar / Auth ----
-        if PUBLIC_MODE:
+        if PUBLIC_MODE or admin_login_requested:
             hide_sidebar_and_header_for_public()
         else:
             st.sidebar.title("JUPR Leagues 🌵")
-
-            if not authenticated:
-                if requested_admin_page:
-                    st.session_state["post_login_admin_page_key"] = incoming_page_param
-                with st.sidebar.expander("🔒 Admin Login"):
-                    show_forgot_password = st.session_state.get("show_forgot_password", False)
-
-                    with st.form("admin_login_form", clear_on_submit=False):
-                        email = st.text_input("Email", key="admin_email")
-                        password = st.text_input("Password", type="password", key="admin_pwd")
-                        login_submitted = st.form_submit_button("Login")
-
-                    if login_submitted:
-                        if not admin_allowlist:
-                            auth_config_error = "Supabase auth is not configured. Set SUPABASE_URL, SUPABASE_ANON_KEY, and admin.allowed_emails."
-                        else:
-                            try:
-                                result = login_admin(email=email, password=password)
-                                login_user = result.get("user")
-                                login_email = str(getattr(login_user, "email", "") or "").strip().lower()
-                                if not is_allowed_admin_email(login_email, admin_allowlist):
-                                    logout_admin()
-                                    st.sidebar.error("Authenticated but not authorized for admin access.")
-                                else:
-                                    requested_key = (
-                                        st.session_state.pop("post_login_admin_page_key", "")
-                                        or incoming_page_param
-                                    )
-                                    if requested_key not in ADMIN_ONLY_PAGE_KEYS:
-                                        requested_key = DEFAULT_ADMIN_PAGE_KEY
-                                    st.query_params["admin"] = "1"
-                                    st.query_params.pop("public", None)
-                                    st.query_params["page"] = requested_key
-                                    st.rerun()
-                            except AdminAuthConfigError as exc:
-                                auth_config_error = str(exc)
-                            except AdminAuthError as exc:
-                                st.sidebar.error(str(exc))
-
-                    if st.button("Forgot password?", key="admin_forgot_password_btn"):
-                        st.session_state["show_forgot_password"] = not show_forgot_password
-                        st.rerun()
-
-                    if st.session_state.get("show_forgot_password", False):
-                        with st.form("admin_reset_password_form", clear_on_submit=False):
-                            reset_email = st.text_input("Email for reset link", key="admin_reset_email")
-                            send_reset_submitted = st.form_submit_button("Send reset email")
-
-                        if send_reset_submitted:
-                            try:
-                                send_password_reset_email(
-                                    reset_email,
-                                    redirect_to=RESET_PASSWORD_REDIRECT_URL,
-                                )
-                            except AdminAuthConfigError as exc:
-                                auth_config_error = str(exc)
-                            except AdminAuthError as exc:
-                                st.sidebar.error(str(exc))
-                            else:
-                                st.sidebar.success(
-                                    "If that email exists, a reset link has been sent."
-                                )
-
-                if auth_config_error:
-                    st.sidebar.error(auth_config_error)
-            else:
+            if authenticated:
                 st.sidebar.success(f"Logged In: {current_admin_email}")
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
                     logout_admin()
@@ -362,6 +303,7 @@ def main():
         # -------------------------
         from jupr_app.ui.pages import (
             admin_guide,
+            admin_login,
             admin_tools,
             badge_codex,
             badge_debug,
@@ -430,6 +372,7 @@ def main():
             "🗞️ Weekly Recap": weekly_recap,
             "🧾 Top Active Players PDF": top_players_printable,
             # Hidden deep-link page
+            "🔐 Admin Login": admin_login,
             "🔐 Reset Password": reset_password,
             "📬 Verified Updates Request": players,
             # Admin-only
@@ -486,7 +429,9 @@ def main():
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 
             valid_admin_deep_label = ""
-            if deep_label in HIDDEN_PAGE_LABELS and is_recovery_flow_query():
+            if deep_page_key == "admin_login" and not authenticated:
+                valid_admin_deep_label = deep_label
+            elif deep_label in HIDDEN_PAGE_LABELS and is_recovery_flow_query():
                 valid_admin_deep_label = deep_label
             elif deep_label in visible_labels:
                 valid_admin_deep_label = deep_label

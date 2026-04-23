@@ -10,12 +10,9 @@ from jupr_app.ui.theme_clean import topbar
 
 def build_admin_entry_url() -> str:
     """
-    Build a deterministic URL that explicitly enters the admin shell.
+    Build a deterministic URL that explicitly enters the admin login landing page.
     """
-    preserved_page = str(st.query_params.get("page", "") or "").strip()
-    params: dict[str, str] = {"admin": "1"}
-    if preserved_page:
-        params["page"] = preserved_page
+    params: dict[str, str] = {"admin": "1", "page": "admin_login"}
     return f"/?{urlencode(params)}"
 
 
