@@ -38,7 +38,6 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
 )
 
 logger = logging.getLogger(__name__)
-_PLAYER_STORIES_MISSING_TABLE_LOGGED = False
 
 try:
     import altair as alt
@@ -56,6 +55,33 @@ except Exception:
     MIN_WIN_DELTA_ELO = 1.0
     CAP_LOSER_GAIN_ELO = 16.0
     _LEAGUE_REPLAY_AVAILABLE = False
+
+
+def _stable_json_payload(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(k): _stable_json_payload(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_stable_json_payload(v) for v in value]
+    if isinstance(value, set):
+        normalized = [_stable_json_payload(v) for v in value]
+        return sorted(normalized, key=lambda v: json.dumps(v, sort_keys=True, ensure_ascii=False, default=str))
+    return value
+
+
+def _cache_safe_value(value: object) -> object:
+    if isinstance(value, (dict, list, set, tuple)):
+        return json.dumps(_stable_json_payload(value), sort_keys=True, ensure_ascii=False, default=str)
+    return value
+
+
+def _hash_safe_cached_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    safe_df = df.copy()
+    for col in safe_df.columns:
+        if safe_df[col].dtype == "object":
+            safe_df[col] = safe_df[col].map(_cache_safe_value)
+    return safe_df
 
 
 @st.cache_data(ttl=30)
@@ -89,9 +115,9 @@ def fetch_player_matches(_supabase, club_id: str, pid: int, limit: int = 600) ->
         return pd.DataFrame(resp.data or [])
 
     try:
-        return _run(snap_select)
+        return _hash_safe_cached_df(_run(snap_select))
     except Exception:
-        return _run(base_select)
+        return _hash_safe_cached_df(_run(base_select))
 
 
 @st.cache_data(ttl=60)
@@ -137,7 +163,7 @@ def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     requirements_map = load_requirements_map()
     badges_df["requirements"] = badges_df["badge_id"].map(requirements_map).fillna("Requirements TBD")
 
-    return pb_df.merge(badges_df, on="badge_id", how="left")
+    return _hash_safe_cached_df(pb_df.merge(badges_df, on="badge_id", how="left"))
 
 
 # Keep this cache short so newly finalized tournament podium trophies appear quickly.
@@ -161,66 +187,9 @@ def fetch_badge_definitions(_supabase) -> pd.DataFrame:
         if not df.empty:
             requirements_map = load_requirements_map()
             df["requirements"] = df["badge_id"].map(requirements_map).fillna("Requirements TBD")
-        return df
+        return _hash_safe_cached_df(df)
     except Exception:
         logger.exception("Failed to load badge definitions")
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=60)
-def fetch_player_stories(_supabase, club_id: str, pid: int, limit: int = 6) -> pd.DataFrame:
-    def _error_payload_text(exc: Exception) -> str:
-        pieces = [str(exc)]
-        for attr in ("code", "message", "details", "hint"):
-            value = getattr(exc, attr, None)
-            if value:
-                pieces.append(str(value))
-        response = getattr(exc, "response", None)
-        if response is not None:
-            text = getattr(response, "text", None)
-            if text:
-                pieces.append(str(text))
-            json_fn = getattr(response, "json", None)
-            if callable(json_fn):
-                try:
-                    payload = json_fn()
-                except Exception:
-                    payload = None
-                if payload:
-                    pieces.append(str(payload))
-        return " | ".join(pieces).lower()
-
-    def _is_missing_player_stories_table_error(exc: Exception) -> bool:
-        payload = _error_payload_text(exc)
-        if not payload:
-            return False
-        has_missing_code = "pgrst205" in payload or "42p01" in payload
-        if not has_missing_code:
-            return False
-        return "player_stories" in payload and ("table" in payload or "relation" in payload)
-
-    try:
-        resp = (
-            _supabase.table("player_stories")
-            .select("story_type,context_id,created_at,title,body,importance,match_id")
-            .eq("club_id", str(club_id))
-            .eq("player_id", int(pid))
-            .order("created_at", desc=True)
-            .limit(int(limit) * 3)
-            .execute()
-        )
-        return pd.DataFrame(resp.data or [])
-    except Exception as exc:
-        if _is_missing_player_stories_table_error(exc):
-            global _PLAYER_STORIES_MISSING_TABLE_LOGGED
-            if not _PLAYER_STORIES_MISSING_TABLE_LOGGED:
-                _PLAYER_STORIES_MISSING_TABLE_LOGGED = True
-                logger.warning(
-                    "Optional table player_stories is missing for club_id=%s; story cards will be hidden until migrations are applied.",
-                    str(club_id),
-                )
-            return pd.DataFrame()
-        logger.exception("Failed to load player stories")
         return pd.DataFrame()
 
 
@@ -583,7 +552,6 @@ def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: 
                 "Event": str(event_row.get("name") or "Social Event").strip() or "Social Event",
                 "Event Type": str(event_row.get("event_type") or "social_unrated").strip() or "social_unrated",
                 "Skill Tags": ", ".join(skill_tags),
-                "_skill_tags_list": skill_tags,
                 "Matches": 0,
                 "Wins": 0,
                 "Losses": 0,
@@ -635,7 +603,7 @@ def fetch_player_social_event_history(_supabase, club_id: str, pid: int, limit: 
 
     history_df["Date"] = pd.to_datetime(history_df["Date"], utc=True, errors="coerce")
     history_df = history_df.sort_values(["Date", "event_id"], ascending=[False, False]).reset_index(drop=True)
-    return history_df
+    return _hash_safe_cached_df(history_df)
 
 
 @st.cache_data(ttl=60)
@@ -666,12 +634,12 @@ def fetch_player_social_participation(_supabase, club_id: str, pid: int) -> dict
 
     buckets: dict[str, dict[str, int | str]] = {}
     for _, row in history_df.iterrows():
-        skill_levels = row.get("_skill_tags_list")
-        if isinstance(skill_levels, str):
-            skill_levels = [skill_levels]
-        if not isinstance(skill_levels, list) or not skill_levels:
+        skill_tags_text = str(row.get("Skill Tags") or "").strip()
+        if not skill_tags_text:
             skill_levels = ["All"]
-        if "All" in skill_levels:
+        else:
+            skill_levels = [token.strip() for token in skill_tags_text.split(",") if token.strip()]
+        if not skill_levels or "All" in skill_levels:
             target_levels = ["All"]
         else:
             target_levels = [str(level).strip() for level in skill_levels if str(level).strip()] or ["All"]
@@ -2023,43 +1991,6 @@ def render(ctx):
                                         "Earned": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
                                     },
                                 )
-            st.subheader("Story Cards")
-            story_df = fetch_player_stories(_supabase, club_id, pid, limit=6)
-            if story_df.empty:
-                st.caption("No new stories in the tape room yet.")
-            else:
-                dedupe_subset = [col for col in ["story_type", "context_id"] if col in story_df.columns]
-                if dedupe_subset:
-                    story_df = story_df.drop_duplicates(subset=dedupe_subset, keep="first")
-                if "created_at" in story_df.columns:
-                    story_df = story_df.sort_values("created_at", ascending=False)
-                if "story_type" not in story_df.columns:
-                    st.caption("No structured story types are available for this player yet.")
-                else:
-                    highlights = story_df[story_df["story_type"].str.startswith("highlight", na=False)].head(3)
-                    foreshadow = story_df[story_df["story_type"].str.startswith("foreshadow", na=False)].head(3)
-                    highlight_col, foreshadow_col = st.columns(2)
-                    with highlight_col:
-                        st.markdown("**Highlights**")
-                        if highlights.empty:
-                            st.caption("No highlights yet.")
-                        else:
-                            for _, row in highlights.iterrows():
-                                title = html.escape(str(row.get("title") or "Highlight"))
-                                body = html.escape(str(row.get("body") or ""))
-                                st.markdown(f"**{title}**")
-                                st.caption(body)
-                    with foreshadow_col:
-                        st.markdown("**Foreshadowing**")
-                        if foreshadow.empty:
-                            st.caption("No foreshadowing yet.")
-                        else:
-                            for _, row in foreshadow.iterrows():
-                                title = html.escape(str(row.get("title") or "Foreshadowing"))
-                                body = html.escape(str(row.get("body") or ""))
-                                st.markdown(f"**{title}**")
-                                st.caption(body)
-
     def render_ratings_tab():
         # -------------------------
         # Restore: Ratings by active league (table)

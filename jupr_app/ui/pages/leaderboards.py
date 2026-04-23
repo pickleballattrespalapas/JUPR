@@ -845,11 +845,9 @@ def render(ctx):
 
     # Preselect league from URL if present
     pre = (st.session_state.get("preselect_league", "") or qp_get("league", "") or "").strip()
-    default_idx = 0
-    if pre and pre in available_leagues:
-        default_idx = available_leagues.index(pre)
-
-    st.session_state.setdefault("lb_league", available_leagues[default_idx])
+    initial_league = pre if (pre and pre in available_leagues) else available_leagues[0]
+    if st.session_state.get("lb_league") not in available_leagues:
+        st.session_state["lb_league"] = initial_league
 
     qp_player = (qp_get("player", "") or "").strip()
     qp_pid_raw = (qp_get("pid", "") or "").strip()
@@ -865,9 +863,9 @@ def render(ctx):
         if "id" in ctx.df_players_active.columns:
             active_ids = set(ctx.df_players_active["id"].astype(int).tolist())
 
-    target_league = st.session_state.get("lb_league", available_leagues[default_idx])
+    target_league = st.session_state.get("lb_league", available_leagues[0])
     if target_league not in available_leagues:
-        target_league = available_leagues[default_idx]
+        target_league = available_leagues[0]
         st.session_state["lb_league"] = target_league
 
     # -------------------------
@@ -880,14 +878,12 @@ def render(ctx):
             target_league = st.segmented_control(
                 "League",
                 available_leagues,
-                default=target_league,
                 key="lb_league",
             )
         except Exception:
             target_league = st.radio(
                 "League",
                 available_leagues,
-                index=available_leagues.index(target_league),
                 horizontal=True,
                 key="lb_league",
             )
@@ -896,7 +892,7 @@ def render(ctx):
 
     target_league = st.session_state.get("lb_league", "OVERALL")
     if target_league not in available_leagues:
-        target_league = available_leagues[default_idx]
+        target_league = available_leagues[0]
         st.session_state["lb_league"] = target_league
     try:
         st.query_params["page"] = "leaderboards"
