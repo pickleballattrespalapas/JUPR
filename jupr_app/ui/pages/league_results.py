@@ -293,16 +293,17 @@ def _build_scoped_league_standings(
     return standings
 
 
-def _render_html_table(headers: list[str], rows: list[list[str]]) -> None:
-    header_html = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+def _render_html_table(headers: list[str], rows: list[list[str]], table_class: str = "") -> None:
+    table_class_attr = f"lb-table {table_class}".strip()
+    header_html = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
     row_html = ""
     for row in rows:
-        cells = "".join(f"<td>{cell}</td>" for cell in row)
+        cells = "".join(f"<td>{html.escape(str(cell))}</td>" for cell in row)
         row_html += f"<tr>{cells}</tr>"
 
     table_html = f"""
     <div class="lb-table-wrap">
-        <table class="lb-table">
+        <table class="{table_class_attr}">
             <thead>
                 <tr>{header_html}</tr>
             </thead>
@@ -320,6 +321,7 @@ def _render_player_table(
     rows: list[dict],
     public_mode: bool,
     club_id: str | None = None,
+    table_key: str = "league_results",
 ) -> None:
     if title:
         st.markdown(title)
@@ -328,27 +330,60 @@ def _render_player_table(
         return
 
     headers = [key for key in rows[0].keys() if not str(key).startswith("_")]
-    header_cols = st.columns([1.8] + [1] * (len(headers) - 1))
-    for idx, header in enumerate(headers):
-        header_cols[idx].markdown(f"**{header}**")
+    col_class_map = {
+        "Player": "col-player",
+        "Rating (JUPR)": "col-rating",
+        "Games": "col-games",
+        "Wins": "col-wins",
+        "Losses": "col-losses",
+    }
+    header_html = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
+    colgroup_html = "".join(f'<col class="{col_class_map.get(h, "")}">' for h in headers)
+    body_html = ""
+    for row in rows:
+        cell_html = "".join(f"<td>{html.escape(str(row.get(h, '—')))}</td>" for h in headers)
+        body_html += f"<tr>{cell_html}</tr>"
+
+    st.markdown(
+        f"""
+        <div class="lb-table-wrap">
+            <table class="lb-table lb-table--results">
+                <colgroup>{colgroup_html}</colgroup>
+                <thead><tr>{header_html}</tr></thead>
+                <tbody>{body_html}</tbody>
+            </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     nav_extra = {"club_id": str(club_id)} if public_mode and club_id else {}
-    for index, row in enumerate(rows):
-        cols = st.columns([1.8] + [1] * (len(headers) - 1))
+    nav_candidates: list[tuple[str, int]] = []
+    seen_ids: set[int] = set()
+    for row in rows:
         pid = _safe_int(row.get("_pid"))
-        for cidx, header in enumerate(headers):
-            value = row.get(header, "—")
-            if header == "Player":
-                label = str(value or "Player")
-                if pid is not None and cols[cidx].button(
-                    label,
-                    key=f"league_results_nav_{title}_{index}_{pid}",
-                    width="stretch",
-                ):
-                    navigate_to_player_profile(pid, public_mode=public_mode, extra_params=nav_extra)
-            else:
-                cols[cidx].write(value)
-        st.divider()
+        if pid is None or pid in seen_ids:
+            continue
+        seen_ids.add(pid)
+        nav_candidates.append((str(row.get("Player", f"#{pid}")), int(pid)))
+
+    if nav_candidates:
+        nav_labels: list[str] = []
+        nav_lookup: dict[str, int] = {}
+        for name, pid in nav_candidates:
+            label = f"{name} (#{pid})"
+            nav_labels.append(label)
+            nav_lookup[label] = pid
+
+        nav_cols = st.columns([4, 1])
+        selected_label = nav_cols[0].selectbox(
+            "Open player profile",
+            options=nav_labels,
+            key=f"{table_key}_profile_select",
+            label_visibility="collapsed",
+        )
+        if nav_cols[1].button("Open", key=f"{table_key}_profile_open", width="stretch"):
+            navigate_to_player_profile(nav_lookup[selected_label], public_mode=public_mode, extra_params=nav_extra)
 
 
 def _replay_league_ratings(
@@ -529,6 +564,21 @@ def render(ctx):
             text-align: left;
             border-bottom: 1px solid var(--border);
             font-size: 13px;
+            white-space: nowrap;
+        }
+        .lb-table--results {
+            min-width: 860px;
+        }
+        .lb-table--results col.col-player {
+            min-width: 220px;
+            width: 220px;
+        }
+        .lb-table--results col.col-rating,
+        .lb-table--results col.col-games,
+        .lb-table--results col.col-wins,
+        .lb-table--results col.col-losses {
+            min-width: 96px;
+            width: 96px;
         }
         .lb-table th {
             font-size: 12px;
@@ -631,7 +681,13 @@ def render(ctx):
                     }
                 )
 
-            _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
+            _render_player_table(
+                "",
+                table_rows,
+                PUBLIC_MODE,
+                getattr(ctx, "club_id", None),
+                table_key="overall_standings",
+            )
 
         st.markdown("### League Match Totals")
         if overall_stats_ui.empty:
@@ -651,7 +707,13 @@ def render(ctx):
                         "_pid": int(row["player_id"]),
                     }
                 )
-            _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
+            _render_player_table(
+                "",
+                table_rows,
+                PUBLIC_MODE,
+                getattr(ctx, "club_id", None),
+                table_key="overall_totals",
+            )
 
     elif section == "Weekly":
         st.subheader("Weekly Results")
@@ -695,7 +757,13 @@ def render(ctx):
                     }
                 )
 
-            _render_player_table("", table_rows, PUBLIC_MODE, getattr(ctx, "club_id", None))
+            _render_player_table(
+                "",
+                table_rows,
+                PUBLIC_MODE,
+                getattr(ctx, "club_id", None),
+                table_key="weekly_results",
+            )
 
         st.markdown("### Weekly Highlights")
         highlight_cols = st.columns(3)
