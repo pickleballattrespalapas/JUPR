@@ -9,9 +9,9 @@ from jupr_app.domain.live_social import (
     list_social_match_log_rows,
     update_social_match_row,
 )
-from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 from jupr_app.ui.layout import page_shell
-from jupr_app.domain.replay_history import replay_history
+from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
+from jupr_app.domain.match_delete import delete_rated_matches_with_replay
 
 
 
@@ -290,19 +290,29 @@ def render(ctx):
                 confirm = st.text_input("Type DELETE to confirm", value="", key="dup_delete_confirm")
                 if st.button("🗑️ Delete duplicates now", type="primary", disabled=(confirm.strip().upper() != "DELETE")):
                     if ids_to_delete:
-                        deleted_rows = dup_only[dup_only["id"].astype(int).isin(ids_to_delete)]
-                        deleted_pids = set()
-                        for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
-                            if col in deleted_rows.columns:
-                                deleted_pids.update(deleted_rows[col].dropna().astype(int).tolist())
-                        ctx.supabase.table("matches").delete().eq("club_id", str(ctx.club_id)).in_("id", ids_to_delete).execute()
-                        if deleted_pids:
-                            recompute_last_game_at_for_players(
+                        bar = st.progress(0.0)
+                        with st.spinner("Deleting duplicates and rebuilding ratings (Replay ALL)..."):
+                            delete_result = delete_rated_matches_with_replay(
                                 supabase=ctx.supabase,
                                 club_id=str(ctx.club_id),
-                                player_ids=deleted_pids,
+                                match_ids=ids_to_delete,
+                                df_meta=getattr(ctx, "df_meta", pd.DataFrame()),
+                                progress_cb=lambda x: bar.progress(float(x)),
+                                actor="match_log.duplicate_delete",
                             )
-                        st.success("Deleted duplicates. Now run Admin Tools → Replay History → ALL.")
+                        if delete_result.get("warning"):
+                            st.warning(delete_result["warning"])
+                        if delete_result.get("replay_error"):
+                            st.warning(
+                                "⚠️ Delete completed, but Replay ALL failed. Ratings may now be stale. "
+                                "Run Admin Tools → Replay History → ALL immediately. "
+                                f"Error: {delete_result['replay_error']}"
+                            )
+                        else:
+                            st.success(
+                                f"Deleted {delete_result['deleted_count']} duplicate rated match(es). "
+                                "Ratings were rebuilt automatically via Replay ALL."
+                            )
                         st.rerun()
 
     st.divider()
@@ -622,7 +632,7 @@ def render(ctx):
         st.caption("Runs the same Replay History as Admin Tools. Use ALL after moving matches between leagues.")
     
         df_meta = getattr(ctx, "df_meta", pd.DataFrame())
-        league_opts = ["ALL (Full System Reset)"]
+        league_opts = [FULL_RESET_LABEL]
         if df_meta is not None and not df_meta.empty and "league_name" in df_meta.columns:
             league_opts += sorted(df_meta["league_name"].dropna().astype(str).unique().tolist())
     
@@ -671,16 +681,27 @@ def render(ctx):
         confirm2 = st.text_input("Type DELETE to confirm bulk delete", value="", key="bulk_delete_confirm")
         if st.button(f"Delete {len(to_delete)} Matches", type="primary", disabled=(confirm2.strip().upper() != "DELETE")):
             delete_ids = to_delete["id"].astype(int).tolist()
-            deleted_pids = set()
-            for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
-                if col in to_delete.columns:
-                    deleted_pids.update(to_delete[col].dropna().astype(int).tolist())
-            ctx.supabase.table("matches").delete().eq("club_id", str(ctx.club_id)).in_("id", delete_ids).execute()
-            if deleted_pids:
-                recompute_last_game_at_for_players(
+            bar = st.progress(0.0)
+            with st.spinner("Deleting rated matches and rebuilding ratings (Replay ALL)..."):
+                delete_result = delete_rated_matches_with_replay(
                     supabase=ctx.supabase,
                     club_id=str(ctx.club_id),
-                    player_ids=deleted_pids,
+                    match_ids=delete_ids,
+                    df_meta=getattr(ctx, "df_meta", pd.DataFrame()),
+                    progress_cb=lambda x: bar.progress(float(x)),
+                    actor="match_log.bulk_delete",
                 )
-            st.success("Deleted. Run Replay ALL if you want ratings to be consistent.")
+            if delete_result.get("warning"):
+                st.warning(delete_result["warning"])
+            if delete_result.get("replay_error"):
+                st.warning(
+                    "⚠️ Delete completed, but Replay ALL failed. Ratings may now be stale. "
+                    "Run Admin Tools → Replay History → ALL immediately. "
+                    f"Error: {delete_result['replay_error']}"
+                )
+            else:
+                st.success(
+                    f"Deleted {delete_result['deleted_count']} rated match(es). "
+                    "Ratings were rebuilt automatically via Replay ALL."
+                )
             st.rerun()
