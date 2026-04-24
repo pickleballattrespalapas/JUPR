@@ -1509,29 +1509,31 @@ def _render_player_slot_editor(
             key=scope_key,
         )
         scoped_sub = game_sub if selected_scope == "This game only" else round_sub
+        scoped_sub_data = scoped_sub or {}
         substitute_key = f"{editor_key}_substitute"
         scope_memory_key = f"{editor_key}_scope_memory"
         default_substitute = ""
-        if scoped_sub:
-            default_substitute = str(scoped_sub.get("substitute_name") or "")
+        if scoped_sub_data:
+            default_substitute = str(scoped_sub_data.get("substitute_name") or "")
         elif active_sub:
             default_substitute = str(active_sub.get("substitute_name") or "")
         note_key = f"{editor_key}_note"
-        if (
+        scope_changed = (
             scope_memory_key not in st.session_state
             or st.session_state.get(scope_memory_key) != selected_scope
-        ):
+        )
+        if scope_changed:
             st.session_state[scope_memory_key] = selected_scope
             st.session_state[substitute_key] = (
                 default_substitute if default_substitute in player_options else player_options[0]
             )
-            st.session_state[note_key] = str(scoped_sub.get("note") or "")
+            st.session_state.pop(note_key, None)
         elif substitute_key not in st.session_state:
             st.session_state[substitute_key] = (
                 default_substitute if default_substitute in player_options else player_options[0]
             )
-        elif note_key not in st.session_state:
-            st.session_state[note_key] = str(scoped_sub.get("note") or "")
+        if note_key not in st.session_state:
+            st.session_state[note_key] = str(scoped_sub_data.get("note") or "")
         selected_name = st.selectbox(
             "Replacement player",
             player_options,
