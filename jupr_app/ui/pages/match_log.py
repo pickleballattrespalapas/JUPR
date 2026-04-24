@@ -283,15 +283,15 @@ def render(ctx):
             if delete_mode == "Delete duplicates (keep oldest in each group)":
                 ids_to_delete = dup_only[dup_only["dup_rank"] > 1]["id"].astype(int).tolist()
                 st.warning(
-                    f"Ready to delete {len(ids_to_delete)} duplicated match rows "
-                    f"(keeping the oldest copy per group)."
+                    f"Ready to exclude {len(ids_to_delete)} duplicated rated match rows "
+                    f"(keeping the oldest copy per group) and rebuild ratings."
                 )
 
                 confirm = st.text_input("Type DELETE to confirm", value="", key="dup_delete_confirm")
                 if st.button("🗑️ Delete duplicates now", type="primary", disabled=(confirm.strip().upper() != "DELETE")):
                     if ids_to_delete:
                         bar = st.progress(0.0)
-                        with st.spinner("Deleting duplicates and rebuilding ratings (Replay ALL)..."):
+                        with st.spinner("Excluding selected rated matches and rebuilding ratings..."):
                             delete_result = delete_rated_matches_with_replay(
                                 supabase=ctx.supabase,
                                 club_id=str(ctx.club_id),
@@ -299,18 +299,19 @@ def render(ctx):
                                 df_meta=getattr(ctx, "df_meta", pd.DataFrame()),
                                 progress_cb=lambda x: bar.progress(float(x)),
                                 actor="match_log.duplicate_delete",
+                                source="match_log",
                             )
                         if delete_result.get("warning"):
                             st.warning(delete_result["warning"])
                         if delete_result.get("replay_error"):
-                            st.warning(
-                                "⚠️ Delete completed, but Replay ALL failed. Ratings may now be stale. "
+                            st.error(
+                                "Matches were excluded, but Replay ALL failed. Ratings may be stale. "
                                 "Run Admin Tools → Replay History → ALL immediately. "
                                 f"Error: {delete_result['replay_error']}"
                             )
                         else:
                             st.success(
-                                f"Deleted {delete_result['deleted_count']} duplicate rated match(es). "
+                                f"Excluded {delete_result['deleted_count']} rated match(es) from official history. "
                                 "Ratings were rebuilt automatically via Replay ALL."
                             )
                         st.session_state["force_data_refresh"] = True
@@ -320,7 +321,7 @@ def render(ctx):
 
     # Bulk match editor UI
     st.subheader("✏️ Bulk Match Editor")
-    st.caption("Filter matches, select rows, edit league/date/week_tag/match_type/notes/is_active, preview impact, then apply safely.")
+    st.caption("Filter matches, select rows, edit league/date/week_tag/match_type/players/scores/notes/is_active, preview impact, then apply safely.")
 
     df_bulk = df_matches.copy()
 
@@ -390,7 +391,7 @@ def render(ctx):
     st.caption(f"{len(df_bulk)} match(es) match the filters.")
 
     # Build editable view
-    base_cols = [c for c in ["id", "date_dt", "league", "week_tag", "match_type"] if c in df_bulk.columns]
+    base_cols = [c for c in ["id", "date_dt", "league", "week_tag", "match_type", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"] if c in df_bulk.columns]
     view = df_bulk[base_cols].copy()
 
     # Rename date_dt -> date for editor friendliness
@@ -424,6 +425,16 @@ def render(ctx):
     if "bulk_match_df" not in st.session_state:
         st.session_state["bulk_match_baseline"] = view.copy(deep=True)
         st.session_state["bulk_match_df"] = view.copy(deep=True)
+
+    players_df = getattr(ctx, "df_players_all", pd.DataFrame()).copy()
+    player_name_by_id = {}
+    if players_df is not None and not players_df.empty and {"id", "name"}.issubset(players_df.columns):
+        for _, prow in players_df.iterrows():
+            try:
+                player_name_by_id[int(prow["id"])] = str(prow["name"])
+            except Exception:
+                continue
+    player_choices = sorted([(f"{name} (#{pid})", pid) for pid, name in player_name_by_id.items()], key=lambda x: x[0].lower())
 
     # Bulk apply controls
     st.markdown("**Bulk apply to selected rows**")
@@ -489,6 +500,29 @@ def render(ctx):
             st.session_state["bulk_match_editor_version"] += 1
             st.success("Bulk changes staged (not yet saved).")
 
+    st.markdown("**Player correction helper**")
+    pcol1, pcol2, pcol3 = st.columns([2, 3, 2])
+    with pcol1:
+        replace_slot = st.selectbox("Replace slot", ["t1_p1", "t1_p2", "t2_p1", "t2_p2"], key="bulk_player_replace_slot")
+    with pcol2:
+        replace_label = st.selectbox(
+            "Replacement player",
+            [label for label, _pid in player_choices] if player_choices else ["No players loaded"],
+            key="bulk_player_replace_target",
+        )
+    with pcol3:
+        if st.button("Stage player replacement", key="bulk_player_stage", disabled=not player_choices):
+            selected_df = st.session_state["bulk_match_df"].copy()
+            sel_mask = selected_df["Select"] == True
+            if not sel_mask.any():
+                st.warning("Select at least one row before staging player replacement.")
+            else:
+                replacement_pid = next(pid for label, pid in player_choices if label == replace_label)
+                selected_df.loc[sel_mask, replace_slot] = int(replacement_pid)
+                st.session_state["bulk_match_df"] = selected_df
+                st.session_state["bulk_match_editor_version"] += 1
+                st.success(f"Staged replacement in {replace_slot} for selected rows.")
+
     # Editable grid (per-row overrides)
     editor_key = f"bulk_match_editor_{st.session_state['bulk_match_editor_version']}"
     edited = st.data_editor(
@@ -499,8 +533,11 @@ def render(ctx):
         column_config={
             "Select": st.column_config.CheckboxColumn(default=False),
             "date": st.column_config.DatetimeColumn("date", help="UTC datetime"),
+            "score_t1": st.column_config.NumberColumn("score_t1", min_value=0, step=1),
+            "score_t2": st.column_config.NumberColumn("score_t2", min_value=0, step=1),
             "is_active": st.column_config.CheckboxColumn("is_active") if "is_active" in st.session_state["bulk_match_df"].columns else None,
         },
+        disabled=[c for c in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"] if c in st.session_state["bulk_match_df"].columns],
     )
     st.session_state["bulk_match_df"] = edited.copy()
 
@@ -576,6 +613,28 @@ def render(ctx):
             if pd.notna(ad) and (pd.isna(bd) or ad != bd):
                 patch["date"] = ad.isoformat()
 
+        for player_slot in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            if player_slot in cur_by_id.columns and player_slot in base_by_id.columns:
+                try:
+                    old_pid = int(b.get(player_slot))
+                except Exception:
+                    old_pid = None
+                try:
+                    new_pid = int(a.get(player_slot))
+                except Exception:
+                    new_pid = None
+                if new_pid != old_pid:
+                    patch[player_slot] = new_pid
+
+        for score_col in ("score_t1", "score_t2"):
+            if score_col in cur_by_id.columns and score_col in base_by_id.columns:
+                old_score = pd.to_numeric(b.get(score_col), errors="coerce")
+                new_score = pd.to_numeric(a.get(score_col), errors="coerce")
+                if pd.isna(new_score):
+                    continue
+                if pd.isna(old_score) or int(new_score) != int(old_score):
+                    patch[score_col] = int(new_score)
+
         if len(patch.keys()) > 1:
             patches.append(patch)
 
@@ -592,37 +651,61 @@ def render(ctx):
     # Apply
     st.markdown("**Apply changes**")
     actor = st.text_input("Actor (for audit log)", value="admin", key="bulk_match_actor")
+    correction_note = st.text_input("Correction note (optional)", value="", key="bulk_match_correction_note")
     confirm = st.text_input("Type APPLY to confirm", value="", key="bulk_match_confirm")
 
     disabled = (confirm.strip().upper() != "APPLY") or (not patches)
 
     if st.button("Apply staged edits", type="primary", disabled=disabled, key="bulk_match_apply"):
         try:
-            with st.spinner("Applying updates..."):
+            with st.spinner("Applying correction and rebuilding ratings..."):
                 result = apply_bulk_match_edits(
                     supabase=ctx.supabase,
                     club_id=str(ctx.club_id),
                     patches=patches,
                     actor=actor.strip() or "admin",
+                    correction_note=(correction_note.strip() or None),
                 )
 
-            st.success(
-                f"Updated {result['updated_count']} match(es). "
-                f"Affected leagues: {', '.join(result.get('affected_leagues', [])) or '(unknown)'}"
-            )
+            replay_error = None
+            if result["recompute_scope"]["ratings"]:
+                bar = st.progress(0.0)
+                try:
+                    replay_history(
+                        supabase=ctx.supabase,
+                        club_id=str(ctx.club_id),
+                        df_meta=getattr(ctx, "df_meta", pd.DataFrame()),
+                        target_reset=FULL_RESET_LABEL,
+                        progress_cb=lambda x: bar.progress(float(x)),
+                    )
+                except Exception as exc:
+                    replay_error = str(exc)
+
+            if replay_error:
+                st.error(
+                    "Edits were saved, but Replay ALL failed. Ratings may be stale. "
+                    "Run Admin Tools → Replay History → ALL immediately. "
+                    f"Error: {replay_error}"
+                )
+            elif result["recompute_scope"]["ratings"]:
+                st.success(f"Updated {result['updated_count']} match(es). Ratings were rebuilt automatically via Replay ALL.")
+            else:
+                st.success(
+                    f"Updated {result['updated_count']} match(es). "
+                    f"Affected leagues: {', '.join(result.get('affected_leagues', [])) or '(unknown)'}"
+                )
 
             if result.get("warnings"):
                 st.warning("Warnings:\n- " + "\n- ".join(result["warnings"][:10]))
 
-            if result["recompute_scope"]["ratings"]:
-                st.warning("Ratings may be impacted. Run **Admin Tools → Replay History → ALL** (or the affected leagues) to fully re-sync ratings/standings.")
-            else:
+            if not result["recompute_scope"]["ratings"]:
                 st.info("Week/league views may change immediately. If anything looks off, run **Replay History**.")
 
             # Reset editor state
             st.session_state["bulk_match_df"] = view.copy(deep=True)
             st.session_state["bulk_match_baseline"] = view.copy(deep=True)
             st.session_state["bulk_match_editor_version"] += 1
+            st.session_state["force_data_refresh"] = True
             st.rerun()
 
         except Exception as exc:
@@ -661,7 +744,7 @@ def render(ctx):
 
 
     # Bulk delete UI
-    st.subheader("🗑️ Bulk Delete (first N rows shown)")
+    st.subheader("🗑️ Exclude Rated Matches (first N rows shown)")
     edit_cols = [c for c in [
         "id", "date", "league", "week_tag", "match_type",
         "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"
@@ -679,12 +762,12 @@ def render(ctx):
 
     to_delete = edited[edited["Delete"] == True]
     if not to_delete.empty:
-        st.warning(f"Ready to delete {len(to_delete)} match(es).")
-        confirm2 = st.text_input("Type DELETE to confirm bulk delete", value="", key="bulk_delete_confirm")
-        if st.button(f"Delete {len(to_delete)} Matches", type="primary", disabled=(confirm2.strip().upper() != "DELETE")):
+        st.warning(f"Exclude selected rated matches and rebuild ratings: {len(to_delete)} match(es).")
+        confirm2 = st.text_input("Type DELETE to confirm exclusion", value="", key="bulk_delete_confirm")
+        if st.button(f"Exclude {len(to_delete)} Rated Matches", type="primary", disabled=(confirm2.strip().upper() != "DELETE")):
             delete_ids = to_delete["id"].astype(int).tolist()
             bar = st.progress(0.0)
-            with st.spinner("Deleting rated matches and rebuilding ratings (Replay ALL)..."):
+            with st.spinner("Excluding selected rated matches and rebuilding ratings..."):
                 delete_result = delete_rated_matches_with_replay(
                     supabase=ctx.supabase,
                     club_id=str(ctx.club_id),
@@ -692,18 +775,19 @@ def render(ctx):
                     df_meta=getattr(ctx, "df_meta", pd.DataFrame()),
                     progress_cb=lambda x: bar.progress(float(x)),
                     actor="match_log.bulk_delete",
+                    source="match_log",
                 )
             if delete_result.get("warning"):
                 st.warning(delete_result["warning"])
             if delete_result.get("replay_error"):
-                st.warning(
-                    "⚠️ Delete completed, but Replay ALL failed. Ratings may now be stale. "
+                st.error(
+                    "Matches were excluded, but Replay ALL failed. Ratings may be stale. "
                     "Run Admin Tools → Replay History → ALL immediately. "
                     f"Error: {delete_result['replay_error']}"
                 )
             else:
                 st.success(
-                    f"Deleted {delete_result['deleted_count']} rated match(es). "
+                    f"Excluded {delete_result['deleted_count']} rated match(es) from official history. "
                     "Ratings were rebuilt automatically via Replay ALL."
                 )
             st.session_state["force_data_refresh"] = True

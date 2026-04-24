@@ -172,7 +172,7 @@ def replay_history(
     match_cols = (
         "id,date,league,match_type,"
         "t1_p1,t1_p2,t2_p1,t2_p2,"
-        "score_t1,score_t2"
+        "score_t1,score_t2,deleted_at,rating_scope"
     )
 
     matches_to_update: list[dict[str, Any]] = []
@@ -184,18 +184,35 @@ def replay_history(
         start = offset
         end = offset + READ_PAGE_SIZE - 1
 
-        page_resp = _retry(
-            lambda s=start, e=end: (
+        def _load_page_with_filters():
+            return (
                 supabase.table("matches")
                 .select(match_cols)
                 .eq("club_id", club_id)
+                .is_("deleted_at", None)
+                .neq("rating_scope", "unrated")
                 .order("date", desc=False)
                 .order("id", desc=False)
-                .range(s, e)
+                .range(start, end)
                 .execute()
-            ),
-            label=f"select_matches_{start}_{end}",
-        )
+            )
+
+        def _load_page_fallback():
+            return (
+                supabase.table("matches")
+                .select("id,date,league,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2")
+                .eq("club_id", club_id)
+                .order("date", desc=False)
+                .order("id", desc=False)
+                .range(start, end)
+                .execute()
+            )
+
+        try:
+            page_resp = _retry(_load_page_with_filters, label=f"select_matches_{start}_{end}")
+        except Exception:
+            # Backward-compat fallback for deployments that have not yet applied the soft-delete/rating_scope columns.
+            page_resp = _retry(_load_page_fallback, label=f"select_matches_fallback_{start}_{end}")
 
         page = page_resp.data or []
         if not page:
@@ -204,6 +221,10 @@ def replay_history(
         matches_scanned_total += len(page)
 
         for m in page:
+            if m.get("deleted_at") is not None:
+                continue
+            if str(m.get("rating_scope", "") or "").strip().lower() == "unrated":
+                continue
             lg = _norm_league(m.get("league", "") or "")
             in_scope = full_reset or (lg == target_league_norm)
 

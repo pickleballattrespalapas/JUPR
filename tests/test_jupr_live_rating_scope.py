@@ -220,12 +220,12 @@ def test_process_matches_overall_only_updates_players_not_league_ratings(monkeyp
     assert float(updated_players[1]["rating"]) != 1200.0
 
 
-def test_process_matches_unrated_inserts_without_rating_changes(monkeypatch):
+def test_process_matches_unrated_skips_insert_and_rating_changes(monkeypatch):
     _patch_side_effects(monkeypatch)
     sb = _Supabase()
     initial_players = _players_df().to_dict("records")
     sb.tables["players"] = [dict(row) for row in initial_players]
-    process_matches(
+    result = process_matches(
         [{
             "league": "JUPR Live",
             "t1_p1": 1,
@@ -243,15 +243,14 @@ def test_process_matches_unrated_inserts_without_rating_changes(monkeypatch):
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
     )
+    assert result["inserted"] == 0
+    assert result["skipped_unrated"] == 1
     assert sb.tables["league_ratings"] == []
     before = {int(row["id"]): row for row in initial_players}
     after = {int(row["id"]): row for row in sb.tables["players"]}
     assert int(after[1]["matches_played"]) == int(before[1]["matches_played"])
     assert float(after[1]["rating"]) == float(before[1]["rating"])
-    match_row = sb.tables["matches"][0]
-    assert float(match_row["elo_delta"]) == 0.0
-    assert float(match_row["t1_p1_r"]) == float(match_row["t1_p1_r_end"])
-    assert float(match_row["t2_p2_r"]) == float(match_row["t2_p2_r_end"])
+    assert sb.tables["matches"] == []
 
 
 def test_process_matches_without_rating_scope_keeps_legacy_league_updates(monkeypatch):

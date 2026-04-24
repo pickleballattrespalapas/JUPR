@@ -26,10 +26,10 @@ def compute_recompute_scope(patches: List[Dict[str, Any]]) -> Dict[str, bool]:
         # id is always present
         keys.discard("id")
 
-        if keys.intersection({"week_tag", "league", "league_id", "date", "is_active"}):
+        if keys.intersection({"week_tag", "league", "league_id", "date", "is_active", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"}):
             standings = True
 
-        if keys.intersection({"league", "league_id", "date", "match_type", "is_active"}):
+        if keys.intersection({"league", "league_id", "date", "match_type", "is_active", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"}):
             ratings = True
 
     return {"standings": standings, "ratings": ratings}
@@ -84,6 +84,7 @@ def apply_bulk_match_edits(
     patches: List[Dict[str, Any]],
     actor: str,
     source: str = "match_log.bulk_match_editor",
+    correction_note: str | None = None,
 ) -> Dict[str, Any]:
     """
     Apply per-match patches safely.
@@ -100,6 +101,11 @@ def apply_bulk_match_edits(
     """
     if not patches:
         raise ValueError("No patches provided.")
+
+    allowed_patch_fields = {
+        "id", "league", "date", "week_tag", "match_type", "notes", "is_active",
+        "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2",
+    }
 
     # Ensure ids are ints
     ids = [int(p["id"]) for p in patches if "id" in p]
@@ -150,12 +156,24 @@ def apply_bulk_match_edits(
     applied: List[Dict[str, Any]] = []
 
     warnings: List[str] = []
+    patch_uses_player_slots = any(set(p.keys()).intersection({"t1_p1", "t1_p2", "t2_p1", "t2_p2"}) for p in patches)
+    valid_player_ids: Set[int] = set()
+    if patch_uses_player_slots:
+        p_rows = supabase.table("players").select("id").eq("club_id", club_id).execute().data or []
+        valid_player_ids = {
+            int(r["id"])
+            for r in p_rows
+            if r.get("id") is not None
+        }
 
     # Apply sequentially (safe correctness > speed).
     # If you want to optimize later, we can group identical updates or use an RPC for true transactions.
     updated_ids: List[int] = []
 
     for p in patches:
+        unknown_fields = set(p.keys()) - allowed_patch_fields
+        if unknown_fields:
+            raise ValueError(f"Unsupported patch fields: {sorted(unknown_fields)}")
         mid = int(p["id"])
         before = before_by_id[mid]
 
@@ -189,6 +207,26 @@ def apply_bulk_match_edits(
             elif k == "date":
                 # allow datetime or iso string
                 update[k] = _iso_utc(v) if not (isinstance(v, str) and v.strip()) else v
+            elif k in ("score_t1", "score_t2"):
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    raise ValueError(f"Match {mid}: {k} cannot be blank.")
+                try:
+                    score_val = int(v)
+                except Exception as exc:
+                    raise ValueError(f"Match {mid}: {k} must be an integer.") from exc
+                if score_val < 0:
+                    raise ValueError(f"Match {mid}: {k} cannot be negative.")
+                update[k] = score_val
+            elif k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+                if v is None or (isinstance(v, str) and not str(v).strip()):
+                    raise ValueError(f"Match {mid}: {k} cannot be blank for rated doubles.")
+                try:
+                    pid = int(v)
+                except Exception as exc:
+                    raise ValueError(f"Match {mid}: {k} must be a valid player ID.") from exc
+                if valid_player_ids and pid not in valid_player_ids:
+                    raise ValueError(f"Match {mid}: player {pid} for {k} is not in this club.")
+                update[k] = pid
             else:
                 update[k] = v
 
@@ -216,6 +254,21 @@ def apply_bulk_match_edits(
             update["week_tag"] = None
             warnings.append(f"Match {mid}: week_tag auto-cleared because league/date changed.")
 
+        candidate_players = {
+            "t1_p1": int(update.get("t1_p1", before.get("t1_p1"))),
+            "t1_p2": int(update.get("t1_p2", before.get("t1_p2"))),
+            "t2_p1": int(update.get("t2_p1", before.get("t2_p1"))),
+            "t2_p2": int(update.get("t2_p2", before.get("t2_p2"))),
+        }
+        if len(set(candidate_players.values())) != 4:
+            raise ValueError(f"Match {mid}: duplicate player detected in one rated doubles match.")
+
+        if "score_t1" in update or "score_t2" in update:
+            s1 = int(update.get("score_t1", before.get("score_t1", 0) or 0))
+            s2 = int(update.get("score_t2", before.get("score_t2", 0) or 0))
+            if s1 < 0 or s2 < 0:
+                raise ValueError(f"Match {mid}: scores must be non-negative integers.")
+
         if not update:
             continue
 
@@ -227,6 +280,11 @@ def apply_bulk_match_edits(
             a_snap[k] = newv
 
         # Apply update
+        now_iso = pd.Timestamp.utcnow().isoformat()
+        update["updated_at"] = now_iso
+        update["updated_by"] = actor
+        if correction_note is not None:
+            update["correction_note"] = _normalize_blank_to_none(correction_note)
         supabase.table("matches").update(update).eq("club_id", club_id).eq("id", mid).execute()
 
         updated_ids.append(mid)
