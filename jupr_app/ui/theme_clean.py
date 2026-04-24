@@ -245,6 +245,114 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         outline-offset: 2px;
       }}
 
+      /* Public website shell */
+      .jupr-public-shell {{
+        width: 100%;
+      }}
+      .jupr-public-nav {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.9rem;
+        margin-bottom: 1.15rem;
+        padding: 0.85rem 1rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        background: color-mix(in srgb, var(--panel) 90%, transparent);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(8px);
+      }}
+      .jupr-public-brand {{
+        display: inline-flex;
+        flex-direction: column;
+        text-decoration: none;
+        color: var(--text-primary);
+        font-weight: 800;
+        letter-spacing: 0.02em;
+      }}
+      .jupr-public-brand small {{
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        font-weight: 600;
+      }}
+      .jupr-public-nav-links {{
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+      }}
+      .jupr-public-nav-link {{
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 0.34rem 0.76rem;
+        color: var(--text-secondary);
+        background: transparent;
+        text-decoration: none;
+        font-size: 0.84rem;
+        font-weight: 700;
+        transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+      }}
+      .jupr-public-nav-link:hover {{
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+        color: var(--text-primary);
+        transform: translateY(-1px);
+      }}
+      .jupr-public-nav-link.active {{
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+        color: var(--text-primary);
+      }}
+      .jupr-hero {{
+        margin-bottom: 1rem;
+        padding: 1.35rem;
+      }}
+      .jupr-hero-eyebrow {{
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.45rem;
+      }}
+      .jupr-hero-title {{
+        margin: 0 0 0.45rem 0;
+        font-size: clamp(1.5rem, 3vw, 2.3rem);
+        line-height: 1.15;
+      }}
+      .jupr-hero-subtitle {{
+        margin: 0;
+        max-width: 70ch;
+        color: var(--text-secondary);
+      }}
+      .jupr-hero-actions {{
+        margin-top: 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+      }}
+      .jupr-home-grid {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.8rem;
+      }}
+      .jupr-home-card {{
+        height: 100%;
+      }}
+      .jupr-home-card-title {{
+        margin: 0 0 0.35rem 0;
+        font-size: 1.02rem;
+        color: var(--text-primary);
+      }}
+      .jupr-home-card-body {{
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 0.95rem;
+      }}
+
       /* Cards + sections */
       .jupr-card {{
         border: 1px solid var(--border);
@@ -398,37 +506,6 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
       }}
       .stTabs [data-baseweb="tab-border"] {{
         display: none;
-      }}
-
-      /* Radio navigation (public top nav) */
-      div[data-testid="stRadio"] div[role="radiogroup"] {{
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.35rem;
-        align-items: center;
-      }}
-      div[data-testid="stRadio"] label[data-baseweb="radio"] {{
-        margin: 0 !important;
-        gap: 0 !important;
-        padding-left: 0 !important;
-      }}
-      div[data-testid="stRadio"] label[data-baseweb="radio"] > div {{
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        padding: 0.35rem 0.85rem;
-        background: var(--panel);
-        color: var(--muted);
-        font-weight: 650;
-        transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-      }}
-      div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {{
-        display: none !important;
-      }}
-      div[data-testid="stRadio"] label[data-baseweb="radio"] input:checked + div {{
-        border-color: var(--accent-border);
-        color: var(--text);
-        background: var(--accent-soft);
-        box-shadow: 0 0 0 1px var(--accent-soft);
       }}
 
       /* Expanders */
@@ -591,27 +668,47 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
 
       /* Public link button fallback */
       .jupr-link-button {{
-        text-decoration: none;
-      }}
-      .jupr-link-button__btn {{
-        padding: 0.5rem 1rem;
-        font-size: 1rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.35rem;
+        min-height: 2.2rem;
+        padding: 0.5rem 0.95rem;
         border-radius: 0.75rem;
-        cursor: pointer;
         border: 1px solid var(--border);
         background: var(--panel);
         color: var(--text);
+        text-decoration: none;
         font-weight: 650;
         box-shadow: 0 1px 1px rgba(0,0,0,0.04);
         transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
       }}
-      .jupr-link-button__btn:hover {{
+      .jupr-link-button:hover {{
         border-color: var(--border-strong);
         transform: translateY(-1px);
       }}
-      .jupr-link-button__btn:focus-visible {{
+      .jupr-link-button:focus-visible {{
         outline: 3px solid var(--focus);
         outline-offset: 2px;
+      }}
+      .jupr-link-button__btn {{
+        all: unset;
+        cursor: pointer;
+      }}
+
+      @media (max-width: 760px) {{
+        .jupr-public-nav {{
+          align-items: flex-start;
+        }}
+        .jupr-public-nav-links {{
+          width: 100%;
+        }}
+        .jupr-home-grid {{
+          grid-template-columns: 1fr;
+        }}
+        .jupr-hero {{
+          padding: 1rem;
+        }}
       }}
     </style>
     """

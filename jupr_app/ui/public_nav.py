@@ -2,49 +2,54 @@ from __future__ import annotations
 
 import streamlit as st
 
-from jupr_app.ui.page_registry import PAGE_KEY_TO_LABEL, PUBLIC_NAV_KEYS
+from jupr_app.ui.page_registry import PAGE_KEY_TO_LABEL
 from jupr_app.ui.url import qp_get
 
 
 def render_public_top_nav(
     *,
-    labels_in_order: list[str] | None = None,
-    current_label: str | None = None,
-    default_page: str = "leaderboards",
+    labels_in_order: list[str] | None = None,  # noqa: ARG001
+    current_label: str | None = None,  # noqa: ARG001
+    default_page: str = "home",
 ) -> str:
-    """
-    Render the horizontal public navigation and return the selected label.
+    """Render the public website-style top nav and return the active page label."""
 
-    If callers do not provide a label list, the shared public-page registry drives the nav.
-    """
-    if labels_in_order is None:
-        labels_in_order = [
-            PAGE_KEY_TO_LABEL[key]
-            for key in PUBLIC_NAV_KEYS
-            if key in PAGE_KEY_TO_LABEL
-        ]
+    current_page = (qp_get("page", "") or "").strip().lower() or default_page
+    if current_page not in PAGE_KEY_TO_LABEL:
+        current_page = default_page
 
-    if not labels_in_order:
-        return PAGE_KEY_TO_LABEL.get(default_page, default_page)
+    links: list[tuple[str, str, str]] = [
+        ("Home", "./", "home"),
+        ("Leaderboards", "?page=leaderboards", "leaderboards"),
+        ("Players", "?page=players", "players"),
+        ("Events", "?page=tournament_registration", "tournament_registration"),
+        ("Updates", "?page=verified_updates_request", "verified_updates_request"),
+        ("Admin Login", "?admin=1&page=admin_login", "admin_login"),
+    ]
 
-    if current_label is None:
-        current_page = (qp_get("page", "") or "").strip() or default_page
-        current_label = PAGE_KEY_TO_LABEL.get(current_page, labels_in_order[0])
-
-    st.markdown("**Go to:**")
-
-    try:
-        idx = labels_in_order.index(current_label)
-    except ValueError:
-        idx = 0
-
-    selected_label = st.radio(
-        label="public_nav",
-        options=labels_in_order,
-        index=idx,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="public_top_nav_radio",
+    nav_links_html = "".join(
+        (
+            f'<a class="jupr-public-nav-link {"active" if key == current_page else ""}" '
+            f'href="{href}">{label}</a>'
+        )
+        for label, href, key in links
     )
 
-    return selected_label
+    st.markdown(
+        f"""
+        <div class="jupr-public-shell">
+          <header class="jupr-public-nav">
+            <a class="jupr-public-brand" href="./">
+              <span>JUPR</span>
+              <small>Tres Palapas Rating System</small>
+            </a>
+            <nav class="jupr-public-nav-links" aria-label="Public navigation">
+              {nav_links_html}
+            </nav>
+          </header>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    return PAGE_KEY_TO_LABEL.get(current_page, PAGE_KEY_TO_LABEL[default_page])

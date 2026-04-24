@@ -367,6 +367,7 @@ def main():
             challenge_ladder,
             challenge_ladder_admin,
             faqs,
+            home,
             jupr_live,
             jupr_live_admin,
             leaderboards,
@@ -396,6 +397,7 @@ def main():
 
         # ---- Router ----
         PAGES = {
+            "Home": home,
             "🏆 Leaderboards": leaderboards,
             "📊 League Results": league_results,
             "🖨️ League Night Printout": league_printout,
@@ -451,6 +453,8 @@ def main():
         deep_page_key = incoming_page_param
         if not deep_page_key and recovery_flow:
             deep_page_key = "reset_password"
+        elif PUBLIC_MODE and not deep_page_key:
+            deep_page_key = "home"
 
         deep_label = PAGE_KEY_TO_LABEL.get(deep_page_key, "")
 
@@ -534,22 +538,19 @@ def main():
         # Keep URL synced (canonical deep links)
         # -------------------------
         try:
-            target_page = LABEL_TO_PAGE_KEY.get(sel, "leaderboards")
+            target_page = LABEL_TO_PAGE_KEY.get(sel, "home")
             current_page = qp_get("page", "").strip()
-            last_rendered_nav = st.session_state.get("_last_rendered_nav")
-            nav_changed = sel != last_rendered_nav
-
-            if nav_changed and current_page != target_page:
-                st.query_params["page"] = target_page
 
             if PUBLIC_MODE:
-                if target_page == "leaderboards":
-                    _set_query_params_idempotent(removals={"admin", "page"})
+                if target_page == "home":
+                    _set_query_params_idempotent(removals={"admin", "public", "page"})
                 elif current_page != target_page:
                     _set_query_params_idempotent(
                         updates={"page": target_page},
-                        removals={"admin"},
+                        removals={"admin", "public"},
                     )
+                else:
+                    _set_query_params_idempotent(removals={"admin", "public"})
             else:
                 _set_query_params_idempotent(
                     updates={"admin": "1"},
