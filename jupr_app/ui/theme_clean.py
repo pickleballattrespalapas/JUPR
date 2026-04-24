@@ -334,6 +334,46 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         flex-wrap: wrap;
         gap: 0.55rem;
       }}
+      .jupr-trust-badge {{
+        margin-top: 0.85rem;
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        border: 1px solid var(--accent-border);
+        background: var(--accent-soft);
+        color: var(--text-primary);
+        font-size: 0.82rem;
+        font-weight: 700;
+        padding: 0.35rem 0.8rem;
+      }}
+      .jupr-trust-section {{
+        margin-bottom: 0.9rem;
+      }}
+      .jupr-trust-grid {{
+        margin-top: 0.75rem;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.65rem;
+      }}
+      .jupr-trust-card {{
+        border: 1px solid var(--border);
+        border-radius: calc(var(--radius) - 4px);
+        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        padding: 0.8rem 0.85rem;
+      }}
+      .jupr-trust-card h3 {{
+        margin: 0 0 0.3rem 0;
+        font-size: 0.95rem;
+        color: var(--text-primary);
+      }}
+      .jupr-trust-card p {{
+        margin: 0;
+        font-size: 0.88rem;
+        color: var(--text-secondary);
+      }}
+      .jupr-trust-actions {{
+        margin-top: 0.8rem;
+      }}
       .jupr-home-grid {{
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -719,6 +759,39 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         all: unset;
         cursor: pointer;
       }}
+      .jupr-rules-page {{
+        display: grid;
+        gap: 0.8rem;
+      }}
+      .jupr-rules-section {{
+        display: grid;
+        gap: 0.5rem;
+      }}
+      .jupr-rules-section h2 {{
+        margin: 0;
+        font-size: 1.05rem;
+        color: var(--text-primary);
+      }}
+      .jupr-rules-section p {{
+        margin: 0;
+        color: var(--text-secondary);
+      }}
+      .jupr-rules-list {{
+        margin: 0;
+        padding-left: 1.2rem;
+        color: var(--text-secondary);
+        display: grid;
+        gap: 0.35rem;
+      }}
+      .jupr-rules-callout {{
+        border-radius: calc(var(--radius) - 3px);
+        border: 1px solid var(--accent-border);
+        background: var(--accent-soft);
+        padding: 0.7rem 0.8rem;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        font-weight: 600;
+      }}
 
       @media (max-width: 760px) {{
         .jupr-public-nav {{
@@ -728,6 +801,9 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
           width: 100%;
         }}
         .jupr-home-grid {{
+          grid-template-columns: 1fr;
+        }}
+        .jupr-trust-grid {{
           grid-template-columns: 1fr;
         }}
         .jupr-hero {{

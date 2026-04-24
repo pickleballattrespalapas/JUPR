@@ -23,6 +23,7 @@ def render_public_top_nav(
         ("Leaderboards", "?page=leaderboards", "leaderboards"),
         ("Players", "?page=players", "players"),
         ("Events", "?page=tournament_registration", "tournament_registration"),
+        ("Rating Rules", "?page=rating_rules", "rating_rules"),
         ("Updates", "?page=verified_updates_request", "verified_updates_request"),
         ("Admin Login", "?admin=1&page=admin_login", "admin_login"),
     ]
