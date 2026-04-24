@@ -95,6 +95,7 @@ def _default_state(config: LivePageConfig) -> dict:
         "resolved_roster_ids": {},
         "admin_roster_rows": [],
         "default_new_player_rating": 3.5,
+        "quick_paste_nonce": 0,
     }
 
 
@@ -804,6 +805,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         "League / Ladder",
     }
     if use_admin_roster_builder:
+        quick_paste_nonce = int(state.get("quick_paste_nonce") or 0)
+        quick_paste_key = f"{config.state_key}_quick_paste_{quick_paste_nonce}"
         state["default_new_player_rating"] = float(
             st.number_input(
                 "Default new-player rating (JUPR)",
@@ -819,7 +822,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             value="",
             height=120,
             placeholder=placeholder,
-            key=f"{config.state_key}_quick_paste",
+            key=quick_paste_key,
         )
         if st.button("Append pasted names", key=f"{config.state_key}_append_paste"):
             incoming = _participant_lines(quick_paste)
@@ -829,7 +832,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 player_name_to_id=player_name_to_id,
                 default_new_player_rating=float(state["default_new_player_rating"]),
             )
-            st.session_state[f"{config.state_key}_quick_paste"] = ""
+            state["quick_paste_nonce"] = quick_paste_nonce + 1
             st.rerun()
         prev_selected = set(previous_selected_existing_players)
         newly_added = [
