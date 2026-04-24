@@ -782,7 +782,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             help_text = "League / Ladder currently requires an exact 4-player / 5-player court fit."
         placeholder = "Amy\nBrooke\nChris\nDana"
     st.caption(help_text)
-    player_options, _ = _player_directory(ctx)
+    player_options, player_name_to_id = _player_directory(ctx)
+    player_name_to_id = player_name_to_id or {}
     selected_players_key = f"{config.state_key}_selected_existing_players"
     participants_key = f"{config.state_key}_participants"
     if selected_players_key not in st.session_state:
@@ -852,7 +853,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 default_new_player_rating=float(state["default_new_player_rating"]),
             )
         if not roster_rows:
-            st.caption("Build the roster by quick paste and/or add from current players.")
+            st.caption("Add current players or paste names to build the roster.")
         editor_source = pd.DataFrame(
             [
                 {
@@ -865,8 +866,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                     ),
                 }
                 for idx, row in enumerate(roster_rows)
-            ]
-            or [{"Order": 1, "Name": "", "Resolution": "create_new_player", "Matched Player": "", "Starting JUPR": float(state["default_new_player_rating"])}]
+            ],
+            columns=["Order", "Name", "Resolution", "Matched Player", "Starting JUPR"],
         )
         edited_df = st.data_editor(
             editor_source,
@@ -945,7 +946,6 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         "Round Robin",
         "League / Ladder",
     }
-    player_options, player_name_to_id = _player_directory(ctx)
     if roster_requires_resolution and not use_admin_roster_builder:
         if state.get("parsed_roster_lines") != participant_names:
             state["parsed_roster_lines"] = list(participant_names)
@@ -970,9 +970,17 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 f"You entered {len(team_entries)} team(s); count is set to {int(state['participant_count'])}."
             )
             can_create = False
-    elif participant_names and len(participant_names) != int(
-        state["participant_count"]
-    ):
+    elif use_admin_roster_builder:
+        required_count = int(state["participant_count"])
+        if not participant_names:
+            st.info("Add current players or paste names to build the roster.")
+            can_create = False
+        elif len(participant_names) != required_count:
+            st.info(
+                f"You entered {len(participant_names)} name(s); count is set to {required_count}."
+            )
+            can_create = False
+    elif participant_names and len(participant_names) != int(state["participant_count"]):
         st.info(
             f"You entered {len(participant_names)} name(s); count is set to {int(state['participant_count'])}."
         )
