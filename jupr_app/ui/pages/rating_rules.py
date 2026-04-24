@@ -16,7 +16,7 @@ def render(ctx) -> None:  # noqa: ARG001
           <div class="jupr-rules-section jupr-card">
             <h2>1) What JUPR tracks</h2>
             <p>JUPR is the player rating and event tracking system for Tres Palapas leagues, ladders, verified round robins, tournaments, player profiles, badges, and weekly updates.</p>
-            <p>JUPR ratings reflect recorded performance inside the Tres Palapas system. They are based on entered match results, not reputation, self-rating, or one strong day on court.</p>
+            <p>JUPR ratings update from official rated match history inside the Tres Palapas system. They are based on entered match results, not reputation, self-rating, or one strong day on court.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
@@ -44,7 +44,7 @@ def render(ctx) -> None:  # noqa: ARG001
 
           <div class="jupr-rules-section jupr-card">
             <h2>4) What does not count</h2>
-            <p>Not every game at Tres Palapas affects your rating. Casual play, practice games, warmups, and unrated social events stay outside official rating history.</p>
+            <p>Not every game at Tres Palapas affects your rating. Casual play, practice games, warmups, and unrated social events stay outside official rated match history.</p>
             <ul class="jupr-rules-list">
               <li>Open play</li>
               <li>Practice games</li>
@@ -58,19 +58,18 @@ def render(ctx) -> None:  # noqa: ARG001
           <div class="jupr-rules-section jupr-card">
             <h2>5) Verified vs. casual</h2>
             <p>Verified/rated results are official match records. They affect JUPR ratings, standings, player profiles, and event history.</p>
-            <p>Casual/social results are separated from official rating history. They can appear as participation or event history, but they do not move official ratings unless the event is approved as rated.</p>
+            <p>Social and unrated results stay separate from official ratings.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
             <h2>6) Match corrections</h2>
-            <p>Authorized admins correct scores when there is a data-entry mistake or official event correction. Corrections update the match record and rating history according to the corrected result.</p>
+            <p>Authorized admins correct scores, opponents, and players when there is a data-entry mistake or official event correction. Corrections update official history, and rating-impacting admin corrections rebuild ratings automatically.</p>
             <p>Public users can view results and profiles. Public users cannot change rated history.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
             <h2>7) Deleted scores</h2>
-            <p>Deleted rated matches are handled through the admin correction workflow. Rating-impact deletions require recalculation before the public rating record is final.</p>
-            <div class="jupr-rules-callout">Do not present deleted-match rating rollback as automatic unless the code enforces it.</div>
+            <p>Deleted rated matches are excluded from official history and removed from rating impact after Replay History rebuilds ratings.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
@@ -91,7 +90,7 @@ def render(ctx) -> None:  # noqa: ARG001
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <div class="jupr-rules-callout">JUPR ratings follow recorded results. Verified matches count. Casual play stays separate. Corrections update the official record.</div>
+            <div class="jupr-rules-callout">JUPR ratings follow official rated match history. Verified matches count. Social and unrated play stays separate. Corrections update the official record.</div>
           </div>
         </section>
         """,

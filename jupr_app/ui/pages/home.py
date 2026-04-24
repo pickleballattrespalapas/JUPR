@@ -27,15 +27,15 @@ def render(ctx) -> None:  # noqa: ARG001
           </div>
 
           <div class="jupr-trust-section jupr-card">
-            <h2 class="jupr-section-title">Ratings built from recorded results</h2>
+            <h2 class="jupr-section-title">Ratings built from official rated history</h2>
             <p class="jupr-home-card-body">
-              JUPR ratings update from recorded match results. The system separates verified rated events from casual play,
-              uses scorelines and opponent strength, and ties every rating change back to match history.
+              JUPR ratings update from official rated match history. Social and unrated results stay separate from official ratings.
+              Scores, opponents, and expected result drive rating movement, and winners receive positive rating movement.
             </p>
             <div class="jupr-trust-grid">
               <div class="jupr-trust-card">
                 <h3>Verified means rated</h3>
-                <p>Verified and rated events affect official JUPR ratings, standings, and player history. Casual results stay separate unless the event is approved as rated.</p>
+                <p>Verified and rated events affect official JUPR ratings, standings, and player history. Social and unrated results stay separate from official ratings.</p>
               </div>
               <div class="jupr-trust-card">
                 <h3>Scores drive movement</h3>
@@ -43,7 +43,7 @@ def render(ctx) -> None:  # noqa: ARG001
               </div>
               <div class="jupr-trust-card">
                 <h3>Corrections update the record</h3>
-                <p>Authorized corrections update the official match record. Rating-impact corrections are handled through the admin recalculation workflow.</p>
+                <p>Authorized corrections update official match history, and rating-impacting admin corrections rebuild ratings automatically.</p>
               </div>
             </div>
             <div class="jupr-trust-actions">

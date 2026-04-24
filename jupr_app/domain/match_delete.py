@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Optional
 
 import pandas as pd
@@ -16,8 +17,10 @@ def delete_rated_matches_with_replay(
     df_meta: Optional[pd.DataFrame],
     progress_cb: Optional[Callable[[float], None]] = None,
     actor: Optional[str] = None,
+    source: Optional[str] = None,
+    note: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Delete rated matches, recompute player activity, then run FULL replay."""
+    """Soft-delete rated matches, recompute player activity, then run FULL replay."""
     normalized_ids = sorted({int(mid) for mid in (match_ids or []) if mid is not None})
     if not normalized_ids:
         return {
@@ -58,9 +61,19 @@ def delete_rated_matches_with_replay(
         warning = f"Some match IDs were not found and could not be deleted: {missing_ids[:10]}"
 
     if existing_ids:
+        now_iso = datetime.now(timezone.utc).isoformat()
         (
             supabase.table("matches")
-            .delete()
+            .update(
+                {
+                    "deleted_at": now_iso,
+                    "deleted_by": (actor or "admin"),
+                    "deleted_source": (source or actor or "match_log"),
+                    "delete_note": (note.strip() if isinstance(note, str) and note.strip() else None),
+                    "updated_at": now_iso,
+                    "updated_by": (actor or "admin"),
+                }
+            )
             .eq("club_id", str(club_id))
             .in_("id", existing_ids)
             .execute()

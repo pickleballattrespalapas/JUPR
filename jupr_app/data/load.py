@@ -158,6 +158,7 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 supabase.table("matches")
                 .select("*")
                 .eq("club_id", club_id)
+                .is_("deleted_at", None)
                 .order("id", desc=True)
                 .limit(int(match_limit))
                 .execute()

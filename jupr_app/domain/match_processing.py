@@ -63,6 +63,7 @@ def process_matches(
 
     skipped_incomplete = 0
     skipped_empty = 0
+    skipped_unrated = 0
     has_badge_eligible_match = False
 
     def as_pid(x):
@@ -305,6 +306,10 @@ def process_matches(
                 affected_players.add(int(pid))
             stored_elo_delta = abs(do1) if (t1_outcome is True) else abs(do2)
 
+        if is_unrated:
+            skipped_unrated += 1
+            continue
+
         db_matches.append(
             {
                 "club_id": club_id,
@@ -513,6 +518,7 @@ def process_matches(
         "inserted": len(db_matches),
         "skipped_incomplete": int(skipped_incomplete),
         "skipped_empty": int(skipped_empty),
+        "skipped_unrated": int(skipped_unrated),
         "badge_summary": badge_summary,
         "player_update_queue": player_update_queue,
     }

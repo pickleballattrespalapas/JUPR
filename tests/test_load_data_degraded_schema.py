@@ -27,6 +27,9 @@ class _FakeTableQuery:
     def order(self, *args, **kwargs):
         return self
 
+    def is_(self, *args, **kwargs):
+        return self
+
     def limit(self, *args, **kwargs):
         return self
 

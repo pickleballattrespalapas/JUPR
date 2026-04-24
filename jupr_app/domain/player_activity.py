@@ -78,6 +78,7 @@ def recompute_last_game_at_for_players(
             supabase.table("matches")
             .select("date,score_t1,score_t2")
             .eq("club_id", str(club_id))
+            .is_("deleted_at", None)
             .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
             .order("date", desc=True)
             .limit(50)
