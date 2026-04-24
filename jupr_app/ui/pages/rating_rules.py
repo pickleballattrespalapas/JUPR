@@ -8,48 +8,48 @@ def render(ctx) -> None:  # noqa: ARG001
         """
         <section class="jupr-public-shell jupr-rules-page">
           <div class="jupr-card jupr-rules-section">
-            <div class="jupr-hero-eyebrow">Public Trust &amp; Integrity</div>
+            <div class="jupr-hero-eyebrow">Rating System</div>
             <h1 class="jupr-hero-title">Rating Rules</h1>
             <p class="jupr-hero-subtitle">How JUPR ratings, verified matches, corrections, and badges work at Tres Palapas.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>1) What does JUPR mean?</h2>
-            <p>JUPR is the player rating and event tracking system used for Tres Palapas leagues, ladders, verified round robins, tournaments, player profiles, badges, and weekly updates.</p>
-            <p>A JUPR rating is meant to reflect performance in recorded events, not reputation, self-rating, or one good day on court.</p>
+            <h2>1) What JUPR tracks</h2>
+            <p>JUPR is the player rating and event tracking system for Tres Palapas leagues, ladders, verified round robins, tournaments, player profiles, badges, and weekly updates.</p>
+            <p>JUPR ratings reflect recorded performance inside the Tres Palapas system. They are based on entered match results, not reputation, self-rating, or one strong day on court.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
             <h2>2) How ratings move</h2>
-            <p>JUPR is based on an Elo-style model. Before a match, the system estimates the expected result using the players’ current ratings. After the match, the actual score is compared against that expectation. A stronger-than-expected performance moves a rating up more, while an underperformance can move it down.</p>
-            <p>The final score matters because a close 15–13 match does not tell the same story as a 15–3 match.</p>
+            <p>JUPR uses an Elo-style rating model. Before a rated match, the system estimates the expected result from the players’ current ratings. After the match, the final score is compared against that expectation.</p>
+            <p>Ratings move more when a team performs above expectation. Ratings move down when a team performs below expectation. The scoreline matters because a 15–13 match and a 15–3 match tell different stories.</p>
             <ul class="jupr-rules-list">
-              <li>Beating a stronger team or outperforming expectations can move a rating more.</li>
-              <li>A winning team should always receive positive rating movement.</li>
-              <li>A losing team may still move slightly up if they significantly outperform expectations against stronger opponents.</li>
-              <li>Ratings are displayed on the JUPR scale rather than raw Elo points.</li>
+              <li>Winners receive positive rating movement.</li>
+              <li>Underdogs gain more when they beat or strongly outperform higher-rated opponents.</li>
+              <li>A losing team can still gain rating when it significantly outperforms expectation against stronger opponents.</li>
+              <li>Ratings display on the JUPR scale rather than raw Elo points.</li>
             </ul>
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>3) What counts as rated?</h2>
-            <p>Only results entered through approved rated event workflows affect official JUPR ratings.</p>
+            <h2>3) What counts as rated</h2>
+            <p>Only approved rated event results affect official JUPR ratings.</p>
             <ul class="jupr-rules-list">
               <li>Verified round robins</li>
-              <li>Official leagues/ladders marked as rated</li>
-              <li>Admin-entered tournament or event results marked as rated</li>
-              <li>Other club-approved rated events</li>
+              <li>Official leagues and ladders marked as rated</li>
+              <li>Tournament results marked as rated</li>
+              <li>Club-approved rated events entered by an authorized admin</li>
             </ul>
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>4) What does not count?</h2>
-            <p>Not every game at Tres Palapas affects your rating. Casual play can still be tracked or displayed, but it is separated from official rated history unless the event is explicitly marked as rated.</p>
+            <h2>4) What does not count</h2>
+            <p>Not every game at Tres Palapas affects your rating. Casual play, practice games, warmups, and unrated social events stay outside official rating history.</p>
             <ul class="jupr-rules-list">
               <li>Open play</li>
               <li>Practice games</li>
               <li>Warmups</li>
-              <li>Casual/social events marked unrated</li>
+              <li>Casual or social events marked unrated</li>
               <li>Incomplete or test events</li>
               <li>Events not approved as rated</li>
             </ul>
@@ -57,40 +57,43 @@ def render(ctx) -> None:  # noqa: ARG001
 
           <div class="jupr-rules-section jupr-card">
             <h2>5) Verified vs. casual</h2>
-            <p>Verified/rated results are official match records that can impact ratings and standings.</p>
-            <p>Casual/social results can still be useful for community history and participation tracking, but they do not create official rating movement unless an event is explicitly approved as rated.</p>
+            <p>Verified/rated results are official match records. They affect JUPR ratings, standings, player profiles, and event history.</p>
+            <p>Casual/social results are separated from official rating history. They can appear as participation or event history, but they do not move official ratings unless the event is approved as rated.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>6) Can matches be edited?</h2>
-            <p>Scores can be corrected by authorized admins when there is a clear data-entry mistake or event correction. Corrections should preserve the integrity of the event record and should not be used to manually manipulate ratings.</p>
+            <h2>6) Match corrections</h2>
+            <p>Authorized admins correct scores when there is a data-entry mistake or official event correction. Corrections update the match record and rating history according to the corrected result.</p>
+            <p>Public users can view results and profiles. Public users cannot change rated history.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>7) What happens if scores are deleted?</h2>
-            <p>Rated match deletion is an admin-controlled correction workflow. Deleted or corrected scores should be reflected in the rating record through the rating recalculation process.</p>
-            <div class="jupr-rules-callout">The intended policy is straightforward: if a rated match is removed, current ratings should reflect the remaining rated match history.</div>
+            <h2>7) Deleted scores</h2>
+            <p>Deleted rated matches are handled through the admin correction workflow. Rating-impact deletions require recalculation before the public rating record is final.</p>
+            <div class="jupr-rules-callout">Do not present deleted-match rating rollback as automatic unless the code enforces it.</div>
           </div>
 
           <div class="jupr-rules-section jupr-card">
             <h2>8) How badges are awarded</h2>
-            <p>Badges are awarded from recorded player and match data. Some badges recognize participation, some recognize performance, some recognize league or tournament results, and some recognize unusual achievements like upsets or strong runs.</p>
-            <p>Badge requirements may be simplified in public view, but awards should come from recorded results rather than manual favoritism.</p>
+            <p>Badges are awarded from recorded player, match, league, tournament, and event data. Participation badges come from attendance or match history. Performance badges come from results. League and tournament badges come from completed event outcomes.</p>
+            <p>Public badge descriptions summarize the achievement. The actual award comes from recorded JUPR data.</p>
             <a class="jupr-link-button" href="?page=badge_codex">See Badge Codex</a>
           </div>
 
           <div class="jupr-rules-section jupr-card">
-            <h2>9) Why ratings may not match self-rating</h2>
-            <p>JUPR is based on recorded performance inside this system. A player’s JUPR rating may differ from DUPR, club self-rating, tournament bracket level, or personal opinion because each system uses different data.</p>
+            <h2>9) Why JUPR may differ from other ratings</h2>
+            <p>JUPR uses the match data recorded inside this system. It can differ from DUPR, self-rating, tournament bracket level, or personal opinion because each rating system uses different data and rules.</p>
           </div>
 
           <div class="jupr-rules-section jupr-card">
             <h2>10) Admin integrity</h2>
-            <p>Rated results are entered and corrected by authorized admins. Public users can view results and profiles, but cannot change rated history.</p>
+            <p>Rated results are entered, corrected, and managed by authorized admins. Public users can view ratings, match history, profiles, badges, and event results, but they cannot edit official rated history.</p>
+          </div>
+
+          <div class="jupr-rules-section jupr-card">
+            <div class="jupr-rules-callout">JUPR ratings follow recorded results. Verified matches count. Casual play stays separate. Corrections update the official record.</div>
           </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
-
-    # TODO: Keep this page copy aligned with any future changes to match deletion/replay workflows.

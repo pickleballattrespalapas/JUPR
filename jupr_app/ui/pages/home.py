@@ -15,7 +15,7 @@ def render(ctx) -> None:  # noqa: ARG001
               from Tres Palapas pickleball.
             </p>
             <div class="jupr-trust-badge" role="note">
-              Transparent rating rules • Verified event separation • Admin-controlled corrections
+              Transparent rating rules • Verified results separated from casual play • Admin-controlled corrections
             </div>
             <div class="jupr-hero-actions">
               <a class="jupr-link-button" href="?page=leaderboards">View Leaderboards</a>
@@ -27,27 +27,27 @@ def render(ctx) -> None:  # noqa: ARG001
           </div>
 
           <div class="jupr-trust-section jupr-card">
-            <h2 class="jupr-section-title">Built on transparent rating rules</h2>
+            <h2 class="jupr-section-title">Ratings built from recorded results</h2>
             <p class="jupr-home-card-body">
-              JUPR separates verified results from casual play, uses match scores and opponent strength to update ratings,
-              and keeps rating changes tied to recorded match history.
+              JUPR ratings update from recorded match results. The system separates verified rated events from casual play,
+              uses scorelines and opponent strength, and ties every rating change back to match history.
             </p>
             <div class="jupr-trust-grid">
               <div class="jupr-trust-card">
-                <h3>Verified vs. Casual</h3>
-                <p>Rated events affect standings. Casual/social results can be shown separately without changing official ratings.</p>
+                <h3>Verified means rated</h3>
+                <p>Verified and rated events affect official JUPR ratings, standings, and player history. Casual results stay separate unless the event is approved as rated.</p>
               </div>
               <div class="jupr-trust-card">
-                <h3>Score-based movement</h3>
-                <p>Ratings consider who you played, the expected result, and how the match actually finished.</p>
+                <h3>Scores drive movement</h3>
+                <p>Ratings update from who played, each team’s rating, the expected result, and the final score. A close match and a blowout do not carry the same weight.</p>
               </div>
               <div class="jupr-trust-card">
-                <h3>Corrections matter</h3>
-                <p>If a rated score is corrected or removed, the rating record should reflect the corrected match history.</p>
+                <h3>Corrections update the record</h3>
+                <p>Authorized corrections update the official match record. Rating-impact corrections are handled through the admin recalculation workflow.</p>
               </div>
             </div>
             <div class="jupr-trust-actions">
-              <a class="jupr-link-button" href="?page=rating_rules">Read the Rating Rules</a>
+              <a class="jupr-link-button" href="?page=rating_rules">See How Ratings Work</a>
             </div>
           </div>
 
@@ -69,7 +69,7 @@ def render(ctx) -> None:  # noqa: ARG001
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=rating_rules" aria-label="Read the rating rules">
               <h3 class="jupr-home-card-title">Rating Rules</h3>
-              <p class="jupr-home-card-body">See what counts as rated, how results are handled, and why verified matches matter.</p>
+              <p class="jupr-home-card-body">See what counts as rated, how results affect ratings, and how JUPR separates verified play from casual results.</p>
               <div class="jupr-home-card-cta">Read rating rules →</div>
             </a>
           </div>
