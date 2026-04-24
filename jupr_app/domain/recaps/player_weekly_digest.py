@@ -129,11 +129,14 @@ def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: da
     badge_ids = sorted({str(row.get("badge_id") or "").strip() for row in badge_rows if row.get("badge_id")})
     badge_name_map: dict[str, str] = {}
     badge_desc_map: dict[str, str] = {}
+    badge_prestige_map: dict[str, int] = {}
     for badge_id, schema in badge_schema_by_id().items():
-        badge_name_map[str(badge_id)] = str(schema.title or badge_id)
-        badge_desc_map[str(badge_id)] = str(
+        schema_id = str(badge_id)
+        badge_name_map[schema_id] = str(schema.title or badge_id)
+        badge_desc_map[schema_id] = str(
             schema.display.flavor or schema.display.requirements or "Award earned during this update window."
         ).strip()
+        badge_prestige_map[schema_id] = int(getattr(schema, "prestige", 0) or 0)
     if badge_ids:
         try:
             badge_defs = (
@@ -163,6 +166,7 @@ def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: da
                 "badge_id": bid,
                 "name": badge_name_map.get(bid, bid),
                 "description": badge_desc_map.get(bid, "Award earned during this update window."),
+                "prestige": int(badge_prestige_map.get(bid, 0) or 0),
                 "earned_at": row.get("earned_at"),
                 "context_type": row.get("context_type"),
                 "context_id": row.get("context_id"),
@@ -182,9 +186,14 @@ def _group_badges_for_display(badges: list[dict]) -> list[dict]:
                 "badge_id": badge_id or None,
                 "name": name,
                 "description": str(badge.get("description") or "Award earned during this update window.").strip(),
+                "prestige": int(badge.get("prestige") or 0),
                 "count": 0,
                 "last_earned_at": None,
             }
+        grouped[key]["prestige"] = max(
+            int(grouped[key].get("prestige") or 0),
+            int(badge.get("prestige") or 0),
+        )
         grouped[key]["count"] = int(grouped[key]["count"]) + 1
         earned_at = badge.get("earned_at")
         if earned_at and (grouped[key]["last_earned_at"] is None or str(earned_at) > str(grouped[key]["last_earned_at"])):

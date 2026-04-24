@@ -44,12 +44,13 @@ def _badge_line(item: dict) -> str:
 def build_player_update_email_subject(digest_json: dict) -> str:
     player_name = _s((digest_json or {}).get("player_name")) or "Verified Player"
     summary = (digest_json or {}).get("summary") or {}
+    before_text = _num(summary.get("overall_jupr_before"), digits=3, default="")
     rating_text = _num(summary.get("overall_jupr_after"), digits=3, default="")
     delta_text = _num(summary.get("overall_delta"), digits=4, prefix_sign=True, default="")
-    if rating_text:
+    if before_text and rating_text:
         if delta_text:
-            return f"{player_name} verified update: {rating_text} JUPR ({delta_text})"
-        return f"{player_name} verified update: {rating_text} JUPR"
+            return f"{player_name} verified update: {before_text} → {rating_text} ({delta_text})"
+        return f"{player_name} verified update: {before_text} → {rating_text}"
     display_range = _s((digest_json or {}).get("display_range"))
     if display_range:
         return f"{player_name} verified update · {display_range}"
@@ -66,12 +67,14 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
 
     player_name = html.escape(_s(digest.get("player_name")) or "Verified Player")
     display_range = html.escape(_s(digest.get("display_range")))
-    overall_text = _num(summary.get("overall_jupr_after"), digits=3)
+    before_text = _num(summary.get("overall_jupr_before"), digits=3, default="—")
+    overall_text = _num(summary.get("overall_jupr_after"), digits=3, default="—")
     delta_text = _num(summary.get("overall_delta"), digits=4, prefix_sign=True, default="—")
     record = html.escape(_s(summary.get("record")) or "0-0")
     matches_played = int(summary.get("matches_played") or 0)
+    prestige_badges = [item for item in badges if int(item.get("prestige") or 0) >= 50]
 
-    badge_items = "".join(_badge_line(item) for item in badges[:3])
+    badge_items = "".join(_badge_line(item) for item in prestige_badges[:3])
     trophy_items = "".join(
         f"<tr><td style='padding:3px 0;'>• {html.escape(_s(item.get('tournament_name')) or _s(item.get('league_name')) or 'Trophy')}</td></tr>"
         for item in trophies[:3]
@@ -81,7 +84,7 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
         new_period_block = (
             "<tr><td style='padding:18px 24px 0;'>"
             "<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>New this period</div>"
-            + (f"<div style='font-size:14px;font-weight:700;margin-top:6px;'>Badges</div><table role='presentation' width='100%'>{badge_items}</table>" if badge_items else "")
+            + (f"<div style='font-size:14px;font-weight:700;margin-top:6px;'>Prestige badges</div><table role='presentation' width='100%'>{badge_items}</table>" if badge_items else "")
             + (f"<div style='font-size:14px;font-weight:700;margin-top:10px;'>Trophies</div><table role='presentation' width='100%'>{trophy_items}</table>" if trophy_items else "")
             + "</td></tr>"
         )
@@ -126,13 +129,15 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
               <td style="padding:18px 24px 6px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                   <tr>
-                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="25%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">JUPR</div><div style="font-size:22px;font-weight:700;">{overall_text}</div></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="19%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Previous JUPR</div><div style="font-size:22px;font-weight:700;">{before_text}</div></td>
                     <td width="2%"></td>
-                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Change</div><div style="font-size:22px;font-weight:700;">{delta_text}</div></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="19%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">New JUPR</div><div style="font-size:22px;font-weight:700;">{overall_text}</div></td>
                     <td width="2%"></td>
-                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Record</div><div style="font-size:22px;font-weight:700;">{record}</div></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="19%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Change</div><div style="font-size:22px;font-weight:700;">{delta_text}</div></td>
                     <td width="2%"></td>
-                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Matches played</div><div style="font-size:22px;font-weight:700;">{matches_played}</div></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="19%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Record</div><div style="font-size:22px;font-weight:700;">{record}</div></td>
+                    <td width="2%"></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="19%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Matches</div><div style="font-size:22px;font-weight:700;">{matches_played}</div></td>
                   </tr>
                 </table>
               </td>
@@ -166,9 +171,10 @@ def build_player_update_email_text(digest_json: dict) -> str:
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
     links = digest.get("links") or {}
+    prestige_badges = [item for item in badges if int(item.get("prestige") or 0) >= 50]
 
     badge_lines = []
-    for item in badges[:3]:
+    for item in prestige_badges[:3]:
         name = _s(item.get("name")) or _s(item.get("badge_id")) or "Badge"
         count = int(item.get("count") or 1)
         label = f"{name} x{count}" if count > 1 else name
@@ -186,13 +192,14 @@ def build_player_update_email_text(digest_json: dict) -> str:
             "You’re receiving this email because you subscribed to JUPR player profile updates.",
             f"Player: {_s(digest.get('player_name'))}",
             f"Date range: {_s(digest.get('display_range'))}",
-            f"Current overall JUPR: {_num(summary.get('overall_jupr_after'), digits=3)}",
-            f"Overall delta: {_num(summary.get('overall_delta'), digits=4, prefix_sign=True, default='—')}",
-            f"Weekly record: {_s(summary.get('record')) or '0-0'}",
+            f"Before JUPR: {_num(summary.get('overall_jupr_before'), digits=3, default='—')}",
+            f"New JUPR: {_num(summary.get('overall_jupr_after'), digits=3, default='—')}",
+            f"Change: {_num(summary.get('overall_delta'), digits=4, prefix_sign=True, default='—')}",
+            f"Record: {_s(summary.get('record')) or '0-0'}",
             f"Matches played: {int(summary.get('matches_played') or 0)}",
             "Rating trend graph: Available in the HTML version of this email and on your profile page.",
             "",
-            *(["New this period:", "Badges:", *badge_lines] if badge_lines else []),
+            *(["New this period:", "Prestige badges:", *badge_lines] if badge_lines else []),
             *(["Trophies:", *trophy_lines] if trophy_lines else []),
             *([""] if badge_lines or trophy_lines else []),
             *(["Recent matches:", *match_lines, ""] if match_lines else []),
