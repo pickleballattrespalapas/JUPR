@@ -18,14 +18,14 @@ from jupr_app.ui.live.shared import (
 ADMIN_CONFIG = LivePageConfig(
     state_key="jupr_live_admin_state",
     intro_markdown=(
-        "Use the official JUPR Live workflow for roster-resolved Round Robin and League / Ladder events. "
-        "League/session context and official finalize/save actions only live here."
+        "Run JUPR Live events as rated overall matches or unrated recorded games. "
+        "No league/session setup required."
     ),
     event_types=("Round Robin", "League / Ladder", "Tournament"),
     mode_pill_label="Official",
     allow_official=True,
     allow_tournament=True,
-    show_official_context=True,
+    show_rating_mode=True,
 )
 
 
@@ -79,7 +79,7 @@ def _save_league_round_official(ctx, state: dict, event: dict) -> bool:
 
 
 def _save_tournament_official(ctx, state: dict, event: dict) -> None:
-    payloads = build_tournament_official_payloads(event)
+    payloads = build_tournament_official_payloads(state, event)
     if not payloads:
         st.info("No newly completed tournament matches to save yet.")
         return
@@ -92,7 +92,7 @@ def _save_tournament_official(ctx, state: dict, event: dict) -> None:
 def render(ctx):
     page_shell(
         "🔴 JUPR Live Admin",
-        "Run official JUPR Live events with save controls and league/session context.",
+        "Run JUPR Live events as rated overall matches or unrated recorded games. No league/session setup required.",
         mode_label="Admin",
     )
     if not bool(getattr(ctx, "admin_logged_in", False)):
