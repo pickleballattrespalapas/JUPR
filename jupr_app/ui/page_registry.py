@@ -15,6 +15,7 @@ class PageDefinition:
 PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("home", "Home", public=True),
     PageDefinition("leaderboards", "🏆 Leaderboards", public=True),
+    PageDefinition("rating_rules", "Rating Rules", public=True),
     PageDefinition("league_results", "📊 League Results", public=True),
     PageDefinition("league_printout", "🖨️ League Night Printout", admin_only=True),
     PageDefinition("match_explorer", "🎯 Match Explorer", public=True),
@@ -75,8 +76,9 @@ HIDDEN_PAGE_LABELS = frozenset(
 PUBLIC_NAV_KEYS = (
     "home",
     "leaderboards",
-    "tournament_registration",
     "players",
+    "tournament_registration",
+    "rating_rules",
     "weekly_recap",
     "faqs",
 )
