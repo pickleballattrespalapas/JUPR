@@ -1081,7 +1081,7 @@ def render(ctx):
         with st.container(border=True):
             st.markdown("#### Public standings")
             st.caption("Share this link with players.")
-            st.text_input("", value=public_url, label_visibility="collapsed")
+            st.text_input("Public share URL", value=public_url, label_visibility="collapsed")
             public_link_button("Open Public Standings", public_url)
     if inactive_notice and not PUBLIC_MODE:
         callout("info", "Heads up", inactive_notice)
