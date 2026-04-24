@@ -24,22 +24,26 @@ def render(ctx) -> None:  # noqa: ARG001
           </div>
 
           <div class="jupr-home-grid">
-            <article class="jupr-home-card jupr-card jupr-card--hover">
+            <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=leaderboards" aria-label="View leaderboards">
               <h3 class="jupr-home-card-title">Ratings &amp; Standings</h3>
               <p class="jupr-home-card-body">Live player ratings, league results, match history, and verified event tracking.</p>
-            </article>
-            <article class="jupr-home-card jupr-card jupr-card--hover">
+              <div class="jupr-home-card-cta">View leaderboards →</div>
+            </a>
+            <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=players" aria-label="Find player profiles">
               <h3 class="jupr-home-card-title">Player Profiles</h3>
               <p class="jupr-home-card-body">Search players, view rating history, badges, trophies, and recent match results.</p>
-            </article>
-            <article class="jupr-home-card jupr-card jupr-card--hover">
+              <div class="jupr-home-card-cta">Find players →</div>
+            </a>
+            <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=tournament_registration" aria-label="View event registration and updates">
               <h3 class="jupr-home-card-title">Events &amp; Updates</h3>
               <p class="jupr-home-card-body">View public event registration, weekly recaps, partner boards, and player update subscriptions.</p>
-            </article>
-            <article class="jupr-home-card jupr-callout">
+              <div class="jupr-home-card-cta">See events →</div>
+            </a>
+            <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=faqs" aria-label="Read frequently asked questions">
               <h3 class="jupr-home-card-title">Built for Tres Palapas</h3>
               <p class="jupr-home-card-body">A public-facing rating and event hub for the Tres Palapas pickleball community.</p>
-            </article>
+              <div class="jupr-home-card-cta">Read FAQs →</div>
+            </a>
           </div>
         </section>
         """,

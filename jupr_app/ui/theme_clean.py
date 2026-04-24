@@ -352,6 +352,30 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         color: var(--text-secondary);
         font-size: 0.95rem;
       }}
+      .jupr-home-card-link {{
+        display: block;
+        color: inherit;
+        text-decoration: none;
+      }}
+      .jupr-home-card-link:hover {{
+        color: inherit;
+        text-decoration: none;
+      }}
+      .jupr-home-card-link:focus-visible {{
+        outline: 3px solid var(--focus);
+        outline-offset: 3px;
+      }}
+      .jupr-home-card-cta {{
+        margin-top: 0.75rem;
+        font-weight: 700;
+        color: var(--link);
+      }}
+      .jupr-home-card-link:hover .jupr-home-card-cta,
+      .jupr-home-card-link:focus-visible .jupr-home-card-cta {{
+        color: var(--link-hover);
+        text-decoration: underline;
+        text-underline-offset: 0.15em;
+      }}
 
       /* Cards + sections */
       .jupr-card {{
