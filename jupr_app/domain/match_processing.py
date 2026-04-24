@@ -63,7 +63,7 @@ def process_matches(
 
     skipped_incomplete = 0
     skipped_empty = 0
-    has_non_popup_match = False
+    has_badge_eligible_match = False
 
     def as_pid(x):
         """Accept int IDs OR numeric strings OR exact names. Returns int player_id or None."""
@@ -168,7 +168,15 @@ def process_matches(
         start = float(get_island_r(int(pid), str(league_name)))
         island_updates[key] = {"r": start, "start": start, "w": 0, "l": 0, "mp": 0}
 
-    def apply_updates(pid: int, d_ov: float, d_isl: float, outcome, is_popup: bool, league_name: str) -> float:
+    def apply_updates(
+        pid: int,
+        d_ov: float,
+        d_isl: float,
+        outcome,
+        *,
+        update_island: bool,
+        league_name: str,
+    ) -> float:
         """
         outcome:
           - True  => this player won
@@ -185,7 +193,7 @@ def process_matches(
         elif outcome is False:
             overall_updates[pid]["l"] += 1
 
-        if not bool(is_popup):
+        if update_island:
             ensure_island_entry(pid, league_name)
             key = (pid, league_name)
             island_updates[key]["r"] += float(d_isl)
@@ -221,9 +229,14 @@ def process_matches(
         league_name = str(m.get("league", "") or "").strip()
         week_tag = str(m.get("week_tag", "") or "")
         match_type = str(m.get("match_type", "") or "")
+        rating_scope = str(m.get("rating_scope", "") or "").strip().lower()
+        if rating_scope not in {"overall_only", "unrated"}:
+            rating_scope = ""
         is_popup = bool(m.get("is_popup", False)) or (match_type == "PopUp")
-        if not is_popup:
-            has_non_popup_match = True
+        is_unrated = rating_scope == "unrated"
+        update_island = (not is_popup) and (rating_scope != "overall_only") and (not is_unrated)
+        if (not is_popup) and (not is_unrated):
+            has_badge_eligible_match = True
 
         dt_val = m.get("date", None)
         match_dt = coerce_utc_datetime(dt_val)
@@ -233,18 +246,20 @@ def process_matches(
 
         ro1, ro2, ro3, ro4 = get_overall_r(p1), get_overall_r(p2), get_overall_r(p3), get_overall_r(p4)
 
-        do1, do2 = calculate_hybrid_elo(
-            (ro1 + ro2) / 2.0,
-            (ro3 + ro4) / 2.0,
-            s1,
-            s2,
-            k_factor=float(default_k_factor),
-            min_win_delta=float(min_win_delta_elo),
-            cap_loser_gain=cap_loser_gain_elo,
-        )
+        do1, do2 = 0.0, 0.0
+        if not is_unrated:
+            do1, do2 = calculate_hybrid_elo(
+                (ro1 + ro2) / 2.0,
+                (ro3 + ro4) / 2.0,
+                s1,
+                s2,
+                k_factor=float(default_k_factor),
+                min_win_delta=float(min_win_delta_elo),
+                cap_loser_gain=cap_loser_gain_elo,
+            )
 
         di1, di2 = 0.0, 0.0
-        if not is_popup:
+        if update_island:
             k_val = get_k(league_name)
             ri1, ri2, ri3, ri4 = (
                 get_island_r(p1, league_name),
@@ -269,16 +284,26 @@ def process_matches(
             t1_outcome = (s1 > s2)
             t2_outcome = (s2 > s1)
 
-        end_r1 = apply_updates(p1, do1, di1, t1_outcome, is_popup, league_name)
-        end_r2 = apply_updates(p2, do1, di1, t1_outcome, is_popup, league_name)
-        end_r3 = apply_updates(p3, do2, di2, t2_outcome, is_popup, league_name)
-        end_r4 = apply_updates(p4, do2, di2, t2_outcome, is_popup, league_name)
-
-        for pid in (p1, p2, p3, p4):
-            last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
-            affected_players.add(int(pid))
-
-        stored_elo_delta = abs(do1) if (t1_outcome is True) else abs(do2)
+        if is_unrated:
+            end_r1, end_r2, end_r3, end_r4 = ro1, ro2, ro3, ro4
+            stored_elo_delta = 0.0
+        else:
+            end_r1 = apply_updates(
+                p1, do1, di1, t1_outcome, update_island=update_island, league_name=league_name
+            )
+            end_r2 = apply_updates(
+                p2, do1, di1, t1_outcome, update_island=update_island, league_name=league_name
+            )
+            end_r3 = apply_updates(
+                p3, do2, di2, t2_outcome, update_island=update_island, league_name=league_name
+            )
+            end_r4 = apply_updates(
+                p4, do2, di2, t2_outcome, update_island=update_island, league_name=league_name
+            )
+            for pid in (p1, p2, p3, p4):
+                last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
+                affected_players.add(int(pid))
+            stored_elo_delta = abs(do1) if (t1_outcome is True) else abs(do2)
 
         db_matches.append(
             {
@@ -340,7 +365,7 @@ def process_matches(
                     f"error={error_obj!r}; sample_row={debug_payload}"
                 )
 
-        if supabase is not None and has_non_popup_match:
+        if supabase is not None and has_badge_eligible_match:
             enqueue_result = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),

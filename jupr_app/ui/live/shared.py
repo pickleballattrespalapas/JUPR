@@ -66,6 +66,7 @@ class LivePageConfig:
     allow_official: bool = False
     allow_tournament: bool = False
     show_official_context: bool = False
+    show_rating_mode: bool = False
     persistent_save_label: str | None = None
     requires_roster_resolution: bool = False
 
@@ -82,6 +83,7 @@ def _default_state(config: LivePageConfig) -> dict:
         "league_rounds": 3,
         "official_league": "",
         "official_week_tag": "Week 1",
+        "rating_mode": "Rated",
         "last_saved_rounds": [],
         "editing_substitution_id": None,
         "parsed_roster_lines": [],
@@ -474,6 +476,39 @@ def _official_context_ui(ctx, state: dict) -> tuple[dict, bool]:
     }, not disabled
 
 
+def _rating_mode_context_ui(ctx, state: dict) -> tuple[dict, bool]:
+    disabled = not bool(getattr(ctx, "admin_logged_in", False))
+    options = ["Rated", "Unrated"]
+    current_mode = str(state.get("rating_mode") or "Rated")
+    if current_mode not in options:
+        current_mode = "Rated"
+    state["rating_mode"] = st.radio(
+        "Rating mode",
+        options,
+        horizontal=True,
+        index=options.index(current_mode),
+        key="jupr_live_rating_mode",
+        disabled=disabled,
+    )
+    if disabled:
+        st.warning("Official mode requires admin login before event creation or save.")
+    if state["rating_mode"] == "Unrated":
+        return {
+            "league": "JUPR Live",
+            "week_tag": "",
+            "match_type": "JUPR Live Unrated",
+            "is_popup": False,
+            "rating_scope": "unrated",
+        }, not disabled
+    return {
+        "league": "JUPR Live",
+        "week_tag": "",
+        "match_type": "JUPR Live Rated",
+        "is_popup": False,
+        "rating_scope": "overall_only",
+    }, not disabled
+
+
 def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     st.markdown('<div class="jupr-live-card">', unsafe_allow_html=True)
     st.markdown('<div class="jupr-live-kicker">Setup</div>', unsafe_allow_html=True)
@@ -582,6 +617,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     official_context: dict = {}
     if config.show_official_context:
         official_context, can_create = _official_context_ui(ctx, state)
+    elif config.show_rating_mode:
+        official_context, can_create = _rating_mode_context_ui(ctx, state)
     participant_names = _participant_lines(state["participant_text"])
     roster_requires_resolution = bool(config.requires_roster_resolution) and state["type_label"] in {
         "Round Robin",
@@ -1213,13 +1250,21 @@ def official_base_payload(state: dict) -> dict:
     }
 
 
+def official_context_payload(event: dict, state: dict) -> dict:
+    context = dict(event.get("official_context") or {})
+    if context:
+        return context
+    return official_base_payload(state)
+
+
 def build_rr_official_payloads(state: dict, event: dict) -> list[dict]:
     payloads = resolve_payload_player_ids(
         event,
         match_payloads_from_rr(event),
         materialize_substitutions=True,
     )
-    return [{**payload, **official_base_payload(state)} for payload in payloads]
+    context = official_context_payload(event, state)
+    return [{**payload, **context} for payload in payloads]
 
 
 def build_league_round_official_payloads(state: dict, event: dict) -> list[dict]:
@@ -1228,11 +1273,14 @@ def build_league_round_official_payloads(state: dict, event: dict) -> list[dict]
         match_payloads_from_current_league_round(event),
         materialize_substitutions=True,
     )
-    return [{**payload, **official_base_payload(state)} for payload in payloads]
+    context = official_context_payload(event, state)
+    return [{**payload, **context} for payload in payloads]
 
 
-def build_tournament_official_payloads(event: dict) -> list[dict]:
-    return tournament_completed_match_payloads(event, unsaved_only=True)
+def build_tournament_official_payloads(state: dict, event: dict) -> list[dict]:
+    payloads = tournament_completed_match_payloads(event, unsaved_only=True)
+    context = official_context_payload(event, state)
+    return [{**payload, **context} for payload in payloads]
 
 
 def mark_tournament_payloads_saved(event: dict, payloads: list[dict]) -> None:
