@@ -1502,6 +1502,8 @@ def _render_player_slot_editor(
         scope_key = f"{editor_key}_scope"
         if scope_key not in st.session_state:
             st.session_state[scope_key] = scope_options[preferred_scope]
+        elif st.session_state.get(scope_key) not in scope_options:
+            st.session_state[scope_key] = scope_options[preferred_scope]
         selected_scope = st.radio(
             "Apply change to",
             scope_options,
@@ -1510,37 +1512,29 @@ def _render_player_slot_editor(
         )
         scoped_sub = game_sub if selected_scope == "This game only" else round_sub
         scoped_sub_data = scoped_sub or {}
-        substitute_key = f"{editor_key}_substitute"
-        scope_memory_key = f"{editor_key}_scope_memory"
         default_substitute = ""
         if scoped_sub_data:
             default_substitute = str(scoped_sub_data.get("substitute_name") or "")
         elif active_sub:
             default_substitute = str(active_sub.get("substitute_name") or "")
-        note_key = f"{editor_key}_note"
-        scope_changed = (
-            scope_memory_key not in st.session_state
-            or st.session_state.get(scope_memory_key) != selected_scope
-        )
-        if scope_changed:
-            st.session_state[scope_memory_key] = selected_scope
+        scope_token = "game" if selected_scope == "This game only" else "round"
+        scoped_sub_id = str(scoped_sub_data.get("id") or "none")
+        substitute_key = f"{editor_key}_substitute_{scope_token}_{scoped_sub_id}"
+        note_key = f"{editor_key}_note_{scope_token}_{scoped_sub_id}"
+        if substitute_key not in st.session_state:
             st.session_state[substitute_key] = (
                 default_substitute if default_substitute in player_options else player_options[0]
             )
-            st.session_state.pop(note_key, None)
-        elif substitute_key not in st.session_state:
-            st.session_state[substitute_key] = (
-                default_substitute if default_substitute in player_options else player_options[0]
-            )
+        elif st.session_state.get(substitute_key) not in player_options:
+            st.session_state[substitute_key] = player_options[0]
         if note_key not in st.session_state:
             st.session_state[note_key] = str(scoped_sub_data.get("note") or "")
         selected_name = st.selectbox(
             "Replacement player",
             player_options,
-            index=player_options.index(st.session_state[substitute_key]) if st.session_state.get(substitute_key) in player_options else 0,
             key=substitute_key,
         )
-        st.text_input("Note", key=note_key)
+        note_value = st.text_input("Note", key=note_key)
         apply_col, clear_col, cancel_col = st.columns([1, 1, 1])
         if apply_col.button("Apply", type="primary", key=f"{editor_key}_apply"):
             try:
@@ -1553,7 +1547,7 @@ def _render_player_slot_editor(
                         substitute_name=selected_name,
                         created_by="admin",
                         created_at=_utc_now_iso(),
-                        note=str(st.session_state.get(note_key) or ""),
+                        note=str(note_value or ""),
                         substitution_id=(str(round_sub["id"]) if round_sub else None),
                     )
                 else:
@@ -1566,7 +1560,7 @@ def _render_player_slot_editor(
                         substitute_name=selected_name,
                         created_by="admin",
                         created_at=_utc_now_iso(),
-                        note=str(st.session_state.get(note_key) or ""),
+                        note=str(note_value or ""),
                         substitution_id=(str(game_sub["id"]) if game_sub else None),
                     )
                 _upsert_substitution(event, substitution)
