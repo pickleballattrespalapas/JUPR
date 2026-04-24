@@ -30,6 +30,21 @@ def _resolve_post_login_target() -> str:
 
 
 def render(ctx):
+    if bool(getattr(ctx, "admin_logged_in", False)):
+        params_changed = False
+        if str(st.query_params.get("admin", "")) != "1":
+            st.query_params["admin"] = "1"
+            params_changed = True
+        if str(st.query_params.get("page", "")) != DEFAULT_ADMIN_PAGE_KEY:
+            st.query_params["page"] = DEFAULT_ADMIN_PAGE_KEY
+            params_changed = True
+        if "public" in st.query_params:
+            st.query_params.pop("public", None)
+            params_changed = True
+        if params_changed:
+            st.rerun()
+        return
+
     page_shell(
         "🔐 Admin Login",
         "Authorized Tres Palapas staff only. Sign in to access JUPR administration.",

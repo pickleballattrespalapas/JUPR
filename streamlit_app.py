@@ -134,6 +134,34 @@ def hide_sidebar_and_header_for_public():
     )
 
 
+def _query_param_value(key: str) -> str:
+    value = st.query_params.get(key, "")
+    if isinstance(value, list):
+        value = value[0] if value else ""
+    return str(value or "")
+
+
+def _set_query_params_idempotent(
+    *,
+    updates: dict[str, str] | None = None,
+    removals: set[str] | None = None,
+) -> bool:
+    changed = False
+
+    for key, value in (updates or {}).items():
+        value_text = str(value)
+        if _query_param_value(key) != value_text:
+            st.query_params[key] = value_text
+            changed = True
+
+    for key in removals or set():
+        if key in st.query_params:
+            st.query_params.pop(key, None)
+            changed = True
+
+    return changed
+
+
 def main():
     """
     Main Streamlit entrypoint. Keep this deterministic for reloads.
@@ -163,6 +191,9 @@ def main():
         admin_login_requested = incoming_page_param == "admin_login"
         requested_admin_page = incoming_page_param in ADMIN_ONLY_PAGE_KEYS
         recovery_flow = is_recovery_flow_query()
+        admin_entry_requested = (
+            admin_requested or admin_login_requested or requested_admin_page or recovery_flow
+        )
         debug_exceptions = _debug_exceptions_enabled()
 
         # Make base_url available to all pages (leaderboards uses this for share links)
@@ -178,10 +209,7 @@ def main():
         render_admin_browser_session_bridge()
 
         admin_allowlist = load_admin_allowlist()
-        should_restore_admin = (
-            admin_requested or requested_admin_page or admin_login_requested or recovery_flow
-        )
-        if should_restore_admin:
+        if admin_entry_requested:
             maybe_restore_admin_login_from_browser()
 
         current_admin = get_current_admin_user()
@@ -194,24 +222,52 @@ def main():
             current_admin = None
             current_admin_email = ""
             authenticated = False
+            authorized = False
 
-        effective_admin_entry = (
-            admin_requested or requested_admin_page or admin_login_requested or recovery_flow
-        )
-        PUBLIC_MODE = not effective_admin_entry
-        if public_requested and not effective_admin_entry:
+        admin_authenticated = authenticated and authorized
+
+        if admin_login_requested and admin_authenticated:
+            post_login_target = str(
+                st.session_state.get("post_login_admin_page_key", "") or ""
+            ).strip().lower()
+            if post_login_target not in ADMIN_ONLY_PAGE_KEYS:
+                post_login_target = str(qp_get("next", "") or "").strip().lower()
+            if post_login_target not in ADMIN_ONLY_PAGE_KEYS:
+                post_login_target = "league_manager"
+
+            st.session_state.pop("post_login_admin_page_key", None)
+            params_changed = _set_query_params_idempotent(
+                updates={
+                    "admin": "1",
+                    "page": post_login_target,
+                },
+                removals={
+                    "public",
+                    "next",
+                    "jupr_admin_access_token",
+                    "jupr_admin_refresh_token",
+                    "jupr_admin_restore_from_storage",
+                },
+            )
+            if params_changed:
+                st.rerun()
+
+        PUBLIC_MODE = not admin_entry_requested
+        if public_requested and not admin_entry_requested:
             PUBLIC_MODE = True
-        unauthenticated_admin_page_request = requested_admin_page and not authenticated
+        unauthenticated_admin_page_request = requested_admin_page and not admin_authenticated
         if unauthenticated_admin_page_request:
             st.session_state["post_login_admin_page_key"] = incoming_page_param
-            st.query_params["admin"] = "1"
-            st.query_params.pop("public", None)
-            st.query_params["page"] = "admin_login"
-            st.rerun()
+            params_changed = _set_query_params_idempotent(
+                updates={"admin": "1", "page": "admin_login"},
+                removals={"public"},
+            )
+            if params_changed:
+                st.rerun()
 
-        admin_logged_in = authenticated and authorized and (not admin_login_requested)
+        admin_logged_in = admin_authenticated and (not PUBLIC_MODE) and (not admin_login_requested)
         st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
-        st.session_state["jupr_admin_entry_active"] = bool(effective_admin_entry)
+        st.session_state["jupr_admin_entry_active"] = bool(admin_entry_requested)
         st.session_state["admin_allowlist"] = admin_allowlist
 
         # ---- Sidebar / Auth ----
@@ -487,15 +543,18 @@ def main():
                 st.query_params["page"] = target_page
 
             if PUBLIC_MODE:
-                st.query_params.pop("admin", None)
                 if target_page == "leaderboards":
-                    st.query_params.pop("page", None)
+                    _set_query_params_idempotent(removals={"admin", "page"})
                 elif current_page != target_page:
-                    st.query_params["page"] = target_page
+                    _set_query_params_idempotent(
+                        updates={"page": target_page},
+                        removals={"admin"},
+                    )
             else:
-                st.query_params["admin"] = "1"
-                if "public" in st.query_params:
-                    st.query_params.pop("public", None)
+                _set_query_params_idempotent(
+                    updates={"admin": "1"},
+                    removals={"public"},
+                )
 
             st.session_state["_last_rendered_nav"] = sel
         except Exception:
