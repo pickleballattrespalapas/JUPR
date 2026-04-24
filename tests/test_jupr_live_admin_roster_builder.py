@@ -6,7 +6,9 @@ import pandas as pd
 
 from jupr_app.ui.live.shared import (
     _append_roster_names,
+    _default_admin_roster_row,
     _create_and_resolve_admin_players,
+    _existing_player_rating_jupr,
     _rows_from_admin_editor_df,
 )
 from jupr_app.ui.pages.jupr_live_admin import ADMIN_CONFIG
@@ -66,6 +68,7 @@ def _ctx(players: list[dict]):
         supabase=sb,
         club_id="club-1",
         name_to_id={str(p["name"]): int(p["id"]) for p in players},
+        df_players_all=pd.DataFrame(players),
     )
 
 
@@ -77,12 +80,14 @@ def test_admin_config_uses_ordered_roster_builder():
 def test_append_roster_names_preserves_custom_order_and_appends_existing_players():
     player_name_to_id = {"Amy": 1, "Brooke": 2, "Chris": 3}
     rows = _append_roster_names(
+        _ctx([]),
         [],
         ["Brooke", "Zoe"],
         player_name_to_id=player_name_to_id,
         default_new_player_rating=3.5,
     )
     rows = _append_roster_names(
+        _ctx([]),
         rows,
         ["Amy"],
         player_name_to_id=player_name_to_id,
@@ -94,14 +99,64 @@ def test_append_roster_names_preserves_custom_order_and_appends_existing_players
 
 def test_rows_from_editor_preserve_admin_order():
     player_name_to_id = {"Amy": 1, "Brooke": 2}
+    ctx = _ctx([{"id": 1, "club_id": "club-1", "name": "Amy", "rating": 1720.0}])
     df = pd.DataFrame(
         [
-            {"Order": 2, "Name": "Amy", "Resolution": "existing_player", "Matched Player": "Amy", "Starting JUPR": 3.5},
-            {"Order": 1, "Name": "Zoe", "Resolution": "create_new_player", "Matched Player": "", "Starting JUPR": 3.8},
+            {"Order": 2, "Name": "Amy", "Resolution": "existing_player", "Matched Player": "Amy", "Current / Starting JUPR": 1.5},
+            {"Order": 1, "Name": "Zoe", "Resolution": "create_new_player", "Matched Player": "", "Current / Starting JUPR": 3.8},
         ]
     )
-    rows = _rows_from_admin_editor_df(df, player_name_to_id=player_name_to_id)
+    rows = _rows_from_admin_editor_df(
+        df,
+        player_name_to_id=player_name_to_id,
+        ctx=ctx,
+        default_new_player_rating=3.5,
+    )
     assert [r["display_name"] for r in rows] == ["Zoe", "Amy"]
+    assert rows[1]["starting_jupr_rating"] == 4.3
+
+
+def test_existing_player_uses_current_rating_from_players_table():
+    ctx = _ctx([{"id": 1, "club_id": "club-1", "name": "Richard Bartolowits", "rating": 1720.0}])
+    assert _existing_player_rating_jupr(ctx, 1) == 4.3
+    row = _default_admin_roster_row(
+        ctx,
+        "Richard Bartolowits",
+        order=1,
+        player_name_to_id={"Richard Bartolowits": 1},
+        default_new_player_rating=3.5,
+    )
+    assert row["resolution_status"] == "existing_player"
+    assert row["starting_jupr_rating"] == 4.3
+
+
+def test_new_player_uses_default_rating_in_default_row():
+    ctx = _ctx([])
+    row = _default_admin_roster_row(
+        ctx,
+        "Lance Zonneveld",
+        order=1,
+        player_name_to_id={},
+        default_new_player_rating=3.9,
+    )
+    assert row["resolution_status"] == "create_new_player"
+    assert row["starting_jupr_rating"] == 3.9
+
+
+def test_mixed_roster_keeps_distinct_existing_and_new_ratings():
+    ctx = _ctx([
+        {"id": 1, "club_id": "club-1", "name": "Kirsten Giacomini", "rating": 1720.0},
+    ])
+    rows = _append_roster_names(
+        ctx,
+        [],
+        ["Kirsten Giacomini", "Lance Zonneveld"],
+        player_name_to_id={"Kirsten Giacomini": 1},
+        default_new_player_rating=3.5,
+    )
+    by_name = {row["display_name"]: row for row in rows}
+    assert by_name["Kirsten Giacomini"]["starting_jupr_rating"] == 4.3
+    assert by_name["Lance Zonneveld"]["starting_jupr_rating"] == 3.5
 
 
 def test_create_and_resolve_mixed_existing_and_new_players(monkeypatch):
@@ -188,3 +243,31 @@ def test_existing_player_only_roster_still_resolves_without_creation(monkeypatch
     assert resolved_ids == {"Brooke": 2, "Amy": 1}
     assert review_messages == []
     assert created_names == []
+
+
+def test_existing_player_creation_path_ignores_starting_jupr_and_does_not_overwrite(monkeypatch):
+    ctx = _ctx([
+        {"id": 1, "club_id": "club-1", "name": "Amy", "rating": 1720.0},
+    ])
+    safe_add_calls = []
+
+    def _safe_add_player(**kwargs):
+        safe_add_calls.append(kwargs)
+        return True, ""
+
+    monkeypatch.setattr("jupr_app.ui.live.shared.safe_add_player", _safe_add_player)
+    _create_and_resolve_admin_players(
+        ctx,
+        roster_rows=[
+            {
+                "order": 1,
+                "display_name": "Amy",
+                "resolution_status": "existing_player",
+                "player_id": 1,
+                "starting_jupr_rating": 1.0,
+            }
+        ],
+        default_new_player_rating=3.5,
+        player_name_to_id={"Amy": 1},
+    )
+    assert safe_add_calls == []
