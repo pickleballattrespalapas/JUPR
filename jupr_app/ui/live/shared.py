@@ -255,6 +255,23 @@ def _best_fuzzy_score(target: str, candidate: str) -> float:
     return float(difflib.SequenceMatcher(None, target, candidate).ratio())
 
 
+def _existing_player_rating_jupr(ctx, player_id: int | None) -> float | None:
+    if player_id is None:
+        return None
+    df_players_all = getattr(ctx, "df_players_all", pd.DataFrame())
+    if df_players_all is None or df_players_all.empty:
+        return None
+    if "id" not in df_players_all.columns or "rating" not in df_players_all.columns:
+        return None
+    matches = df_players_all[df_players_all["id"] == int(player_id)]
+    if matches.empty:
+        return None
+    rating_elo = pd.to_numeric(matches["rating"], errors="coerce").dropna()
+    if rating_elo.empty:
+        return None
+    return round(float(rating_elo.iloc[0]) / 400.0, 2)
+
+
 def _build_roster_candidate_rows(
     participant_names: list[str],
     player_name_to_id: dict[str, int],
@@ -405,6 +422,7 @@ def _fetch_player_by_exact_name(supabase, *, club_id: str, display_name: str) ->
 
 
 def _default_admin_roster_row(
+    ctx,
     display_name: str,
     *,
     order: int,
@@ -429,12 +447,20 @@ def _default_admin_roster_row(
     if exact_pid is not None:
         status = "existing_player"
         selected_name = normalized_display
+        starting_rating = _existing_player_rating_jupr(ctx, exact_pid)
     elif suggestion:
         status = "needs_review"
         selected_name = suggestion
+        suggested_pid = player_name_to_id.get(suggestion)
+        starting_rating = (
+            _existing_player_rating_jupr(ctx, suggested_pid)
+            if suggested_pid is not None
+            else None
+        )
     else:
         status = "create_new_player"
         selected_name = ""
+        starting_rating = float(default_new_player_rating)
     return {
         "order": int(order),
         "display_name": normalized_display,
@@ -442,11 +468,12 @@ def _default_admin_roster_row(
         "player_id": int(exact_pid) if exact_pid is not None else None,
         "selected_existing_name": selected_name,
         "suggested_existing_name": suggestion,
-        "starting_jupr_rating": float(default_new_player_rating),
+        "starting_jupr_rating": starting_rating,
     }
 
 
 def _append_roster_names(
+    ctx,
     roster_rows: list[dict],
     incoming_names: list[str],
     *,
@@ -469,6 +496,7 @@ def _append_roster_names(
             continue
         updated.append(
             _default_admin_roster_row(
+                ctx,
                 name,
                 order=next_order,
                 player_name_to_id=player_name_to_id,
@@ -480,7 +508,13 @@ def _append_roster_names(
     return updated
 
 
-def _rows_from_admin_editor_df(editor_df: pd.DataFrame, *, player_name_to_id: dict[str, int]) -> list[dict]:
+def _rows_from_admin_editor_df(
+    editor_df: pd.DataFrame,
+    *,
+    player_name_to_id: dict[str, int],
+    ctx,
+    default_new_player_rating: float,
+) -> list[dict]:
     rows: list[dict] = []
     for _, row in editor_df.iterrows():
         display_name = normalize_name(row.get("Name"))
@@ -499,10 +533,20 @@ def _rows_from_admin_editor_df(editor_df: pd.DataFrame, *, player_name_to_id: di
             if selected_existing_name and selected_existing_name in player_name_to_id
             else None
         )
-        try:
-            starting_rating = float(row.get("Starting JUPR"))
-        except Exception:
-            starting_rating = 3.5
+        if resolution_status == "existing_player" and selected_player_id is not None:
+            starting_rating = _existing_player_rating_jupr(ctx, selected_player_id)
+        elif resolution_status == "create_new_player":
+            try:
+                starting_rating = float(row.get("Current / Starting JUPR"))
+            except Exception:
+                starting_rating = float(default_new_player_rating)
+            if starting_rating <= 0:
+                starting_rating = float(default_new_player_rating)
+        else:
+            try:
+                starting_rating = float(row.get("Current / Starting JUPR"))
+            except Exception:
+                starting_rating = None
         rows.append(
             {
                 "order": int(order),
@@ -510,7 +554,7 @@ def _rows_from_admin_editor_df(editor_df: pd.DataFrame, *, player_name_to_id: di
                 "resolution_status": resolution_status,
                 "player_id": selected_player_id,
                 "selected_existing_name": selected_existing_name,
-                "starting_jupr_rating": float(starting_rating),
+                "starting_jupr_rating": starting_rating,
             }
         )
     rows.sort(key=lambda item: (int(item.get("order") or 0), str(item.get("display_name") or "")))
@@ -827,6 +871,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         if st.button("Append pasted names", key=f"{config.state_key}_append_paste"):
             incoming = _participant_lines(quick_paste)
             state["admin_roster_rows"] = _append_roster_names(
+                ctx,
                 list(state.get("admin_roster_rows") or []),
                 incoming,
                 player_name_to_id=player_name_to_id,
@@ -842,6 +887,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         ]
         if newly_added:
             state["admin_roster_rows"] = _append_roster_names(
+                ctx,
                 list(state.get("admin_roster_rows") or []),
                 newly_added,
                 player_name_to_id=player_name_to_id,
@@ -850,6 +896,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         roster_rows = list(state.get("admin_roster_rows") or [])
         if not roster_rows and state.get("participant_text"):
             roster_rows = _append_roster_names(
+                ctx,
                 [],
                 _participant_lines(state["participant_text"]),
                 player_name_to_id=player_name_to_id,
@@ -864,13 +911,19 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                     "Name": str(row.get("display_name") or ""),
                     "Resolution": str(row.get("resolution_status") or "create_new_player"),
                     "Matched Player": str(row.get("selected_existing_name") or ""),
-                    "Starting JUPR": float(
-                        row.get("starting_jupr_rating") or state["default_new_player_rating"]
+                    "Current / Starting JUPR": (
+                        row.get("starting_jupr_rating")
+                        if row.get("resolution_status") == "existing_player"
+                        else float(
+                            row.get("starting_jupr_rating")
+                            if row.get("starting_jupr_rating") is not None
+                            else state["default_new_player_rating"]
+                        )
                     ),
                 }
                 for idx, row in enumerate(roster_rows)
             ],
-            columns=["Order", "Name", "Resolution", "Matched Player", "Starting JUPR"],
+            columns=["Order", "Name", "Resolution", "Matched Player", "Current / Starting JUPR"],
         )
         edited_df = st.data_editor(
             editor_source,
@@ -888,8 +941,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                     "Matched Player",
                     options=[""] + player_options,
                 ),
-                "Starting JUPR": st.column_config.NumberColumn(
-                    "Starting JUPR",
+                "Current / Starting JUPR": st.column_config.NumberColumn(
+                    "Current / Starting JUPR",
                     min_value=1.0,
                     max_value=8.0,
                     step=0.05,
@@ -899,6 +952,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         state["admin_roster_rows"] = _rows_from_admin_editor_df(
             edited_df,
             player_name_to_id=player_name_to_id,
+            ctx=ctx,
+            default_new_player_rating=float(state["default_new_player_rating"]),
         )
         state["participant_text"] = "\n".join(
             row["display_name"] for row in (state.get("admin_roster_rows") or [])
