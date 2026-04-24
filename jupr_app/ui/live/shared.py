@@ -52,6 +52,7 @@ from jupr_app.domain.live_beta_engine import (
     update_tournament_score,
     validate_assignments,
 )
+from jupr_app.domain.player_ops import safe_add_player
 
 
 SaveCallback = Callable[[object, dict, dict], bool | None]
@@ -69,6 +70,7 @@ class LivePageConfig:
     show_rating_mode: bool = False
     persistent_save_label: str | None = None
     requires_roster_resolution: bool = False
+    use_admin_roster_builder: bool = False
 
 
 def _default_state(config: LivePageConfig) -> dict:
@@ -91,6 +93,8 @@ def _default_state(config: LivePageConfig) -> dict:
         "confirmed_roster_rows": [],
         "roster_confirmed": False,
         "resolved_roster_ids": {},
+        "admin_roster_rows": [],
+        "default_new_player_rating": 3.5,
     }
 
 
@@ -382,6 +386,210 @@ def _resolved_participants_from_confirmation(
             )
     return names, resolved_ids, resolved_rows
 
+
+def _fetch_player_by_exact_name(supabase, *, club_id: str, display_name: str) -> dict | None:
+    rows = (
+        supabase.table("players")
+        .select("id,name")
+        .eq("club_id", str(club_id))
+        .eq("name", normalize_name(display_name))
+        .limit(2)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return None
+    return dict(rows[0])
+
+
+def _default_admin_roster_row(
+    display_name: str,
+    *,
+    order: int,
+    player_name_to_id: dict[str, int],
+    default_new_player_rating: float,
+) -> dict:
+    normalized_display = normalize_name(display_name)
+    exact_pid = player_name_to_id.get(normalized_display)
+    suggestion = ""
+    if exact_pid is None and normalized_display:
+        suggestion = next(
+            iter(
+                difflib.get_close_matches(
+                    normalized_display,
+                    list(player_name_to_id.keys()),
+                    n=1,
+                    cutoff=0.8,
+                )
+            ),
+            "",
+        )
+    if exact_pid is not None:
+        status = "existing_player"
+        selected_name = normalized_display
+    elif suggestion:
+        status = "needs_review"
+        selected_name = suggestion
+    else:
+        status = "create_new_player"
+        selected_name = ""
+    return {
+        "order": int(order),
+        "display_name": normalized_display,
+        "resolution_status": status,
+        "player_id": int(exact_pid) if exact_pid is not None else None,
+        "selected_existing_name": selected_name,
+        "suggested_existing_name": suggestion,
+        "starting_jupr_rating": float(default_new_player_rating),
+    }
+
+
+def _append_roster_names(
+    roster_rows: list[dict],
+    incoming_names: list[str],
+    *,
+    player_name_to_id: dict[str, int],
+    default_new_player_rating: float,
+) -> list[dict]:
+    existing_keys = {
+        normalize_name(row.get("display_name")).casefold()
+        for row in roster_rows
+        if normalize_name(row.get("display_name"))
+    }
+    next_order = len(roster_rows) + 1
+    updated = list(roster_rows)
+    for raw_name in incoming_names:
+        name = normalize_name(raw_name)
+        if not name:
+            continue
+        key = name.casefold()
+        if key in existing_keys:
+            continue
+        updated.append(
+            _default_admin_roster_row(
+                name,
+                order=next_order,
+                player_name_to_id=player_name_to_id,
+                default_new_player_rating=default_new_player_rating,
+            )
+        )
+        existing_keys.add(key)
+        next_order += 1
+    return updated
+
+
+def _rows_from_admin_editor_df(editor_df: pd.DataFrame, *, player_name_to_id: dict[str, int]) -> list[dict]:
+    rows: list[dict] = []
+    for _, row in editor_df.iterrows():
+        display_name = normalize_name(row.get("Name"))
+        if not display_name:
+            continue
+        try:
+            order = int(row.get("Order"))
+        except Exception:
+            order = len(rows) + 1
+        resolution_status = str(row.get("Resolution") or "create_new_player")
+        if resolution_status not in {"existing_player", "create_new_player", "needs_review"}:
+            resolution_status = "create_new_player"
+        selected_existing_name = normalize_name(row.get("Matched Player"))
+        selected_player_id = (
+            int(player_name_to_id[selected_existing_name])
+            if selected_existing_name and selected_existing_name in player_name_to_id
+            else None
+        )
+        try:
+            starting_rating = float(row.get("Starting JUPR"))
+        except Exception:
+            starting_rating = 3.5
+        rows.append(
+            {
+                "order": int(order),
+                "display_name": display_name,
+                "resolution_status": resolution_status,
+                "player_id": selected_player_id,
+                "selected_existing_name": selected_existing_name,
+                "starting_jupr_rating": float(starting_rating),
+            }
+        )
+    rows.sort(key=lambda item: (int(item.get("order") or 0), str(item.get("display_name") or "")))
+    for idx, row in enumerate(rows, start=1):
+        row["order"] = idx
+    return rows
+
+
+def _create_and_resolve_admin_players(
+    ctx,
+    *,
+    roster_rows: list[dict],
+    default_new_player_rating: float,
+    player_name_to_id: dict[str, int],
+) -> tuple[list[str], dict[str, int], list[str], list[str]]:
+    sorted_rows = sorted(
+        list(roster_rows or []),
+        key=lambda item: (int(item.get("order") or 0), str(item.get("display_name") or "")),
+    )
+    participant_names: list[str] = []
+    resolved_ids: dict[str, int] = {}
+    review_messages: list[str] = []
+    created_names: list[str] = []
+    for row in sorted_rows:
+        display_name = normalize_name(row.get("display_name"))
+        if not display_name:
+            continue
+        participant_names.append(display_name)
+        status = str(row.get("resolution_status") or "create_new_player")
+        selected_existing_name = normalize_name(row.get("selected_existing_name"))
+        selected_pid = row.get("player_id")
+        if selected_pid is None and selected_existing_name in player_name_to_id:
+            selected_pid = int(player_name_to_id[selected_existing_name])
+
+        if status == "needs_review":
+            suggestion = selected_existing_name or "an existing player"
+            review_messages.append(
+                f"Review roster: {display_name} is close to {suggestion}. Choose existing player or create a new player."
+            )
+            continue
+
+        if status == "existing_player":
+            if selected_pid is None:
+                review_messages.append(
+                    f"Review roster: {display_name} must select a matched existing player."
+                )
+                continue
+            resolved_ids[display_name] = int(selected_pid)
+            continue
+
+        rating_jupr = row.get("starting_jupr_rating")
+        try:
+            rating_jupr = float(rating_jupr)
+        except Exception:
+            rating_jupr = float(default_new_player_rating)
+        if rating_jupr <= 0:
+            rating_jupr = float(default_new_player_rating)
+        ok, err = safe_add_player(
+            supabase=ctx.supabase,
+            club_id=str(ctx.club_id),
+            name=display_name,
+            rating_jupr=rating_jupr,
+        )
+        if not ok:
+            raise RuntimeError(err or f"Unable to create rated player for {display_name}.")
+        created = _fetch_player_by_exact_name(
+            ctx.supabase,
+            club_id=str(ctx.club_id),
+            display_name=display_name,
+        )
+        if created is None or created.get("id") is None:
+            raise RuntimeError(f"Unable to resolve created rated player for {display_name}.")
+        pid = int(created["id"])
+        resolved_ids[display_name] = pid
+        player_name_to_id[display_name] = pid
+        created_names.append(display_name)
+        if isinstance(getattr(ctx, "name_to_id", None), dict):
+            ctx.name_to_id[display_name] = pid
+    return participant_names, resolved_ids, review_messages, created_names
+
 def _team_entry_lines(value: str) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
     for idx, raw_line in enumerate(str(value or "").splitlines(), start=1):
@@ -579,29 +787,136 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     participants_key = f"{config.state_key}_participants"
     if selected_players_key not in st.session_state:
         st.session_state[selected_players_key] = state.get("selected_existing_players", [])
+    default_rating_key = f"{config.state_key}_default_new_player_rating"
+    if default_rating_key not in st.session_state:
+        st.session_state[default_rating_key] = float(state.get("default_new_player_rating") or 3.5)
+    previous_selected_existing_players = list(state.get("selected_existing_players") or [])
     selected_existing_players = st.multiselect(
         "Add from current players",
         options=player_options,
         key=selected_players_key,
-        help="Search and select existing player names to quickly add them to the roster.",
+        help="Search and select existing player names to quickly append them to the roster.",
     )
     state["selected_existing_players"] = list(selected_existing_players)
-    st.caption(
-        "Search current players to add them quickly. You can still type guest names below."
-    )
-    merged_participant_text = _merge_participant_text(
-        state["participant_text"], state["selected_existing_players"]
-    )
-    if merged_participant_text != state["participant_text"]:
-        state["participant_text"] = merged_participant_text
-        st.session_state[participants_key] = merged_participant_text
-    state["participant_text"] = st.text_area(
-        "Names or roster entry",
-        value=state["participant_text"],
-        height=180,
-        placeholder=placeholder,
-        key=participants_key,
-    )
+    use_admin_roster_builder = bool(config.use_admin_roster_builder) and state["type_label"] in {
+        "Round Robin",
+        "League / Ladder",
+    }
+    if use_admin_roster_builder:
+        state["default_new_player_rating"] = float(
+            st.number_input(
+                "Default new-player rating (JUPR)",
+                min_value=1.0,
+                max_value=8.0,
+                step=0.05,
+                key=default_rating_key,
+                help="Used when creating a new player unless overridden per roster row.",
+            )
+        )
+        quick_paste = st.text_area(
+            "Quick paste names (one per line)",
+            value="",
+            height=120,
+            placeholder=placeholder,
+            key=f"{config.state_key}_quick_paste",
+        )
+        if st.button("Append pasted names", key=f"{config.state_key}_append_paste"):
+            incoming = _participant_lines(quick_paste)
+            state["admin_roster_rows"] = _append_roster_names(
+                list(state.get("admin_roster_rows") or []),
+                incoming,
+                player_name_to_id=player_name_to_id,
+                default_new_player_rating=float(state["default_new_player_rating"]),
+            )
+            st.session_state[f"{config.state_key}_quick_paste"] = ""
+            st.rerun()
+        prev_selected = set(previous_selected_existing_players)
+        newly_added = [
+            name
+            for name in state["selected_existing_players"]
+            if name not in prev_selected
+        ]
+        if newly_added:
+            state["admin_roster_rows"] = _append_roster_names(
+                list(state.get("admin_roster_rows") or []),
+                newly_added,
+                player_name_to_id=player_name_to_id,
+                default_new_player_rating=float(state["default_new_player_rating"]),
+            )
+        roster_rows = list(state.get("admin_roster_rows") or [])
+        if not roster_rows and state.get("participant_text"):
+            roster_rows = _append_roster_names(
+                [],
+                _participant_lines(state["participant_text"]),
+                player_name_to_id=player_name_to_id,
+                default_new_player_rating=float(state["default_new_player_rating"]),
+            )
+        if not roster_rows:
+            st.caption("Build the roster by quick paste and/or add from current players.")
+        editor_source = pd.DataFrame(
+            [
+                {
+                    "Order": int(row.get("order") or (idx + 1)),
+                    "Name": str(row.get("display_name") or ""),
+                    "Resolution": str(row.get("resolution_status") or "create_new_player"),
+                    "Matched Player": str(row.get("selected_existing_name") or ""),
+                    "Starting JUPR": float(
+                        row.get("starting_jupr_rating") or state["default_new_player_rating"]
+                    ),
+                }
+                for idx, row in enumerate(roster_rows)
+            ]
+            or [{"Order": 1, "Name": "", "Resolution": "create_new_player", "Matched Player": "", "Starting JUPR": float(state["default_new_player_rating"])}]
+        )
+        edited_df = st.data_editor(
+            editor_source,
+            num_rows="dynamic",
+            hide_index=True,
+            key=f"{config.state_key}_admin_roster_editor",
+            column_config={
+                "Order": st.column_config.NumberColumn("Order", min_value=1, step=1),
+                "Name": st.column_config.TextColumn("Name"),
+                "Resolution": st.column_config.SelectboxColumn(
+                    "Resolution",
+                    options=["existing_player", "create_new_player", "needs_review"],
+                ),
+                "Matched Player": st.column_config.SelectboxColumn(
+                    "Matched Player",
+                    options=[""] + player_options,
+                ),
+                "Starting JUPR": st.column_config.NumberColumn(
+                    "Starting JUPR",
+                    min_value=1.0,
+                    max_value=8.0,
+                    step=0.05,
+                ),
+            },
+        )
+        state["admin_roster_rows"] = _rows_from_admin_editor_df(
+            edited_df,
+            player_name_to_id=player_name_to_id,
+        )
+        state["participant_text"] = "\n".join(
+            row["display_name"] for row in (state.get("admin_roster_rows") or [])
+        )
+        st.session_state[participants_key] = state["participant_text"]
+    else:
+        st.caption(
+            "Search current players to add them quickly. You can still type guest names below."
+        )
+        merged_participant_text = _merge_participant_text(
+            state["participant_text"], state["selected_existing_players"]
+        )
+        if merged_participant_text != state["participant_text"]:
+            state["participant_text"] = merged_participant_text
+            st.session_state[participants_key] = merged_participant_text
+        state["participant_text"] = st.text_area(
+            "Names or roster entry",
+            value=state["participant_text"],
+            height=180,
+            placeholder=placeholder,
+            key=participants_key,
+        )
     if state["type_label"] == "League / Ladder":
         state["league_rounds"] = int(
             st.number_input(
@@ -620,12 +935,18 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     elif config.show_rating_mode:
         official_context, can_create = _rating_mode_context_ui(ctx, state)
     participant_names = _participant_lines(state["participant_text"])
+    if use_admin_roster_builder:
+        participant_names = [
+            str(row.get("display_name") or "")
+            for row in (state.get("admin_roster_rows") or [])
+            if normalize_name(row.get("display_name"))
+        ]
     roster_requires_resolution = bool(config.requires_roster_resolution) and state["type_label"] in {
         "Round Robin",
         "League / Ladder",
     }
     player_options, player_name_to_id = _player_directory(ctx)
-    if roster_requires_resolution:
+    if roster_requires_resolution and not use_admin_roster_builder:
         if state.get("parsed_roster_lines") != participant_names:
             state["parsed_roster_lines"] = list(participant_names)
             state["roster_candidates"] = _build_roster_candidate_rows(
@@ -656,7 +977,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             f"You entered {len(participant_names)} name(s); count is set to {int(state['participant_count'])}."
         )
         can_create = False
-    if roster_requires_resolution and participant_names:
+    if roster_requires_resolution and participant_names and not use_admin_roster_builder:
         roster_candidates = list(state.get("roster_candidates") or [])
         st.markdown("#### Step 1: Review roster matches")
         st.caption(
@@ -728,9 +1049,11 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 st.caption("Social-only fallback: " + ", ".join(str(row.get("name") or "") for row in social_only_rows))
 
     action_cols = st.columns([1, 1, 3])
-    if roster_requires_resolution:
+    if roster_requires_resolution and not use_admin_roster_builder:
         st.caption("Step 3: Create event → enter scores → submit Club Social results.")
-    create_disabled = not can_create or (roster_requires_resolution and not bool(state.get("roster_confirmed")))
+    create_disabled = not can_create or (
+        (roster_requires_resolution and not use_admin_roster_builder and not bool(state.get("roster_confirmed")))
+    )
     if action_cols[0].button(
         "Create event",
         type="primary",
@@ -740,8 +1063,24 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         try:
             create_participant_names = list(participant_names)
             create_resolved_ids: dict[str, int] | None = None
+            created_player_names: list[str] = []
             confirmed_roster_rows = list(state.get("confirmed_roster_rows") or [])
-            if roster_requires_resolution and confirmed_roster_rows:
+            if use_admin_roster_builder:
+                (
+                    create_participant_names,
+                    admin_resolved_ids,
+                    review_messages,
+                    created_player_names,
+                ) = _create_and_resolve_admin_players(
+                    ctx,
+                    roster_rows=list(state.get("admin_roster_rows") or []),
+                    default_new_player_rating=float(state.get("default_new_player_rating") or 3.5),
+                    player_name_to_id=player_name_to_id,
+                )
+                if review_messages:
+                    raise ValueError("\n".join(review_messages))
+                create_resolved_ids = dict(admin_resolved_ids)
+            elif roster_requires_resolution and confirmed_roster_rows:
                 create_participant_names, create_resolved_ids, resolved_rows = _resolved_participants_from_confirmation(
                     [
                         {
@@ -762,7 +1101,9 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 )
             if state["type_label"] == "Round Robin":
                 resolved_ids = None
-                if _is_official(config):
+                if _is_official(config) and use_admin_roster_builder:
+                    resolved_ids = dict(create_resolved_ids or {})
+                elif _is_official(config):
                     resolved_ids, missing = _resolved_ids_for_official(
                         create_participant_names, getattr(ctx, "name_to_id", {})
                     )
@@ -830,13 +1171,15 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                         official_context=official_context,
                     )
             else:
-                exact_sizes = suggest_exact_league_court_sizes(len(participant_names))
+                exact_sizes = suggest_exact_league_court_sizes(len(create_participant_names))
                 if not exact_sizes:
                     raise ValueError(
                         "League / Ladder requires an exact 4-player / 5-player court fit."
                     )
                 resolved_ids = None
-                if _is_official(config):
+                if _is_official(config) and use_admin_roster_builder:
+                    resolved_ids = dict(create_resolved_ids or {})
+                elif _is_official(config):
                     resolved_ids, missing = _resolved_ids_for_official(
                         create_participant_names, getattr(ctx, "name_to_id", {})
                     )
@@ -866,6 +1209,8 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                         participant["match_status"] = str(row.get("match_status") or "")
                         participant["source_name"] = str(row.get("source_name") or "")
             state["last_saved_rounds"] = []
+            if created_player_names:
+                st.session_state["force_data_refresh"] = True
             st.success("Event created.")
             st.rerun()
         except Exception as exc:

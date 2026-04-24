@@ -26,6 +26,8 @@ ADMIN_CONFIG = LivePageConfig(
     allow_official=True,
     allow_tournament=True,
     show_rating_mode=True,
+    requires_roster_resolution=True,
+    use_admin_roster_builder=True,
 )
 
 
