@@ -16,36 +16,40 @@ def _num(value, digits: int = 3, prefix_sign: bool = False, default: str = "N/A"
         return default
 
 
-def _people_html(items: list[dict], empty_text: str) -> str:
-    if not items:
-        return f"<tr><td style='padding:4px 0;color:#5A6678;font-size:13px;'>{html.escape(empty_text)}</td></tr>"
-    rows = []
-    for item in items[:3]:
-        name = _s(item.get("player_name")) or f"Player #{_s(item.get('player_id'))}"
-        matches = int(item.get("matches") or 0)
-        record = _s(item.get("record")) or "0-0"
-        rows.append(
-            f"<tr><td style='padding:4px 0;font-size:13px;line-height:1.35;'><strong>{html.escape(name)}</strong>"
-            f"<span style='color:#5A6678;'> · {matches} matches · {html.escape(record)}</span></td></tr>"
-        )
-    return "".join(rows)
+def _truncate(text: str, limit: int = 80) -> str:
+    value = _s(text)
+    if len(value) <= limit:
+        return value
+    return f"{value[: max(0, limit - 1)].rstrip()}…"
 
 
 def _badge_line(item: dict) -> str:
     name = _s(item.get("name")) or _s(item.get("badge_id")) or "Badge"
     count = int(item.get("count") or 1)
     label = f"{name} x{count}" if count > 1 else name
-    desc = _s(item.get("description")) or "Award earned during this update window."
+    desc = _truncate(_s(item.get("description")), limit=90)
+    desc_block = (
+        f"<div style='color:#5A6678;font-size:12px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{html.escape(desc)}</div>"
+        if desc
+        else ""
+    )
     return (
         "<tr><td style='padding:4px 0;'>"
         f"<div><strong>{html.escape(label)}</strong></div>"
-        f"<div style='color:#5A6678;font-size:12px;line-height:1.3;'>{html.escape(desc)}</div>"
+        f"{desc_block}"
         "</td></tr>"
     )
 
 
 def build_player_update_email_subject(digest_json: dict) -> str:
     player_name = _s((digest_json or {}).get("player_name")) or "Verified Player"
+    summary = (digest_json or {}).get("summary") or {}
+    rating_text = _num(summary.get("overall_jupr_after"), digits=3, default="")
+    delta_text = _num(summary.get("overall_delta"), digits=4, prefix_sign=True, default="")
+    if rating_text:
+        if delta_text:
+            return f"{player_name} verified update: {rating_text} JUPR ({delta_text})"
+        return f"{player_name} verified update: {rating_text} JUPR"
     display_range = _s((digest_json or {}).get("display_range"))
     if display_range:
         return f"{player_name} verified update · {display_range}"
@@ -58,9 +62,6 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
     badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
-    highlights = digest.get("highlights") or []
-    glance = digest.get("week_at_a_glance") or []
-    people = digest.get("people") or {}
     links = digest.get("links") or {}
 
     player_name = html.escape(_s(digest.get("player_name")) or "Verified Player")
@@ -70,26 +71,32 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
     record = html.escape(_s(summary.get("record")) or "0-0")
     matches_played = int(summary.get("matches_played") or 0)
 
-    highlight_items = "".join(
-        f"<tr><td style='padding:4px 0;'><span style='color:#FF7A00;'>•</span> {html.escape(_s(line))}</td></tr>"
-        for line in highlights[:6]
-        if _s(line)
-    )
-    glance_items = "".join(
-        f"<tr><td style='padding:3px 0;color:#314155;'>{html.escape(_s(line))}</td></tr>"
-        for line in glance[:4]
-        if _s(line)
-    )
-
-    badge_items = "".join(_badge_line(item) for item in badges[:10])
+    badge_items = "".join(_badge_line(item) for item in badges[:3])
     trophy_items = "".join(
         f"<tr><td style='padding:3px 0;'>• {html.escape(_s(item.get('tournament_name')) or _s(item.get('league_name')) or 'Trophy')}</td></tr>"
-        for item in trophies[:8]
+        for item in trophies[:3]
     )
+    new_period_block = ""
+    if badge_items or trophy_items:
+        new_period_block = (
+            "<tr><td style='padding:18px 24px 0;'>"
+            "<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>New this period</div>"
+            + (f"<div style='font-size:14px;font-weight:700;margin-top:6px;'>Badges</div><table role='presentation' width='100%'>{badge_items}</table>" if badge_items else "")
+            + (f"<div style='font-size:14px;font-weight:700;margin-top:10px;'>Trophies</div><table role='presentation' width='100%'>{trophy_items}</table>" if trophy_items else "")
+            + "</td></tr>"
+        )
     match_items = "".join(
         f"<tr><td style='padding:5px 0;font-size:13px;line-height:1.35;'>{html.escape(_s(item.get('summary')))}</td></tr>"
-        for item in matches
+        for item in matches[:5]
         if _s(item.get("summary"))
+    )
+    recent_matches_block = (
+        "<tr><td style='padding:14px 24px 0;'>"
+        "<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>Recent matches</div>"
+        f"<table role='presentation' width='100%'>{match_items}</table>"
+        "</td></tr>"
+        if match_items
+        else ""
     )
 
     profile_link = html.escape(_s(links.get("player_profile")))
@@ -121,55 +128,21 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
                   <tr>
                     <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="25%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">JUPR</div><div style="font-size:22px;font-weight:700;">{overall_text}</div></td>
                     <td width="2%"></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Change</div><div style="font-size:22px;font-weight:700;">{delta_text}</div></td>
+                    <td width="2%"></td>
                     <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Record</div><div style="font-size:22px;font-weight:700;">{record}</div></td>
                     <td width="2%"></td>
-                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Matches</div><div style="font-size:22px;font-weight:700;">{matches_played}</div></td>
-                    <td width="2%"></td>
-                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Delta</div><div style="font-size:22px;font-weight:700;">{delta_text}</div></td>
+                    <td style="padding:8px;border-radius:10px;background:#F7FAFF;text-align:center;" width="23%"><div style="font-size:11px;color:#617189;text-transform:uppercase;">Matches played</div><div style="font-size:22px;font-weight:700;">{matches_played}</div></td>
                   </tr>
                 </table>
               </td>
             </tr>
             <tr><td style="padding:16px 24px 0;"><div style="font-size:17px;font-weight:700;margin-bottom:8px;">Overall JUPR Trend</div>{chart_block}</td></tr>
-            <tr><td style="padding:14px 24px 0;"><div style="font-size:17px;font-weight:700;">Short Summary</div><table role="presentation" width="100%">{glance_items or "<tr><td style='padding:4px 0;color:#5A6678;'>No activity in this date window.</td></tr>"}</table></td></tr>
-            <tr>
-              <td style="padding:18px 24px 0;">
-                <div style="font-size:17px;font-weight:700;margin-bottom:6px;">Highlights</div>
-                <table role="presentation" width="100%">{highlight_items or "<tr><td style='padding:4px 0;color:#5A6678;'>No highlights available.</td></tr>"}</table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:18px 24px 0;">
-                <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Badges earned</div>
-                <table role='presentation' width='100%'>{badge_items or "<tr><td style='padding:3px 0;color:#5A6678;'>None this period.</td></tr>"}</table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:14px 24px 0;">
-                <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Matches Played</div>
-                <table role='presentation' width='100%'>{match_items or "<tr><td style='padding:3px 0;color:#5A6678;'>No matches in this date range.</td></tr>"}</table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:18px 24px 0;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                  <tr>
-                    <td width="50%" valign="top" style="padding-right:8px;">
-                      <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Played With</div>
-                      <table role="presentation" width="100%">{_people_html(people.get('top_partners') or [], 'No partner data in this period.')}</table>
-                    </td>
-                    <td width="50%" valign="top" style="padding-left:8px;">
-                      <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Faced Most</div>
-                      <table role="presentation" width="100%">{_people_html(people.get('top_opponents') or [], 'No opponent data in this period.')}</table>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            {"<tr><td style='padding:18px 24px 0;'><div style='font-size:16px;font-weight:700;margin-bottom:6px;'>Trophies</div><table role='presentation' width='100%'>" + trophy_items + "</table></td></tr>" if trophy_items else ""}
+            {new_period_block}
+            {recent_matches_block}
             <tr>
               <td align="center" style="padding:22px 24px 10px;">
-                <a href="{profile_link}" style="display:inline-block;background:#14223A;color:#FFFFFF;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:700;font-size:14px;">View player profile</a>
+                <a href="{profile_link}" style="display:inline-block;background:#14223A;color:#FFFFFF;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:700;font-size:14px;">View full player profile</a>
               </td>
             </tr>
             <tr>
@@ -192,33 +165,20 @@ def build_player_update_email_text(digest_json: dict) -> str:
     badges = digest.get("badges_grouped") or digest.get("badges_earned") or []
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
-    highlights = digest.get("highlights") or []
-    glance = digest.get("week_at_a_glance") or []
-    people = digest.get("people") or {}
     links = digest.get("links") or {}
 
     badge_lines = []
-    for item in badges[:10]:
+    for item in badges[:3]:
         name = _s(item.get("name")) or _s(item.get("badge_id")) or "Badge"
         count = int(item.get("count") or 1)
         label = f"{name} x{count}" if count > 1 else name
-        badge_lines.append(f"- {label}: {_s(item.get('description')) or 'Award earned during this update window.'}")
+        description = _truncate(_s(item.get("description")), limit=90)
+        badge_lines.append(f"- {label}{': ' + description if description else ''}")
     trophy_lines = [
         f"- {_s(item.get('tournament_name')) or _s(item.get('league_name')) or 'Trophy'}"
-        for item in trophies[:10]
+        for item in trophies[:3]
     ]
-    highlight_lines = [f"- {_s(line)}" for line in highlights[:10] if _s(line)]
-    glance_lines = [f"- {_s(line)}" for line in glance[:6] if _s(line)]
-    match_lines = [f"- {_s(item.get('summary'))}" for item in matches if _s(item.get("summary"))]
-
-    partner_lines = [
-        f"- {_s(item.get('player_name')) or ('Player #' + _s(item.get('player_id')))} · {int(item.get('matches') or 0)} matches · {_s(item.get('record')) or '0-0'}"
-        for item in (people.get("top_partners") or [])[:3]
-    ]
-    opp_lines = [
-        f"- {_s(item.get('player_name')) or ('Player #' + _s(item.get('player_id')))} · {int(item.get('matches') or 0)} matches · {_s(item.get('record')) or '0-0'}"
-        for item in (people.get("top_opponents") or [])[:3]
-    ]
+    match_lines = [f"- {_s(item.get('summary'))}" for item in matches[:5] if _s(item.get("summary"))]
 
     return "\n".join(
         [
@@ -227,32 +187,15 @@ def build_player_update_email_text(digest_json: dict) -> str:
             f"Player: {_s(digest.get('player_name'))}",
             f"Date range: {_s(digest.get('display_range'))}",
             f"Current overall JUPR: {_num(summary.get('overall_jupr_after'), digits=3)}",
+            f"Overall delta: {_num(summary.get('overall_delta'), digits=4, prefix_sign=True, default='—')}",
             f"Weekly record: {_s(summary.get('record')) or '0-0'}",
             f"Matches played: {int(summary.get('matches_played') or 0)}",
-            f"Overall delta: {_num(summary.get('overall_delta'), digits=4, prefix_sign=True, default='—')}",
+            "Rating trend graph: Available in the HTML version of this email and on your profile page.",
             "",
-            "Week at a glance:",
-            *(glance_lines or ["- No activity in this date window."]),
-            "",
-            "Matches played:",
-            *(match_lines or ["- No matches in this date window."]),
-            "",
-            "Highlights:",
-            *(highlight_lines or ["- No highlights available."]),
-            "",
-            "Played with:",
-            *(partner_lines or ["- No partner data in this period."]),
-            "",
-            "Faced most:",
-            *(opp_lines or ["- No opponent data in this period."]),
-            "",
-            "Badges earned:",
-            *(badge_lines or ["- None this period."]),
-            *(
-                ["", "Trophies earned:", *trophy_lines]
-                if trophy_lines
-                else []
-            ),
+            *(["New this period:", "Badges:", *badge_lines] if badge_lines else []),
+            *(["Trophies:", *trophy_lines] if trophy_lines else []),
+            *([""] if badge_lines or trophy_lines else []),
+            *(["Recent matches:", *match_lines, ""] if match_lines else []),
             "",
             f"Profile link: {_s(links.get('player_profile'))}",
             f"Unsubscribe: {_s(links.get('unsubscribe'))}",
