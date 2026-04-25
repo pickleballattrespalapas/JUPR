@@ -128,7 +128,7 @@ def hide_sidebar_and_header_for_public():
         "<style>"
         "section[data-testid='stSidebar']{display:none;}"
         "div[data-testid='collapsedControl']{display:none;}"
-        "header{visibility:hidden;}"
+        'header[data-testid="stHeader"]{visibility:hidden;}'
         "</style>",
         unsafe_allow_html=True,
     )
