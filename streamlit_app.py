@@ -551,25 +551,46 @@ def main():
         # -------------------------
         try:
             target_page = LABEL_TO_PAGE_KEY.get(sel, "home")
-            current_page = qp_get("page", "").strip()
+            current_page = qp_get("page", "").strip().lower()
+            canonical_updates: dict[str, str] = {}
+            canonical_removals: set[str] = set()
 
             if PUBLIC_MODE:
-                if target_page == "home":
-                    _set_query_params_idempotent(removals={"admin", "public", "page"})
-                elif current_page != target_page:
-                    _set_query_params_idempotent(
-                        updates={"page": target_page},
-                        removals={"admin", "public"},
-                    )
-                else:
-                    _set_query_params_idempotent(removals={"admin", "public"})
-            else:
-                _set_query_params_idempotent(
-                    updates={"admin": "1"},
-                    removals={"public"},
+                canonical_removals.update(
+                    {
+                        "admin",
+                        "next",
+                        "jupr_admin_access_token",
+                        "jupr_admin_refresh_token",
+                        "jupr_admin_restore_from_storage",
+                    }
                 )
+                if target_page == "home":
+                    canonical_removals.update({"public", "page"})
+                else:
+                    canonical_removals.add("public")
+                    canonical_updates["page"] = target_page
+            else:
+                canonical_updates["admin"] = "1"
+                canonical_removals.add("public")
+                if target_page:
+                    canonical_updates["page"] = target_page
+
+            params_changed = _set_query_params_idempotent(
+                updates=canonical_updates,
+                removals=canonical_removals,
+            )
 
             st.session_state["_last_rendered_nav"] = sel
+
+            if params_changed and current_page != (target_page or ""):
+                logger.info(
+                    "Canonical route sync updated page query param: requested=%s resolved=%s public_mode=%s",
+                    current_page,
+                    target_page,
+                    PUBLIC_MODE,
+                )
+                st.rerun()
         except Exception:
             logger.exception("Failed to sync canonical query params for page selection.")
             if debug_exceptions:
