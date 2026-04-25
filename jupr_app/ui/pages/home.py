@@ -9,67 +9,62 @@ def render(ctx) -> None:  # noqa: ARG001
         <section class="jupr-public-shell">
           <div class="jupr-hero jupr-card">
             <div class="jupr-hero-eyebrow">JUPR</div>
-            <h1 class="jupr-hero-title">The official player rating and event system for Tres Palapas.</h1>
+            <h1 class="jupr-hero-title">Tres Palapas ratings, profiles, and events.</h1>
             <p class="jupr-hero-subtitle">
-              Track ratings, standings, player profiles, events, match history, badges, and weekly updates
-              from Tres Palapas pickleball.
+              Find current standings, player profiles, upcoming events, and player update subscriptions.
             </p>
-            <div class="jupr-trust-badge" role="note">
-              Transparent rating rules • Verified results separated from casual play • Admin-controlled corrections
-            </div>
             <div class="jupr-hero-actions">
-              <a class="jupr-link-button" href="?page=leaderboards">View Leaderboards</a>
-              <a class="jupr-link-button" href="?page=players">Find Your Player Profile</a>
-              <a class="jupr-link-button" href="?page=tournament_registration">See Upcoming Events</a>
-              <a class="jupr-link-button" href="?page=verified_updates_request">Subscribe to Player Updates</a>
+              <a class="jupr-link-button" href="?page=leaderboards">Leaderboards</a>
+              <a class="jupr-link-button" href="?page=players">Player Profiles</a>
+              <a class="jupr-link-button" href="?page=tournament_registration">Events</a>
+              <a class="jupr-link-button" href="?page=verified_updates_request">Player Updates</a>
               <a class="jupr-link-button" href="?admin=1&page=admin_login">Admin Login</a>
             </div>
           </div>
 
           <div class="jupr-trust-section jupr-card">
-            <h2 class="jupr-section-title">Ratings built from official rated history</h2>
+            <h2 class="jupr-section-title">How JUPR ratings work</h2>
             <p class="jupr-home-card-body">
-              JUPR ratings update from official rated match history. Social and unrated results stay separate from official ratings.
-              Scores, opponents, and expected result drive rating movement, and winners receive positive rating movement.
+              Ratings are built from approved match results. Casual play stays separate. When an official record is corrected, affected ratings are recalculated.
             </p>
             <div class="jupr-trust-grid">
               <div class="jupr-trust-card">
-                <h3>Verified means rated</h3>
-                <p>Verified and rated events affect official JUPR ratings, standings, and player history. Social and unrated results stay separate from official ratings.</p>
+                <h3>Rated results only</h3>
+                <p>Only approved rated events affect JUPR ratings and standings.</p>
               </div>
               <div class="jupr-trust-card">
-                <h3>Scores drive movement</h3>
-                <p>Ratings update from who played, each team’s rating, the expected result, and the final score. A close match and a blowout do not carry the same weight.</p>
+                <h3>Scorelines matter</h3>
+                <p>Movement reflects the final score, margin, opponent strength, and expected result.</p>
               </div>
               <div class="jupr-trust-card">
-                <h3>Corrections update the record</h3>
-                <p>Authorized corrections update official match history, and rating-impacting admin corrections rebuild ratings automatically.</p>
+                <h3>Corrections rebuild ratings</h3>
+                <p>Authorized edits update match history and recalculate affected ratings.</p>
               </div>
             </div>
             <div class="jupr-trust-actions">
-              <a class="jupr-link-button" href="?page=rating_rules">See How Ratings Work</a>
+              <a class="jupr-link-button" href="?page=rating_rules">Read Rating Rules</a>
             </div>
           </div>
 
           <div class="jupr-home-grid">
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=leaderboards" aria-label="View leaderboards">
               <h3 class="jupr-home-card-title">Ratings &amp; Standings</h3>
-              <p class="jupr-home-card-body">Live player ratings, league results, match history, and verified event tracking.</p>
+              <p class="jupr-home-card-body">Current ratings, league standings, and match history.</p>
               <div class="jupr-home-card-cta">View leaderboards →</div>
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=players" aria-label="Find player profiles">
               <h3 class="jupr-home-card-title">Player Profiles</h3>
-              <p class="jupr-home-card-body">Search players, view rating history, badges, trophies, and recent match results.</p>
+              <p class="jupr-home-card-body">Profiles, recent results, badges, trophies, and update subscriptions.</p>
               <div class="jupr-home-card-cta">Find players →</div>
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=tournament_registration" aria-label="View event registration and updates">
               <h3 class="jupr-home-card-title">Events &amp; Updates</h3>
-              <p class="jupr-home-card-body">View public event registration, weekly recaps, partner boards, and player update subscriptions.</p>
+              <p class="jupr-home-card-body">Event registration, weekly recaps, partner boards, and player notifications.</p>
               <div class="jupr-home-card-cta">See events →</div>
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=rating_rules" aria-label="Read the rating rules">
               <h3 class="jupr-home-card-title">Rating Rules</h3>
-              <p class="jupr-home-card-body">See what counts as rated, how results affect ratings, and how JUPR separates verified play from casual results.</p>
+              <p class="jupr-home-card-body">What counts as rated and how results affect movement.</p>
               <div class="jupr-home-card-cta">Read rating rules →</div>
             </a>
           </div>
