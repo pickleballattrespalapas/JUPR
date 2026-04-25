@@ -344,6 +344,43 @@ def _safe_float(value, default: float | None = None) -> float | None:
         return default
 
 
+def _ensure_rating_series_frame(df: pd.DataFrame | None) -> pd.DataFrame:
+    required_cols: dict[str, object] = {
+        "id": pd.NA,
+        "Date": pd.NaT,
+        "League": "",
+        "Score": "",
+        "Result": "",
+        "Overall Δ": pd.NA,
+        "Overall After": pd.NA,
+        "match_type": "",
+        "context": "",
+        "tournament_id": pd.NA,
+        "t1_p1": pd.NA,
+        "t1_p2": pd.NA,
+        "t2_p1": pd.NA,
+        "t2_p2": pd.NA,
+        "t1_p1_r": pd.NA,
+        "t1_p2_r": pd.NA,
+        "t2_p1_r": pd.NA,
+        "t2_p2_r": pd.NA,
+    }
+
+    if df is None or not isinstance(df, pd.DataFrame):
+        return pd.DataFrame(columns=list(required_cols.keys()))
+
+    safe_df = df.copy()
+    for col, default in required_cols.items():
+        if col not in safe_df.columns:
+            safe_df[col] = default
+
+    safe_df["Date"] = pd.to_datetime(safe_df.get("Date"), utc=True, errors="coerce")
+    safe_df["id"] = pd.to_numeric(safe_df.get("id"), errors="coerce")
+    safe_df["Overall Δ"] = pd.to_numeric(safe_df.get("Overall Δ"), errors="coerce")
+    safe_df["Overall After"] = pd.to_numeric(safe_df.get("Overall After"), errors="coerce")
+    return safe_df
+
+
 def _month_day(value) -> str:
     dt = pd.to_datetime(value, utc=True, errors="coerce")
     if pd.isna(dt):
@@ -442,8 +479,7 @@ def _aggregate_repeating_badges(unlocked_badges: list[dict]) -> list[dict]:
 
 
 def _build_profile_snapshot(df: pd.DataFrame, row: pd.Series, pid: int) -> dict:
-    if df is None:
-        df = pd.DataFrame()
+    df = _ensure_rating_series_frame(df)
     out = {"stats": [], "wins": 0, "losses": 0, "matches": 0}
     if df.empty:
         current_jupr = (_safe_float(row.get("rating"), 1200.0) or 1200.0) / 400.0
@@ -1464,7 +1500,21 @@ def render(ctx):
     pick_name = str(row["name"])
     claimed_or_verified_profile = _player_is_claimed_or_verified(row)
 
-    df_rating_all = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
+    try:
+        logger.info(
+            "Rendering selected player profile: pid=%s name=%s page=%s public_mode=%s query=%s",
+            int(pid),
+            str(row.get("name") or "").strip(),
+            current_page_key or "(none)",
+            PUBLIC_MODE,
+            dict(st.query_params),
+        )
+    except Exception:
+        logger.info("Rendering selected player profile: pid=%s", int(pid))
+
+    df_rating_all = _ensure_rating_series_frame(
+        build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
+    )
     snapshot = _build_profile_snapshot(df_rating_all, row, pid)
     c1 = st.container()
     verified_updates_manage_url = ""
@@ -2210,16 +2260,17 @@ def render(ctx):
                                     },
                                 )
     def render_ratings_tab():
-        df_recent = build_player_overall_rating_series(_supabase, club_id, pid, limit=60)
-        df = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
+        df_recent = _ensure_rating_series_frame(
+            build_player_overall_rating_series(_supabase, club_id, pid, limit=60)
+        )
+        df = _ensure_rating_series_frame(
+            build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
+        )
         if df.empty:
             st.info("No rated match data yet for this player.")
             return
 
         df = df.copy().sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
-        df["Date"] = pd.to_datetime(df.get("Date"), utc=True, errors="coerce")
-        df["Overall Δ"] = pd.to_numeric(df.get("Overall Δ"), errors="coerce")
-        df["Overall After"] = pd.to_numeric(df.get("Overall After"), errors="coerce")
 
         snapshot_local = _build_profile_snapshot(df, row, pid)
         wins = int(snapshot_local.get("wins", 0) or 0)
@@ -2439,7 +2490,11 @@ def render(ctx):
                     "Opponents": ", ".join(_lookup_player_name(players_df, x) for x in ctx_match.get("opponent_ids", []) if x is not None),
                     "Score": str(match.get("Score") or "—"),
                     "Result": "W" if str(match.get("Result", "")).upper() == "WIN" else ("L" if str(match.get("Result", "")).upper() == "LOSS" else "D"),
-                    "Overall rating delta": f"{float(match.get('Overall Δ')):+.4f}" if pd.notna(match.get("Overall Δ")) else "",
+                    "Overall rating delta": (
+                        f"{delta_val:+.4f}"
+                        if (delta_val := _safe_float(match.get("Overall Δ"))) is not None and pd.notna(delta_val)
+                        else ""
+                    ),
                     "Explain": explain_link(match),
                 }
             )
