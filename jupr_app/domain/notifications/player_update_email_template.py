@@ -89,8 +89,8 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
             + "</td></tr>"
         )
     match_items = "".join(
-        f"<tr><td style='padding:5px 0;font-size:13px;line-height:1.35;'>{html.escape(_s(item.get('summary')))}</td></tr>"
-        for item in matches[:5]
+        f"<tr><td style='padding:2px 0;font-size:13px;line-height:1.25;'>{html.escape(_s(item.get('summary')))}</td></tr>"
+        for item in matches
         if _s(item.get("summary"))
     )
     recent_matches_block = (
@@ -184,7 +184,7 @@ def build_player_update_email_text(digest_json: dict) -> str:
         f"- {_s(item.get('tournament_name')) or _s(item.get('league_name')) or 'Trophy'}"
         for item in trophies[:3]
     ]
-    match_lines = [f"- {_s(item.get('summary'))}" for item in matches[:5] if _s(item.get("summary"))]
+    match_lines = [f"- {_s(item.get('summary'))}" for item in matches if _s(item.get("summary"))]
 
     return "\n".join(
         [

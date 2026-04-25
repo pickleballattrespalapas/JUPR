@@ -7,6 +7,7 @@ import streamlit as st
 
 from jupr_app.domain.notifications.player_profile_update_repo import (
     approve_request,
+    delete_pending_outbox_row,
     list_active_subscriptions,
     list_digests_for_range,
     list_outbox_rows,
@@ -170,7 +171,7 @@ def render(ctx) -> None:
         [
             "Pending Requests",
             "Active Profiles",
-            "Weekly Digests",
+            "Player Digests",
             "Send Queue",
         ]
     )
@@ -317,23 +318,23 @@ def render(ctx) -> None:
                         st.error(f"Unsubscribe failed: {_friendly_error(exc)}")
 
     with digests_tab:
-        st.subheader("Weekly Digests")
+        st.subheader("Player Digests")
         today = date.today()
         start_date = st.date_input(
-            "Start Date",
+            "Digest Start Date",
             value=today - timedelta(days=7),
             key="player_updates_digest_start",
             help="Custom date windows are supported (not Monday–Sunday only).",
         )
         end_date = st.date_input(
-            "End Date",
+            "Digest End Date",
             value=today,
             key="player_updates_digest_end",
-            help="Must be on or after Start Date.",
+            help="Must be on or after Digest Start Date.",
         )
 
         if end_date < start_date:
-            st.error("End Date must be on or after Start Date.")
+            st.error("Digest End Date must be on or after Digest Start Date.")
             return
 
         active_rows = list_active_subscriptions(supabase, club_id, limit=500)
@@ -432,7 +433,7 @@ def render(ctx) -> None:
 
     with queue_tab:
         st.subheader("Send Queue")
-        st.caption("Digests generated on Weekly Digests are queued automatically. Just hit send here.")
+        st.caption("Digests generated on Player Digests are queued automatically. Just hit send here.")
 
         try:
             outbox_rows = list_outbox_rows(supabase, club_id, limit=1000)
@@ -486,6 +487,30 @@ def render(ctx) -> None:
         st.markdown("#### Pending to send")
         if pending_rows:
             st.dataframe(pd.DataFrame(_outbox_display_rows(ctx, pending_rows)), use_container_width=True, hide_index=True)
+            st.markdown("#### Remove pending queued digest")
+            st.caption("Only pending rows can be removed. This does not delete sent history.")
+            for row in pending_rows:
+                outbox_id = str(row.get("id") or "").strip()
+                player_name = _player_name(ctx, row.get("player_id")) or f"Player #{row.get('player_id')}"
+                with st.expander(
+                    f"{player_name} · {row.get('email') or 'no email'} · "
+                    f"{row.get('week_start')} → {row.get('week_end')} · {row.get('created_at') or 'n/a'}"
+                ):
+                    with st.form(f"delete_pending_outbox_{outbox_id}"):
+                        confirm_delete = st.checkbox(
+                            "I understand this will remove this pending digest from the send queue.",
+                            key=f"confirm_delete_outbox_{outbox_id}",
+                        )
+                        delete_clicked = st.form_submit_button("Delete queued digest")
+                    if delete_clicked:
+                        try:
+                            if not confirm_delete:
+                                raise ValueError("Please confirm removal before deleting.")
+                            delete_pending_outbox_row(supabase, club_id=club_id, outbox_id=outbox_id)
+                            st.success("Queued digest removed.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Delete failed: {_friendly_error(exc)}")
         else:
             st.caption("No pending emails right now.")
 
