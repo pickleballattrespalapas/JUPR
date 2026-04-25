@@ -120,6 +120,24 @@ def fetch_player_matches(_supabase, club_id: str, pid: int, limit: int = 600) ->
         return _hash_safe_cached_df(_run(base_select))
 
 
+@st.cache_data(ttl=120)
+def fetch_player_match_count(_supabase, club_id: str, pid: int, league_name: str | None = None) -> int:
+    try:
+        query = (
+            _supabase.table("matches")
+            .select("id", count="exact", head=True)
+            .eq("club_id", str(club_id))
+            .or_(f"t1_p1.eq.{pid},t1_p2.eq.{pid},t2_p1.eq.{pid},t2_p2.eq.{pid}")
+        )
+        if league_name:
+            query = query.eq("league", str(league_name).strip())
+        resp = query.execute()
+        return int(getattr(resp, "count", 0) or 0)
+    except Exception:
+        logger.exception("Failed to fetch player match count")
+        return 0
+
+
 @st.cache_data(ttl=60)
 def fetch_player_badges(_supabase, club_id: str, pid: int) -> pd.DataFrame:
     try:
@@ -2048,7 +2066,14 @@ def render(ctx):
 
         st.divider()
 
-        df = build_player_overall_rating_series(_supabase, club_id, pid, limit=600)
+        df = build_player_overall_rating_series(_supabase, club_id, pid, limit=60)
+        df_all: pd.DataFrame | None = None
+
+        def get_all_matches_df() -> pd.DataFrame:
+            nonlocal df_all
+            if df_all is None:
+                df_all = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
+            return df_all.copy()
 
         if df.empty:
             st.info("No matches recorded for this player.")
@@ -2113,19 +2138,57 @@ def render(ctx):
         tab_labels = ["Overall"] + [f"League: {lg}" for lg in leagues_in_matches]
         tabs = st.tabs(tab_labels)
 
-        def render_chart_and_table(view_df: pd.DataFrame, title_prefix: str, *, league_trend: bool = False, league_name: str = ""):
+        def render_chart_and_table(
+            view_df_recent: pd.DataFrame,
+            title_prefix: str,
+            *,
+            league_trend: bool = False,
+            league_name: str = "",
+            all_matches_loader=None,
+        ):
             st.subheader(f"{title_prefix} JUPR Trend")
+
+            selected_scope = st.radio(
+                "Display:",
+                options=["Recent 60", "All matches"],
+                horizontal=True,
+                key=f"profile-display-scope-{title_prefix}",
+                label_visibility="collapsed",
+            )
+            show_all = selected_scope == "All matches"
+            if show_all and all_matches_loader is not None:
+                view_df = all_matches_loader()
+            else:
+                view_df = view_df_recent.copy()
+
+            total_matches = fetch_player_match_count(
+                _supabase,
+                club_id,
+                pid,
+                league_name if (league_name and title_prefix != "Overall") else None,
+            )
+            shown_matches = int(len(view_df))
+            if show_all:
+                st.caption(f"Showing all {shown_matches} matches.")
+            else:
+                st.caption(
+                    f"Showing recent {shown_matches} matches for faster loading."
+                    + (f" ({total_matches} total)" if total_matches > shown_matches else "")
+                )
 
             chart_df = view_df.copy().dropna(subset=["Overall After"]).sort_values(["Date", "id"]).reset_index(drop=True)
             if chart_df.empty:
                 st.info("No chartable rating data in this view.")
             else:
-                chart_df["Match #"] = range(1, len(chart_df) + 1)
+                if show_all or total_matches <= len(chart_df):
+                    chart_df["Match #"] = range(1, len(chart_df) + 1)
+                else:
+                    start_match_number = max(total_matches - len(chart_df) + 1, 1)
+                    chart_df["Match #"] = range(start_match_number, start_match_number + len(chart_df))
                 chart_df["DateStr"] = pd.to_datetime(chart_df["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
                 chart_df["DeltaStr"] = chart_df["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
                 chart_df["AfterStr"] = chart_df["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-
-                tail = chart_df.tail(60).copy()
+                chart_scope = chart_df.copy()
 
                 # Optional full restore: show league replay trend (if available)
                 if league_trend and league_name and _LEAGUE_REPLAY_AVAILABLE:
@@ -2148,10 +2211,13 @@ def render(ctx):
                         tmp2 = tmp.dropna(subset=["League After"]).sort_values(["Date", "id"]).reset_index(drop=True)
                         if not tmp2.empty:
                             tmp2["Match #"] = range(1, len(tmp2) + 1)
+                            if not show_all and total_matches > len(tmp2):
+                                start_match_number = max(total_matches - len(tmp2) + 1, 1)
+                                tmp2["Match #"] = range(start_match_number, start_match_number + len(tmp2))
                             tmp2["DateStr"] = pd.to_datetime(tmp2["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
                             tmp2["DeltaStr"] = tmp2["League Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
                             tmp2["AfterStr"] = tmp2["League After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-                            tail = tmp2.tail(60).copy()
+                            chart_scope = tmp2.copy()
                             y_col = "League After"
                             y_title = "League JUPR After Match"
                         else:
@@ -2166,7 +2232,7 @@ def render(ctx):
 
                 if alt is not None:
                     line = (
-                        alt.Chart(tail)
+                        alt.Chart(chart_scope)
                         .mark_line(point=True)
                         .encode(
                             x=alt.X("Match #:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
@@ -2188,7 +2254,7 @@ def render(ctx):
                     )
                     st.altair_chart(line, use_container_width=True)
                 else:
-                    st.line_chart(tail.set_index("Match #")[y_col])
+                    st.line_chart(chart_scope.set_index("Match #")[y_col])
 
             st.divider()
             st.subheader(f"{title_prefix} Match History")
@@ -2258,13 +2324,22 @@ def render(ctx):
             )
 
         with tabs[0]:
-            render_chart_and_table(df, "Overall", league_trend=False)
+            render_chart_and_table(df, "Overall", league_trend=False, all_matches_loader=get_all_matches_df)
 
         for i, lg in enumerate(leagues_in_matches, start=1):
             with tabs[i]:
                 df_lg = df[df["League"].astype(str).str.strip() == lg].copy()
+                def _load_all_lg_matches(league_name: str = lg) -> pd.DataFrame:
+                    all_df = get_all_matches_df()
+                    return all_df[all_df["League"].astype(str).str.strip() == league_name].copy()
                 # Show league replay trend if available; otherwise overall trend filtered to that league’s matches.
-                render_chart_and_table(df_lg, f"League: {lg}", league_trend=True, league_name=lg)
+                render_chart_and_table(
+                    df_lg,
+                    f"League: {lg}",
+                    league_trend=True,
+                    league_name=lg,
+                    all_matches_loader=_load_all_lg_matches,
+                )
 
     def render_social_tab():
         st.markdown("### Social / Community")
