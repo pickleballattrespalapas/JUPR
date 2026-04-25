@@ -352,13 +352,24 @@ def _month_day(value) -> str:
 
 
 def _lookup_player_name(players_df: pd.DataFrame, player_id: int | None) -> str:
+    def _display_name(raw_name: object) -> str:
+        name = str(raw_name or "").strip()
+        if not name:
+            return ""
+        if any(ch.isupper() for ch in name):
+            return name
+        return re.sub(r"\s+", " ", name).title()
+
     if player_id is None or players_df is None or players_df.empty or "id" not in players_df.columns:
         return "—"
     try:
         hit = players_df[players_df["id"].astype(int) == int(player_id)]
         if hit.empty:
             return f"#{int(player_id)}"
-        return str(hit.iloc[0].get("name") or f"#{int(player_id)}")
+        preferred = hit.iloc[0].get("display_name")
+        fallback = hit.iloc[0].get("name")
+        shown = _display_name(preferred) or _display_name(fallback)
+        return shown or f"#{int(player_id)}"
     except Exception:
         return f"#{int(player_id)}"
 
@@ -373,6 +384,7 @@ def _player_match_context(match_row: dict, pid: int) -> dict:
 
     if pid in {t1p1, t1p2}:
         return {
+            "team": 1,
             "partner_id": t1p2 if t1p1 == pid else t1p1,
             "opponent_ids": [t2p1, t2p2],
             "my_score": s1,
@@ -381,13 +393,36 @@ def _player_match_context(match_row: dict, pid: int) -> dict:
         }
     if pid in {t2p1, t2p2}:
         return {
+            "team": 2,
             "partner_id": t2p2 if t2p1 == pid else t2p1,
             "opponent_ids": [t1p1, t1p2],
             "my_score": s2,
             "opp_score": s1,
             "result": "W" if s2 > s1 else ("L" if s2 < s1 else "D"),
         }
-    return {"partner_id": None, "opponent_ids": [], "my_score": 0, "opp_score": 0, "result": ""}
+    return {"team": None, "partner_id": None, "opponent_ids": [], "my_score": 0, "opp_score": 0, "result": ""}
+
+
+def _extract_partner_opponent_ratings(match_row: dict, pid: int) -> tuple[float | None, float | None]:
+    context = _player_match_context(match_row, pid)
+    team = context.get("team")
+    snapshots = {
+        "t1_p1": _safe_float(match_row.get("t1_p1_r")),
+        "t1_p2": _safe_float(match_row.get("t1_p2_r")),
+        "t2_p1": _safe_float(match_row.get("t2_p1_r")),
+        "t2_p2": _safe_float(match_row.get("t2_p2_r")),
+    }
+    if team == 1:
+        partner_rating = snapshots["t1_p2"] if _safe_int(match_row.get("t1_p1")) == pid else snapshots["t1_p1"]
+        opp_values = [snapshots["t2_p1"], snapshots["t2_p2"]]
+    elif team == 2:
+        partner_rating = snapshots["t2_p2"] if _safe_int(match_row.get("t2_p1")) == pid else snapshots["t2_p1"]
+        opp_values = [snapshots["t1_p1"], snapshots["t1_p2"]]
+    else:
+        return None, None
+    opp_known = [float(v) for v in opp_values if v is not None and pd.notna(v)]
+    opp_avg = (sum(opp_known) / len(opp_known)) if opp_known else None
+    return partner_rating, opp_avg
 
 
 def _aggregate_repeating_badges(unlocked_badges: list[dict]) -> list[dict]:
@@ -424,9 +459,28 @@ def _build_profile_snapshot(df: pd.DataFrame, row: pd.Series, pid: int) -> dict:
     matches = int(len(calc))
     win_pct = (wins / matches * 100.0) if matches > 0 else 0.0
     current = calc["Overall After"].dropna().iloc[-1] if calc["Overall After"].notna().any() else None
-    starting = calc["Overall After"].dropna().iloc[0] if calc["Overall After"].notna().any() else None
-    highest = calc["Overall After"].max() if calc["Overall After"].notna().any() else None
-    lowest = calc["Overall After"].min() if calc["Overall After"].notna().any() else None
+    starting = None
+    for _, row_i in calc.iterrows():
+        after_val = _safe_float(row_i.get("Overall After"))
+        delta_val = _safe_float(row_i.get("Overall Δ"))
+        if after_val is not None and delta_val is not None and pd.notna(after_val) and pd.notna(delta_val):
+            starting = float(after_val) - float(delta_val)
+            break
+    if starting is None:
+        first = calc.iloc[0] if not calc.empty else None
+        if first is not None:
+            pre_map = {
+                _safe_int(first.get("t1_p1")): _safe_float(first.get("t1_p1_r")),
+                _safe_int(first.get("t1_p2")): _safe_float(first.get("t1_p2_r")),
+                _safe_int(first.get("t2_p1")): _safe_float(first.get("t2_p1_r")),
+                _safe_int(first.get("t2_p2")): _safe_float(first.get("t2_p2_r")),
+            }
+            starting = pre_map.get(int(pid))
+    all_known = [float(v) for v in calc["Overall After"].dropna().tolist()]
+    if starting is not None and pd.notna(starting):
+        all_known.append(float(starting))
+    highest = max(all_known) if all_known else None
+    lowest = min(all_known) if all_known else None
     last_played = calc["Date"].max()
     first_rated = calc["Date"].min()
 
@@ -1412,18 +1466,7 @@ def render(ctx):
 
     df_rating_all = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
     snapshot = _build_profile_snapshot(df_rating_all, row, pid)
-    current_jupr = None
-    for stat in snapshot.get("stats", []):
-        if stat.get("Stat") == "Current JUPR":
-            try:
-                current_jupr = float(str(stat.get("Value")).replace("+", ""))
-            except Exception:
-                current_jupr = None
-            break
-    if current_jupr is None:
-        current_jupr = (_safe_float(row.get("rating"), 1200.0) or 1200.0) / 400.0
-
-    c1, c2 = st.columns([2.4, 1.6])
+    c1 = st.container()
     verified_updates_manage_url = ""
     verified_updates_request_url = ""
     open_or_active = None
@@ -1488,17 +1531,8 @@ def render(ctx):
                 st.caption("Verified updates enabled")
             elif request_status == REQUEST_STATUS_PENDING:
                 st.caption("Verified updates request pending")
-            if not claimed_or_verified_profile and request_status not in {
-                REQUEST_STATUS_ACTIVE,
-                REQUEST_STATUS_PENDING,
-            }:
+            if request_status != REQUEST_STATUS_ACTIVE:
                 st.caption(f"[Subscribe to player updates]({verified_updates_request_url})")
-    with c2:
-        st.metric("Current JUPR", f"{current_jupr:.3f}")
-        st.caption(
-            f"Record: {int(snapshot.get('wins', 0) or 0)}-{int(snapshot.get('losses', 0) or 0)} "
-            f"({float(snapshot.get('win_pct', 0.0) or 0.0):.1f}%)"
-        )
 
     if PUBLIC_MODE and (
         route_requests_verified_updates or verified_updates_view_q == "verified_updates_request"
@@ -2235,17 +2269,25 @@ def render(ctx):
         if trend_df.empty:
             st.info("No rating points available for this timeframe.")
         else:
-            trend_df["DateStr"] = trend_df["Date"].dt.strftime("%Y-%m-%d")
+            trend_df = trend_df.sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
+            trend_df["Match Number"] = trend_df.index + 1
+            trend_df["DateStr"] = trend_df["Date"].map(_month_day)
             trend_df["AfterStr"] = trend_df["Overall After"].map(lambda v: f"{float(v):.3f}")
             trend_df["DeltaStr"] = trend_df["Overall Δ"].map(lambda v: f"{float(v):+.4f}" if pd.notna(v) else "")
             if alt is not None:
+                tick_count = min(12, max(4, len(trend_df) // 8)) if len(trend_df) > 20 else len(trend_df)
                 chart = (
                     alt.Chart(trend_df)
                     .mark_line(point=True)
                     .encode(
-                        x=alt.X("Date:T", title="Date"),
+                        x=alt.X(
+                            "Match Number:Q",
+                            title="Rated Match",
+                            axis=alt.Axis(tickMinStep=1, tickCount=tick_count),
+                        ),
                         y=alt.Y("Overall After:Q", title="JUPR After Match", axis=alt.Axis(format=".3f"), scale=alt.Scale(zero=False)),
                         tooltip=[
+                            alt.Tooltip("Match Number:Q", title="Match #", format=".0f"),
                             alt.Tooltip("DateStr:N", title="Date"),
                             alt.Tooltip("League:N", title="League / Event"),
                             alt.Tooltip("Score:N", title="Score"),
@@ -2258,7 +2300,7 @@ def render(ctx):
                 )
                 st.altair_chart(chart, use_container_width=True)
             else:
-                st.line_chart(trend_df.set_index("Date")["Overall After"])
+                st.line_chart(trend_df.set_index("Match Number")["Overall After"])
 
         st.markdown("### Player Snapshot")
         stats_df = pd.DataFrame(snapshot_local.get("stats", []))
@@ -2266,29 +2308,69 @@ def render(ctx):
             st.dataframe(stats_df, use_container_width=True, hide_index=True)
 
         st.markdown("### Match Type Breakdown")
+        def _cat_text(r: pd.Series) -> str:
+            values = [
+                r.get("match_type"),
+                r.get("context"),
+                r.get("League"),
+            ]
+            return " ".join(str(v or "").lower() for v in values)
+
+        def _is_social_unrated(r: pd.Series) -> bool:
+            text = _cat_text(r)
+            return any(k in text for k in ["social", "unrated", "casual", "recreational"])
+
+        def _is_tournament(r: pd.Series) -> bool:
+            text = _cat_text(r)
+            tournament_id = _safe_int(r.get("tournament_id"))
+            return (tournament_id is not None and tournament_id > 0) or ("tournament" in text)
+
+        def _is_round_robin(r: pd.Series) -> bool:
+            text = _cat_text(r)
+            return "round robin" in text or "rr" in text
+
+        def _is_league_ladder(r: pd.Series) -> bool:
+            text = _cat_text(r)
+            league_name = str(r.get("League") or "").strip().lower()
+            return any(k in text for k in ["ladder", "league"]) or ("ladder" in league_name)
+
+        def _is_live_event(r: pd.Series) -> bool:
+            text = _cat_text(r)
+            return "jupr live" in text or "rated event" in text or "live event" in text
+
         category_defs = [
-            ("All rated matches", lambda r: True),
-            ("Verified Round Robins", lambda r: "round robin" in str(r.get("match_type", "")).lower()),
-            ("League matches", lambda r: "league" in str(r.get("match_type", "")).lower() or str(r.get("League", "")).strip() not in {"", "OVERALL"}),
-            ("Tournament matches", lambda r: "tournament" in str(r.get("match_type", "")).lower()),
-            ("Social / unrated", lambda r: "social" in str(r.get("match_type", "")).lower() or "unrated" in str(r.get("match_type", "")).lower()),
+            ("All rated matches", lambda r: not _is_social_unrated(r), True),
+            ("League / ladder matches", lambda r: (not _is_social_unrated(r)) and _is_league_ladder(r), True),
+            ("Verified round robins", lambda r: (not _is_social_unrated(r)) and _is_round_robin(r), True),
+            ("Tournament matches", lambda r: (not _is_social_unrated(r)) and _is_tournament(r), True),
+            ("JUPR Live / rated events", lambda r: (not _is_social_unrated(r)) and _is_live_event(r), True),
+            ("Social / unrated events", lambda r: _is_social_unrated(r), False),
         ]
         breakdown_rows = []
-        for label, predicate in category_defs:
+        for label, predicate, include_in_rated in category_defs:
             sub = df[df.apply(predicate, axis=1)].copy()
             if sub.empty:
                 continue
             w = int((sub.get("Result", "").astype(str).str.upper() == "WIN").sum())
             l = int((sub.get("Result", "").astype(str).str.upper() == "LOSS").sum())
             m = int(len(sub))
+            partner_vals: list[float] = []
+            opp_vals: list[float] = []
+            for _, r in sub.iterrows():
+                partner_rating, opp_rating = _extract_partner_opponent_ratings(dict(r), pid)
+                if partner_rating is not None and pd.notna(partner_rating):
+                    partner_vals.append(float(partner_rating) / 400.0)
+                if opp_rating is not None and pd.notna(opp_rating):
+                    opp_vals.append(float(opp_rating) / 400.0)
             breakdown_rows.append(
                 {
                     "Category": label,
                     "Record": f"{w}-{l}",
                     "Win %": f"{(w / m * 100.0):.1f}%" if m else "0.0%",
                     "Matches": m,
-                    "Average partner rating": "—",
-                    "Average opponent rating": "—",
+                    "Average partner rating": (f"{(sum(partner_vals) / len(partner_vals)):.3f}" if partner_vals else "—"),
+                    "Average opponent rating": (f"{(sum(opp_vals) / len(opp_vals)):.3f}" if opp_vals else "—"),
+                    "Counted as rated": "Yes" if include_in_rated else "No",
                     "Point differential": int(
                         sum(_player_match_context(dict(r), pid).get("my_score", 0) - _player_match_context(dict(r), pid).get("opp_score", 0) for _, r in sub.iterrows())
                     ),
@@ -2377,12 +2459,13 @@ def render(ctx):
                 column_config={"EXPLAIN": st.column_config.LinkColumn("Explain", display_text="Explain")},
             )
 
-        st.markdown("### Trophy Case & Badges")
+        st.markdown("### Featured Badges & Trophy Preview")
         trophy_list = fetch_player_tournament_trophies(_supabase, club_id, pid)
         if trophy_list:
-            trophy_df = pd.DataFrame(trophy_list).head(6)
+            trophy_df = pd.DataFrame(trophy_list).head(3)
             trophy_cols = [c for c in ["icon", "title", "league_name", "season_label", "placement"] if c in trophy_df.columns]
             st.dataframe(trophy_df[trophy_cols], use_container_width=True, hide_index=True)
+            st.caption("See Trophy Room for full trophy and badge details.")
         else:
             st.caption("No tournament trophies yet.")
         badge_defs = getattr(ctx, "df_badges", None)
@@ -2398,7 +2481,8 @@ def render(ctx):
                     {
                         "Badge": f"{badge_icon(b.get('badge_id'), b.get('category'))} {str(b.get('name') or 'Badge')}",
                         "Prestige": int(b.get("prestige", 0) or 0),
-                        "Count": int(b.get("stack_count", 1) or 1),
+                        "Count": f"x{int(b.get('stack_count', 1) or 1)}",
+                        "Earned for": str(b.get("description") or b.get("requirements") or "—"),
                         "Last earned": _month_day(pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce")),
                     }
                     for b in featured_badges
