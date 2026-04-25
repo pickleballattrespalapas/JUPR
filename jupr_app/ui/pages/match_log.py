@@ -13,6 +13,16 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
 from jupr_app.domain.match_delete import delete_rated_matches_with_replay
 
+BULK_REPLAY_ERROR_STATE_KEY = "match_log_bulk_replay_error"
+
+
+def _set_bulk_replay_error(message: str) -> None:
+    st.session_state[BULK_REPLAY_ERROR_STATE_KEY] = str(message)
+
+
+def _clear_bulk_replay_error() -> None:
+    st.session_state.pop(BULK_REPLAY_ERROR_STATE_KEY, None)
+
 
 
 def render(ctx):
@@ -27,6 +37,11 @@ def render(ctx):
     if df_matches is None or df_matches.empty:
         st.info("No matches loaded.")
         st.stop()
+    if st.session_state.get(BULK_REPLAY_ERROR_STATE_KEY):
+        st.warning(
+            "⚠️ Previous automatic Replay ALL failed after bulk edit. "
+            f"{st.session_state[BULK_REPLAY_ERROR_STATE_KEY]}"
+        )
 
     df = df_matches.copy()
     df["source_type"] = "rated"
@@ -682,14 +697,19 @@ def render(ctx):
                     replay_error = str(exc)
 
             if replay_error:
-                st.error(
+                _set_bulk_replay_error(
                     "Edits were saved, but Replay ALL failed. Ratings may be stale. "
                     "Run Admin Tools → Replay History → ALL immediately. "
                     f"Error: {replay_error}"
                 )
+                st.error(
+                    st.session_state[BULK_REPLAY_ERROR_STATE_KEY]
+                )
             elif result["recompute_scope"]["ratings"]:
+                _clear_bulk_replay_error()
                 st.success(f"Updated {result['updated_count']} match(es). Ratings were rebuilt automatically via Replay ALL.")
             else:
+                _clear_bulk_replay_error()
                 st.success(
                     f"Updated {result['updated_count']} match(es). "
                     f"Affected leagues: {', '.join(result.get('affected_leagues', [])) or '(unknown)'}"
@@ -706,7 +726,8 @@ def render(ctx):
             st.session_state["bulk_match_baseline"] = view.copy(deep=True)
             st.session_state["bulk_match_editor_version"] += 1
             st.session_state["force_data_refresh"] = True
-            st.rerun()
+            if replay_error is None:
+                st.rerun()
 
         except Exception as exc:
             st.error(f"Unable to apply bulk edits: {exc}")
@@ -733,6 +754,7 @@ def render(ctx):
                     target_reset=str(target_reset_quick),
                     progress_cb=lambda x: bar.progress(float(x)),
                 )
+            _clear_bulk_replay_error()
             st.success("Replay complete.")
             st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
             st.info(f"Matches rewritten: {result['matches_rewritten']}")

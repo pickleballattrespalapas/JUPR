@@ -55,6 +55,7 @@ class _Supabase:
             "players": [],
             "league_ratings": [],
         }
+        self.fail_on_rating_scope_insert = False
 
     def table(self, name):
         return _Query(self, name)
@@ -71,6 +72,9 @@ class _Supabase:
             return SimpleNamespace(data=data)
         if q._op == "insert":
             payload = q._payload if isinstance(q._payload, list) else [q._payload]
+            if q.table == "matches" and self.fail_on_rating_scope_insert:
+                if any("rating_scope" in row for row in payload):
+                    raise RuntimeError("column \"rating_scope\" of relation \"matches\" does not exist")
             for row in payload:
                 rows.append(dict(row))
             return SimpleNamespace(data=payload)
@@ -267,3 +271,31 @@ def test_process_matches_without_rating_scope_keeps_legacy_league_updates(monkey
         df_meta=pd.DataFrame(),
     )
     assert len(sb.tables["league_ratings"]) == 4
+
+
+def test_process_matches_insert_falls_back_when_rating_scope_column_missing(monkeypatch):
+    _patch_side_effects(monkeypatch)
+    sb = _Supabase()
+    sb.fail_on_rating_scope_insert = True
+    sb.tables["players"] = _players_df().to_dict("records")
+    result = process_matches(
+        [{
+            "league": "JUPR Live",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "s1": 11,
+            "s2": 9,
+            "rating_scope": "overall_only",
+        }],
+        supabase=sb,
+        club_id="club",
+        name_to_id={},
+        df_players_all=_players_df(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+    )
+    assert result["inserted"] == 1
+    assert len(sb.tables["matches"]) == 1
+    assert "rating_scope" not in sb.tables["matches"][0]

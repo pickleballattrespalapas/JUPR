@@ -65,6 +65,7 @@ def process_matches(
     skipped_empty = 0
     skipped_unrated = 0
     has_badge_eligible_match = False
+    supports_rating_scope_column: bool | None = None
 
     def as_pid(x):
         """Accept int IDs OR numeric strings OR exact names. Returns int player_id or None."""
@@ -336,6 +337,7 @@ def process_matches(
                 "context_id": m.get("context_id"),
                 "tournament_id": m.get("tournament_id"),
                 "tournament_game_id": m.get("tournament_game_id"),
+                "rating_scope": rating_scope,
             }
         )
         match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})
@@ -346,10 +348,35 @@ def process_matches(
     # -------------------------
     badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
     if db_matches:
+        def _insert_match_chunk(chunk: list[dict[str, Any]]):
+            nonlocal supports_rating_scope_column
+            if supports_rating_scope_column is False:
+                legacy_chunk = [{k: v for k, v in row.items() if k != "rating_scope"} for row in chunk]
+                return sb_retry(lambda legacy_chunk=legacy_chunk: supabase.table("matches").insert(legacy_chunk).execute())
+
+            try:
+                insert_result = sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
+            except Exception as exc:
+                exc_text = str(exc).lower()
+                if "rating_scope" in exc_text and "column" in exc_text:
+                    supports_rating_scope_column = False
+                    legacy_chunk = [{k: v for k, v in row.items() if k != "rating_scope"} for row in chunk]
+                    return sb_retry(lambda legacy_chunk=legacy_chunk: supabase.table("matches").insert(legacy_chunk).execute())
+                raise
+            error_obj = getattr(insert_result, "error", None) if insert_result is not None else None
+            error_text = str(error_obj or "").lower()
+            if ("rating_scope" in error_text and "column" in error_text) or "matches_rating_scope_check" in error_text:
+                supports_rating_scope_column = False
+                legacy_chunk = [{k: v for k, v in row.items() if k != "rating_scope"} for row in chunk]
+                return sb_retry(lambda legacy_chunk=legacy_chunk: supabase.table("matches").insert(legacy_chunk).execute())
+
+            supports_rating_scope_column = True
+            return insert_result
+
         CHUNK_M = 300
         for i in range(0, len(db_matches), CHUNK_M):
             chunk = db_matches[i : i + CHUNK_M]
-            insert_result = sb_retry(lambda chunk=chunk: supabase.table("matches").insert(chunk).execute())
+            insert_result = _insert_match_chunk(chunk)
             inserted_rows = getattr(insert_result, "data", None) if insert_result is not None else None
             if not inserted_rows:
                 error_obj = getattr(insert_result, "error", None) if insert_result is not None else None
