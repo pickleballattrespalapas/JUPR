@@ -20,6 +20,7 @@ _BROWSER_RESTORE_FLAG_KEY = "jupr_admin_restore_from_storage"
 _BROWSER_SYNC_PAYLOAD_KEY = "_admin_browser_sync_payload"
 _BROWSER_CLEAR_PENDING_KEY = "_admin_browser_clear_pending"
 _BROWSER_RESTORE_INFLIGHT_SESSION_KEY = "jupr_admin_restore_inflight_at"
+_ADMIN_RESTORE_FAILED_THIS_RUN_KEY = "_admin_restore_failed_this_run"
 
 
 class AdminAuthError(RuntimeError):
@@ -120,10 +121,7 @@ def _set_auth_session(client, access_token: str, refresh_token: str):
         raise AttributeError("Supabase client is missing auth")
 
     attempts = (
-        (
-            "set_session(access_token, refresh_token)",
-            lambda: auth.set_session(access_token, refresh_token),
-        ),
+        ("set_session(access_token, refresh_token)", lambda: auth.set_session(access_token, refresh_token)),
         (
             "set_session({access_token, refresh_token})",
             lambda: auth.set_session(
@@ -145,16 +143,39 @@ def _set_auth_session(client, access_token: str, refresh_token: str):
     )
 
     last_exc: Exception | None = None
-    for label, attempt in attempts:
+    for idx, (label, attempt) in enumerate(attempts):
         try:
             return attempt()
-        except Exception as exc:
+        except TypeError as exc:
+            # Only TypeError from early attempts should trigger compatibility fallbacks.
+            # Invalid refresh token failures can occasionally surface as TypeError wrappers.
+            if _is_invalid_refresh_token_error(exc):
+                logger.warning("Supabase auth %s failed with invalid refresh token: %r", label, exc)
+                raise
             last_exc = exc
             logger.warning("Supabase auth %s failed: %r", label, exc)
+            if idx == len(attempts) - 1:
+                raise
+        except Exception as exc:
+            # Preserve real auth failures (AuthApiError, invalid refresh token, etc.).
+            logger.warning("Supabase auth %s failed: %r", label, exc)
+            raise
 
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("Unable to set auth session")
+
+
+def _is_invalid_refresh_token_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    needles = (
+        "invalid refresh token",
+        "already used",
+        "refresh token",
+    )
+    return any(needle in text for needle in needles)
 
 
 def _exchange_auth_code_for_session(client, auth_code: str):
@@ -345,6 +366,16 @@ def restore_admin_browser_session() -> dict[str, str] | None:
     access = _query_param_text("jupr_admin_access_token")
     refresh = _query_param_text("jupr_admin_refresh_token")
     restore_flag = _query_param_text(_BROWSER_RESTORE_FLAG_KEY)
+    if bool(st.session_state.get(_ADMIN_RESTORE_FAILED_THIS_RUN_KEY, False)):
+        logger.info("Admin restore handshake skipped: restore already failed in this run")
+        return None
+
+    existing_user = get_current_admin_user()
+    if existing_user is not None:
+        existing_email = str(getattr(existing_user, "email", "") or "").strip().lower()
+        if existing_email and is_allowed_admin_email(existing_email, load_admin_allowlist()):
+            logger.info("Admin restore handshake skipped: already authenticated admin user in session")
+            return None
 
     if access and refresh and restore_flag == "1":
         logger.info(
@@ -366,6 +397,7 @@ def restore_admin_browser_session() -> dict[str, str] | None:
 
     if restore_flag == "1":
         logger.info("Admin restore skipped: handshake flag present but token query params missing")
+        return None
 
     components.html(
         f"""
@@ -405,6 +437,26 @@ def clear_admin_browser_session() -> None:
     logger.info("Browser token clear queued")
 
 
+def render_admin_browser_session_clear_now() -> None:
+    """Immediately clear browser auth token state for this tab."""
+    components.html(
+        f"""
+        <script>
+        try {{
+          const appWindow = window.parent || window;
+          appWindow.localStorage.removeItem("{_BROWSER_ACCESS_TOKEN_KEY}");
+          appWindow.localStorage.removeItem("{_BROWSER_REFRESH_TOKEN_KEY}");
+          appWindow.sessionStorage.removeItem("{_BROWSER_RESTORE_INFLIGHT_SESSION_KEY}");
+        }} catch (e) {{}}
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state.pop(_BROWSER_SYNC_PAYLOAD_KEY, None)
+    st.session_state.pop(_BROWSER_CLEAR_PENDING_KEY, None)
+    logger.info("Browser token clear rendered immediately")
+
+
 def maybe_restore_admin_login_from_browser() -> bool:
     """Try to restore allowlisted admin auth from browser storage when needed."""
     bootstrap_admin_auth()
@@ -416,6 +468,9 @@ def maybe_restore_admin_login_from_browser() -> bool:
         return bool(
             existing_email and is_allowed_admin_email(existing_email, load_admin_allowlist())
         )
+    if bool(st.session_state.get(_ADMIN_RESTORE_FAILED_THIS_RUN_KEY, False)):
+        logger.info("Browser restore skipped: this run already recorded a restore failure")
+        return False
 
     logger.info("Browser token restore attempt started")
     stored_tokens = restore_admin_browser_session()
@@ -451,11 +506,19 @@ def maybe_restore_admin_login_from_browser() -> bool:
 
         st.session_state[_AUTH_USER_KEY] = user
         st.session_state[_AUTH_SESSION_KEY] = session
+        access_token = str(getattr(session, "access_token", "") or "").strip()
+        refresh_token = str(getattr(session, "refresh_token", "") or "").strip()
+        if access_token and refresh_token:
+            persist_admin_browser_session(access_token, refresh_token)
+        st.session_state.pop(_ADMIN_RESTORE_FAILED_THIS_RUN_KEY, None)
         logger.info("Browser token restore succeeded")
         return True
     except Exception as exc:
         logger.warning("Browser token restore failed: %r", exc)
         clear_local_admin_auth_state()
+        render_admin_browser_session_clear_now()
+        _clear_sensitive_query_params()
+        st.session_state[_ADMIN_RESTORE_FAILED_THIS_RUN_KEY] = True
         return False
 
 

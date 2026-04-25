@@ -3,7 +3,11 @@ from types import SimpleNamespace
 import pytest
 
 from jupr_app.ui import admin_auth
-from jupr_app.ui.admin_auth import _exchange_auth_code_for_session, _set_auth_session
+from jupr_app.ui.admin_auth import (
+    _exchange_auth_code_for_session,
+    _is_invalid_refresh_token_error,
+    _set_auth_session,
+)
 
 
 class _SetSessionAuth:
@@ -16,6 +20,10 @@ class _SetSessionAuth:
         if len(self.calls) < self._succeed_on:
             raise TypeError(f"attempt {len(self.calls)} failed")
         return {"ok": True, "attempt": len(self.calls)}
+
+
+class _AuthApiError(Exception):
+    pass
 
 
 class _ExchangeCodeAuth:
@@ -68,6 +76,37 @@ def test_set_auth_session_raises_last_exception_if_all_attempts_fail():
         _set_auth_session(client, "a-token", "r-token")
 
     assert len(auth.calls) == 3
+
+
+def test_set_auth_session_preserves_auth_api_error_and_does_not_fallback():
+    class _InvalidRefreshAuth:
+        def __init__(self):
+            self.calls = []
+
+        def set_session(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            raise _AuthApiError("Invalid Refresh Token: Already Used")
+
+    auth = _InvalidRefreshAuth()
+    client = SimpleNamespace(auth=auth)
+
+    with pytest.raises(_AuthApiError, match="Invalid Refresh Token"):
+        _set_auth_session(client, "a-token", "r-token")
+
+    assert auth.calls == [(("a-token", "r-token"), {})]
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("Invalid Refresh Token: Already Used", True),
+        ("refresh token expired", True),
+        ("Already Used", True),
+        ("some unrelated error", False),
+    ],
+)
+def test_is_invalid_refresh_token_error(message, expected):
+    assert _is_invalid_refresh_token_error(Exception(message)) is expected
 
 
 def test_exchange_auth_code_for_session_falls_back_in_order():

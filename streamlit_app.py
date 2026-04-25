@@ -280,9 +280,19 @@ def main():
                 if st.sidebar.button("Log Out", key="admin_logout_btn"):
                     logout_admin()
                     st.session_state.pop("post_login_admin_page_key", None)
-                    st.query_params.pop("admin", None)
-                    st.query_params.pop("public", None)
-                    st.query_params.pop("page", None)
+                    _set_query_params_idempotent(
+                        updates={
+                            "public": "1",
+                            "page": "home",
+                        },
+                        removals={
+                            "admin",
+                            "next",
+                            "jupr_admin_access_token",
+                            "jupr_admin_refresh_token",
+                            "jupr_admin_restore_from_storage",
+                        },
+                    )
                     st.rerun()
 
         # Optional: allow pages to request a refresh of cached data
