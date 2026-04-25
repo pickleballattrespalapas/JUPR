@@ -4,6 +4,7 @@ import logging
 import math
 import re
 import textwrap
+from datetime import timedelta
 from urllib.parse import urlencode
 
 import streamlit as st
@@ -324,6 +325,151 @@ def select_featured_cuts(unlocked_badges: list[dict], limit: int = 3) -> list[di
         featured.extend(participant_badges[:remaining_slots])
     return featured
 
+
+def _safe_int(value, default: int | None = None) -> int | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def _safe_float(value, default: float | None = None) -> float | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _month_day(value) -> str:
+    dt = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(dt):
+        return "—"
+    return f"{dt.strftime('%B')} {dt.day}"
+
+
+def _lookup_player_name(players_df: pd.DataFrame, player_id: int | None) -> str:
+    if player_id is None or players_df is None or players_df.empty or "id" not in players_df.columns:
+        return "—"
+    try:
+        hit = players_df[players_df["id"].astype(int) == int(player_id)]
+        if hit.empty:
+            return f"#{int(player_id)}"
+        return str(hit.iloc[0].get("name") or f"#{int(player_id)}")
+    except Exception:
+        return f"#{int(player_id)}"
+
+
+def _player_match_context(match_row: dict, pid: int) -> dict:
+    t1p1 = _safe_int(match_row.get("t1_p1"))
+    t1p2 = _safe_int(match_row.get("t1_p2"))
+    t2p1 = _safe_int(match_row.get("t2_p1"))
+    t2p2 = _safe_int(match_row.get("t2_p2"))
+    s1 = _safe_int(match_row.get("score_t1"), 0) or 0
+    s2 = _safe_int(match_row.get("score_t2"), 0) or 0
+
+    if pid in {t1p1, t1p2}:
+        return {
+            "partner_id": t1p2 if t1p1 == pid else t1p1,
+            "opponent_ids": [t2p1, t2p2],
+            "my_score": s1,
+            "opp_score": s2,
+            "result": "W" if s1 > s2 else ("L" if s1 < s2 else "D"),
+        }
+    if pid in {t2p1, t2p2}:
+        return {
+            "partner_id": t2p2 if t2p1 == pid else t2p1,
+            "opponent_ids": [t1p1, t1p2],
+            "my_score": s2,
+            "opp_score": s1,
+            "result": "W" if s2 > s1 else ("L" if s2 < s1 else "D"),
+        }
+    return {"partner_id": None, "opponent_ids": [], "my_score": 0, "opp_score": 0, "result": ""}
+
+
+def _aggregate_repeating_badges(unlocked_badges: list[dict]) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for badge in unlocked_badges or []:
+        badge_id = str(badge.get("badge_id") or "").strip() or "__unknown__"
+        item = grouped.get(badge_id, dict(badge))
+        if badge_id not in grouped:
+            item["stack_count"] = 0
+        item["stack_count"] = int(item.get("stack_count", 0) or 0) + int(badge.get("stack_count", 1) or 1)
+        earned_at = pd.to_datetime(badge.get("last_earned_at"), utc=True, errors="coerce")
+        current_dt = pd.to_datetime(item.get("last_earned_at"), utc=True, errors="coerce")
+        if pd.notna(earned_at) and (pd.isna(current_dt) or earned_at > current_dt):
+            item["last_earned_at"] = badge.get("last_earned_at")
+        grouped[badge_id] = item
+    return list(grouped.values())
+
+
+def _build_profile_snapshot(df: pd.DataFrame, row: pd.Series, pid: int) -> dict:
+    if df is None:
+        df = pd.DataFrame()
+    out = {"stats": [], "wins": 0, "losses": 0, "matches": 0}
+    if df.empty:
+        current_jupr = (_safe_float(row.get("rating"), 1200.0) or 1200.0) / 400.0
+        out["stats"] = [{"Stat": "Current JUPR", "Value": f"{current_jupr:.3f}"}, {"Stat": "Rated matches", "Value": "0"}]
+        return out
+
+    calc = df.copy().sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
+    calc["Date"] = pd.to_datetime(calc.get("Date"), utc=True, errors="coerce")
+    calc["Overall After"] = pd.to_numeric(calc.get("Overall After"), errors="coerce")
+    calc["Overall Δ"] = pd.to_numeric(calc.get("Overall Δ"), errors="coerce")
+    wins = int((calc.get("Result", "").astype(str).str.upper() == "WIN").sum())
+    losses = int((calc.get("Result", "").astype(str).str.upper() == "LOSS").sum())
+    matches = int(len(calc))
+    win_pct = (wins / matches * 100.0) if matches > 0 else 0.0
+    current = calc["Overall After"].dropna().iloc[-1] if calc["Overall After"].notna().any() else None
+    starting = calc["Overall After"].dropna().iloc[0] if calc["Overall After"].notna().any() else None
+    highest = calc["Overall After"].max() if calc["Overall After"].notna().any() else None
+    lowest = calc["Overall After"].min() if calc["Overall After"].notna().any() else None
+    last_played = calc["Date"].max()
+    first_rated = calc["Date"].min()
+
+    recent10 = calc.tail(10).copy()
+    recent10_w = int((recent10.get("Result", "").astype(str).str.upper() == "WIN").sum())
+    recent10_l = int((recent10.get("Result", "").astype(str).str.upper() == "LOSS").sum())
+    delta10 = recent10["Overall Δ"].sum(min_count=1)
+    streak = 0
+    streak_token = ""
+    for result in calc.get("Result", "").astype(str).str.upper().iloc[::-1]:
+        code = "W" if result == "WIN" else ("L" if result == "LOSS" else "")
+        if not code:
+            break
+        if not streak_token:
+            streak_token = code
+        if code != streak_token:
+            break
+        streak += 1
+    streak_label = f"{streak_token}{streak}" if streak > 0 and streak_token else "—"
+
+    stats = [
+        {"Stat": "Current JUPR", "Value": f"{current:.3f}" if current is not None and pd.notna(current) else "—"},
+        {"Stat": "Starting JUPR", "Value": f"{starting:.3f}" if starting is not None and pd.notna(starting) else "—"},
+        {"Stat": "Highest JUPR", "Value": f"{highest:.3f}" if highest is not None and pd.notna(highest) else "—"},
+        {"Stat": "Lowest JUPR", "Value": f"{lowest:.3f}" if lowest is not None and pd.notna(lowest) else "—"},
+        {"Stat": "Last played", "Value": _month_day(last_played)},
+        {"Stat": "Rated matches", "Value": f"{matches}"},
+        {"Stat": "Current streak", "Value": streak_label},
+        {"Stat": "Last 10 record", "Value": f"{recent10_w}-{recent10_l}"},
+        {"Stat": "Last 10 JUPR Δ", "Value": f"{float(delta10):+.3f}" if pd.notna(delta10) else "—"},
+    ]
+    out.update(
+        {
+            "stats": stats,
+            "wins": wins,
+            "losses": losses,
+            "matches": matches,
+            "win_pct": win_pct,
+            "first_rated": first_rated,
+            "last_played": last_played,
+        }
+    )
+    return out
 
 def _season_sort_key(league_name: str) -> tuple[int, int] | None:
     name = str(league_name or "").strip()
@@ -1264,13 +1410,20 @@ def render(ctx):
     pick_name = str(row["name"])
     claimed_or_verified_profile = _player_is_claimed_or_verified(row)
 
-    try:
-        current_overall_elo = float(row.get("rating", 1200.0) or 1200.0)
-    except Exception:
-        current_overall_elo = 1200.0
-    current_jupr = current_overall_elo / 400.0
+    df_rating_all = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
+    snapshot = _build_profile_snapshot(df_rating_all, row, pid)
+    current_jupr = None
+    for stat in snapshot.get("stats", []):
+        if stat.get("Stat") == "Current JUPR":
+            try:
+                current_jupr = float(str(stat.get("Value")).replace("+", ""))
+            except Exception:
+                current_jupr = None
+            break
+    if current_jupr is None:
+        current_jupr = (_safe_float(row.get("rating"), 1200.0) or 1200.0) / 400.0
 
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns([2.4, 1.6])
     verified_updates_manage_url = ""
     verified_updates_request_url = ""
     open_or_active = None
@@ -1322,6 +1475,14 @@ def render(ctx):
             )
         else:
             st.markdown(f"### {pick_name}")
+        club_label = str(row.get("club") or row.get("club_name") or "Tres Palapas").strip()
+        meta_tokens = [f"Club: {club_label}"]
+        if snapshot.get("first_rated") is not None and pd.notna(snapshot.get("first_rated")):
+            meta_tokens.append(f"First rated: {_month_day(snapshot.get('first_rated'))}")
+        if snapshot.get("last_played") is not None and pd.notna(snapshot.get("last_played")):
+            meta_tokens.append(f"Last played: {_month_day(snapshot.get('last_played'))}")
+        meta_tokens.append(f"Rated matches: {int(snapshot.get('matches', 0) or 0)}")
+        st.caption(" • ".join(meta_tokens))
         if PUBLIC_MODE:
             if claimed_or_verified_profile or request_status == REQUEST_STATUS_ACTIVE:
                 st.caption("Verified updates enabled")
@@ -1331,8 +1492,13 @@ def render(ctx):
                 REQUEST_STATUS_ACTIVE,
                 REQUEST_STATUS_PENDING,
             }:
-                st.markdown(f"[Subscribe to verified updates]({verified_updates_request_url})")
-    c2.metric("Overall JUPR", f"{current_jupr:.3f}")
+                st.caption(f"[Subscribe to player updates]({verified_updates_request_url})")
+    with c2:
+        st.metric("Current JUPR", f"{current_jupr:.3f}")
+        st.caption(
+            f"Record: {int(snapshot.get('wins', 0) or 0)}-{int(snapshot.get('losses', 0) or 0)} "
+            f"({float(snapshot.get('win_pct', 0.0) or 0.0):.1f}%)"
+        )
 
     if PUBLIC_MODE and (
         route_requests_verified_updates or verified_updates_view_q == "verified_updates_request"
@@ -1381,7 +1547,7 @@ def render(ctx):
         st.caption(f"[Back to player profile]({verified_updates_manage_url})")
         return
 
-    tape_tab, ratings_tab, social_tab = st.tabs(["Trophy Room", "Ratings", "Social"])
+    profile_tab, tape_tab, social_tab = st.tabs(["Profile", "Trophy Room", "Social"])
 
     with tape_tab:
         debug_render = False
@@ -2010,108 +2176,162 @@ def render(ctx):
                                     },
                                 )
     def render_ratings_tab():
-        # -------------------------
-        # Restore: Ratings by active league (table)
-        # -------------------------
-        st.markdown("### Ratings by active league")
-
-        active_leagues = []
-        if df_meta is not None and isinstance(df_meta, pd.DataFrame) and not df_meta.empty:
-            if "is_active" in df_meta.columns and "league_name" in df_meta.columns:
-                active_leagues = (
-                    df_meta[df_meta["is_active"] == True]["league_name"]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .tolist()
-                )
-
-        lr_rows = pd.DataFrame()
-        if df_leagues is not None and isinstance(df_leagues, pd.DataFrame) and not df_leagues.empty:
-            if "player_id" in df_leagues.columns:
-                lr_rows = df_leagues[df_leagues["player_id"].astype(int) == int(pid)].copy()
-
-        if not lr_rows.empty:
-            if "league_name" in lr_rows.columns:
-                lr_rows["league_name"] = lr_rows["league_name"].astype(str).str.strip()
-
-            if active_leagues and "league_name" in lr_rows.columns:
-                lr_rows = lr_rows[lr_rows["league_name"].isin(active_leagues)].copy()
-
-            if "is_active" in lr_rows.columns:
-                lr_rows = lr_rows[lr_rows["is_active"] == True].copy()
-
-            if lr_rows.empty:
-                st.caption("No active league ratings found for this player.")
-            else:
-                if "rating" in lr_rows.columns:
-                    lr_rows["League JUPR"] = lr_rows["rating"].astype(float) / 400.0
-
-                cols = ["league_name", "League JUPR", "wins", "losses", "matches_played"]
-                cols = [c for c in cols if c in lr_rows.columns]
-
-                if "League JUPR" in lr_rows.columns:
-                    lr_rows = lr_rows.sort_values("League JUPR", ascending=False)
-
-                st.dataframe(
-                    lr_rows[cols].rename(
-                        columns={"league_name": "League", "wins": "W", "losses": "L", "matches_played": "MP"}
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={"League JUPR": st.column_config.NumberColumn(format="%.3f")},
-                )
-        else:
-            st.caption("No league ratings table entries found for this player yet.")
-
-        st.divider()
-
-        df = build_player_overall_rating_series(_supabase, club_id, pid, limit=60)
-        df_all: pd.DataFrame | None = None
-
-        def get_all_matches_df() -> pd.DataFrame:
-            nonlocal df_all
-            if df_all is None:
-                df_all = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
-            return df_all.copy()
-
+        df_recent = build_player_overall_rating_series(_supabase, club_id, pid, limit=60)
+        df = build_player_overall_rating_series(_supabase, club_id, pid, limit=None)
         if df.empty:
-            st.info("No matches recorded for this player.")
+            st.info("No rated match data yet for this player.")
             return
 
-        def _safe_int(x, default=None):
-            try:
-                if x is None or str(x).strip() == "":
-                    return default
-                return int(x)
-            except Exception:
-                return default
+        df = df.copy().sort_values(["Date", "id"], ascending=[True, True]).reset_index(drop=True)
+        df["Date"] = pd.to_datetime(df.get("Date"), utc=True, errors="coerce")
+        df["Overall Δ"] = pd.to_numeric(df.get("Overall Δ"), errors="coerce")
+        df["Overall After"] = pd.to_numeric(df.get("Overall After"), errors="coerce")
 
-        def explain_link(r):
-            try:
-                t1p1 = _safe_int(r.get("t1_p1"))
-                t1p2 = _safe_int(r.get("t1_p2"))
-                t2p1 = _safe_int(r.get("t2_p1"))
-                t2p2 = _safe_int(r.get("t2_p2"))
-                s1 = _safe_int(r.get("score_t1"), 0) or 0
-                s2 = _safe_int(r.get("score_t2"), 0) or 0
-            except Exception:
-                return ""
+        snapshot_local = _build_profile_snapshot(df, row, pid)
+        wins = int(snapshot_local.get("wins", 0) or 0)
+        losses = int(snapshot_local.get("losses", 0) or 0)
+        matches = int(snapshot_local.get("matches", 0) or 0)
+        win_pct = float(snapshot_local.get("win_pct", 0.0) or 0.0)
+        current_jupr_local = (
+            df["Overall After"].dropna().iloc[-1]
+            if df["Overall After"].notna().any()
+            else (_safe_float(row.get("rating"), 1200.0) or 1200.0) / 400.0
+        )
 
+        st.markdown("### Rating Summary")
+        summary_cols = st.columns(6)
+        summary_cols[0].metric("Current JUPR", f"{float(current_jupr_local):.3f}")
+        summary_cols[1].metric("Wins", f"{wins}")
+        summary_cols[2].metric("Losses", f"{losses}")
+        summary_cols[3].metric("Matches", f"{matches}")
+        summary_cols[4].metric("Win %", f"{win_pct:.1f}%")
+        if "rating" in players_df.columns:
+            ratings = pd.to_numeric(players_df.get("rating"), errors="coerce") / 400.0
+            if ratings.notna().any():
+                pct = float((ratings <= float(current_jupr_local)).mean() * 100.0)
+                summary_cols[5].metric("Percentile", f"{pct:.0f}th")
+
+        st.markdown("### Overall Rating Trend")
+        today = pd.Timestamp.now(tz="UTC")
+        scope = st.radio(
+            "Timeframe",
+            options=["Past 90 days", "This season", "Past year", "All rated matches"],
+            horizontal=True,
+            key=f"profile-scope-{pid}",
+        )
+        if scope == "Past 90 days":
+            min_date = today - timedelta(days=90)
+            trend_df = df[df["Date"] >= min_date].copy()
+        elif scope == "Past year":
+            min_date = today - timedelta(days=365)
+            trend_df = df[df["Date"] >= min_date].copy()
+        elif scope == "This season":
+            season_start = pd.Timestamp(year=today.year, month=1, day=1, tz="UTC")
+            trend_df = df[df["Date"] >= season_start].copy()
+        else:
+            trend_df = df.copy()
+
+        trend_df = trend_df.dropna(subset=["Date", "Overall After"]).copy()
+        if trend_df.empty:
+            st.info("No rating points available for this timeframe.")
+        else:
+            trend_df["DateStr"] = trend_df["Date"].dt.strftime("%Y-%m-%d")
+            trend_df["AfterStr"] = trend_df["Overall After"].map(lambda v: f"{float(v):.3f}")
+            trend_df["DeltaStr"] = trend_df["Overall Δ"].map(lambda v: f"{float(v):+.4f}" if pd.notna(v) else "")
+            if alt is not None:
+                chart = (
+                    alt.Chart(trend_df)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X("Date:T", title="Date"),
+                        y=alt.Y("Overall After:Q", title="JUPR After Match", axis=alt.Axis(format=".3f"), scale=alt.Scale(zero=False)),
+                        tooltip=[
+                            alt.Tooltip("DateStr:N", title="Date"),
+                            alt.Tooltip("League:N", title="League / Event"),
+                            alt.Tooltip("Score:N", title="Score"),
+                            alt.Tooltip("Result:N", title="Result"),
+                            alt.Tooltip("DeltaStr:N", title="Rating Δ"),
+                            alt.Tooltip("AfterStr:N", title="JUPR"),
+                        ],
+                    )
+                    .interactive()
+                )
+                st.altair_chart(chart, use_container_width=True)
+            else:
+                st.line_chart(trend_df.set_index("Date")["Overall After"])
+
+        st.markdown("### Player Snapshot")
+        stats_df = pd.DataFrame(snapshot_local.get("stats", []))
+        if not stats_df.empty:
+            st.dataframe(stats_df, use_container_width=True, hide_index=True)
+
+        st.markdown("### Match Type Breakdown")
+        category_defs = [
+            ("All rated matches", lambda r: True),
+            ("Verified Round Robins", lambda r: "round robin" in str(r.get("match_type", "")).lower()),
+            ("League matches", lambda r: "league" in str(r.get("match_type", "")).lower() or str(r.get("League", "")).strip() not in {"", "OVERALL"}),
+            ("Tournament matches", lambda r: "tournament" in str(r.get("match_type", "")).lower()),
+            ("Social / unrated", lambda r: "social" in str(r.get("match_type", "")).lower() or "unrated" in str(r.get("match_type", "")).lower()),
+        ]
+        breakdown_rows = []
+        for label, predicate in category_defs:
+            sub = df[df.apply(predicate, axis=1)].copy()
+            if sub.empty:
+                continue
+            w = int((sub.get("Result", "").astype(str).str.upper() == "WIN").sum())
+            l = int((sub.get("Result", "").astype(str).str.upper() == "LOSS").sum())
+            m = int(len(sub))
+            breakdown_rows.append(
+                {
+                    "Category": label,
+                    "Record": f"{w}-{l}",
+                    "Win %": f"{(w / m * 100.0):.1f}%" if m else "0.0%",
+                    "Matches": m,
+                    "Average partner rating": "—",
+                    "Average opponent rating": "—",
+                    "Point differential": int(
+                        sum(_player_match_context(dict(r), pid).get("my_score", 0) - _player_match_context(dict(r), pid).get("opp_score", 0) for _, r in sub.iterrows())
+                    ),
+                }
+            )
+        if breakdown_rows:
+            st.dataframe(pd.DataFrame(breakdown_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("### Recent Match History")
+        history_df = df.sort_values(["Date", "id"], ascending=[False, False]).copy()
+        selected_scope = st.radio(
+            "History scope",
+            options=["Recent 60", "All matches"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key=f"profile-history-scope-{pid}",
+        )
+        show_all_history = selected_scope == "All matches"
+        if selected_scope == "Recent 60":
+            history_df = df_recent.sort_values(["Date", "id"], ascending=[False, False]).copy()
+            shown_matches = int(len(history_df))
+            st.caption(f"Showing recent {shown_matches} matches for faster loading.")
+        else:
+            shown_matches = int(len(history_df))
+            st.caption(f"Showing all {shown_matches} matches.")
+
+        def explain_link(match_row: pd.Series) -> str:
+            t1p1 = _safe_int(match_row.get("t1_p1"))
+            t1p2 = _safe_int(match_row.get("t1_p2"))
+            t2p1 = _safe_int(match_row.get("t2_p1"))
+            t2p2 = _safe_int(match_row.get("t2_p2"))
+            s1 = _safe_int(match_row.get("score_t1"), 0) or 0
+            s2 = _safe_int(match_row.get("score_t2"), 0) or 0
             if t1p1 == pid or t1p2 == pid:
                 partner = t1p1 if t1p2 == pid else t1p2
-                opp1, opp2 = t2p1, t2p2
-                sy, so = s1, s2
+                opp1, opp2, sy, so = t2p1, t2p2, s1, s2
             elif t2p1 == pid or t2p2 == pid:
                 partner = t2p1 if t2p2 == pid else t2p2
-                opp1, opp2 = t1p1, t1p2
-                sy, so = s2, s1
+                opp1, opp2, sy, so = t1p1, t1p2, s2, s1
             else:
                 return ""
-
             if partner is None or opp1 is None or opp2 is None:
                 return ""
-
             params = {
                 "page": "match_explorer",
                 "ctx": "OVERALL",
@@ -2126,220 +2346,111 @@ def render(ctx):
                 params["public"] = 1
             return f"/?{urlencode(params)}"
 
-        df = df.copy()
-        df["Explain"] = df.apply(lambda row: explain_link(dict(row)), axis=1)
-
-        # -------------------------
-        # Restore: tabs for Overall + each league
-        # -------------------------
-        leagues_in_matches = sorted(
-            [x for x in df["League"].fillna("").astype(str).str.strip().unique().tolist() if x and x.upper() != "OVERALL"]
+        rows = []
+        for _, match in history_df.iterrows():
+            ctx_match = _player_match_context(dict(match), pid)
+            rows.append(
+                {
+                    "Date": _month_day(match.get("Date")),
+                    "Event/League": str(match.get("League") or "Rated Match"),
+                    "Partner": _lookup_player_name(players_df, ctx_match.get("partner_id")),
+                    "Opponents": ", ".join(_lookup_player_name(players_df, x) for x in ctx_match.get("opponent_ids", []) if x is not None),
+                    "Score": str(match.get("Score") or "—"),
+                    "Result": "W" if str(match.get("Result", "")).upper() == "WIN" else ("L" if str(match.get("Result", "")).upper() == "LOSS" else "D"),
+                    "Overall rating delta": f"{float(match.get('Overall Δ')):+.4f}" if pd.notna(match.get("Overall Δ")) else "",
+                    "Explain": explain_link(match),
+                }
+            )
+        history_show = pd.DataFrame(rows)
+        history_show = history_show.rename(columns={"Explain": "EXPLAIN"})
+        st.dataframe(
+            history_show.head(10),
+            use_container_width=True,
+            hide_index=True,
+            column_config={"EXPLAIN": st.column_config.LinkColumn("Explain", display_text="Explain")},
         )
-        tab_labels = ["Overall"] + [f"League: {lg}" for lg in leagues_in_matches]
-        tabs = st.tabs(tab_labels)
-
-        def render_chart_and_table(
-            view_df_recent: pd.DataFrame,
-            title_prefix: str,
-            *,
-            league_trend: bool = False,
-            league_name: str = "",
-            all_matches_loader=None,
-        ):
-            st.subheader(f"{title_prefix} JUPR Trend")
-
-            selected_scope = st.radio(
-                "Display:",
-                options=["Recent 60", "All matches"],
-                horizontal=True,
-                key=f"profile-display-scope-{title_prefix}",
-                label_visibility="collapsed",
-            )
-            show_all = selected_scope == "All matches"
-            if show_all and all_matches_loader is not None:
-                view_df = all_matches_loader()
-            else:
-                view_df = view_df_recent.copy()
-
-            total_matches = fetch_player_match_count(
-                _supabase,
-                club_id,
-                pid,
-                league_name if (league_name and title_prefix != "Overall") else None,
-            )
-            shown_matches = int(len(view_df))
-            if show_all:
-                st.caption(f"Showing all {shown_matches} matches.")
-            else:
-                st.caption(
-                    f"Showing recent {shown_matches} matches for faster loading."
-                    + (f" ({total_matches} total)" if total_matches > shown_matches else "")
-                )
-
-            chart_df = view_df.copy().dropna(subset=["Overall After"]).sort_values(["Date", "id"]).reset_index(drop=True)
-            if chart_df.empty:
-                st.info("No chartable rating data in this view.")
-            else:
-                if show_all or total_matches <= len(chart_df):
-                    chart_df["Match #"] = range(1, len(chart_df) + 1)
-                else:
-                    start_match_number = max(total_matches - len(chart_df) + 1, 1)
-                    chart_df["Match #"] = range(start_match_number, start_match_number + len(chart_df))
-                chart_df["DateStr"] = pd.to_datetime(chart_df["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-                chart_df["DeltaStr"] = chart_df["Overall Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
-                chart_df["AfterStr"] = chart_df["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-                chart_scope = chart_df.copy()
-
-                # Optional full restore: show league replay trend (if available)
-                if league_trend and league_name and _LEAGUE_REPLAY_AVAILABLE:
-                    snap_map = build_league_snapshot_map(_supabase, club_id, league_name, df_meta, df_players_all)
-                    if snap_map:
-                        # Build a league-after series from snap_map for this player
-                        tmp = view_df.copy()
-                        tmp["League After"] = pd.NA
-                        tmp["League Δ"] = pd.NA
-                        for i in range(len(tmp)):
-                            mid = tmp.iloc[i].get("id", None)
-                            if mid is None:
-                                continue
-                            hit = snap_map.get(int(mid), {}).get(int(pid), None)
-                            if hit:
-                                ls, le = hit
-                                tmp.at[tmp.index[i], "League Δ"] = (float(le) - float(ls)) / 400.0
-                                tmp.at[tmp.index[i], "League After"] = float(le) / 400.0
-
-                        tmp2 = tmp.dropna(subset=["League After"]).sort_values(["Date", "id"]).reset_index(drop=True)
-                        if not tmp2.empty:
-                            tmp2["Match #"] = range(1, len(tmp2) + 1)
-                            if not show_all and total_matches > len(tmp2):
-                                start_match_number = max(total_matches - len(tmp2) + 1, 1)
-                                tmp2["Match #"] = range(start_match_number, start_match_number + len(tmp2))
-                            tmp2["DateStr"] = pd.to_datetime(tmp2["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-                            tmp2["DeltaStr"] = tmp2["League Δ"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
-                            tmp2["AfterStr"] = tmp2["League After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-                            chart_scope = tmp2.copy()
-                            y_col = "League After"
-                            y_title = "League JUPR After Match"
-                        else:
-                            y_col = "Overall After"
-                            y_title = "JUPR After Match (Overall)"
-                    else:
-                        y_col = "Overall After"
-                        y_title = "JUPR After Match (Overall)"
-                else:
-                    y_col = "Overall After"
-                    y_title = "JUPR After Match (Overall)"
-
-                if alt is not None:
-                    line = (
-                        alt.Chart(chart_scope)
-                        .mark_line(point=True)
-                        .encode(
-                            x=alt.X("Match #:Q", axis=alt.Axis(tickMinStep=1), title="Match Order"),
-                            y=alt.Y(
-                                f"{y_col}:Q",
-                                axis=alt.Axis(format=".3f"),
-                                title=y_title,
-                                scale=alt.Scale(zero=False),
-                            ),
-                            tooltip=[
-                                alt.Tooltip("DateStr:N", title="Date"),
-                                alt.Tooltip("League:N", title="League"),
-                                alt.Tooltip("Score:N", title="Score"),
-                                alt.Tooltip("AfterStr:N", title="After"),
-                                alt.Tooltip("DeltaStr:N", title="Δ"),
-                            ],
-                        )
-                        .interactive()
-                    )
-                    st.altair_chart(line, use_container_width=True)
-                else:
-                    st.line_chart(chart_scope.set_index("Match #")[y_col])
-
-            st.divider()
-            st.subheader(f"{title_prefix} Match History")
-
-            show = view_df.sort_values(["Date", "id"], ascending=[False, False]).copy()
-            show["date"] = pd.to_datetime(show["Date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
-            show["delta_raw"] = pd.to_numeric(show["Overall Δ"], errors="coerce")
-            show["Overall Δ"] = show["delta_raw"].map(lambda x: f"{float(x):+.4f}" if pd.notna(x) else "")
-            show["Overall After"] = show["Overall After"].map(lambda x: f"{float(x):.3f}" if pd.notna(x) else "")
-
-            # Render Overall history with a native LinkColumn so Explain links are clickable.
-            if title_prefix == "Overall":
-                show = show.rename(columns={"Explain": "EXPLAIN"})
-                show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "EXPLAIN"]]
-                st.dataframe(
-                    show,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "EXPLAIN": st.column_config.LinkColumn("Explain", display_text="Explain"),
-                    },
-                )
-                return
-
-            def result_badge(result: str) -> str:
-                label = str(result or "").strip().upper() or "—"
-                normalized = label.upper()
-                if normalized in {"W", "WIN", "WON"}:
-                    variant = "win"
-                elif normalized in {"L", "LOSS", "LOST"}:
-                    variant = "loss"
-                else:
-                    variant = "draw"
-                return f"<span class='jupr-result-badge {variant}'>{label}</span>"
-
-            def delta_span(delta_str: str, delta_raw: float | None) -> str:
-                if not delta_str:
-                    return ""
-                kind = "zero"
-                try:
-                    delta_val = float(delta_raw)
-                except (TypeError, ValueError):
-                    delta_val = 0.0
-                if delta_val > 0:
-                    kind = "pos"
-                elif delta_val < 0:
-                    kind = "neg"
-                return f"<span class='jupr-delta {kind}'>{delta_str}</span>"
-
-            show["Result"] = show["Result"].map(result_badge)
-            show["Overall Δ"] = show.apply(lambda row: delta_span(row["Overall Δ"], row["delta_raw"]), axis=1)
-            show["Explain"] = show["Explain"].map(
-                lambda url: f"<a href='{url}' target='_self'>Explain</a>" if url else ""
+        with st.expander("Show full match history", expanded=False):
+            st.dataframe(
+                history_show,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"EXPLAIN": st.column_config.LinkColumn("Explain", display_text="Explain")},
             )
 
-            show = show[["date", "League", "Score", "Result", "match_type", "Overall Δ", "Overall After", "Explain"]]
-
-            html_table = show.to_html(index=False, escape=False)
-
-            st.markdown(
-                f"""
-                <div class="match-history-table">
-                  {html_table}
-                </div>
-                """,
-                unsafe_allow_html=True,
+        st.markdown("### Trophy Case & Badges")
+        trophy_list = fetch_player_tournament_trophies(_supabase, club_id, pid)
+        if trophy_list:
+            trophy_df = pd.DataFrame(trophy_list).head(6)
+            trophy_cols = [c for c in ["icon", "title", "league_name", "season_label", "placement"] if c in trophy_df.columns]
+            st.dataframe(trophy_df[trophy_cols], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No tournament trophies yet.")
+        badge_defs = getattr(ctx, "df_badges", None)
+        if badge_defs is None or (isinstance(badge_defs, pd.DataFrame) and badge_defs.empty):
+            badge_defs = fetch_badge_definitions(_supabase)
+        player_badges = resolve_player_badges_for_profile(ctx, _supabase, club_id, pid)
+        summary_badges = build_gamification_summary(pid, badge_defs, player_badges)
+        unlocked = _aggregate_repeating_badges(summary_badges.get("unlocked_badges", []))
+        featured_badges = select_featured_cuts(unlocked, limit=4)
+        if featured_badges:
+            compact_badges = pd.DataFrame(
+                [
+                    {
+                        "Badge": f"{badge_icon(b.get('badge_id'), b.get('category'))} {str(b.get('name') or 'Badge')}",
+                        "Prestige": int(b.get("prestige", 0) or 0),
+                        "Count": int(b.get("stack_count", 1) or 1),
+                        "Last earned": _month_day(pd.to_datetime(b.get("last_earned_at"), utc=True, errors="coerce")),
+                    }
+                    for b in featured_badges
+                ]
             )
+            st.dataframe(compact_badges, use_container_width=True, hide_index=True)
 
-        with tabs[0]:
-            render_chart_and_table(df, "Overall", league_trend=False, all_matches_loader=get_all_matches_df)
+        partners_map: dict[int, dict] = {}
+        rivals_map: dict[int, dict] = {}
+        for _, match in df.iterrows():
+            ctx_match = _player_match_context(dict(match), pid)
+            partner_id = ctx_match.get("partner_id")
+            result = ctx_match.get("result")
+            if partner_id is not None:
+                p = partners_map.setdefault(partner_id, {"wins": 0, "losses": 0, "matches": 0})
+                p["matches"] += 1
+                if result == "W":
+                    p["wins"] += 1
+                elif result == "L":
+                    p["losses"] += 1
+            for opp_id in ctx_match.get("opponent_ids", []):
+                if opp_id is None:
+                    continue
+                o = rivals_map.setdefault(opp_id, {"wins": 0, "losses": 0, "matches": 0})
+                o["matches"] += 1
+                if result == "W":
+                    o["wins"] += 1
+                elif result == "L":
+                    o["losses"] += 1
 
-        for i, lg in enumerate(leagues_in_matches, start=1):
-            with tabs[i]:
-                df_lg = df[df["League"].astype(str).str.strip() == lg].copy()
-                def _load_all_lg_matches(league_name: str = lg) -> pd.DataFrame:
-                    all_df = get_all_matches_df()
-                    return all_df[all_df["League"].astype(str).str.strip() == league_name].copy()
-                # Show league replay trend if available; otherwise overall trend filtered to that league’s matches.
-                render_chart_and_table(
-                    df_lg,
-                    f"League: {lg}",
-                    league_trend=True,
-                    league_name=lg,
-                    all_matches_loader=_load_all_lg_matches,
-                )
+        with st.expander("Frequent partners", expanded=False):
+            partners_rows = [
+                {
+                    "Partner": _lookup_player_name(players_df, pid2),
+                    "Matches together": v["matches"],
+                    "Record": f"{v['wins']}-{v['losses']}",
+                    "Win %": f"{(v['wins'] / v['matches'] * 100.0):.1f}%" if v["matches"] else "0.0%",
+                }
+                for pid2, v in sorted(partners_map.items(), key=lambda item: item[1]["matches"], reverse=True)
+            ]
+            st.dataframe(pd.DataFrame(partners_rows), use_container_width=True, hide_index=True)
+
+        with st.expander("Common opponents / rivals", expanded=False):
+            rival_rows = [
+                {
+                    "Opponent": _lookup_player_name(players_df, oid),
+                    "Matches": v["matches"],
+                    "Record against": f"{v['wins']}-{v['losses']}",
+                }
+                for oid, v in sorted(rivals_map.items(), key=lambda item: item[1]["matches"], reverse=True)
+            ]
+            st.dataframe(pd.DataFrame(rival_rows), use_container_width=True, hide_index=True)
 
     def render_social_tab():
         st.markdown("### Social / Community")
@@ -2412,7 +2523,7 @@ def render(ctx):
         cols = [c for c in cols if c in show_df.columns]
         st.dataframe(show_df[cols], use_container_width=True, hide_index=True)
 
-    with ratings_tab:
+    with profile_tab:
         render_ratings_tab()
 
     with social_tab:
