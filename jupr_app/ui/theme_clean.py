@@ -254,14 +254,17 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
-        gap: 0.9rem;
+        gap: 0.8rem 1rem;
+        position: sticky;
+        top: 0.5rem;
+        z-index: 120;
         margin-bottom: 1.15rem;
-        padding: 0.85rem 1rem;
+        padding: 0.7rem 0.9rem;
         border-radius: var(--radius);
-        border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--panel) 90%, transparent);
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(8px);
+        border: 1px solid var(--border-strong);
+        background: color-mix(in srgb, var(--panel) 94%, transparent);
+        box-shadow: var(--shadow-lg);
+        backdrop-filter: blur(10px);
       }}
       .jupr-public-brand {{
         display: inline-flex;
@@ -279,32 +282,78 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
       .jupr-public-nav-links {{
         display: flex;
         align-items: center;
+        flex: 1 1 420px;
         flex-wrap: wrap;
         gap: 0.45rem;
+        min-width: 0;
       }}
       .jupr-public-nav-link {{
         display: inline-flex;
         align-items: center;
         border-radius: 999px;
-        border: 1px solid var(--border);
-        padding: 0.34rem 0.76rem;
-        color: var(--text-secondary);
-        background: transparent;
+        border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+        padding: 0.34rem 0.72rem;
+        color: var(--text-primary);
+        background: color-mix(in srgb, var(--panel) 86%, transparent);
         text-decoration: none;
         font-size: 0.84rem;
         font-weight: 700;
         transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+        white-space: nowrap;
       }}
       .jupr-public-nav-link:hover {{
-        border-color: var(--accent-border);
+        border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
         background: var(--accent-soft);
         color: var(--text-primary);
         transform: translateY(-1px);
       }}
       .jupr-public-nav-link.active {{
-        border-color: var(--accent-border);
-        background: var(--accent-soft);
+        border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+        background: color-mix(in srgb, var(--accent-soft) 85%, var(--panel));
         color: var(--text-primary);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+      }}
+      .jupr-public-admin-action {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.38rem 0.72rem;
+        border-radius: 10px;
+        border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border-strong));
+        background: color-mix(in srgb, var(--accent-soft) 45%, var(--panel));
+        color: var(--text-primary);
+        text-decoration: none;
+        white-space: nowrap;
+        font-size: 0.8rem;
+        font-weight: 800;
+      }}
+      .jupr-public-admin-action:hover {{
+        color: var(--text-primary);
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+        background: color-mix(in srgb, var(--accent-soft) 65%, var(--panel));
+      }}
+      .jupr-public-admin-action:focus-visible,
+      .jupr-public-nav-link:focus-visible {{
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
+      }}
+      @media (max-width: 720px) {{
+        .jupr-public-nav {{
+          gap: 0.65rem;
+          padding: 0.64rem 0.72rem;
+        }}
+        .jupr-public-brand {{
+          min-width: 100%;
+        }}
+        .jupr-public-nav-links {{
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          padding-bottom: 0.15rem;
+          scrollbar-width: thin;
+        }}
+        .jupr-public-admin-action {{
+          margin-left: auto;
+        }}
       }}
       .jupr-hero {{
         margin-bottom: 1rem;
