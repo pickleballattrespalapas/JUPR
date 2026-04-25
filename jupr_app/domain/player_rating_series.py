@@ -93,7 +93,7 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional
     base_select = (
         "id,date,league,match_type,score_t1,score_t2,"
         "t1_p1,t1_p2,t2_p1,t2_p2,"
-        "elo_delta"
+        "elo_delta,context,tournament_id"
     )
     snap_select = (
         base_select
@@ -180,6 +180,12 @@ def build_player_overall_rating_series(supabase, club_id: str, player_id: int, l
                 "t2_p2": _safe_int(r.get("t2_p2")),
                 "score_t1": _safe_int(r.get("score_t1"), 0) or 0,
                 "score_t2": _safe_int(r.get("score_t2"), 0) or 0,
+                "t1_p1_r": _safe_float(r.get("t1_p1_r")),
+                "t1_p2_r": _safe_float(r.get("t1_p2_r")),
+                "t2_p1_r": _safe_float(r.get("t2_p1_r")),
+                "t2_p2_r": _safe_float(r.get("t2_p2_r")),
+                "context": str(r.get("context", "") or "").strip(),
+                "tournament_id": _safe_int(r.get("tournament_id")),
             }
         )
 
