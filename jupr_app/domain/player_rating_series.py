@@ -90,21 +90,36 @@ def _signed_delta_from_elo_delta(r: dict, player_id: int) -> float | None:
 
 
 def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional[int] = 600) -> pd.DataFrame:
-    base_select = (
-        "id,date,league,match_type,score_t1,score_t2,"
-        "t1_p1,t1_p2,t2_p1,t2_p2,"
-        "elo_delta,context,tournament_id"
-    )
-    snap_select = (
-        base_select
-        + ",t1_p1_r,t1_p1_r_end,t1_p2_r,t1_p2_r_end,"
-        "t2_p1_r,t2_p1_r_end,t2_p2_r,t2_p2_r_end"
-    )
+    required_cols = [
+        "id",
+        "date",
+        "league",
+        "match_type",
+        "score_t1",
+        "score_t2",
+        "t1_p1",
+        "t1_p2",
+        "t2_p1",
+        "t2_p2",
+        "elo_delta",
+    ]
+    optional_meta_cols = ["context_id", "context_type", "tournament_id"]
+    snapshot_cols = [
+        "t1_p1_r",
+        "t1_p1_r_end",
+        "t1_p2_r",
+        "t1_p2_r_end",
+        "t2_p1_r",
+        "t2_p1_r_end",
+        "t2_p2_r",
+        "t2_p2_r_end",
+    ]
 
-    def _run(cols: str) -> pd.DataFrame:
+    def _run(cols: list[str]) -> pd.DataFrame:
+        select_cols = ",".join(cols)
         base_query = (
             supabase.table("matches")
-            .select(cols)
+            .select(select_cols)
             .eq("club_id", str(club_id))
             .or_(f"t1_p1.eq.{player_id},t1_p2.eq.{player_id},t2_p1.eq.{player_id},t2_p2.eq.{player_id}")
             .order("date", desc=True)
@@ -129,10 +144,18 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional
             offset += page_size
         return pd.DataFrame(all_rows)
 
-    try:
-        return _run(snap_select)
-    except Exception:
-        return _run(base_select)
+    attempts: list[list[str]] = [
+        required_cols + optional_meta_cols + snapshot_cols,
+        required_cols + snapshot_cols,
+        required_cols + optional_meta_cols,
+        required_cols,
+    ]
+    for cols in attempts:
+        try:
+            return _run(cols)
+        except Exception:
+            continue
+    return pd.DataFrame()
 
 
 def build_player_overall_rating_series(supabase, club_id: str, player_id: int, limit: Optional[int] = 600) -> pd.DataFrame:
@@ -184,7 +207,8 @@ def build_player_overall_rating_series(supabase, club_id: str, player_id: int, l
                 "t1_p2_r": _safe_float(r.get("t1_p2_r")),
                 "t2_p1_r": _safe_float(r.get("t2_p1_r")),
                 "t2_p2_r": _safe_float(r.get("t2_p2_r")),
-                "context": str(r.get("context", "") or "").strip(),
+                "context_id": _safe_int(r.get("context_id")),
+                "context_type": str(r.get("context_type", "") or "").strip(),
                 "tournament_id": _safe_int(r.get("tournament_id")),
             }
         )
