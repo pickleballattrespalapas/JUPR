@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -88,7 +89,7 @@ def _signed_delta_from_elo_delta(r: dict, player_id: int) -> float | None:
     return abs(float(raw)) if winner_team == my_team else -abs(float(raw))
 
 
-def _load_player_matches(supabase, club_id: str, player_id: int, limit: int = 600) -> pd.DataFrame:
+def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional[int] = 600) -> pd.DataFrame:
     base_select = (
         "id,date,league,match_type,score_t1,score_t2,"
         "t1_p1,t1_p2,t2_p1,t2_p2,"
@@ -101,17 +102,32 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: int = 60
     )
 
     def _run(cols: str) -> pd.DataFrame:
-        resp = (
+        base_query = (
             supabase.table("matches")
             .select(cols)
             .eq("club_id", str(club_id))
             .or_(f"t1_p1.eq.{player_id},t1_p2.eq.{player_id},t2_p1.eq.{player_id},t2_p2.eq.{player_id}")
             .order("date", desc=True)
             .order("id", desc=True)
-            .limit(int(limit))
-            .execute()
         )
-        return pd.DataFrame(resp.data or [])
+        if limit is not None:
+            resp = base_query.limit(int(limit)).execute()
+            return pd.DataFrame(resp.data or [])
+
+        # Supabase can enforce per-query row limits; fetch all rows in pages.
+        all_rows: list[dict] = []
+        page_size = 1000
+        offset = 0
+        while True:
+            resp = base_query.range(offset, offset + page_size - 1).execute()
+            batch = resp.data or []
+            if not batch:
+                break
+            all_rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+        return pd.DataFrame(all_rows)
 
     try:
         return _run(snap_select)
@@ -119,7 +135,7 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: int = 60
         return _run(base_select)
 
 
-def build_player_overall_rating_series(supabase, club_id: str, player_id: int, limit: int = 600) -> pd.DataFrame:
+def build_player_overall_rating_series(supabase, club_id: str, player_id: int, limit: Optional[int] = 600) -> pd.DataFrame:
     matches = _load_player_matches(supabase, club_id, int(player_id), limit=limit)
     if matches.empty:
         return pd.DataFrame(columns=["id", "Date", "League", "Score", "Result", "Overall Δ", "Overall After"])
