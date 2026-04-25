@@ -260,6 +260,13 @@ def apply_bulk_match_edits(
             "t2_p1": int(update.get("t2_p1", before.get("t2_p1"))),
             "t2_p2": int(update.get("t2_p2", before.get("t2_p2"))),
         }
+        for pid in candidate_players.values():
+            affected_players.add(int(pid))
+        match_type_after = str(update.get("match_type", before.get("match_type")) or "")
+        is_popup_after = bool(before.get("is_popup", False)) or (match_type_after == "PopUp")
+        if not is_popup_after:
+            for pid in candidate_players.values():
+                badge_eligible_players.add(int(pid))
         if len(set(candidate_players.values())) != 4:
             raise ValueError(f"Match {mid}: duplicate player detected in one rated doubles match.")
 

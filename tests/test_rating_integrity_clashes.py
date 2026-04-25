@@ -17,6 +17,7 @@ class _Query:
         self.table = table
         self._op = "select"
         self._payload = None
+        self._select_cols = None
         self._filters = []
         self._order = []
         self._range = None
@@ -24,6 +25,7 @@ class _Query:
 
     def select(self, _cols):
         self._op = "select"
+        self._select_cols = _cols
         return self
 
     def insert(self, payload, returning=None):
@@ -152,6 +154,20 @@ class _Supabase:
         return SimpleNamespace(data=[])
 
 
+class _StrictSchemaSupabase(_Supabase):
+    def __init__(self, missing_match_columns: set[str]):
+        super().__init__()
+        self.missing_match_columns = set(missing_match_columns)
+
+    def execute(self, q: _Query):
+        if q._op == "select" and q.table == "matches" and q._select_cols:
+            requested = {c.strip() for c in str(q._select_cols).split(",")}
+            missing = requested.intersection(self.missing_match_columns)
+            if missing:
+                raise RuntimeError(f"column does not exist: {sorted(missing)}")
+        return super().execute(q)
+
+
 def _seed_players():
     return [
         {"id": 1, "club_id": "club", "name": "A", "rating": 1200, "starting_rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
@@ -167,6 +183,42 @@ def test_replay_history_ignores_soft_deleted_matches():
     sb.tables["matches"] = [
         {"id": 1, "club_id": "club", "date": "2024-01-01T00:00:00Z", "league": "Main", "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 5, "deleted_at": None},
         {"id": 2, "club_id": "club", "date": "2024-01-02T00:00:00Z", "league": "Main", "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 0, "deleted_at": "2026-01-01T00:00:00Z"},
+    ]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert result["matches_rewritten"] == 1
+
+
+def test_replay_history_missing_rating_scope_still_excludes_soft_deleted():
+    sb = _StrictSchemaSupabase(missing_match_columns={"rating_scope"})
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {"id": 1, "club_id": "club", "date": "2024-01-01T00:00:00Z", "league": "Main", "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 5, "deleted_at": None},
+        {"id": 2, "club_id": "club", "date": "2024-01-02T00:00:00Z", "league": "Main", "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 0, "deleted_at": "2026-01-01T00:00:00Z"},
+    ]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert result["matches_rewritten"] == 1
+
+
+def test_replay_history_includes_null_rating_scope_but_skips_unrated():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {"id": 1, "club_id": "club", "date": "2024-01-01T00:00:00Z", "league": "Main", "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 5, "deleted_at": None, "rating_scope": None},
+        {"id": 2, "club_id": "club", "date": "2024-01-02T00:00:00Z", "league": "Main", "match_type": "League", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 7, "deleted_at": None, "rating_scope": "unrated"},
     ]
 
     result = replay_history(
@@ -241,6 +293,43 @@ def test_bulk_editor_validates_duplicate_players_and_negative_scores(monkeypatch
 
     with pytest.raises(ValueError, match="not in this club"):
         apply_bulk_match_edits(sb, "club", [{"id": 1, "t2_p2": 999}], actor="admin")
+
+
+def test_bulk_editor_recomputes_last_game_for_removed_and_added_players(monkeypatch):
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players() + [
+        {"id": 5, "club_id": "club", "name": "E", "rating": 1200, "starting_rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+    ]
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "league": "Main",
+            "date": "2024-01-01T00:00:00Z",
+            "week_tag": "Week 1",
+            "match_type": "League",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 7,
+        }
+    ]
+    seen = {}
+
+    monkeypatch.setattr("jupr_app.domain.bulk_match_editor.enqueue_badge_eval", lambda *a, **k: {"queued": False})
+    monkeypatch.setattr("jupr_app.domain.bulk_match_editor.run_live_badge_awards", lambda *a, **k: {"mode": "inline"})
+
+    def _capture_recompute(**kwargs):
+        seen["player_ids"] = set(kwargs["player_ids"])
+
+    monkeypatch.setattr("jupr_app.domain.player_activity.recompute_last_game_at_for_players", _capture_recompute)
+
+    result = apply_bulk_match_edits(sb, "club", [{"id": 1, "t1_p1": 5}], actor="admin")
+
+    assert result["updated_count"] == 1
+    assert seen["player_ids"] == {1, 2, 3, 4, 5}
 
 
 class _LoadSpyQuery(_Query):

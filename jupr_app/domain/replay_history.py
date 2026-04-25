@@ -179,25 +179,37 @@ def replay_history(
     skipped_incomplete_scope = 0
     matches_scanned_total = 0
 
+    match_query_mode = "with_deleted_and_scope"
     offset = 0
     while True:
         start = offset
         end = offset + READ_PAGE_SIZE - 1
 
-        def _load_page_with_filters():
+        def _load_page_with_deleted_and_scope():
             return (
                 supabase.table("matches")
                 .select(match_cols)
                 .eq("club_id", club_id)
                 .is_("deleted_at", None)
-                .neq("rating_scope", "unrated")
                 .order("date", desc=False)
                 .order("id", desc=False)
                 .range(start, end)
                 .execute()
             )
 
-        def _load_page_fallback():
+        def _load_page_with_deleted_only():
+            return (
+                supabase.table("matches")
+                .select("id,date,league,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,deleted_at")
+                .eq("club_id", club_id)
+                .is_("deleted_at", None)
+                .order("date", desc=False)
+                .order("id", desc=False)
+                .range(start, end)
+                .execute()
+            )
+
+        def _load_page_legacy_fallback():
             return (
                 supabase.table("matches")
                 .select("id,date,league,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2")
@@ -209,10 +221,22 @@ def replay_history(
             )
 
         try:
-            page_resp = _retry(_load_page_with_filters, label=f"select_matches_{start}_{end}")
+            if match_query_mode == "with_deleted_and_scope":
+                page_resp = _retry(_load_page_with_deleted_and_scope, label=f"select_matches_{start}_{end}")
+            elif match_query_mode == "with_deleted_only":
+                page_resp = _retry(_load_page_with_deleted_only, label=f"select_matches_deleted_only_{start}_{end}")
+            else:
+                page_resp = _retry(_load_page_legacy_fallback, label=f"select_matches_legacy_{start}_{end}")
         except Exception:
-            # Backward-compat fallback for deployments that have not yet applied the soft-delete/rating_scope columns.
-            page_resp = _retry(_load_page_fallback, label=f"select_matches_fallback_{start}_{end}")
+            # Backward-compat fallback for deployments with partial schema rollout.
+            if match_query_mode == "with_deleted_and_scope":
+                match_query_mode = "with_deleted_only"
+                page_resp = _retry(_load_page_with_deleted_only, label=f"select_matches_deleted_only_{start}_{end}")
+            elif match_query_mode == "with_deleted_only":
+                match_query_mode = "legacy"
+                page_resp = _retry(_load_page_legacy_fallback, label=f"select_matches_legacy_{start}_{end}")
+            else:
+                raise
 
         page = page_resp.data or []
         if not page:
@@ -223,7 +247,7 @@ def replay_history(
         for m in page:
             if m.get("deleted_at") is not None:
                 continue
-            if str(m.get("rating_scope", "") or "").strip().lower() == "unrated":
+            if "rating_scope" in m and str(m.get("rating_scope", "") or "").strip().lower() == "unrated":
                 continue
             lg = _norm_league(m.get("league", "") or "")
             in_scope = full_reset or (lg == target_league_norm)
