@@ -91,6 +91,44 @@ def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, st
     return df_player_badges, schema_degraded, schema_degraded_reason
 
 
+def _fetch_matches(
+    supabase,
+    club_id: str,
+    match_limit: int,
+) -> tuple[pd.DataFrame, bool, str | None]:
+    schema_degraded = False
+    schema_degraded_reason = None
+    try:
+        m_resp = (
+            supabase.table("matches")
+            .select("*")
+            .eq("club_id", club_id)
+            .is_("deleted_at", None)
+            .order("id", desc=True)
+            .limit(int(match_limit))
+            .execute()
+        )
+    except APIError as exc:
+        message = str(exc)
+        if getattr(exc, "code", None) == "42703" and "deleted_at" in message:
+            schema_degraded = True
+            schema_degraded_reason = (
+                "matches.deleted_at column is missing; apply "
+                "supabase/migrations/20260424_matches_soft_delete.sql to enable soft-delete filtering."
+            )
+            m_resp = (
+                supabase.table("matches")
+                .select("*")
+                .eq("club_id", club_id)
+                .order("id", desc=True)
+                .limit(int(match_limit))
+                .execute()
+            )
+        else:
+            raise
+    return pd.DataFrame(m_resp.data or []), schema_degraded, schema_degraded_reason
+
+
 def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "name" not in df.columns:
         return df
@@ -154,16 +192,14 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             df_leagues = pd.DataFrame(l_resp.data or [])
 
             # Matches
-            m_resp = (
-                supabase.table("matches")
-                .select("*")
-                .eq("club_id", club_id)
-                .is_("deleted_at", None)
-                .order("id", desc=True)
-                .limit(int(match_limit))
-                .execute()
-            )
-            df_matches = pd.DataFrame(m_resp.data or [])
+            (
+                df_matches,
+                matches_schema_degraded,
+                matches_schema_degraded_reason,
+            ) = _fetch_matches(supabase, club_id, match_limit)
+            if matches_schema_degraded:
+                schema_degraded = True
+                schema_degraded_reason = matches_schema_degraded_reason
 
             # Metadata
             meta_resp = (
@@ -223,10 +259,22 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 )
 
             # Player badges (club-scoped)
-            df_player_badges, schema_degraded, schema_degraded_reason = _fetch_player_badges(
+            (
+                df_player_badges,
+                badges_schema_degraded,
+                badges_schema_degraded_reason,
+            ) = _fetch_player_badges(
                 supabase,
                 club_id,
             )
+            if badges_schema_degraded:
+                schema_degraded = True
+                if schema_degraded_reason and badges_schema_degraded_reason:
+                    schema_degraded_reason = (
+                        f"{schema_degraded_reason} Also: {badges_schema_degraded_reason}"
+                    )
+                elif badges_schema_degraded_reason:
+                    schema_degraded_reason = badges_schema_degraded_reason
 
             # Mappings
             if (
