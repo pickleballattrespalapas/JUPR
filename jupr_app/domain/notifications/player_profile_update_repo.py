@@ -72,6 +72,10 @@ def _week_window_for_day(day: date) -> tuple[date, date]:
     return week_start, week_end
 
 
+def _digest_window_for_match_day(day: date) -> tuple[date, date]:
+    return day, day
+
+
 def normalize_email(email: str) -> str:
     return str(email or "").strip().lower()
 
@@ -506,16 +510,16 @@ def queue_player_updates_for_affected_subscribers(
     if not unique_player_ids:
         return summary
 
-    week_windows: set[tuple[date, date]] = set()
+    digest_windows: set[tuple[date, date]] = set()
     for raw_date in match_dates or []:
         parsed = _coerce_date(raw_date)
         if parsed is None:
             continue
-        week_windows.add(_week_window_for_day(parsed))
-    if not week_windows:
-        week_windows.add(_week_window_for_day(datetime.now(timezone.utc).date()))
+        digest_windows.add(_digest_window_for_match_day(parsed))
+    if not digest_windows:
+        digest_windows.add(_digest_window_for_match_day(datetime.now(timezone.utc).date()))
 
-    summary["week_windows"] = len(week_windows)
+    summary["week_windows"] = len(digest_windows)
 
     active_subs = list_active_subscriptions(supabase, club_id, limit=max(500, len(unique_player_ids) * 5))
     active_by_player: dict[int, dict[str, Any]] = {}
@@ -538,9 +542,9 @@ def queue_player_updates_for_affected_subscribers(
         subscription_id = str(subscription.get("id") or "").strip()
         email = str(subscription.get("email") or "").strip()
         if not subscription_id or not email:
-            summary["failed"] += len(week_windows)
+            summary["failed"] += len(digest_windows)
             continue
-        for week_start, week_end in sorted(week_windows):
+        for week_start, week_end in sorted(digest_windows):
             try:
                 create_outbox_row(
                     supabase,
@@ -558,6 +562,27 @@ def queue_player_updates_for_affected_subscribers(
                     continue
                 summary["failed"] += 1
     return summary
+
+
+def delete_pending_outbox_row(
+    supabase,
+    club_id: str,
+    outbox_id: str,
+) -> dict[str, Any]:
+    club_id = _require_nonempty(club_id, "club_id")
+    outbox_id = _require_nonempty(outbox_id, "outbox_id")
+
+    deleted = _safe_data(
+        supabase.table("player_profile_update_outbox")
+        .delete()
+        .eq("club_id", club_id)
+        .eq("id", outbox_id)
+        .eq("send_status", SEND_STATUS_PENDING)
+        .execute()
+    )
+    if not deleted:
+        raise ValueError("Only pending queued digests can be deleted.")
+    return deleted[0]
 
 
 def list_outbox_rows(

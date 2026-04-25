@@ -8,6 +8,7 @@ import pandas as pd
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_ACTIVE,
+    delete_pending_outbox_row,
     queue_player_updates_for_affected_subscribers,
 )
 
@@ -35,6 +36,10 @@ class _Query:
     def update(self, payload):
         self._op = "update"
         self._payload = payload
+        return self
+
+    def delete(self):
+        self._op = "delete"
         return self
 
     def eq(self, col, val):
@@ -125,6 +130,13 @@ class _Supabase:
                 row.update(q._payload)
             return SimpleNamespace(data=data)
 
+        if q._op == "delete":
+            deleted = [dict(row) for row in data]
+            for row in data:
+                if row in rows:
+                    rows.remove(row)
+            return SimpleNamespace(data=deleted)
+
         return SimpleNamespace(data=[])
 
 
@@ -139,7 +151,7 @@ def _players_df():
     )
 
 
-def test_queue_helper_queues_per_subscribed_player_per_week_window():
+def test_queue_helper_queues_per_subscribed_player_per_digest_date_window():
     sb = _Supabase()
     sb.tables["player_profile_update_subscriptions"] = [
         {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE},
@@ -155,12 +167,18 @@ def test_queue_helper_queues_per_subscribed_player_per_week_window():
 
     assert summary["affected_players"] == 3
     assert summary["active_subscriptions"] == 2
-    assert summary["week_windows"] == 2
-    assert summary["queued"] == 4
+    assert summary["week_windows"] == 3
+    assert summary["queued"] == 6
     assert summary["already_queued"] == 0
     assert summary["no_active_subscription"] == 1
     assert summary["failed"] == 0
-    assert len(sb.tables["player_profile_update_outbox"]) == 4
+    assert len(sb.tables["player_profile_update_outbox"]) == 6
+    windows = {(row["week_start"], row["week_end"]) for row in sb.tables["player_profile_update_outbox"]}
+    assert windows == {
+        ("2026-02-10", "2026-02-10"),
+        ("2026-02-11", "2026-02-11"),
+        ("2026-02-17", "2026-02-17"),
+    }
 
 
 def test_queue_helper_counts_duplicate_outbox_rows_as_already_queued():
@@ -174,8 +192,8 @@ def test_queue_helper_counts_duplicate_outbox_rows_as_already_queued():
             "subscription_id": "sub-1",
             "club_id": "club",
             "player_id": 1,
-            "week_start": "2026-02-09",
-            "week_end": "2026-02-15",
+            "week_start": "2026-02-10",
+            "week_end": "2026-02-10",
             "email": "a@example.com",
             "send_status": "pending",
         }
@@ -260,3 +278,42 @@ def test_process_matches_skips_queue_when_no_matches_inserted(monkeypatch):
     assert result["inserted"] == 0
     assert calls["count"] == 0
     assert result["player_update_queue"]["mode"] == "skipped"
+
+
+def test_queue_helper_queues_multiple_distinct_match_dates():
+    sb = _Supabase()
+    sb.tables["player_profile_update_subscriptions"] = [
+        {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE},
+    ]
+
+    summary = queue_player_updates_for_affected_subscribers(
+        sb,
+        club_id="club",
+        affected_player_ids=[1],
+        match_dates=[date(2026, 4, 24), date(2026, 4, 25)],
+    )
+
+    assert summary["queued"] == 2
+    windows = {(row["week_start"], row["week_end"]) for row in sb.tables["player_profile_update_outbox"]}
+    assert windows == {
+        ("2026-04-24", "2026-04-24"),
+        ("2026-04-25", "2026-04-25"),
+    }
+
+
+def test_delete_pending_outbox_row_allows_pending_and_blocks_sent():
+    sb = _Supabase()
+    sb.tables["player_profile_update_outbox"] = [
+        {"id": "o1", "club_id": "club", "send_status": "pending"},
+        {"id": "o2", "club_id": "club", "send_status": "sent"},
+    ]
+
+    deleted = delete_pending_outbox_row(sb, "club", "o1")
+    assert deleted["id"] == "o1"
+    assert [row["id"] for row in sb.tables["player_profile_update_outbox"]] == ["o2"]
+
+    try:
+        delete_pending_outbox_row(sb, "club", "o2")
+        assert False, "Expected sent rows to be protected"
+    except ValueError as exc:
+        assert "Only pending queued digests can be deleted." in str(exc)

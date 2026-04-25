@@ -501,9 +501,17 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     start_date, end_date = normalize_date_range(start_date, end_date)
     supabase = getattr(ctx, "supabase", None)
     club_id = str(getattr(ctx, "club_id", "") or "")
+    start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
 
     overall_series = build_player_overall_rating_series(supabase, club_id, int(player_id), limit=1200)
     window_series = filter_rating_series_for_window(overall_series, start_date, end_date, tz_name=tz_name).copy()
+    if not window_series.empty:
+        window_series["Date"] = pd.to_datetime(window_series.get("Date"), utc=True, errors="coerce")
+        window_series = window_series[
+            window_series["Date"].notna()
+            & (window_series["Date"] >= pd.Timestamp(start_dt_utc))
+            & (window_series["Date"] <= pd.Timestamp(end_dt_utc))
+        ].copy()
     if not window_series.empty:
         window_series["player_id"] = int(player_id)
 
@@ -552,7 +560,6 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         "record": f"{wins}-{losses}",
     }
 
-    start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
     points = []
     if before is not None and not window_series.empty:
         points.append(
@@ -609,6 +616,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     )
     notable_results = _build_notable_results(window_series)
     matches_played_rows: list[dict] = []
+    single_day_window = start_date == end_date
     for _, row in window_series.sort_values(["Date", "id"], ascending=[False, False]).iterrows():
         player_on_t1 = _is_player_on_t1(row, int(player_id))
         if player_on_t1 is None:
@@ -628,9 +636,11 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
         date_text = _format_display_date(played_at) if pd.notna(played_at) else "Unknown date"
         partners = " / ".join(_player_name(ctx, int(pid)) for pid in partner_ids) if partner_ids else "No partner listed"
         opponents = " / ".join(_player_name(ctx, int(pid)) for pid in opponent_ids) if opponent_ids else "Unknown opponents"
-        summary_line = f"{date_text} — with {partners} vs {opponents} — {result_short}"
-        if score:
-            summary_line = f"{summary_line} {score}"
+        result_score = f"{result_short} {score}" if score else f"{result_short}"
+        if single_day_window:
+            summary_line = f"{result_score} — with {partners} vs {opponents}"
+        else:
+            summary_line = f"{result_score} — {date_text} — with {partners} vs {opponents}"
         matches_played_rows.append(
             {
                 "date": played_at.isoformat() if pd.notna(played_at) else None,
@@ -639,6 +649,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
                 "opponents": opponents,
                 "result": result_short,
                 "score": score,
+                "result_score": result_score,
                 "summary": summary_line,
             }
         )
