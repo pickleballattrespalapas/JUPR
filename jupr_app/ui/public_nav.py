@@ -86,7 +86,7 @@ def render_public_top_nav(
     st.markdown(
         f"""
         <div class="jupr-public-shell">
-          <header class="jupr-public-nav">
+          <div class="jupr-public-nav" role="navigation" aria-label="Public site navigation">
             <a class="jupr-public-brand" href="./">
               <span>JUPR</span>
               <small>Tres Palapas Rating System</small>
@@ -95,7 +95,7 @@ def render_public_top_nav(
               {nav_links_html}
             </nav>
             <a class="jupr-public-admin-action" href="{admin_href}">Admin Login</a>
-          </header>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
