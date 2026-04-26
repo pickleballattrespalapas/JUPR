@@ -28,8 +28,9 @@ def test_existing_public_pages_remain_in_shared_public_nav():
     assert public_labels == [
         "Home",
         "🏆 Leaderboards",
-        "📝 Tournament Registration",
         "🔍 Player Search",
+        "📝 Tournament Registration",
+        "Rating Rules",
         "🗞️ Weekly Recap",
         "❓ FAQs",
     ]
