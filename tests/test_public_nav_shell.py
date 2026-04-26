@@ -9,8 +9,14 @@ def test_public_nav_uses_same_tab_routing_buttons():
     assert "navigate_same_tab(" in contents
     assert 'source="public_header:home"' in contents
     assert '"leaderboards": "public_header:leaderboards"' in contents
+    assert '"league_results": "public_header:league_results"' in contents
+    assert '"match_explorer": "public_header:match_explorer"' in contents
+    assert '"badge_codex": "public_header:badge_codex"' in contents
+    assert '"challenge_ladder": "public_header:challenge_ladder"' in contents
+    assert '"jupr_live": "public_header:jupr_live"' in contents
     assert '"players": "public_header:players"' in contents
     assert '"tournament_registration": "public_header:tournament_registration"' in contents
+    assert '"tournament_partner_board": "public_header:tournament_partner_board"' in contents
     assert '"rating_rules": "public_header:rating_rules"' in contents
     assert '"weekly_recap": "public_header:weekly_recap"' in contents
     assert '"faqs": "public_header:faqs"' in contents
