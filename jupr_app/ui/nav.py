@@ -42,5 +42,4 @@ def navigate_to_player_profile(
         params={k: v for k, v in next_params.items() if k != "page"},
         public_mode=public_mode,
         clear_existing=True,
-        source_label="navigate_to_player_profile",
     )

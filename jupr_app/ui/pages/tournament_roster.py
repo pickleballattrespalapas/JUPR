@@ -155,12 +155,7 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
             slug = _safe_text(settings.get("registration_slug"))
             if slug:
                 nav_params["tournament"] = slug
-            navigate_same_tab(
-                page="tournament_registration",
-                params=nav_params,
-                public_mode=True,
-                source_label="tournament_roster:register",
-            )
+            navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
 
     summary = state.get("summary") or {}
     registrations = state.get("registrations_by_event") or []

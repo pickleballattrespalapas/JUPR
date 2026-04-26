@@ -160,8 +160,4 @@ def render(ctx):
         clear_local_admin_auth_state()
         st.success("Password updated successfully. Return to login and sign in with your new password.")
         if st.button("Return to login"):
-            navigate_same_tab(
-                page="admin_login",
-                public_mode=False,
-                source_label="reset_password:return_to_login",
-            )
+            navigate_same_tab(page="admin_login", public_mode=False)

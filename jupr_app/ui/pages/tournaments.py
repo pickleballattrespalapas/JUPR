@@ -192,14 +192,12 @@ def render(ctx):
             page="tournament_registration",
             params=tournament_nav_params,
             public_mode=True,
-            source_label="tournaments:public_registration",
         )
     if launch[4].button("🤝 Partner Board"):
         navigate_same_tab(
             page="tournament_partner_board",
             params=tournament_nav_params,
             public_mode=True,
-            source_label="tournaments:partner_board",
         )
 
     st.markdown("#### Admin Actions")

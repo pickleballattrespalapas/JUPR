@@ -789,12 +789,7 @@ def render(ctx):
             slug = _safe_text(settings.get("registration_slug"))
             if slug:
                 nav_params["tournament"] = slug
-            navigate_same_tab(
-                page="tournament_roster",
-                params=nav_params,
-                public_mode=True,
-                source_label="tournament_registration:view_roster_header",
-            )
+            navigate_same_tab(page="tournament_roster", params=nav_params, public_mode=True)
 
     if admin_mode:
         roster_tab, add_tab, links_tab = st.tabs(["Registration Roster", "Add Registration", "Public Form Preview / Links"])
@@ -849,23 +844,13 @@ def render(ctx):
                 slug = _safe_text(settings.get("registration_slug"))
                 if slug:
                     nav_params["tournament"] = slug
-                navigate_same_tab(
-                    page="tournament_registration",
-                    params=nav_params,
-                    public_mode=True,
-                    source_label="tournament_registration:open_public_registration",
-                )
+                navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
             if st.button("Open Public Roster", key=f"open_public_roster_{tournament.get('id')}"):
                 nav_params = {"tournament_id": str(tournament.get("id"))}
                 slug = _safe_text(settings.get("registration_slug"))
                 if slug:
                     nav_params["tournament"] = slug
-                navigate_same_tab(
-                    page="tournament_roster",
-                    params=nav_params,
-                    public_mode=True,
-                    source_label="tournament_registration:open_public_roster",
-                )
+                navigate_same_tab(page="tournament_roster", params=nav_params, public_mode=True)
         return
 
     if settings.get("sponsor_markdown"):
@@ -1507,12 +1492,7 @@ def render(ctx):
                     slug = _safe_text(settings.get("registration_slug"))
                     if slug:
                         nav_params["tournament"] = slug
-                    navigate_same_tab(
-                        page="tournament_roster",
-                        params=nav_params,
-                        public_mode=True,
-                        source_label="tournament_registration:view_roster_post_save",
-                    )
+                    navigate_same_tab(page="tournament_roster", params=nav_params, public_mode=True)
                 wizard["current_step"] = 1
                 wizard["step3"] = {"selected_event_ids": []}
                 wizard["step4"] = {"partner_details": {}}

@@ -1,13 +1,10 @@
 # jupr_app/ui/public_links.py
 from __future__ import annotations
 
-import logging
 import urllib.parse
 from collections.abc import Mapping
 
 import streamlit as st
-
-logger = logging.getLogger(__name__)
 
 
 def get_base_url() -> str:
@@ -72,19 +69,8 @@ def navigate_same_tab(
     params: dict[str, str] | None = None,
     public_mode: bool = True,
     clear_existing: bool = True,
-    source_label: str = "unknown",
 ) -> None:
     next_params = build_route_params(page=page, params=params, public_mode=public_mode)
-    admin_mode = not bool(public_mode)
-    logger.info(
-        "same_tab_navigation source=%s page=%s params=%s public_mode=%s admin_mode=%s clear_existing=%s",
-        source_label,
-        str(page).strip(),
-        {k: v for k, v in next_params.items() if k != "page"},
-        bool(public_mode),
-        admin_mode,
-        bool(clear_existing),
-    )
     if clear_existing:
         st.query_params.clear()
     st.query_params.update(next_params)
@@ -98,28 +84,9 @@ def public_nav_button(
     key: str | None = None,
     use_container_width: bool = False,
 ) -> bool:
-    logger.info(
-        "public_nav_button_rendered source=%s label=%s page=%s params=%s",
-        "public_nav_button",
-        label,
-        page,
-        params or {},
-    )
     clicked = st.button(label, key=key, use_container_width=use_container_width)
     if clicked:
-        logger.info(
-            "public_nav_button_clicked source=%s label=%s page=%s params=%s",
-            "public_nav_button",
-            label,
-            page,
-            params or {},
-        )
-        navigate_same_tab(
-            page=page,
-            params=params,
-            public_mode=True,
-            source_label=f"public_nav_button:{label}",
-        )
+        navigate_same_tab(page=page, params=params, public_mode=True)
     return clicked
 
 
@@ -148,12 +115,6 @@ def public_link_button(
     use_container_width: bool = False,
 ) -> None:
     """Backward compatible helper: same-app URLs navigate in-tab; external URLs use link_button."""
-    logger.info(
-        "public_link_button_called source=%s label=%s url=%s",
-        "public_link_button",
-        label,
-        url,
-    )
     route_params = _same_app_query_params_from_url(url)
     if route_params and route_params.get("page"):
         clicked = st.button(label, key=key, use_container_width=use_container_width)
@@ -167,7 +128,6 @@ def public_link_button(
                 params=nav_params,
                 public_mode=public_mode,
                 clear_existing=True,
-                source_label=f"public_link_button:{label}",
             )
         return
     external_link_button(label, url, use_container_width=use_container_width)

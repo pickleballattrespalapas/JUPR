@@ -2096,19 +2096,9 @@ def render(ctx):
         if slug:
             nav_params["tournament"] = slug
         if st.button("Public registration form"):
-            navigate_same_tab(
-                page="tournament_registration",
-                params=nav_params,
-                public_mode=True,
-                source_label="tournament_manager:public_registration",
-            )
+            navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
         if st.button("Public partner board"):
-            navigate_same_tab(
-                page="tournament_partner_board",
-                params=nav_params,
-                public_mode=True,
-                source_label="tournament_manager:partner_board",
-            )
+            navigate_same_tab(page="tournament_partner_board", params=nav_params, public_mode=True)
         st.caption("Publish registration changes before sharing links when days, events, or divisions have changed.")
 
         validation_errors = _validate_builder(days_df, events_df, divisions_df)

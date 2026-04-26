@@ -142,7 +142,6 @@ def render(ctx):
                 page="weekly_recap",
                 params={"print": "1"},
                 public_mode=True,
-                source_label="weekly_recap:print_view",
             )
         pdf_bytes = _build_recap_pdf(
             recap,
