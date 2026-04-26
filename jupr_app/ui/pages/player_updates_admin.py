@@ -346,20 +346,45 @@ def render(ctx) -> None:
         active_rows = list_active_subscriptions(supabase, club_id, limit=500)
         st.markdown("#### Generate for all subscribed players")
         st.caption("Generating digests here also queues them automatically for the Send Queue page.")
-        if st.button("Generate + Queue for All Subscribed Players", disabled=not active_rows, use_container_width=True):
+        only_players_with_matches = st.checkbox(
+            "Only generate for players with matches during selected dates",
+            value=True,
+            key="player_updates_only_players_with_matches",
+            help="Recommended. This prevents creating queued emails for players who did not play during this date window.",
+        )
+        bulk_button_text = (
+            "Generate + Queue for Active Players With Matches"
+            if only_players_with_matches
+            else "Generate + Queue for All Subscribed Players"
+        )
+        if st.button(bulk_button_text, disabled=not active_rows, use_container_width=True):
             try:
                 result = generate_and_queue_digests_for_active_subscriptions(
                     ctx,
                     start_date=start_date,
                     end_date=end_date,
+                    only_players_with_matches=only_players_with_matches,
                 )
-                st.success(
-                    "Bulk generation complete: "
-                    f"active={result['active_subscriptions']} · "
-                    f"saved={result['saved']} · "
-                    f"queued={result['queued']} · "
-                    f"failed={result['failed']}"
-                )
+                if only_players_with_matches:
+                    st.success(
+                        "Bulk generation complete: "
+                        f"active={result['active_subscriptions']} · "
+                        f"players with matches={result['players_with_matches']} · "
+                        f"eligible={result['eligible_subscriptions']} · "
+                        f"saved={result['saved']} · "
+                        f"queued={result['queued']} · "
+                        f"skipped no matches={result['skipped_no_matches']} · "
+                        f"failed={result['failed']}"
+                    )
+                else:
+                    st.success(
+                        "Bulk generation complete: "
+                        f"active={result['active_subscriptions']} · "
+                        f"eligible={result['eligible_subscriptions']} · "
+                        f"saved={result['saved']} · "
+                        f"queued={result['queued']} · "
+                        f"failed={result['failed']}"
+                    )
             except Exception as exc:
                 st.error(f"Bulk digest generation failed: {_friendly_error(exc)}")
 
