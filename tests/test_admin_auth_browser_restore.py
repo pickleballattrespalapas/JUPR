@@ -20,6 +20,24 @@ class _FakeSt:
         self.query_params = _FakeQueryParams()
 
 
+class _FakeNow:
+    def __init__(self, iso: str):
+        self._iso = iso
+
+    def isoformat(self) -> str:
+        return self._iso
+
+
+class _FakeDatetime:
+    values: list[str] = []
+
+    @classmethod
+    def now(cls, _tz=None):
+        if cls.values:
+            return _FakeNow(cls.values.pop(0))
+        return _FakeNow("2026-01-01T00:00:00+00:00")
+
+
 class _InvalidRefreshAuth:
     def set_session(self, *_args, **_kwargs):
         raise _FakeAuthApiError("Invalid Refresh Token: Already Used")
@@ -159,3 +177,66 @@ def test_append_auth_debug_event_keeps_only_latest_50(monkeypatch):
     assert len(events) == 50
     assert events[0]["event_type"] == "event_10"
     assert events[-1]["event_type"] == "event_59"
+
+
+def test_append_auth_debug_event_compresses_duplicate_event_with_repeat_count(monkeypatch):
+    fake_st = _FakeSt()
+    fake_st.query_params.update({"page": "admin_tools"})
+    _FakeDatetime.values = ["2026-01-01T00:00:00+00:00", "2026-01-01T00:00:05+00:00"]
+
+    monkeypatch.setattr(admin_auth, "st", fake_st)
+    monkeypatch.setattr(admin_auth, "datetime", _FakeDatetime)
+
+    admin_auth._append_auth_debug_event(
+        "restore_skipped_already_authenticated",
+        success=True,
+        reason="Existing admin user already present in this Streamlit session.",
+    )
+    admin_auth._append_auth_debug_event(
+        "restore_skipped_already_authenticated",
+        success=True,
+        reason="Existing admin user already present in this Streamlit session.",
+    )
+
+    events = fake_st.session_state.get("jupr_auth_debug_events", [])
+    assert len(events) == 1
+    event = events[0]
+    assert event["repeat_count"] == 2
+    assert event["timestamp"] == "2026-01-01T00:00:00+00:00"
+    assert event["last_seen_at"] == "2026-01-01T00:00:05+00:00"
+
+
+def test_append_auth_debug_event_keeps_non_duplicate_important_events(monkeypatch):
+    fake_st = _FakeSt()
+    monkeypatch.setattr(admin_auth, "st", fake_st)
+
+    admin_auth._append_auth_debug_event("restore_failed", success=False, reason="some failure")
+    admin_auth._append_auth_debug_event("restore_failed", success=False, reason="different failure")
+
+    events = fake_st.session_state.get("jupr_auth_debug_events", [])
+    assert len(events) == 2
+    assert events[0]["reason"] == "some failure"
+    assert events[1]["reason"] == "different failure"
+
+
+def test_append_auth_debug_event_bounded_retention_with_compressed_duplicates(monkeypatch):
+    fake_st = _FakeSt()
+    monkeypatch.setattr(admin_auth, "st", fake_st)
+
+    for idx in range(49):
+        admin_auth._append_auth_debug_event(f"event_{idx}", success=True, reason="")
+
+    for _ in range(10):
+        admin_auth._append_auth_debug_event(
+            "restore_skipped_already_authenticated",
+            success=True,
+            reason="Existing admin user already present in this Streamlit session.",
+        )
+
+    for idx in range(50, 70):
+        admin_auth._append_auth_debug_event(f"event_{idx}", success=True, reason="")
+
+    events = fake_st.session_state.get("jupr_auth_debug_events", [])
+    assert len(events) == 50
+    assert events[0]["event_type"] == "event_20"
+    assert events[-1]["event_type"] == "event_69"
