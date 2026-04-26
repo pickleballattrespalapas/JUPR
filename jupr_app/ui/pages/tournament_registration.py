@@ -8,15 +8,29 @@ import streamlit as st
 
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
 from jupr_app.domain.tournament_registration_repo import (
+    ADMIN_PAYMENT_STATUS_OPTIONS,
+    ADMIN_REGISTRATION_STATUS_OPTIONS,
+    PARTNER_MODE_OPTIONS,
     build_registration_state,
     build_public_urls,
+    cancel_registration,
+    create_admin_registration,
+    delete_registration,
     get_public_tournament_bundle,
+    get_registration_settings,
     is_day_enabled,
+    list_event_options as list_registration_event_options,
+    list_existing_tournaments,
     list_open_public_tournaments,
+    list_registration_admin_rows,
+    list_registration_days,
     public_event_option_visibility,
     registration_feature_available,
+    registration_is_imported_to_draw,
     registration_is_open,
     save_registration,
+    update_admin_registration,
+    update_admin_registration_selection,
 )
 from jupr_app.ui.layout import page_shell
 
@@ -519,11 +533,209 @@ def _init_wizard_state(tournament_id: Any) -> dict[str, Any]:
     return st.session_state[key]
 
 
+def _status_badge(value: Any) -> str:
+    text = _safe_text(value).lower()
+    return text.replace("_", " ").title() if text else "—"
+
+
+def _select_admin_tournament(ctx, supabase, *, page_key: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    club_id = _safe_text(getattr(ctx, "club_id", ""))
+    tournaments = list_existing_tournaments(supabase, club_id, include_archived=False)
+    if not tournaments:
+        st.info("No tournaments available.")
+        return None, None, [], []
+
+    qp_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+    qp_slug = _safe_text(st.query_params.get("tournament"))
+    selected_index = 0
+    if qp_tournament_id:
+        for idx, row in enumerate(tournaments):
+            if str(row.get("id")) == qp_tournament_id:
+                selected_index = idx
+                break
+    elif qp_slug:
+        for idx, row in enumerate(tournaments):
+            row_settings = get_registration_settings(supabase, str(row.get("id")), tournament_name=_safe_text(row.get("name")))
+            if _safe_text(row_settings.get("registration_slug")) == qp_slug:
+                selected_index = idx
+                break
+
+    labels = [f"{_safe_text(row.get('name'))} ({_safe_text(row.get('status') or 'DRAFT')})" for row in tournaments]
+    selected_label = st.selectbox("Choose a tournament", labels, index=selected_index)
+    tournament = tournaments[labels.index(selected_label)]
+    tournament_id = str(tournament.get("id"))
+
+    settings = get_registration_settings(supabase, tournament_id, tournament_name=_safe_text(tournament.get("name")))
+    days = list_registration_days(supabase, tournament_id)
+    event_options = list_registration_event_options(supabase, tournament_id)
+
+    if (
+        _safe_text(st.query_params.get("page")) != page_key
+        or _safe_text(st.query_params.get("tournament_id")) != tournament_id
+        or _safe_text(st.query_params.get("tournament")) != _safe_text(settings.get("registration_slug"))
+    ):
+        st.query_params["page"] = page_key
+        st.query_params["tournament_id"] = tournament_id
+        slug = _safe_text(settings.get("registration_slug"))
+        if slug:
+            st.query_params["tournament"] = slug
+        st.rerun()
+
+    return tournament, settings, days, event_options
+
+
+def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], days: list[dict[str, Any]], event_options: list[dict[str, Any]]) -> None:
+    tournament_id = str(tournament.get("id"))
+    admin_rows = list_registration_admin_rows(supabase, tournament_id)
+    day_lookup = {str(row.get("id")): row for row in days}
+    event_lookup = {str(row.get("id")): row for row in event_options}
+
+    registration_forms = len({str(row.get("registration_id")) for row in admin_rows if _safe_text(row.get("registration_id"))})
+    pending = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "pending"]
+    confirmed = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "confirmed"]
+    needs_partner = [row for row in admin_rows if _safe_text((row.get("selection") or {}).get("partner_mode")).upper() == "NEEDS_PARTNER"]
+    paid = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("payment_status")).lower() == "paid"]
+    unpaid = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("payment_status")).lower() == "unpaid"]
+
+    metrics = st.columns(7)
+    for idx, (label, value) in enumerate([
+        ("Registration Forms", registration_forms),
+        ("Event Entries", len(admin_rows)),
+        ("Confirmed Entries", len(confirmed)),
+        ("Pending Entries", len(pending)),
+        ("Needs Partner", len(needs_partner)),
+        ("Paid", len(paid)),
+        ("Unpaid", len(unpaid)),
+    ]):
+        metrics[idx].metric(label, value)
+
+    filters = st.columns(5)
+    status_filter = filters[0].selectbox("Status", ["All"] + ADMIN_REGISTRATION_STATUS_OPTIONS, key=f"reg_status_filter_{tournament_id}")
+    payment_filter = filters[1].selectbox("Payment", ["All"] + ADMIN_PAYMENT_STATUS_OPTIONS, key=f"reg_payment_filter_{tournament_id}")
+    partner_filter = filters[2].selectbox("Partner", ["All", "HAS_PARTNER", "NEEDS_PARTNER", "NONE"], key=f"reg_partner_filter_{tournament_id}")
+    day_filter = filters[3].selectbox("Day", ["All"] + [str(day.get("id")) for day in days], format_func=lambda did: "All" if did == "All" else _safe_text((day_lookup.get(did) or {}).get("label") or did), key=f"reg_day_filter_{tournament_id}")
+    search = filters[4].text_input("Search", key=f"reg_search_{tournament_id}")
+
+    filtered_rows: list[dict[str, Any]] = []
+    for row in admin_rows:
+        reg = row.get("registration") or {}
+        sel = row.get("selection") or {}
+        if status_filter != "All" and _safe_text(reg.get("status")).lower() != status_filter:
+            continue
+        if payment_filter != "All" and _safe_text(reg.get("payment_status")).lower() != payment_filter:
+            continue
+        if partner_filter != "All" and _safe_text(sel.get("partner_mode")).upper() != partner_filter:
+            continue
+        if day_filter != "All" and _safe_text(sel.get("registration_day_id")) != day_filter:
+            continue
+        search_blob = " ".join([_safe_text(reg.get("display_name")), _safe_text(reg.get("email")), _safe_text(sel.get("partner_name"))]).lower()
+        if search and search.lower() not in search_blob:
+            continue
+        filtered_rows.append(row)
+
+    if not filtered_rows:
+        st.info("No matching registration entries.")
+
+    for row in filtered_rows:
+        reg = row.get("registration") or {}
+        sel = row.get("selection") or {}
+        event = row.get("event") or {}
+        day = row.get("day") or {}
+        reg_id = _safe_text(row.get("registration_id"))
+        sel_id = _safe_text(row.get("selection_id"))
+        imported = registration_is_imported_to_draw(supabase, tournament_id=tournament_id, selection_id=sel_id or None, registration_id=reg_id)
+
+        label = f"{_safe_text(reg.get('display_name') or reg.get('email'))} • {_safe_text(day.get('label'))} • {_safe_text(event.get('division_name') or event.get('label'))}"
+        with st.expander(label, expanded=False):
+            st.caption(f"Registrant: {_safe_text(reg.get('first_name'))} {_safe_text(reg.get('last_name'))} · {_safe_text(reg.get('email'))} · {_safe_text(reg.get('phone'))}")
+            st.caption(f"Partner: {_safe_text(sel.get('partner_name')) or '—'} · {_safe_text(sel.get('partner_email')) or '—'}")
+            st.caption(f"Status: {_status_badge(reg.get('status'))} · Payment: {_status_badge(reg.get('payment_status'))} · Partner mode: {_status_badge(sel.get('partner_mode'))}")
+            st.caption(f"Notes: {_safe_text(sel.get('partner_note')) or _safe_text(reg.get('notes')) or '—'}")
+            st.caption(f"Created: {_safe_text(reg.get('created_at')) or '—'} · Linked JUPR player: {_safe_text(reg.get('player_id')) or '—'}")
+            if imported:
+                st.warning("Imported into tournament_teams. Event edits and hard delete are blocked until removed from teams.")
+
+            quick_actions = st.columns(3)
+            if quick_actions[0].button("Quick Confirm", key=f"confirm_{sel_id}_{reg_id}"):
+                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={"status": "confirmed"})
+                st.rerun()
+            if quick_actions[1].button("Move to Waitlist", key=f"waitlist_{sel_id}_{reg_id}"):
+                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={"status": "waitlist"})
+                st.rerun()
+            if quick_actions[2].button("Cancel", key=f"cancel_{sel_id}_{reg_id}"):
+                cancel_registration(supabase, tournament_id=tournament_id, registration_id=reg_id)
+                st.rerun()
+
+            with st.form(f"edit_reg_{sel_id}_{reg_id}"):
+                c1, c2 = st.columns(2)
+                first_name = c1.text_input("First name", value=_safe_text(reg.get("first_name")))
+                last_name = c2.text_input("Last name", value=_safe_text(reg.get("last_name")))
+                display_name = st.text_input("Display name", value=_safe_text(reg.get("display_name")))
+                email = st.text_input("Email", value=_safe_text(reg.get("email")))
+                phone = st.text_input("Phone", value=_safe_text(reg.get("phone")))
+                reg_status = st.selectbox("Admin status", ADMIN_REGISTRATION_STATUS_OPTIONS, index=max(0, ADMIN_REGISTRATION_STATUS_OPTIONS.index(_safe_text(reg.get("status")).lower()) if _safe_text(reg.get("status")).lower() in ADMIN_REGISTRATION_STATUS_OPTIONS else 0))
+                reg_payment = st.selectbox("Payment status", ADMIN_PAYMENT_STATUS_OPTIONS, index=max(0, ADMIN_PAYMENT_STATUS_OPTIONS.index(_safe_text(reg.get("payment_status")).lower()) if _safe_text(reg.get("payment_status")).lower() in ADMIN_PAYMENT_STATUS_OPTIONS else 0))
+                day_ids = [str(day.get("id")) for day in days]
+                event_ids = [str(event_opt.get("id")) for event_opt in event_options]
+                day_id = st.selectbox("Day", day_ids, index=max(0, day_ids.index(_safe_text(sel.get("registration_day_id"))) if _safe_text(sel.get("registration_day_id")) in day_ids else 0), format_func=lambda did: _safe_text((day_lookup.get(did) or {}).get("label") or did))
+                event_id = st.selectbox("Division", event_ids, index=max(0, event_ids.index(_safe_text(sel.get("event_option_id"))) if _safe_text(sel.get("event_option_id")) in event_ids else 0), format_func=lambda eid: f"{_safe_text((event_lookup.get(eid) or {}).get('event_family_label'))} / {_safe_text((event_lookup.get(eid) or {}).get('division_name') or (event_lookup.get(eid) or {}).get('label'))}")
+                partner_mode = st.selectbox("Partner mode", PARTNER_MODE_OPTIONS, index=max(0, PARTNER_MODE_OPTIONS.index(_safe_text(sel.get("partner_mode")).upper()) if _safe_text(sel.get("partner_mode")).upper() in PARTNER_MODE_OPTIONS else 0))
+                partner_name = st.text_input("Partner name/details", value=_safe_text(sel.get("partner_name")))
+                partner_email = st.text_input("Partner email", value=_safe_text(sel.get("partner_email")))
+                partner_note = st.text_area("Public partner note", value=_safe_text(sel.get("partner_note")))
+                notes = st.text_area("Internal/admin notes", value=_safe_text(reg.get("notes")))
+                save = st.form_submit_button("Save Changes", use_container_width=True)
+            if save:
+                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "display_name": display_name,
+                    "email": email,
+                    "phone": phone,
+                    "status": reg_status,
+                    "payment_status": reg_payment,
+                    "notes": notes,
+                })
+                if sel_id and not imported:
+                    update_admin_registration_selection(supabase, tournament_id=tournament_id, selection_id=sel_id, payload={
+                        "registration_day_id": day_id,
+                        "event_option_id": event_id,
+                        "partner_mode": partner_mode,
+                        "partner_name": partner_name,
+                        "partner_email": partner_email,
+                        "partner_note": partner_note,
+                        "show_on_partner_board": bool(_safe_text(sel.get("show_on_partner_board")).lower() in {"true", "1", "yes"}),
+                    })
+                st.rerun()
+
+            with st.expander("Hard delete", expanded=False):
+                st.caption("Prefer Cancel for normal workflow. Hard delete is permanent.")
+                confirm = st.text_input("Type DELETE to hard delete", key=f"delete_confirm_{sel_id}_{reg_id}")
+                if st.button("Delete registration permanently", key=f"delete_btn_{sel_id}_{reg_id}"):
+                    if imported:
+                        st.error("Registration already imported into tournament_teams. Remove team/draw entries first.")
+                    elif confirm != "DELETE":
+                        st.error("Type DELETE exactly.")
+                    else:
+                        delete_registration(supabase, tournament_id=tournament_id, registration_id=reg_id)
+                        st.rerun()
+
+    st.markdown("#### Players Looking for Partners")
+    partner_rows = [row for row in filtered_rows if _safe_text((row.get("selection") or {}).get("partner_mode")).upper() == "NEEDS_PARTNER"]
+    if not partner_rows:
+        st.info("No players currently marked as NEEDS_PARTNER.")
+    else:
+        for row in partner_rows:
+            reg = row.get("registration") or {}
+            sel = row.get("selection") or {}
+            st.markdown(f"- **{_safe_text(reg.get('display_name'))}** ({_safe_text(reg.get('email'))}) — {_safe_text(sel.get('partner_note')) or 'No note'}")
+
+
 def render(ctx):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell(
         "📝 Tournament Registration",
-        "Register inside JUPR without spreadsheets. Choose your day, event, and division, then tell the organizer whether you already have a partner or need one.",
+        "Manage registration forms, player entries, approvals, partner needs, and public registration links.",
         mode_label=mode_label,
     )
 
@@ -540,12 +752,13 @@ def render(ctx):
             st.caption(detail)
         st.stop()
 
+    admin_mode = bool(getattr(ctx, "admin_logged_in", False)) and not bool(getattr(ctx, "public_mode", False))
     qp_tournament_id = _safe_text(st.query_params.get("tournament_id"))
     qp_slug = _safe_text(st.query_params.get("tournament"))
-    tournament, settings, days, event_options = _select_public_tournament(
-        ctx,
-        supabase,
-        page_key="tournament_registration",
+    tournament, settings, days, event_options = (
+        _select_admin_tournament(ctx, supabase, page_key="tournament_registration")
+        if admin_mode
+        else _select_public_tournament(ctx, supabase, page_key="tournament_registration")
     )
     if not tournament:
         st.stop()
@@ -571,6 +784,58 @@ def render(ctx):
             st.caption(" • ".join(window_bits))
     with top_cols[1]:
         st.link_button("View Tournament Roster", public_urls["roster"])
+
+    if admin_mode:
+        roster_tab, add_tab, links_tab = st.tabs(["Registration Roster", "Add Registration", "Public Form Preview / Links"])
+        with roster_tab:
+            _render_registration_admin_roster(
+                supabase=supabase,
+                tournament=tournament,
+                days=days,
+                event_options=event_options,
+            )
+        with add_tab:
+            if not days or not event_options:
+                st.warning("Configure registration days and event divisions in Tournament Setup first.")
+            else:
+                day_lookup = {str(row.get("id")): row for row in days}
+                event_lookup = {str(row.get("id")): row for row in event_options}
+                with st.form(f"admin_add_registration_{tournament.get('id')}"):
+                    c1, c2 = st.columns(2)
+                    first_name = c1.text_input("First name")
+                    last_name = c2.text_input("Last name")
+                    display_name = st.text_input("Display name")
+                    email = st.text_input("Email")
+                    phone = st.text_input("Phone")
+                    status = st.selectbox("Admin status", ADMIN_REGISTRATION_STATUS_OPTIONS)
+                    payment_status = st.selectbox("Payment status", ADMIN_PAYMENT_STATUS_OPTIONS)
+                    day_id = st.selectbox("Day", [str(d.get("id")) for d in days], format_func=lambda did: _safe_text((day_lookup.get(did) or {}).get("label") or did))
+                    event_id = st.selectbox("Division", [str(e.get("id")) for e in event_options], format_func=lambda eid: f"{_safe_text((event_lookup.get(eid) or {}).get('event_family_label'))} / {_safe_text((event_lookup.get(eid) or {}).get('division_name') or (event_lookup.get(eid) or {}).get('label'))}")
+                    partner_mode = st.selectbox("Partner mode", PARTNER_MODE_OPTIONS)
+                    partner_name = st.text_input("Partner name")
+                    partner_email = st.text_input("Partner email")
+                    notes = st.text_area("Notes")
+                    save_add = st.form_submit_button("Save registration", use_container_width=True)
+                if save_add:
+                    create_admin_registration(supabase, tournament_id=str(tournament.get("id")), payload={
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "display_name": display_name or " ".join([first_name, last_name]).strip(),
+                        "email": email,
+                        "phone": phone,
+                        "status": status,
+                        "payment_status": payment_status,
+                        "notes": notes,
+                        "selections": [{"registration_day_id": day_id, "event_option_id": event_id, "partner_mode": partner_mode, "partner_name": partner_name, "partner_email": partner_email}],
+                    })
+                    st.success("Registration created.")
+                    st.rerun()
+        with links_tab:
+            st.code(public_urls["registration"])
+            st.code(public_urls["roster"])
+            st.link_button("Open Public Registration Form", public_urls["registration"])
+            st.link_button("Open Public Roster", public_urls["roster"])
+        return
 
     if settings.get("sponsor_markdown"):
         st.markdown(_safe_text(settings.get("sponsor_markdown")))
