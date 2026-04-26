@@ -570,7 +570,7 @@ def render(ctx):
                 window_bits.append(f"Closes: {_safe_text(settings.get('registration_close_at'))}")
             st.caption(" • ".join(window_bits))
     with top_cols[1]:
-        st.link_button("Partner board", public_urls["partner_board"])
+        st.link_button("View Tournament Roster", public_urls["roster"])
 
     if settings.get("sponsor_markdown"):
         st.markdown(_safe_text(settings.get("sponsor_markdown")))
@@ -1206,7 +1206,7 @@ def render(ctx):
                 st.success(
                     f"Registration saved. Confirmation record: {result.get('registration_id')}. Submitting again with the same email updates your registration. Final placement may still change after partner matching and waitlist review."
                 )
-                st.link_button("Open partner board", public_urls["partner_board"])
+                st.link_button("View Tournament Roster", public_urls["roster"])
                 wizard["current_step"] = 1
                 wizard["step3"] = {"selected_event_ids": []}
                 wizard["step4"] = {"partner_details": {}}

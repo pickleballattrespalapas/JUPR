@@ -1208,6 +1208,92 @@ def build_registration_state(supabase, tournament: dict[str, Any], settings: dic
     )
 
 
+def build_public_tournament_roster_state(
+    supabase,
+    tournament: dict[str, Any],
+    settings: dict[str, Any],
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    state = build_registration_state(supabase, tournament, settings, days, event_options)
+    event_lookup = {str(row.get("id")): row for row in (state.get("event_options") or [])}
+
+    status_map = {
+        "CONFIRMED": "Confirmed",
+        "WAITLIST": "Waitlist",
+        "REVIEW": "Pending Review",
+        "PARTNER_MISSING": "Pending Review",
+        "NEEDS_PARTNER": "Pending Review",
+    }
+
+    def _public_member(member: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "display_name": str(member.get("display_name") or "Player").strip(),
+            "skill": member.get("skill"),
+            "age": member.get("age"),
+            "age_bracket": member.get("age_bracket"),
+            "dupr_id": member.get("dupr_id"),
+        }
+
+    registrations_by_event: list[dict[str, Any]] = []
+    players_needing_partners: list[dict[str, Any]] = []
+    unique_players: set[str] = set()
+
+    for roster in state.get("event_rosters", []):
+        event_option_id = str(roster.get("event_option_id") or "")
+        event_option = event_lookup.get(event_option_id) or {}
+        event_rows: list[dict[str, Any]] = []
+
+        for entry in roster.get("entries", []):
+            members = [_public_member(member or {}) for member in (entry.get("members") or [])]
+            if not members:
+                continue
+            for member in members:
+                name_key = str(member.get("display_name") or "").strip().lower()
+                if name_key:
+                    unique_players.add(name_key)
+
+            status = str(entry.get("status") or "").upper()
+            event_row = {
+                "event_day_id": str(roster.get("event_day_id") or ""),
+                "event_day_label": str(roster.get("event_day_label") or "").strip(),
+                "event_family": str(event_option.get("event_family_label") or roster.get("event_label") or "Event").strip(),
+                "division": str(event_option.get("division_name") or roster.get("event_label") or "Division").strip(),
+                "event_label": str(roster.get("event_label") or "").strip(),
+                "status": status_map.get(status),
+                "members": members,
+            }
+            registrations_by_event.append(event_row)
+            event_rows.append(event_row)
+
+            if status == "NEEDS_PARTNER":
+                primary = members[0] if members else {}
+                players_needing_partners.append(
+                    {
+                        "player_name": primary.get("display_name"),
+                        "event_day_label": event_row["event_day_label"],
+                        "event_family": event_row["event_family"],
+                        "division": event_row["division"],
+                        "event_label": event_row["event_label"],
+                        "skill": primary.get("skill"),
+                        "age": primary.get("age"),
+                        "age_bracket": primary.get("age_bracket"),
+                        "note": str(entry.get("notes") or "").strip(),
+                    }
+                )
+
+    return {
+        "registrations_by_event": registrations_by_event,
+        "players_needing_partners": players_needing_partners,
+        "summary": {
+            "total_registrations": int(state.get("summary", {}).get("total_registrations") or 0),
+            "total_players": len(unique_players),
+            "players_needing_partners": len(players_needing_partners),
+            "waitlist": int(state.get("summary", {}).get("waitlist_entries") or 0),
+        },
+    }
+
+
 def build_public_urls(*, base_url: str, tournament_id: str, registration_slug: str | None = None) -> dict[str, str]:
     tournament_id = str(tournament_id)
     base_url = str(base_url or "").rstrip("/")
@@ -1215,6 +1301,7 @@ def build_public_urls(*, base_url: str, tournament_id: str, registration_slug: s
     board_q = reg_q
     return {
         "registration": f"{base_url}/?public=1&page=tournament_registration&{reg_q}",
+        "roster": f"{base_url}/?public=1&page=tournament_roster&{reg_q}",
         "partner_board": f"{base_url}/?public=1&page=tournament_partner_board&{board_q}",
         "admin_manager": f"{base_url}/?page=tournament_manager&tournament_id={tournament_id}",
         "admin_operations": f"{base_url}/?page=tournaments&tournament_id={tournament_id}",
