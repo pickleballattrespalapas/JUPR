@@ -8,6 +8,7 @@ import pandas as pd
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_ACTIVE,
+    bulk_delete_pending_outbox_rows,
     delete_pending_outbox_row,
     queue_player_updates_for_affected_subscribers,
 )
@@ -317,3 +318,37 @@ def test_delete_pending_outbox_row_allows_pending_and_blocks_sent():
         assert False, "Expected sent rows to be protected"
     except ValueError as exc:
         assert "Only pending queued digests can be deleted." in str(exc)
+
+
+def test_bulk_delete_pending_outbox_rows_only_deletes_pending_for_club():
+    sb = _Supabase()
+    sb.tables["player_profile_update_outbox"] = [
+        {"id": "o1", "club_id": "club", "send_status": "pending"},
+        {"id": "o2", "club_id": "club", "send_status": "sent"},
+        {"id": "o3", "club_id": "club", "send_status": "error"},
+        {"id": "o4", "club_id": "club", "send_status": "pending"},
+        {"id": "o5", "club_id": "other", "send_status": "pending"},
+    ]
+
+    result = bulk_delete_pending_outbox_rows(
+        sb,
+        club_id="club",
+        outbox_ids=["o1", "o2", "o3", "o4", "o5"],
+    )
+
+    assert result == {
+        "requested": 5,
+        "matched_pending": 2,
+        "deleted": 2,
+        "skipped": 3,
+    }
+    assert [row["id"] for row in sb.tables["player_profile_update_outbox"]] == ["o2", "o3", "o5"]
+
+
+def test_bulk_delete_pending_outbox_rows_requires_ids():
+    sb = _Supabase()
+    try:
+        bulk_delete_pending_outbox_rows(sb, club_id="club", outbox_ids=[])
+        assert False, "Expected empty outbox IDs to fail"
+    except ValueError as exc:
+        assert "At least one outbox_id is required" in str(exc)
