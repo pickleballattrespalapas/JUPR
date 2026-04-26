@@ -188,6 +188,7 @@ def render(ctx):
 
     divider()
     st.markdown("### Links and helper text")
+    # Intentional external-docs example: target='_blank' is only for off-app destinations.
     st.markdown(
         "Need help? Visit the "
         f"<a href='https://example.com' target='_blank'>{html.escape('support page')}</a>."
