@@ -13,6 +13,7 @@ from jupr_app.domain.tournament_registration_repo import (
     registration_feature_available,
 )
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.public_links import navigate_same_tab
 
 
 def _safe_text(value: Any) -> str:
@@ -149,7 +150,12 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
                 window_bits.append(f"Closes: {_safe_text(settings.get('registration_close_at'))}")
             st.caption(" • ".join(window_bits))
     with top_cols[1]:
-        st.link_button("Register", public_urls["registration"])
+        if st.button("Register", key=f"register_from_roster_{tournament.get('id')}"):
+            nav_params = {"tournament_id": str(tournament.get("id"))}
+            slug = _safe_text(settings.get("registration_slug"))
+            if slug:
+                nav_params["tournament"] = slug
+            navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
 
     summary = state.get("summary") or {}
     registrations = state.get("registrations_by_event") or []
@@ -234,4 +240,3 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
                         if skills:
                             details.append("Skill " + " / ".join(str(skill) for skill in skills))
                         st.markdown(f"- {names}" + (f" — {' • '.join(details)}" if details else ""))
-
