@@ -19,22 +19,80 @@ def _safe_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _pick_tournament(ctx, supabase):
+def _public_tournament_label(choice: dict[str, Any]) -> str:
+    tournament = choice.get("tournament") or {}
+    settings = choice.get("settings") or {}
+    name = _safe_text(tournament.get("name") or f"Tournament #{tournament.get('id')}")
+    start_date = _safe_text(tournament.get("start_date"))
+    slug = _safe_text(settings.get("registration_slug"))
+    details = " • ".join(part for part in [start_date, slug] if part)
+    return f"{name} ({details})" if details else name
+
+
+def _resolve_public_tournament_id(choices: list[dict[str, Any]], *, qp_tournament_id: str, qp_slug: str) -> str:
+    by_id = {str((row.get("tournament") or {}).get("id")): row for row in choices}
+    by_slug = {
+        _safe_text((row.get("settings") or {}).get("registration_slug")): row
+        for row in choices
+        if _safe_text((row.get("settings") or {}).get("registration_slug"))
+    }
+    if qp_tournament_id and qp_tournament_id in by_id:
+        return qp_tournament_id
+    if qp_slug and qp_slug in by_slug:
+        return str((by_slug[qp_slug].get("tournament") or {}).get("id"))
+    first = choices[0] if choices else {}
+    return str((first.get("tournament") or {}).get("id") or "")
+
+
+def _set_public_tournament_query_params(*, page_key: str, registration_slug: str | None) -> None:
+    st.query_params["page"] = page_key
+    if registration_slug:
+        st.query_params["tournament"] = registration_slug
+    else:
+        st.query_params.pop("tournament", None)
+    st.query_params.pop("tournament_id", None)
+
+
+def _select_public_tournament(ctx, supabase, *, page_key: str):
     club_id = _safe_text(getattr(ctx, "club_id", ""))
     choices = list_open_public_tournaments(supabase, club_id)
     if not choices:
         return None, None, [], []
-    labels = [f"{row['tournament'].get('name')}" for row in choices]
-    selected_label = st.selectbox("Choose a tournament", labels)
-    idx = labels.index(selected_label)
-    selected = choices[idx]
-    tournament = selected["tournament"]
-    settings = selected["settings"]
+
+    qp_tournament_id = _safe_text(st.query_params.get("tournament_id"))
+    qp_slug = _safe_text(st.query_params.get("tournament"))
+    selected_id = _resolve_public_tournament_id(choices, qp_tournament_id=qp_tournament_id, qp_slug=qp_slug)
+
+    by_id = {str((row.get("tournament") or {}).get("id")): row for row in choices}
+    selected_choice = by_id.get(selected_id) or choices[0]
+    selected_id = str((selected_choice.get("tournament") or {}).get("id") or "")
+
+    if len(choices) > 1:
+        selected_id = st.selectbox(
+            "Choose a tournament",
+            options=[str((row.get("tournament") or {}).get("id")) for row in choices],
+            index=max(0, [str((row.get("tournament") or {}).get("id")) for row in choices].index(selected_id)),
+            format_func=lambda tid: _public_tournament_label(by_id[tid]),
+        )
+        selected_choice = by_id[selected_id]
+
+    selected_settings = selected_choice.get("settings") or {}
+    selected_slug = _safe_text(selected_settings.get("registration_slug"))
+
+    should_update_qp = (
+        _safe_text(st.query_params.get("page")) != page_key
+        or _safe_text(st.query_params.get("tournament")) != selected_slug
+        or bool(_safe_text(st.query_params.get("tournament_id")))
+    )
+    if should_update_qp:
+        _set_public_tournament_query_params(page_key=page_key, registration_slug=selected_slug or None)
+        st.rerun()
+
     return get_public_tournament_bundle(
         supabase,
         club_id=club_id,
-        tournament_id=str(tournament.get("id")),
-        registration_slug=settings.get("registration_slug"),
+        tournament_id=selected_id or None,
+        registration_slug=selected_slug or None,
     )
 
 
@@ -61,17 +119,18 @@ def render(ctx):
 
     qp_tournament_id = _safe_text(st.query_params.get("tournament_id"))
     qp_slug = _safe_text(st.query_params.get("tournament"))
-    tournament, settings, days, event_options = get_public_tournament_bundle(
+    tournament, settings, days, event_options = _select_public_tournament(
+        ctx,
         supabase,
-        club_id=club_id,
-        tournament_id=qp_tournament_id or None,
-        registration_slug=qp_slug or None,
+        page_key="tournament_partner_board",
     )
     if not tournament:
-        tournament, settings, days, event_options = _pick_tournament(ctx, supabase)
-        if not tournament:
-            st.info("No open tournaments are currently using the partner board.")
-            st.stop()
+        st.info("No open tournaments are currently using the partner board.")
+        st.stop()
+    if qp_tournament_id and str(tournament.get("id")) != qp_tournament_id:
+        st.warning("The requested tournament_id is unavailable. Showing the selected open tournament instead.")
+    elif qp_slug and _safe_text(settings.get("registration_slug")) != qp_slug:
+        st.warning("The requested tournament link is unavailable. Showing the selected open tournament instead.")
 
     state = build_registration_state(supabase, tournament, settings, days, event_options)
     board = state.get("partner_board", [])
