@@ -12,6 +12,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     get_open_or_active_subscription,
 )
 from jupr_app.ui.helpers import qp_get
+from jupr_app.ui.components.player_picker import build_player_picker_df, render_player_picker
 from jupr_app.ui.layout import page_shell
 
 
@@ -39,38 +40,6 @@ def requested_player_id_from_query(*, player_id_q: str, pid_q: str) -> int | Non
     if fallback.isdigit():
         return int(fallback)
     return None
-
-
-def build_player_picker_df(df_players: pd.DataFrame) -> pd.DataFrame:
-    if df_players is None or df_players.empty or "id" not in df_players.columns:
-        return pd.DataFrame(columns=["id", "option_label", "sort_label"])
-
-    working = df_players.copy()
-    working = working[working["id"].notna()].copy()
-    if working.empty:
-        return pd.DataFrame(columns=["id", "option_label", "sort_label"])
-
-    working["id"] = pd.to_numeric(working["id"], errors="coerce")
-    working = working[working["id"].notna()].copy()
-    if working.empty:
-        return pd.DataFrame(columns=["id", "option_label", "sort_label"])
-
-    working["id"] = working["id"].astype(int)
-    if "display_name" in working.columns:
-        display = working["display_name"].fillna("").astype(str).str.strip()
-    else:
-        display = pd.Series([""] * len(working), index=working.index)
-    base_name = working.get("name", pd.Series([""] * len(working), index=working.index)).fillna("").astype(str).str.strip()
-    working["display_label"] = display.where(display != "", base_name).fillna("").astype(str).str.strip()
-    working["display_label"] = working["display_label"].where(working["display_label"] != "", working["id"].map(lambda x: f"Player #{x}"))
-    working["sort_label"] = working["display_label"].str.lower()
-    deduped = (
-        working.sort_values(["sort_label", "display_label", "id"])
-        .drop_duplicates(subset=["id"], keep="first")
-        .copy()
-    )
-    deduped["option_label"] = deduped["display_label"] + deduped["id"].map(lambda x: f"  (#{x})")
-    return deduped[["id", "option_label", "sort_label"]].sort_values(["sort_label", "id"]).reset_index(drop=True)
 
 
 def resolve_prefill_player_id(
@@ -105,7 +74,7 @@ def render(ctx) -> None:
     df_players_all = getattr(ctx, "df_players_all", None)
     df_players_active = getattr(ctx, "df_players_active", None)
     source_df = df_players_all if df_players_all is not None and not df_players_all.empty else df_players_active
-    options_df = build_player_picker_df(source_df if source_df is not None else pd.DataFrame())
+    options_df = build_player_picker_df(source_df if source_df is not None else pd.DataFrame(), include_inactive=True)
 
     if options_df.empty:
         st.info("No players found.")
@@ -121,19 +90,15 @@ def render(ctx) -> None:
     elif (player_id_q or pid_q) and prefill_player_id is None:
         st.caption("The requested player was not found. Please choose a player below.")
 
-    option_ids = options_df["id"].astype(int).tolist()
-    selected_index = 0
-    if prefill_player_id in set(option_ids):
-        selected_index = option_ids.index(int(prefill_player_id))
-    selected_player_id = st.selectbox(
-        "Player",
-        options=option_ids,
-        index=selected_index,
-        format_func=lambda pid: str(
-            options_df.loc[options_df["id"] == int(pid), "option_label"].iloc[0]
-        ),
+    selected_player_id = render_player_picker(
+        source_df if source_df is not None else pd.DataFrame(),
+        label="Search player",
         key="verified_updates_player_picker",
+        default_player_id=prefill_player_id,
+        include_inactive=True,
     )
+    if selected_player_id is None:
+        return
 
     open_or_active = get_open_or_active_subscription(
         ctx.supabase,

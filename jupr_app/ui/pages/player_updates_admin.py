@@ -24,6 +24,7 @@ from jupr_app.domain.notifications.player_update_sender import (
 )
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 from jupr_app.ui.components.player_digest_layout import render_player_digest
+from jupr_app.ui.components.player_picker import render_player_picker
 from jupr_app.ui.layout import page_shell
 
 
@@ -338,8 +339,6 @@ def render(ctx) -> None:
             return
 
         active_rows = list_active_subscriptions(supabase, club_id, limit=500)
-        labels, label_to_pid = _digest_player_options(ctx, active_rows)
-
         st.markdown("#### Generate for all subscribed players")
         st.caption("Generating digests here also queues them automatically for the Send Queue page.")
         if st.button("Generate + Queue for All Subscribed Players", disabled=not active_rows, use_container_width=True):
@@ -366,8 +365,23 @@ def render(ctx) -> None:
         st.divider()
         with st.expander("Single player options", expanded=False):
             st.caption("Use this only when you want to preview or regenerate one player manually.")
-            selected_label = st.selectbox("Player", options=labels, index=0 if labels else None)
-            selected_pid = label_to_pid.get(selected_label) if selected_label else None
+            active_player_ids = []
+            for row in active_rows:
+                try:
+                    active_player_ids.append(int(row.get("player_id")))
+                except Exception:
+                    continue
+            active_player_ids = sorted(set(active_player_ids))
+            active_df = getattr(ctx, "df_players_all", pd.DataFrame())
+            active_df = active_df.copy() if isinstance(active_df, pd.DataFrame) else pd.DataFrame()
+            if not active_df.empty and "id" in active_df.columns:
+                active_df = active_df[active_df["id"].astype(int).isin(active_player_ids)].copy()
+            selected_pid = render_player_picker(
+                active_df,
+                label="Search player",
+                key="player_updates_digest_single_player",
+                include_inactive=True,
+            )
 
             c1, c2 = st.columns(2)
             with c1:

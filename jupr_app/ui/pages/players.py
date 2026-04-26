@@ -18,6 +18,7 @@ from jupr_app.ui.helpers import (
     qp_get,
     display_requirement_text,
 )
+from jupr_app.ui.components.player_picker import render_player_picker
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.gamification.profile import (
     build_gamification_summary,
@@ -1410,33 +1411,26 @@ def render(ctx):
             st.session_state["player_search_id"] = int(hit.iloc[0]["id"])
         st.session_state["player_pid_sig_applied"] = pid_sig
 
-    players_df = players_df.sort_values("name").copy()
-    options = [""] + players_df["id"].tolist()
+    current_pick = st.session_state.get("player_search_id")
+    if current_pick is not None:
+        try:
+            current_pick = int(current_pick)
+        except Exception:
+            current_pick = None
 
-    def _fmt(x):
-        if x == "":
-            return ""
-        r = players_df[players_df["id"] == int(x)]
-        if r.empty:
-            return f"#{x}"
-        return f"{str(r.iloc[0]['name'])}  (#{int(x)})"
-
-    current_pick = st.session_state.get("player_search_id", "")
-    if current_pick not in options:
-        st.session_state["player_search_id"] = ""
-
-    pick_id = st.selectbox(
-        "Select a player",
-        options=options,
-        format_func=_fmt,
-        key="player_search_id",
+    pid = render_player_picker(
+        players_df,
+        label="Search player",
+        key="player_search",
+        default_player_id=current_pick,
+        include_inactive=False,
     )
 
-    if pick_id == "":
+    if pid is None:
         st.info("Select a player to view details.")
         return
 
-    pid = int(pick_id)
+    st.session_state["player_search_id"] = int(pid)
     if PUBLIC_MODE:
         try:
             st.query_params["pid"] = str(pid)
