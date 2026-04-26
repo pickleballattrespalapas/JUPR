@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -134,6 +134,58 @@ def _find_active_subscription_for_player(active_rows: list[dict[str, Any]], play
     return None
 
 
+def _coerce_match_day(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).date()
+    except Exception:
+        try:
+            return date.fromisoformat(text[:10])
+        except Exception:
+            return None
+
+
+def _coerce_optional_player_id(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except Exception:
+        return None
+
+
+def get_player_ids_with_matches_in_range(ctx, *, start_date: date, end_date: date) -> set[int]:
+    supabase = ctx.supabase
+    club_id = str(ctx.club_id)
+    query_end = end_date + timedelta(days=1)
+    rows = (
+        supabase.table("matches")
+        .select("date,t1_p1,t1_p2,t2_p1,t2_p2")
+        .eq("club_id", club_id)
+        .gte("date", start_date.isoformat())
+        .lte("date", query_end.isoformat())
+        .execute()
+    ).data or []
+
+    player_ids: set[int] = set()
+    for row in rows:
+        match_day = _coerce_match_day((row or {}).get("date"))
+        if match_day is None or match_day < start_date or match_day > end_date:
+            continue
+        for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            pid = _coerce_optional_player_id((row or {}).get(key))
+            if pid is not None:
+                player_ids.add(pid)
+    return player_ids
+
+
 def _save_digest_for_subscription(ctx, *, subscription: dict[str, Any], start_date: date, end_date: date) -> dict[str, Any]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
@@ -195,16 +247,36 @@ def generate_digests_for_active_subscriptions(ctx, *, start_date: date, end_date
     }
 
 
-def generate_and_queue_digests_for_active_subscriptions(ctx, *, start_date: date, end_date: date) -> dict[str, int]:
+def generate_and_queue_digests_for_active_subscriptions(
+    ctx,
+    *,
+    start_date: date,
+    end_date: date,
+    only_players_with_matches: bool = False,
+) -> dict[str, int]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
 
     active_rows = list_active_subscriptions(supabase, club_id, limit=2000)
+    player_ids_with_matches = (
+        get_player_ids_with_matches_in_range(ctx, start_date=start_date, end_date=end_date)
+        if only_players_with_matches
+        else set()
+    )
+    eligible_rows = (
+        [
+            row
+            for row in active_rows
+            if _coerce_optional_player_id(row.get("player_id")) in player_ids_with_matches
+        ]
+        if only_players_with_matches
+        else list(active_rows)
+    )
     saved = 0
     queued = 0
     failed = 0
 
-    for sub in active_rows:
+    for sub in eligible_rows:
         try:
             _save_digest_for_subscription(ctx, subscription=sub, start_date=start_date, end_date=end_date)
             saved += 1
@@ -215,8 +287,11 @@ def generate_and_queue_digests_for_active_subscriptions(ctx, *, start_date: date
 
     return {
         "active_subscriptions": len(active_rows),
+        "players_with_matches": len(player_ids_with_matches),
+        "eligible_subscriptions": len(eligible_rows),
         "saved": saved,
         "queued": queued,
+        "skipped_no_matches": max(0, len(active_rows) - len(eligible_rows)),
         "failed": failed,
     }
 
