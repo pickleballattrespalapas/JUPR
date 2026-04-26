@@ -3,10 +3,13 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 import streamlit as st
 import streamlit.components.v1 as components
 from supabase import create_client
+
+from jupr_app.ui.public_links import redact_query_params
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,8 @@ _BROWSER_SYNC_PAYLOAD_KEY = "_admin_browser_sync_payload"
 _BROWSER_CLEAR_PENDING_KEY = "_admin_browser_clear_pending"
 _BROWSER_RESTORE_INFLIGHT_SESSION_KEY = "jupr_admin_restore_inflight_at"
 _ADMIN_RESTORE_FAILED_THIS_RUN_KEY = "_admin_restore_failed_this_run"
+_AUTH_DEBUG_EVENTS_KEY = "jupr_auth_debug_events"
+_AUTH_DEBUG_EVENTS_MAX = 50
 
 
 class AdminAuthError(RuntimeError):
@@ -29,6 +34,54 @@ class AdminAuthError(RuntimeError):
 
 class AdminAuthConfigError(AdminAuthError):
     """Raised when required auth config is missing."""
+
+
+def _safe_route_snapshot() -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for key in st.query_params.keys():
+        value = st.query_params.get(key, "")
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        text_value = str(value or "").strip()
+        if text_value:
+            snapshot[str(key)] = text_value
+    return redact_query_params(snapshot)
+
+
+def _sanitize_debug_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    sensitive_terms = (
+        "access_token",
+        "refresh_token",
+        "password",
+        "auth code",
+        "auth_code",
+        "token hash",
+        "token_hash",
+        "supabase",
+        "anon_key",
+        "service_role",
+    )
+    if any(term in lowered for term in sensitive_terms):
+        return "[REDACTED]"
+    return text
+
+
+def _append_auth_debug_event(event_type: str, *, success: bool, reason: str = "") -> None:
+    events = list(st.session_state.get(_AUTH_DEBUG_EVENTS_KEY, []))
+    events.append(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": str(event_type or "").strip() or "unknown",
+            "success": bool(success),
+            "reason": _sanitize_debug_text(reason),
+            "route_query_params": _safe_route_snapshot(),
+        }
+    )
+    st.session_state[_AUTH_DEBUG_EVENTS_KEY] = events[-_AUTH_DEBUG_EVENTS_MAX:]
 
 
 def _get_secret(path: list[str], default=None):
@@ -434,6 +487,11 @@ def restore_admin_browser_session() -> dict[str, str] | None:
 def clear_admin_browser_session() -> None:
     st.session_state[_BROWSER_CLEAR_PENDING_KEY] = True
     st.session_state.pop(_BROWSER_SYNC_PAYLOAD_KEY, None)
+    _append_auth_debug_event(
+        "clear_browser_tokens_queued",
+        success=True,
+        reason="Queued browser token clear for logout/session cleanup.",
+    )
     logger.info("Browser token clear queued")
 
 
@@ -454,6 +512,11 @@ def render_admin_browser_session_clear_now() -> None:
     )
     st.session_state.pop(_BROWSER_SYNC_PAYLOAD_KEY, None)
     st.session_state.pop(_BROWSER_CLEAR_PENDING_KEY, None)
+    _append_auth_debug_event(
+        "clear_browser_tokens_now",
+        success=True,
+        reason="Cleared browser auth tokens immediately in current tab.",
+    )
     logger.info("Browser token clear rendered immediately")
 
 
@@ -465,17 +528,37 @@ def maybe_restore_admin_login_from_browser() -> bool:
     if existing_user is not None:
         existing_email = str(getattr(existing_user, "email", "") or "").strip().lower()
         logger.info("Browser restore skipped: user already present in session state")
+        _append_auth_debug_event(
+            "restore_skipped_already_authenticated",
+            success=True,
+            reason="Existing admin user already present in this Streamlit session.",
+        )
         return bool(
             existing_email and is_allowed_admin_email(existing_email, load_admin_allowlist())
         )
     if bool(st.session_state.get(_ADMIN_RESTORE_FAILED_THIS_RUN_KEY, False)):
         logger.info("Browser restore skipped: this run already recorded a restore failure")
+        _append_auth_debug_event(
+            "restore_skipped_after_failure",
+            success=False,
+            reason="Restore already failed earlier in this app run.",
+        )
         return False
 
     logger.info("Browser token restore attempt started")
+    _append_auth_debug_event(
+        "restore_attempt_started",
+        success=True,
+        reason="Attempting to restore admin auth from browser storage handshake.",
+    )
     stored_tokens = restore_admin_browser_session()
     if not stored_tokens:
         logger.info("Browser token restore skipped: no handshake tokens available yet")
+        _append_auth_debug_event(
+            "restore_skipped_no_handshake_tokens",
+            success=False,
+            reason="No restore handshake tokens available in query params yet.",
+        )
         return False
 
     try:
@@ -502,6 +585,11 @@ def maybe_restore_admin_login_from_browser() -> bool:
         ):
             clear_local_admin_auth_state()
             logger.info("Browser token restore failed: invalid session/user or disallowed email")
+            _append_auth_debug_event(
+                "restore_failed",
+                success=False,
+                reason="Invalid restore session/user or user not in admin allowlist.",
+            )
             return False
 
         st.session_state[_AUTH_USER_KEY] = user
@@ -512,9 +600,19 @@ def maybe_restore_admin_login_from_browser() -> bool:
             persist_admin_browser_session(access_token, refresh_token)
         st.session_state.pop(_ADMIN_RESTORE_FAILED_THIS_RUN_KEY, None)
         logger.info("Browser token restore succeeded")
+        _append_auth_debug_event(
+            "restore_succeeded",
+            success=True,
+            reason="Browser token restore completed for allowlisted admin user.",
+        )
         return True
     except Exception as exc:
         logger.warning("Browser token restore failed: %r", exc)
+        _append_auth_debug_event(
+            "restore_failed",
+            success=False,
+            reason=f"Exception during restore: {exc}",
+        )
         clear_local_admin_auth_state()
         render_admin_browser_session_clear_now()
         _clear_sensitive_query_params()
@@ -551,10 +649,17 @@ def login_admin(email: str, password: str) -> dict:
 
     st.session_state[_AUTH_USER_KEY] = user
     st.session_state[_AUTH_SESSION_KEY] = session
+    # A failed automatic restore should not remain visible after a successful manual login.
+    st.session_state.pop(_ADMIN_RESTORE_FAILED_THIS_RUN_KEY, None)
     access_token = str(getattr(session, "access_token", "") or "").strip()
     refresh_token = str(getattr(session, "refresh_token", "") or "").strip()
     if access_token and refresh_token:
         persist_admin_browser_session(access_token, refresh_token)
+    _append_auth_debug_event(
+        "login_succeeded",
+        success=True,
+        reason="Manual admin login succeeded.",
+    )
     return {"user": user, "session": session}
 
 
