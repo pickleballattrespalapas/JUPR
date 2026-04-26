@@ -294,6 +294,81 @@ def _build_scoped_league_standings(
     return standings
 
 
+def _build_current_standings_from_league_ratings(
+    df_leagues: pd.DataFrame | None,
+    df_players_all: pd.DataFrame | None,
+    df_players_active: pd.DataFrame | None,
+    league_name: str,
+    active_only: bool = True,
+) -> pd.DataFrame:
+    if df_leagues is None or df_leagues.empty:
+        return pd.DataFrame()
+
+    normalized_league = str(league_name or "").strip()
+    if not normalized_league:
+        return pd.DataFrame()
+
+    data = df_leagues.copy()
+    required = {"player_id", "league_name", "rating"}
+    if not required.issubset(set(data.columns)):
+        return pd.DataFrame()
+
+    data["league_name"] = data["league_name"].fillna("").astype(str).str.strip()
+    data = data[data["league_name"] == normalized_league].copy()
+    if data.empty:
+        return pd.DataFrame()
+
+    if df_players_all is not None and not df_players_all.empty and {"id", "name"}.issubset(set(df_players_all.columns)):
+        players = df_players_all[["id", "name"]].copy().rename(columns={"id": "player_id", "name": "player_name"})
+        data = data.merge(players, on="player_id", how="left")
+    else:
+        data["player_name"] = pd.NA
+
+    if active_only and df_players_active is not None and not df_players_active.empty and "id" in df_players_active.columns:
+        active_ids = set(pd.to_numeric(df_players_active["id"], errors="coerce").dropna().astype(int).tolist())
+        data = data[pd.to_numeric(data["player_id"], errors="coerce").fillna(-1).astype(int).isin(active_ids)].copy()
+        if data.empty:
+            return pd.DataFrame()
+
+    data["player_id"] = pd.to_numeric(data["player_id"], errors="coerce").fillna(-1).astype(int)
+    data["rating"] = pd.to_numeric(data.get("rating"), errors="coerce")
+    data["starting_rating"] = pd.to_numeric(data.get("starting_rating"), errors="coerce")
+    data["wins"] = pd.to_numeric(data.get("wins"), errors="coerce").fillna(0).astype(int)
+    data["losses"] = pd.to_numeric(data.get("losses"), errors="coerce").fillna(0).astype(int)
+    data["matches_played"] = pd.to_numeric(data.get("matches_played"), errors="coerce").fillna(0).astype(int)
+    data["games"] = data["matches_played"]
+    data["player_name"] = data["player_name"].where(
+        data["player_name"].notna() & (data["player_name"].astype(str).str.strip() != ""),
+        data["player_id"].map(lambda pid: f"#{int(pid)}"),
+    )
+    data["win_pct"] = data.apply(
+        lambda r: (float(r["wins"]) / float(r["games"]) * 100.0) if int(r["games"]) > 0 else pd.NA,
+        axis=1,
+    )
+    data["JUPR"] = data["rating"].astype(float) / 400.0
+    data["rating_delta"] = (data["rating"] - data["starting_rating"]).astype(float) / 400.0
+    data = data.sort_values(
+        ["rating", "games", "wins", "player_name"],
+        ascending=[False, False, False, True],
+    ).copy()
+    data["rank"] = range(1, len(data) + 1)
+    return data[
+        [
+            "player_id",
+            "player_name",
+            "rating",
+            "starting_rating",
+            "games",
+            "wins",
+            "losses",
+            "win_pct",
+            "JUPR",
+            "rating_delta",
+            "rank",
+        ]
+    ]
+
+
 def _render_html_table(headers: list[str], rows: list[list[str]], table_class: str = "") -> None:
     table_class_attr = f"lb-table {table_class}".strip()
     header_html = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
@@ -670,7 +745,38 @@ def render(ctx):
     if not replay_df.empty and scoped_player_ids:
         replay_df = replay_df[replay_df["player_id"].astype(int).isin(scoped_player_ids)].copy()
     weekly_rating = _weekly_rating_summary(replay_df)
-    standings = _build_scoped_league_standings(overall_stats, replay_df, getattr(ctx, "id_to_name", {}))
+    standings_from_league_ratings = _build_current_standings_from_league_ratings(
+        getattr(ctx, "df_leagues", None),
+        df_players_all,
+        df_players_active,
+        league_name,
+        active_only=True,
+    )
+    standings = standings_from_league_ratings.copy()
+    standings_source = "league_ratings"
+    replay_standings = _build_scoped_league_standings(overall_stats, replay_df, getattr(ctx, "id_to_name", {}))
+    if standings.empty:
+        standings = replay_standings.copy()
+        standings_source = "match replay fallback"
+
+    mismatch_df = pd.DataFrame()
+    if not standings_from_league_ratings.empty and not replay_standings.empty:
+        replay_cmp = replay_standings[["player_id", "player_name", "JUPR"]].rename(
+            columns={"JUPR": "replay_JUPR", "player_name": "replay_player_name"}
+        )
+        league_cmp = standings_from_league_ratings[["player_id", "player_name", "JUPR"]].rename(
+            columns={"JUPR": "league_ratings_JUPR"}
+        )
+        mismatch_df = league_cmp.merge(replay_cmp, on="player_id", how="inner")
+        if not mismatch_df.empty:
+            mismatch_df["player_name"] = mismatch_df["player_name"].where(
+                mismatch_df["player_name"].notna() & (mismatch_df["player_name"].astype(str).str.strip() != ""),
+                mismatch_df["replay_player_name"],
+            )
+            mismatch_df["difference"] = (mismatch_df["replay_JUPR"] - mismatch_df["league_ratings_JUPR"]).abs()
+            mismatch_df = mismatch_df[mismatch_df["difference"] > 0.001].copy()
+            mismatch_df = mismatch_df.sort_values("difference", ascending=False)
+
     weeks_df = _build_league_weeks(df_meta, league_name, league_matches)
     league_week_nums = weeks_df["week_num"].tolist() if not weeks_df.empty else []
     league_matches_ui = _sanitize_dataframe_for_ui(league_matches)
@@ -690,6 +796,29 @@ def render(ctx):
 
     if section == "Overall":
         st.subheader("Current Standings")
+        st.caption(f"Rating source: {standings_source}")
+        if bool(getattr(ctx, "admin_logged_in", False)) and not bool(getattr(ctx, "public_mode", False)) and not mismatch_df.empty:
+            st.warning(
+                f"Replay standings differ from league_ratings for {len(mismatch_df)} players. "
+                "Current standings are using league_ratings."
+            )
+            with st.expander("View replay vs league_ratings mismatches"):
+                mismatch_view = mismatch_df[["player_name", "league_ratings_JUPR", "replay_JUPR", "difference"]].copy()
+                mismatch_view["league_ratings_JUPR"] = mismatch_view["league_ratings_JUPR"].map(lambda v: f"{float(v):.3f}")
+                mismatch_view["replay_JUPR"] = mismatch_view["replay_JUPR"].map(lambda v: f"{float(v):.3f}")
+                mismatch_view["difference"] = mismatch_view["difference"].map(lambda v: f"{float(v):.3f}")
+                st.dataframe(
+                    mismatch_view.rename(
+                        columns={
+                            "player_name": "Player",
+                            "league_ratings_JUPR": "league_ratings JUPR",
+                            "replay_JUPR": "Replay JUPR",
+                            "difference": "Difference",
+                        }
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
         if standings_ui.empty:
             st.info("No league rating data found yet.")
         else:
