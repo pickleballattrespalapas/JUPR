@@ -585,6 +585,60 @@ def delete_pending_outbox_row(
     return deleted[0]
 
 
+def bulk_delete_pending_outbox_rows(
+    supabase,
+    *,
+    club_id: str,
+    outbox_ids: list[str],
+) -> dict[str, int]:
+    club_id = _require_nonempty(club_id, "club_id")
+    normalized_ids = []
+    for raw in outbox_ids or []:
+        outbox_id = str(raw or "").strip()
+        if outbox_id:
+            normalized_ids.append(outbox_id)
+    if not normalized_ids:
+        raise ValueError("At least one outbox_id is required")
+
+    unique_ids = list(dict.fromkeys(normalized_ids))
+    requested = len(unique_ids)
+
+    matched_rows = _safe_data(
+        supabase.table("player_profile_update_outbox")
+        .select("id")
+        .eq("club_id", club_id)
+        .eq("send_status", SEND_STATUS_PENDING)
+        .in_("id", unique_ids)
+        .execute()
+    )
+    matched_ids = [str(row.get("id") or "").strip() for row in matched_rows if str(row.get("id") or "").strip()]
+    matched_pending = len(matched_ids)
+    if not matched_ids:
+        return {
+            "requested": requested,
+            "matched_pending": 0,
+            "deleted": 0,
+            "skipped": requested,
+        }
+
+    deleted_rows = _safe_data(
+        supabase.table("player_profile_update_outbox")
+        .delete()
+        .eq("club_id", club_id)
+        .eq("send_status", SEND_STATUS_PENDING)
+        .in_("id", matched_ids)
+        .execute()
+    )
+    deleted = len(deleted_rows)
+    skipped = max(0, requested - deleted)
+    return {
+        "requested": requested,
+        "matched_pending": matched_pending,
+        "deleted": deleted,
+        "skipped": skipped,
+    }
+
+
 def list_outbox_rows(
     supabase,
     club_id: str,

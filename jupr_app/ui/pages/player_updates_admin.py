@@ -7,6 +7,7 @@ import streamlit as st
 
 from jupr_app.domain.notifications.player_profile_update_repo import (
     approve_request,
+    bulk_delete_pending_outbox_rows,
     delete_pending_outbox_row,
     list_active_subscriptions,
     list_digests_for_range,
@@ -150,6 +151,10 @@ def _outbox_display_rows(ctx, rows: list[dict]) -> list[dict]:
             }
         )
     return display_rows
+
+
+def _normalized_text_filter(value: str) -> str:
+    return str(value or "").strip().lower()
 
 
 def render(ctx) -> None:
@@ -501,8 +506,141 @@ def render(ctx) -> None:
         st.markdown("#### Pending to send")
         if pending_rows:
             st.dataframe(pd.DataFrame(_outbox_display_rows(ctx, pending_rows)), use_container_width=True, hide_index=True)
-            st.markdown("#### Remove pending queued digest")
-            st.caption("Only pending rows can be removed. This does not delete sent history.")
+            st.markdown("#### Bulk remove pending queued digests")
+            st.caption(
+                "This only removes pending queued emails. Saved digest previews and sent email history are not affected."
+            )
+
+            bulk_rows: list[dict] = []
+            for row in pending_rows:
+                outbox_id = str(row.get("id") or "").strip()
+                if not outbox_id:
+                    continue
+                bulk_rows.append(
+                    {
+                        "outbox_id": outbox_id,
+                        "player_name": _player_name(ctx, row.get("player_id")),
+                        "player_id": row.get("player_id"),
+                        "email": row.get("email"),
+                        "week_start": row.get("week_start"),
+                        "week_end": row.get("week_end"),
+                        "created_at": row.get("created_at"),
+                    }
+                )
+
+            fs1, fs2, fs3 = st.columns(3)
+            with fs1:
+                filter_week_start = st.text_input(
+                    "Filter week_start",
+                    key="bulk_delete_filter_week_start",
+                    placeholder="YYYY-MM-DD",
+                ).strip()
+            with fs2:
+                filter_week_end = st.text_input(
+                    "Filter week_end",
+                    key="bulk_delete_filter_week_end",
+                    placeholder="YYYY-MM-DD",
+                ).strip()
+            with fs3:
+                filter_text = _normalized_text_filter(
+                    st.text_input(
+                        "Filter player/email",
+                        key="bulk_delete_filter_text",
+                        placeholder="Name or email",
+                    )
+                )
+
+            filtered_rows: list[dict] = []
+            for row in bulk_rows:
+                row_week_start = str(row.get("week_start") or "").strip()
+                row_week_end = str(row.get("week_end") or "").strip()
+                row_name = _normalized_text_filter(row.get("player_name") or "")
+                row_email = _normalized_text_filter(row.get("email") or "")
+                if filter_week_start and row_week_start != filter_week_start:
+                    continue
+                if filter_week_end and row_week_end != filter_week_end:
+                    continue
+                if filter_text and filter_text not in row_name and filter_text not in row_email:
+                    continue
+                filtered_rows.append(row)
+
+            selection_key = "player_updates_bulk_selected_outbox_ids"
+            selected_ids = set(st.session_state.get(selection_key, []))
+            visible_ids = [str(row.get("outbox_id") or "").strip() for row in filtered_rows if str(row.get("outbox_id") or "").strip()]
+
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("Select all pending", use_container_width=True, disabled=not visible_ids):
+                    selected_ids.update(visible_ids)
+                    st.session_state[selection_key] = sorted(selected_ids)
+                    st.rerun()
+            with b2:
+                if st.button("Clear selection", use_container_width=True, disabled=not selected_ids):
+                    st.session_state[selection_key] = []
+                    st.rerun()
+
+            if filtered_rows:
+                editor_rows = []
+                for row in filtered_rows:
+                    outbox_id = str(row.get("outbox_id") or "").strip()
+                    editor_rows.append(
+                        {
+                            "selected": outbox_id in selected_ids,
+                            "player_name": row.get("player_name"),
+                            "player_id": row.get("player_id"),
+                            "email": row.get("email"),
+                            "week_start": row.get("week_start"),
+                            "week_end": row.get("week_end"),
+                            "created_at": row.get("created_at"),
+                            "_outbox_id": outbox_id,
+                        }
+                    )
+                editor_df = pd.DataFrame(editor_rows)
+                edited_df = st.data_editor(
+                    editor_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["player_name", "player_id", "email", "week_start", "week_end", "created_at", "_outbox_id"],
+                    column_order=["selected", "player_name", "player_id", "email", "week_start", "week_end", "created_at"],
+                    key="bulk_delete_pending_editor",
+                )
+                edited_selected_ids = {
+                    str(row.get("_outbox_id") or "").strip()
+                    for _, row in edited_df.iterrows()
+                    if bool(row.get("selected")) and str(row.get("_outbox_id") or "").strip()
+                }
+                selected_ids = (selected_ids - set(visible_ids)) | edited_selected_ids
+                st.session_state[selection_key] = sorted(selected_ids)
+            else:
+                st.caption("No pending rows match the current filters.")
+
+            selected_count = len(selected_ids)
+            st.caption(f"Selected pending rows: {selected_count}")
+            confirm_bulk_delete = st.checkbox(
+                "I understand this will remove the selected pending digests from the send queue. Sent history will not be deleted.",
+                key="confirm_bulk_delete_pending",
+            )
+            if st.button(
+                "Delete selected pending digests",
+                use_container_width=True,
+                disabled=(selected_count == 0 or not confirm_bulk_delete),
+            ):
+                try:
+                    result = bulk_delete_pending_outbox_rows(
+                        supabase,
+                        club_id=club_id,
+                        outbox_ids=sorted(selected_ids),
+                    )
+                    st.session_state[selection_key] = []
+                    st.success(f"Deleted {result['deleted']} pending queued digests.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Bulk delete failed: {_friendly_error(exc)}")
+
+            st.markdown("#### Remove one pending queued digest")
+            st.caption(
+                "This only removes pending queued emails. Saved digest previews and sent email history are not affected."
+            )
             for row in pending_rows:
                 outbox_id = str(row.get("id") or "").strip()
                 player_name = _player_name(ctx, row.get("player_id")) or f"Player #{row.get('player_id')}"
