@@ -5,6 +5,7 @@ from postgrest.exceptions import APIError
 
 from jupr_app.ui.components.weekly_recap_layout import render_weekly_recap
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.public_links import navigate_same_tab
 from jupr_app.ui.url import qp_get
 
 
@@ -136,10 +137,13 @@ def render(ctx):
 
     if not print_mode:
         st.caption("Tip: use your browser print dialog for a bulletin-board-ready PDF.")
-        base_url = st.session_state.get("base_url", "")
-        if base_url:
-            print_url = f"{base_url}/?page=weekly_recap&public=1&print=1"
-            st.link_button("Open Print-Friendly View", print_url)
+        if st.button("Open Print-Friendly View"):
+            navigate_same_tab(
+                page="weekly_recap",
+                params={"print": "1"},
+                public_mode=True,
+                source_label="weekly_recap:print_view",
+            )
         pdf_bytes = _build_recap_pdf(
             recap,
             str(selected_row.get("week_start") or ""),

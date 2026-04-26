@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-import streamlit as st
+from jupr_app.ui.public_links import navigate_same_tab
 
 
 logger = logging.getLogger(__name__)
@@ -31,12 +31,16 @@ def navigate_to_player_profile(
         if text_value:
             next_params[str(key)] = text_value
 
-    st.query_params.clear()
-    st.query_params.update(next_params)
     logger.info(
         "Internal navigation to player profile via query-param mutation (full_reload=False): pid=%s public_mode=%s extra_keys=%s",
         player_id,
         public_mode,
         sorted((extra_params or {}).keys()),
     )
-    st.rerun()
+    navigate_same_tab(
+        page=next_params["page"],
+        params={k: v for k, v in next_params.items() if k != "page"},
+        public_mode=public_mode,
+        clear_existing=True,
+        source_label="navigate_to_player_profile",
+    )

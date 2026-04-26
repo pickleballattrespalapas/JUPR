@@ -8,7 +8,6 @@ import streamlit as st
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
 from jupr_app.domain.tournament_registration_repo import (
     archive_tournament,
-    build_public_urls,
     delete_unused_draft_tournament,
     get_registration_settings,
     list_existing_tournaments,
@@ -17,6 +16,7 @@ from jupr_app.domain.tournament_registration_repo import (
     upsert_registration_settings,
 )
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.public_links import navigate_same_tab
 
 LEGACY_DEFAULT_TEAM_COUNT = 4
 TOURNAMENT_STATUS_OPTIONS = ["DRAFT", "REGISTRATION", "REGISTRATION_OPEN", "REGISTRATION_CLOSED", "ARCHIVED"]
@@ -182,13 +182,25 @@ def render(ctx):
     if launch[2].button("🔴 Open Tournament Live"):
         _go_to_page("tournament_live", tournament_id)
 
-    links = build_public_urls(
-        base_url=_safe_text(st.session_state.get("base_url")),
-        tournament_id=str(tournament_id),
-        registration_slug=settings.get("registration_slug"),
-    )
-    launch[3].link_button("📝 Public Registration", links["registration"])
-    launch[4].link_button("🤝 Partner Board", links["partner_board"])
+    slug = _safe_text(settings.get("registration_slug"))
+    tournament_nav_params = {"tournament_id": str(tournament_id)}
+    if slug:
+        tournament_nav_params["tournament"] = slug
+
+    if launch[3].button("📝 Public Registration"):
+        navigate_same_tab(
+            page="tournament_registration",
+            params=tournament_nav_params,
+            public_mode=True,
+            source_label="tournaments:public_registration",
+        )
+    if launch[4].button("🤝 Partner Board"):
+        navigate_same_tab(
+            page="tournament_partner_board",
+            params=tournament_nav_params,
+            public_mode=True,
+            source_label="tournaments:partner_board",
+        )
 
     st.markdown("#### Admin Actions")
     action_cols = st.columns(2)

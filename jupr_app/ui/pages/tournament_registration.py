@@ -33,6 +33,7 @@ from jupr_app.domain.tournament_registration_repo import (
     update_admin_registration_selection,
 )
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.public_links import navigate_same_tab
 
 
 def _uid(prefix: str) -> str:
@@ -783,7 +784,17 @@ def render(ctx):
                 window_bits.append(f"Closes: {_safe_text(settings.get('registration_close_at'))}")
             st.caption(" • ".join(window_bits))
     with top_cols[1]:
-        st.link_button("View Tournament Roster", public_urls["roster"])
+        if st.button("View Tournament Roster", key=f"view_tournament_roster_{tournament.get('id')}"):
+            nav_params = {"tournament_id": str(tournament.get("id"))}
+            slug = _safe_text(settings.get("registration_slug"))
+            if slug:
+                nav_params["tournament"] = slug
+            navigate_same_tab(
+                page="tournament_roster",
+                params=nav_params,
+                public_mode=True,
+                source_label="tournament_registration:view_roster_header",
+            )
 
     if admin_mode:
         roster_tab, add_tab, links_tab = st.tabs(["Registration Roster", "Add Registration", "Public Form Preview / Links"])
@@ -833,8 +844,28 @@ def render(ctx):
         with links_tab:
             st.code(public_urls["registration"])
             st.code(public_urls["roster"])
-            st.link_button("Open Public Registration Form", public_urls["registration"])
-            st.link_button("Open Public Roster", public_urls["roster"])
+            if st.button("Open Public Registration Form", key=f"open_public_registration_{tournament.get('id')}"):
+                nav_params = {"tournament_id": str(tournament.get("id"))}
+                slug = _safe_text(settings.get("registration_slug"))
+                if slug:
+                    nav_params["tournament"] = slug
+                navigate_same_tab(
+                    page="tournament_registration",
+                    params=nav_params,
+                    public_mode=True,
+                    source_label="tournament_registration:open_public_registration",
+                )
+            if st.button("Open Public Roster", key=f"open_public_roster_{tournament.get('id')}"):
+                nav_params = {"tournament_id": str(tournament.get("id"))}
+                slug = _safe_text(settings.get("registration_slug"))
+                if slug:
+                    nav_params["tournament"] = slug
+                navigate_same_tab(
+                    page="tournament_roster",
+                    params=nav_params,
+                    public_mode=True,
+                    source_label="tournament_registration:open_public_roster",
+                )
         return
 
     if settings.get("sponsor_markdown"):
@@ -1471,7 +1502,17 @@ def render(ctx):
                 st.success(
                     f"Registration saved. Confirmation record: {result.get('registration_id')}. Submitting again with the same email updates your registration. Final placement may still change after partner matching and waitlist review."
                 )
-                st.link_button("View Tournament Roster", public_urls["roster"])
+                if st.button("View Tournament Roster", key=f"view_tournament_roster_post_save_{tournament.get('id')}"):
+                    nav_params = {"tournament_id": str(tournament.get("id"))}
+                    slug = _safe_text(settings.get("registration_slug"))
+                    if slug:
+                        nav_params["tournament"] = slug
+                    navigate_same_tab(
+                        page="tournament_roster",
+                        params=nav_params,
+                        public_mode=True,
+                        source_label="tournament_registration:view_roster_post_save",
+                    )
                 wizard["current_step"] = 1
                 wizard["step3"] = {"selected_event_ids": []}
                 wizard["step4"] = {"partner_details": {}}

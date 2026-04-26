@@ -27,6 +27,7 @@ from jupr_app.domain.tournament_registration_repo import (
     upsert_registration_settings,
 )
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.public_links import navigate_same_tab
 
 COMPETITION_FORMATS = ["ROUND_ROBIN", "SINGLE_ELIM", "DOUBLE_ELIM", "ROUND_ROBIN_PLUS_PLAYOFF"]
 SCORING_OPTIONS = ["GAME_TO_11", "GAME_TO_15", "GAME_TO_21", "BEST_2_OF_3"]
@@ -2090,8 +2091,24 @@ def render(ctx):
             tournament_id=tournament_id,
             registration_slug=settings.get("registration_slug"),
         )
-        st.link_button("Public registration form", public_urls["registration"])
-        st.link_button("Public partner board", public_urls["partner_board"])
+        nav_params = {"tournament_id": tournament_id}
+        slug = _safe_text(settings.get("registration_slug"))
+        if slug:
+            nav_params["tournament"] = slug
+        if st.button("Public registration form"):
+            navigate_same_tab(
+                page="tournament_registration",
+                params=nav_params,
+                public_mode=True,
+                source_label="tournament_manager:public_registration",
+            )
+        if st.button("Public partner board"):
+            navigate_same_tab(
+                page="tournament_partner_board",
+                params=nav_params,
+                public_mode=True,
+                source_label="tournament_manager:partner_board",
+            )
         st.caption("Publish registration changes before sharing links when days, events, or divisions have changed.")
 
         validation_errors = _validate_builder(days_df, events_df, divisions_df)

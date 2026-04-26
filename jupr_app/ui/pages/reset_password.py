@@ -15,6 +15,7 @@ from jupr_app.ui.admin_auth import (
     make_supabase_auth_client,
     update_recovered_user_password,
 )
+from jupr_app.ui.public_links import navigate_same_tab
 from jupr_app.ui.layout import page_shell
 
 
@@ -158,4 +159,9 @@ def render(ctx):
 
         clear_local_admin_auth_state()
         st.success("Password updated successfully. Return to login and sign in with your new password.")
-        st.link_button("Return to login", "/?page=admin_login&admin=1")
+        if st.button("Return to login"):
+            navigate_same_tab(
+                page="admin_login",
+                public_mode=False,
+                source_label="reset_password:return_to_login",
+            )
