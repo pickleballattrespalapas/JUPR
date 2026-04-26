@@ -7,7 +7,7 @@ import pandas as pd
 from jupr_app.domain.awards import build_top_performer_entries
 from jupr_app.ui.nav import navigate_to_player_profile
 from jupr_app.ui.url import qp_get
-from jupr_app.ui.public_links import build_public_url, public_link_button
+from jupr_app.ui.public_links import build_public_url, public_nav_button
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.theme_clean import callout
 from jupr_app.ui.badge_data import normalize_player_badges_frame, normalize_player_ids
@@ -1082,7 +1082,11 @@ def render(ctx):
             st.markdown("#### Public standings")
             st.caption("Share this link with players.")
             st.text_input("Public share URL", value=public_url, label_visibility="collapsed")
-            public_link_button("Open Public Standings", public_url)
+            public_nav_button(
+                "Open Public Standings",
+                page="leaderboards",
+                params={"league": target_league},
+            )
     if inactive_notice and not PUBLIC_MODE:
         callout("info", "Heads up", inactive_notice)
 
