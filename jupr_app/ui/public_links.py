@@ -1,10 +1,16 @@
 # jupr_app/ui/public_links.py
 from __future__ import annotations
 
+import logging
 import urllib.parse
 from collections.abc import Mapping
+from datetime import datetime, timezone
 
 import streamlit as st
+
+logger = logging.getLogger(__name__)
+_NAV_DEBUG_EVENTS_KEY = "jupr_nav_debug_events"
+_NAV_DEBUG_EVENTS_MAX = 50
 
 
 def get_base_url() -> str:
@@ -41,6 +47,34 @@ def _clean_param_values(params: Mapping[str, object] | None = None) -> dict[str,
     return cleaned
 
 
+def redact_debug_value(key: str, value: object) -> str:
+    key_text = str(key or "").strip().lower()
+    sensitive_fragments = (
+        "token",
+        "secret",
+        "key",
+        "password",
+        "authorization",
+        "access",
+        "refresh",
+        "code",
+    )
+    if any(fragment in key_text for fragment in sensitive_fragments):
+        return "[REDACTED]"
+    return str(value or "").strip()
+
+
+def redact_query_params(params: Mapping[str, object] | None) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for key, value in (params or {}).items():
+        if value is None:
+            continue
+        redacted_value = redact_debug_value(str(key), value)
+        if redacted_value:
+            redacted[str(key)] = redacted_value
+    return redacted
+
+
 def build_public_params(page: str, params: dict[str, str] | None = None) -> dict[str, str]:
     public_params = {"page": str(page).strip(), "public": "1"}
     public_params.update(_clean_param_values(params))
@@ -64,13 +98,54 @@ def build_route_params(
     return route_params
 
 
+def _query_params_snapshot() -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for key in st.query_params.keys():
+        value = st.query_params.get(key, "")
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        text_value = str(value or "").strip()
+        if text_value:
+            snapshot[str(key)] = text_value
+    return snapshot
+
+
+def _append_nav_debug_event(event: Mapping[str, object]) -> None:
+    events = list(st.session_state.get(_NAV_DEBUG_EVENTS_KEY, []))
+    events.append(dict(event))
+    st.session_state[_NAV_DEBUG_EVENTS_KEY] = events[-_NAV_DEBUG_EVENTS_MAX:]
+
+
 def navigate_same_tab(
     page: str,
     params: dict[str, str] | None = None,
     public_mode: bool = True,
     clear_existing: bool = True,
+    source: str | None = None,
 ) -> None:
+    previous_query_params = redact_query_params(_query_params_snapshot())
     next_params = build_route_params(page=page, params=params, public_mode=public_mode)
+    redacted_next_params = redact_query_params(next_params)
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": str(source or "").strip() or "navigate_same_tab",
+        "target_page": str(page).strip(),
+        "params": redact_query_params(_clean_param_values(params)),
+        "public_mode": bool(public_mode),
+        "clear_existing": bool(clear_existing),
+        "previous_query_params": previous_query_params,
+        "next_query_params": redacted_next_params,
+    }
+    _append_nav_debug_event(event)
+    logger.info(
+        "Navigation event source=%s target=%s mode=%s clear_existing=%s prev=%s next=%s",
+        event["source"],
+        event["target_page"],
+        "public" if event["public_mode"] else "admin",
+        event["clear_existing"],
+        previous_query_params,
+        redacted_next_params,
+    )
     if clear_existing:
         st.query_params.clear()
     st.query_params.update(next_params)
@@ -86,7 +161,12 @@ def public_nav_button(
 ) -> bool:
     clicked = st.button(label, key=key, use_container_width=use_container_width)
     if clicked:
-        navigate_same_tab(page=page, params=params, public_mode=True)
+        navigate_same_tab(
+            page=page,
+            params=params,
+            public_mode=True,
+            source=f"public_nav_button:{label}",
+        )
     return clicked
 
 
@@ -103,7 +183,18 @@ def _same_app_query_params_from_url(url: str) -> dict[str, str] | None:
     return None
 
 
-def external_link_button(label: str, url: str, use_container_width: bool = False) -> None:
+def external_link_button(
+    label: str,
+    url: str,
+    use_container_width: bool = False,
+    source: str | None = None,
+) -> None:
+    logger.info(
+        "External link via st.link_button source=%s label=%s url=%s",
+        str(source or "").strip() or "external_link_button",
+        label,
+        url,
+    )
     st.link_button(label, url, use_container_width=use_container_width)
 
 
@@ -128,6 +219,13 @@ def public_link_button(
                 params=nav_params,
                 public_mode=public_mode,
                 clear_existing=True,
+                source=f"public_link_button:{label}:same_app",
             )
         return
-    external_link_button(label, url, use_container_width=use_container_width)
+    logger.info("public_link_button label=%s classified=external url=%s", label, url)
+    external_link_button(
+        label,
+        url,
+        use_container_width=use_container_width,
+        source=f"public_link_button:{label}:external",
+    )
