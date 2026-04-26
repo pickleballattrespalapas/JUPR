@@ -118,3 +118,44 @@ def test_streamlit_app_only_restores_browser_tokens_for_admin_entry():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
 
     assert "if admin_entry_requested:\n            maybe_restore_admin_login_from_browser()" in app
+
+
+def test_append_auth_debug_event_redacts_sensitive_reason_and_query_params(monkeypatch):
+    fake_st = _FakeSt()
+    fake_st.query_params.update(
+        {
+            "page": "admin_tools",
+            "jupr_admin_access_token": "secret-token",
+            "jupr_admin_refresh_token": "refresh-token",
+            "public": "1",
+        }
+    )
+    monkeypatch.setattr(admin_auth, "st", fake_st)
+
+    admin_auth._append_auth_debug_event(
+        "restore_failed",
+        success=False,
+        reason="Exception while validating access_token value",
+    )
+
+    events = fake_st.session_state.get("jupr_auth_debug_events", [])
+    assert len(events) == 1
+    event = events[0]
+    assert event["event_type"] == "restore_failed"
+    assert event["success"] is False
+    assert event["reason"] == "[REDACTED]"
+    assert event["route_query_params"]["jupr_admin_access_token"] == "[REDACTED]"
+    assert event["route_query_params"]["jupr_admin_refresh_token"] == "[REDACTED]"
+
+
+def test_append_auth_debug_event_keeps_only_latest_50(monkeypatch):
+    fake_st = _FakeSt()
+    monkeypatch.setattr(admin_auth, "st", fake_st)
+
+    for idx in range(60):
+        admin_auth._append_auth_debug_event(f"event_{idx}", success=True, reason="")
+
+    events = fake_st.session_state.get("jupr_auth_debug_events", [])
+    assert len(events) == 50
+    assert events[0]["event_type"] == "event_10"
+    assert events[-1]["event_type"] == "event_59"

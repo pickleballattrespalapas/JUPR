@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import json
 from datetime import datetime, timezone
+from uuid import uuid4
 from jupr_app.domain.replay_history import replay_history
 
 from postgrest.exceptions import APIError
@@ -146,9 +147,20 @@ def render(ctx):
 
     with st.expander("🧰 System Debug Panel", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
+        auth_events = list(st.session_state.get("jupr_auth_debug_events", []))
         current_query_params = redact_query_params(_query_params_snapshot())
+        debug_session_id = str(st.session_state.setdefault("debug_session_id", str(uuid4())))
 
         st.caption("Admin-only diagnostics for navigation, auth, and session restoration state.")
+        st.write("Session continuity diagnostics")
+        st.json(
+            {
+                "debug_session_id": debug_session_id,
+                "navigation_events_present": bool(nav_events),
+                "navigation_event_count": len(nav_events),
+                "auth_event_count": len(auth_events),
+            }
+        )
 
         st.markdown("#### Phase 1 — Navigation diagnostics")
         st.write("Current query params")
@@ -193,11 +205,23 @@ def render(ctx):
             "admin_user": _admin_user_debug_snapshot(),
             "admin_session": _admin_session_debug_snapshot(),
             "allowlist_size": len(st.session_state.get("admin_allowlist", set()) or set()),
+            "auth_events": auth_events,
         }
         st.json(auth_debug)
+        if st.button("Clear auth debug events", key="clear_auth_debug_events"):
+            st.session_state["jupr_auth_debug_events"] = []
+            st.success("Auth debug events cleared.")
+            auth_events = []
+            auth_debug["auth_events"] = auth_events
 
         debug_report = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "debug_session_id": debug_session_id,
+            "session_continuity": {
+                "navigation_events_present": bool(nav_events),
+                "navigation_event_count": len(nav_events),
+                "auth_event_count": len(auth_events),
+            },
             "navigation": {
                 "query_params": current_query_params,
                 "runtime": nav_runtime,
