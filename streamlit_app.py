@@ -390,6 +390,7 @@ def main():
             match_uploader,
             moneyball,
             player_updates_admin,
+            player_updates_subscribe,
             player_editor,
             players,
             rating_rules,
@@ -446,7 +447,7 @@ def main():
             # Hidden deep-link page
             "🔐 Admin Login": admin_login,
             "🔐 Reset Password": reset_password,
-            "📬 Verified Updates Request": players,
+            "📬 Verified Updates Request": player_updates_subscribe,
             # Admin-only
             "🗞️ Weekly Recap Admin": weekly_recap_admin,
             "📬 Player Updates Admin": player_updates_admin,
