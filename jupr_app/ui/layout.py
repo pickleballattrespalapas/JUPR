@@ -1,19 +1,9 @@
 from __future__ import annotations
 
 import html
-from urllib.parse import urlencode
-
 import streamlit as st
 
-from jupr_app.ui.theme_clean import topbar
-
-
-def build_admin_entry_url() -> str:
-    """
-    Build a deterministic URL that explicitly enters the admin login landing page.
-    """
-    params: dict[str, str] = {"admin": "1", "page": "admin_login"}
-    return f"/?{urlencode(params)}"
+from jupr_app.ui.theme_clean import page_header, topbar
 
 
 def page_shell(
@@ -32,16 +22,11 @@ def page_shell(
         if mode_label:
             chips.append(f'<span class="jupr-pill neutral">{html.escape(mode_label)}</span>')
 
-        in_public_shell = bool(st.session_state.get("jupr_public_mode", False))
-        in_admin_entry = bool(st.session_state.get("jupr_admin_entry_active", False))
-        if in_public_shell and not in_admin_entry:
-            admin_href = html.escape(build_admin_entry_url(), quote=True)
-            chips.append(
-                f'<a class="jupr-topbar-action" href="{admin_href}" '
-                'aria-label="Open admin login">Admin Login</a>'
-            )
-
         resolved_right_html = "".join(chips)
 
-    topbar(title, subtitle, right_html=resolved_right_html)
+    in_public_shell = bool(st.session_state.get("jupr_public_mode", False))
+    if in_public_shell:
+        page_header(title, subtitle, right_html=resolved_right_html)
+    else:
+        topbar(title, subtitle, right_html=resolved_right_html)
     st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)

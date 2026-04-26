@@ -33,7 +33,7 @@ from jupr_app.ui.page_registry import (
     PUBLIC_NAV_KEYS,
     labels_for_keys,
 )
-from jupr_app.ui.public_nav import render_public_top_nav
+from jupr_app.ui.public_nav import render_public_app_header
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
@@ -188,6 +188,7 @@ def main():
         public_requested = _is_truthy(qp_get("public", "0"))
         admin_requested = _is_truthy(qp_get("admin", "0"))
         incoming_page_param = qp_get("page", "").strip().lower()
+        logout_requested = _is_truthy(qp_get("logout", "0"))
         admin_login_requested = incoming_page_param == "admin_login"
         requested_admin_page = incoming_page_param in ADMIN_ONLY_PAGE_KEYS
         recovery_flow = is_recovery_flow_query()
@@ -225,6 +226,25 @@ def main():
             authorized = False
 
         admin_authenticated = authenticated and authorized
+        st.session_state["jupr_admin_authenticated"] = bool(admin_authenticated)
+
+        if logout_requested:
+            if authenticated:
+                logout_admin()
+                st.session_state.pop("post_login_admin_page_key", None)
+            params_changed = _set_query_params_idempotent(
+                updates={"public": "1", "page": "home"},
+                removals={
+                    "admin",
+                    "next",
+                    "logout",
+                    "jupr_admin_access_token",
+                    "jupr_admin_refresh_token",
+                    "jupr_admin_restore_from_storage",
+                },
+            )
+            if params_changed:
+                st.rerun()
 
         if admin_login_requested and admin_authenticated:
             post_login_target = str(
@@ -495,7 +515,7 @@ def main():
                     if deep_label in public_labels_in_order
                     else public_labels_in_order[0]
                 )
-                sel = render_public_top_nav(
+                sel = render_public_app_header(
                     labels_in_order=public_labels_in_order,
                     current_label=current_label,
                 )

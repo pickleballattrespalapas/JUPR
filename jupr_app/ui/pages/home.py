@@ -18,7 +18,6 @@ def render(ctx) -> None:  # noqa: ARG001
               <a class="jupr-link-button" href="?page=players">Player Profiles</a>
               <a class="jupr-link-button" href="?page=tournament_registration">Events</a>
               <a class="jupr-link-button" href="?page=verified_updates_request">Player Updates</a>
-              <a class="jupr-link-button" href="?admin=1&page=admin_login">Admin Login</a>
             </div>
           </div>
 
