@@ -30,6 +30,19 @@ from jupr_app.domain.live_social import (
 )
 from jupr_app.ui.layout import page_shell
 
+
+def _query_params_snapshot() -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for key in st.query_params.keys():
+        value = st.query_params.get(key, "")
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        text_value = str(value or "").strip()
+        if text_value:
+            snapshot[str(key)] = text_value
+    return snapshot
+
+
 def _get_api_error_code(exc: APIError) -> str | None:
     code = getattr(exc, "code", None)
     if code:
@@ -86,6 +99,44 @@ def render(ctx):
 
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
+
+    with st.expander("🧭 Navigation Debug", expanded=False):
+        nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
+        current_query_params = _query_params_snapshot()
+        session_flags = {
+            "public_mode": bool(getattr(ctx, "public_mode", False)),
+            "admin_logged_in": bool(getattr(ctx, "admin_logged_in", False)),
+            "jupr_admin_authenticated": bool(st.session_state.get("jupr_admin_authenticated", False)),
+            "jupr_public_mode": st.session_state.get("jupr_public_mode"),
+        }
+
+        st.caption("Admin-only report for same-tab and external-link navigation diagnostics.")
+        st.write("Current query params")
+        st.json(current_query_params)
+        st.write("Current mode/session flags")
+        st.json(session_flags)
+        st.write(f"Recent navigation events ({len(nav_events)})")
+        st.json(nav_events)
+
+        if st.button("Clear navigation debug events", key="clear_navigation_debug_events"):
+            st.session_state["jupr_nav_debug_events"] = []
+            st.success("Navigation debug events cleared.")
+            nav_events = []
+
+        debug_report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "query_params": current_query_params,
+            "session_flags": session_flags,
+            "events": nav_events,
+        }
+        st.text_area(
+            "Copy debug report",
+            value=json.dumps(debug_report, indent=2, sort_keys=True),
+            height=260,
+            key="navigation_debug_copy_report",
+        )
+
+    st.divider()
 
     st.subheader("🏥 System Health Check")
 
