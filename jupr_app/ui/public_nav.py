@@ -53,73 +53,75 @@ def _render_public_nav_styles() -> None:
     st.markdown(
         """
         <style>
-          .jupr-public-nav-streamlit .jupr-public-nav-toolbar {
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-nav {
+            border: 1px solid color-mix(in srgb, var(--border-strong) 58%, transparent);
+            border-radius: 14px;
+            padding: 0.65rem 0.85rem;
+            background: color-mix(in srgb, var(--panel) 95%, transparent);
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-nav-toolbar {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
-            justify-content: space-between;
-            gap: 0.6rem;
+            gap: 0.75rem;
           }
-          .jupr-public-nav-streamlit .jupr-public-brand-block {
-            min-width: max-content;
-          }
-          .jupr-public-nav-streamlit .jupr-public-nav-pills,
-          .jupr-public-nav-streamlit .jupr-public-admin-pills {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0.45rem;
-          }
-          .jupr-public-nav-streamlit .jupr-public-nav-pills {
-            flex: 1 1 560px;
-          }
-          .jupr-public-nav-streamlit .jupr-public-admin-pills {
-            justify-content: flex-end;
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand {
             flex: 0 1 auto;
+            min-width: 10rem;
           }
-          .jupr-public-nav-streamlit .stButton > button {
-            border-radius: 999px;
-            border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
-            padding: 0.34rem 0.72rem;
-            color: var(--text-primary);
-            background: color-mix(in srgb, var(--panel) 86%, transparent);
-            text-decoration: none;
-            font-size: 0.84rem;
-            font-weight: 700;
-            white-space: nowrap;
-            min-height: 0;
-            line-height: 1.15;
-            width: fit-content;
-            max-width: 100%;
-          }
-          .jupr-public-nav-streamlit .stButton > button:hover {
-            border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-            background: var(--accent-soft);
-            color: var(--text-primary);
-          }
-          .jupr-public-nav-streamlit .stButton > button:focus-visible {
-            outline: 3px solid var(--focus);
-            outline-offset: 2px;
-          }
-          .jupr-public-nav-streamlit .jupr-public-nav-active .stButton > button {
-            border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
-            background: color-mix(in srgb, var(--accent-soft) 85%, var(--panel));
-            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
-          }
-          .jupr-public-nav-streamlit .jupr-public-brand-button .stButton > button {
-            border-radius: 10px;
-            padding: 0.44rem 0.7rem;
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand .stButton > button {
+            all: unset;
+            cursor: pointer;
+            display: block;
+            font-size: 1.03rem;
             font-weight: 800;
-            text-align: left;
+            letter-spacing: 0.02em;
+            line-height: 1.1;
+            color: var(--text-primary);
           }
-          .jupr-public-nav-streamlit .jupr-public-admin-button .stButton > button {
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand .stButton > button:hover {
+            text-decoration: underline;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand-title {
+            font-size: 1.03rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            line-height: 1.1;
+            color: var(--text-primary);
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand-subtitle {
+            margin-top: 0.1rem;
+            font-size: 0.74rem;
+            font-weight: 600;
+            color: color-mix(in srgb, var(--text-muted) 95%, var(--text-secondary));
+            white-space: nowrap;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-nav-control {
+            flex: 1 1 34rem;
+            min-width: min(32rem, 100%);
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-nav-control [role="radiogroup"] {
+            gap: 0.35rem;
+            flex-wrap: wrap;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin {
+            flex: 0 1 auto;
+            margin-left: auto;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin .stButton {
+            display: inline-flex;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin .stButton > button {
             border-radius: 10px;
             font-size: 0.8rem;
             font-weight: 800;
+            padding: 0.35rem 0.65rem;
+            white-space: nowrap;
+            width: fit-content;
           }
           @media (max-width: 1080px) {
-            .jupr-public-nav-streamlit .jupr-public-admin-pills {
-              justify-content: flex-start;
+            .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin {
+              margin-left: 0;
             }
           }
         </style>
@@ -128,31 +130,29 @@ def _render_public_nav_styles() -> None:
     )
 
 
-def _render_nav_button(
+def _single_select_widget(
     *,
-    page_key: str,
-    label: str,
-    active: bool,
-    current_params: dict[str, str],
-    position: int,
-) -> None:
-    active_class = " jupr-public-nav-active" if active else ""
-    st.markdown(f'<div class="jupr-public-nav-item{active_class}">', unsafe_allow_html=True)
-    if st.button(label, key=f"public_header_nav_{page_key}_{position}"):
-        navigate_same_tab(
-            page=page_key,
-            params=_safe_context_params(page_key, current_params),
-            public_mode=True,
-            source=PUBLIC_SOURCE_BY_PAGE[page_key],
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
+    options: list[str],
+    current_option: str,
+    key: str,
+) -> str:
+    if hasattr(st, "pills"):
+        pills_sig = inspect.signature(st.pills)
+        kwargs: dict[str, object] = {"key": key}
+        if "selection_mode" in pills_sig.parameters:
+            kwargs["selection_mode"] = "single"
+        if "default" in pills_sig.parameters:
+            kwargs["default"] = current_option
+        return st.pills("", options=options, **kwargs) or current_option
 
+    if hasattr(st, "segmented_control"):
+        segmented_sig = inspect.signature(st.segmented_control)
+        kwargs = {"key": key}
+        if "default" in segmented_sig.parameters:
+            kwargs["default"] = current_option
+        return st.segmented_control("", options=options, **kwargs) or current_option
 
-def _horizontal_container(parent: st.delta_generator.DeltaGenerator) -> st.delta_generator.DeltaGenerator:
-    container_sig = inspect.signature(parent.container)
-    if "horizontal" in container_sig.parameters:
-        return parent.container(horizontal=True)
-    return parent.container()
+    return st.selectbox("", options=options, index=options.index(current_option), key=key, label_visibility="collapsed")
 
 
 def render_public_app_header(
@@ -188,61 +188,60 @@ def render_public_app_header(
         """
         <div class="jupr-public-shell jupr-public-nav-streamlit">
           <div class="jupr-public-nav" role="navigation" aria-label="Public site navigation">
+            <div class="jupr-public-nav-toolbar">
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="jupr-public-nav-toolbar">', unsafe_allow_html=True)
-    with _horizontal_container(st):
-        st.markdown('<div class="jupr-public-brand-block jupr-public-brand-button">', unsafe_allow_html=True)
-        st.markdown('<div class="jupr-public-brand-button">', unsafe_allow_html=True)
-        if st.button("JUPR\nTres Palapas Rating System", key="public_header_brand_home"):
-            navigate_same_tab(
-                page="home",
-                params=_safe_context_params("home", current_params),
-                public_mode=True,
-                source="public_header:home",
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown('<div class="jupr-public-nav-pills">', unsafe_allow_html=True)
-        for idx, page_key in enumerate(nav_page_keys):
-            _render_nav_button(
-                page_key=page_key,
-                label=PUBLIC_LABEL_BY_KEY[page_key],
-                active=page_key == current_page_key,
-                current_params=current_params,
-                position=idx,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown('<div class="jupr-public-admin-pills">', unsafe_allow_html=True)
-        admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
-        admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
-        st.markdown('<div class="jupr-public-admin-button">', unsafe_allow_html=True)
-        if st.button(admin_label, key="public_header_admin_primary"):
-            navigate_same_tab(
-                page="league_manager" if admin_authenticated else "admin_login",
-                public_mode=False,
-                source="public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login",
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        if admin_authenticated:
-            st.markdown('<div class="jupr-public-admin-button">', unsafe_allow_html=True)
-            if st.button("Logout", key="public_header_logout"):
-                navigate_same_tab(
-                    page=current_page_key or default_page,
-                    params={"logout": "1", **_safe_context_params(current_page_key or default_page, current_params)},
-                    public_mode=True,
-                    source="public_header:logout",
-                )
-            st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
+    st.markdown('<div class="jupr-public-brand">', unsafe_allow_html=True)
+    if st.button("JUPR", key="public_header_brand_home"):
+        navigate_same_tab(
+            page="home",
+            params=_safe_context_params("home", current_params),
+            public_mode=True,
+            source="public_header:home",
+        )
+    st.markdown('<div class="jupr-public-brand-subtitle">Tres Palapas Rating System</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("</div></div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="jupr-public-nav-control">', unsafe_allow_html=True)
+    nav_labels = [PUBLIC_LABEL_BY_KEY[key] for key in nav_page_keys]
+    current_label_value = PUBLIC_LABEL_BY_KEY[current_page_key]
+    selected_label = _single_select_widget(
+        options=nav_labels,
+        current_option=current_label_value,
+        key="public_header_nav_selector",
+    )
+    selected_page_key = next((k for k in nav_page_keys if PUBLIC_LABEL_BY_KEY[k] == selected_label), current_page_key)
+    if selected_page_key != current_page_key:
+        navigate_same_tab(
+            page=selected_page_key,
+            params=_safe_context_params(selected_page_key, current_params),
+            public_mode=True,
+            source=PUBLIC_SOURCE_BY_PAGE[selected_page_key],
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="jupr-public-admin">', unsafe_allow_html=True)
+    admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
+    admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
+    if st.button(admin_label, key="public_header_admin_primary"):
+        navigate_same_tab(
+            page="league_manager" if admin_authenticated else "admin_login",
+            public_mode=False,
+            source="public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login",
+        )
+
+    if admin_authenticated and st.button("Logout", key="public_header_logout"):
+        navigate_same_tab(
+            page=current_page_key or default_page,
+            params={"logout": "1", **_safe_context_params(current_page_key or default_page, current_params)},
+            public_mode=True,
+            source="public_header:logout",
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div></div></div>", unsafe_allow_html=True)
 
     return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
 
