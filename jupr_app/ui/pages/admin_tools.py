@@ -29,6 +29,7 @@ from jupr_app.domain.live_social import (
     moderate_social_submission,
 )
 from jupr_app.ui.layout import page_shell
+from jupr_app.ui.public_links import redact_query_params
 
 
 def _query_params_snapshot() -> dict[str, str]:
@@ -102,19 +103,11 @@ def render(ctx):
 
     with st.expander("🧭 Navigation Debug", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
-        current_query_params = _query_params_snapshot()
-        session_flags = {
-            "public_mode": bool(getattr(ctx, "public_mode", False)),
-            "admin_logged_in": bool(getattr(ctx, "admin_logged_in", False)),
-            "jupr_admin_authenticated": bool(st.session_state.get("jupr_admin_authenticated", False)),
-            "jupr_public_mode": st.session_state.get("jupr_public_mode"),
-        }
+        current_query_params = redact_query_params(_query_params_snapshot())
 
         st.caption("Admin-only report for same-tab and external-link navigation diagnostics.")
         st.write("Current query params")
         st.json(current_query_params)
-        st.write("Current mode/session flags")
-        st.json(session_flags)
         st.write(f"Recent navigation events ({len(nav_events)})")
         st.json(nav_events)
 
@@ -126,7 +119,6 @@ def render(ctx):
         debug_report = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "query_params": current_query_params,
-            "session_flags": session_flags,
             "events": nav_events,
         }
         st.text_area(

@@ -47,6 +47,34 @@ def _clean_param_values(params: Mapping[str, object] | None = None) -> dict[str,
     return cleaned
 
 
+def redact_debug_value(key: str, value: object) -> str:
+    key_text = str(key or "").strip().lower()
+    sensitive_fragments = (
+        "token",
+        "secret",
+        "key",
+        "password",
+        "authorization",
+        "access",
+        "refresh",
+        "code",
+    )
+    if any(fragment in key_text for fragment in sensitive_fragments):
+        return "[REDACTED]"
+    return str(value or "").strip()
+
+
+def redact_query_params(params: Mapping[str, object] | None) -> dict[str, str]:
+    redacted: dict[str, str] = {}
+    for key, value in (params or {}).items():
+        if value is None:
+            continue
+        redacted_value = redact_debug_value(str(key), value)
+        if redacted_value:
+            redacted[str(key)] = redacted_value
+    return redacted
+
+
 def build_public_params(page: str, params: dict[str, str] | None = None) -> dict[str, str]:
     public_params = {"page": str(page).strip(), "public": "1"}
     public_params.update(_clean_param_values(params))
@@ -95,17 +123,18 @@ def navigate_same_tab(
     clear_existing: bool = True,
     source: str | None = None,
 ) -> None:
-    previous_query_params = _query_params_snapshot()
+    previous_query_params = redact_query_params(_query_params_snapshot())
     next_params = build_route_params(page=page, params=params, public_mode=public_mode)
+    redacted_next_params = redact_query_params(next_params)
     event = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "source": str(source or "").strip() or "navigate_same_tab",
         "target_page": str(page).strip(),
-        "params": _clean_param_values(params),
+        "params": redact_query_params(_clean_param_values(params)),
         "public_mode": bool(public_mode),
         "clear_existing": bool(clear_existing),
         "previous_query_params": previous_query_params,
-        "next_query_params": next_params,
+        "next_query_params": redacted_next_params,
     }
     _append_nav_debug_event(event)
     logger.info(
@@ -115,7 +144,7 @@ def navigate_same_tab(
         "public" if event["public_mode"] else "admin",
         event["clear_existing"],
         previous_query_params,
-        next_params,
+        redacted_next_params,
     )
     if clear_existing:
         st.query_params.clear()
