@@ -258,12 +258,12 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         position: sticky;
         top: 0.5rem;
         z-index: 120;
-        margin-bottom: 1.15rem;
-        padding: 0.7rem 0.9rem;
+        margin-bottom: 0.8rem;
+        padding: 0.52rem 0.72rem;
         border-radius: var(--radius);
         border: 1px solid var(--border-strong);
         background: color-mix(in srgb, var(--panel) 94%, transparent);
-        box-shadow: var(--shadow-lg);
+        box-shadow: 0 8px 18px rgba(2, 6, 23, 0.06);
         backdrop-filter: blur(10px);
       }}
       .jupr-public-brand {{
@@ -327,6 +327,17 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         font-size: 0.8rem;
         font-weight: 800;
       }}
+      .jupr-public-admin-actions {{
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }}
+      .jupr-public-admin-action--secondary {{
+        border-color: var(--border);
+        background: var(--panel);
+      }}
       .jupr-public-admin-action:hover {{
         color: var(--text-primary);
         border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
@@ -354,6 +365,34 @@ def apply_clean_theme(*, accent_hex: str = "#2F6FED") -> None:
         .jupr-public-admin-action {{
           margin-left: auto;
         }}
+        .jupr-public-admin-actions {{
+          margin-left: auto;
+        }}
+      }}
+      .jupr-page-header {{
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.8rem 1rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.75rem;
+        padding: 0.6rem 0.1rem 0.4rem;
+      }}
+      .jupr-page-header__title {{
+        font-size: clamp(1.25rem, 2.1vw, 1.55rem);
+        font-weight: 750;
+        line-height: 1.2;
+        color: var(--text-primary);
+      }}
+      .jupr-page-header__subtitle {{
+        margin-top: 0.2rem;
+        font-size: 0.9rem;
+        color: var(--text-muted);
+      }}
+      .jupr-page-header__right {{
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
       }}
       .jupr-hero {{
         margin-bottom: 1rem;
@@ -879,6 +918,25 @@ def topbar(title: str, subtitle: str = "", *, right_html: str = "") -> None:
             <div class="jupr-topbar__subtitle">{subtitle_html}</div>
           </div>
           <div class="jupr-topbar__right">{right_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def page_header(title: str, subtitle: str = "", *, right_html: str = "") -> None:
+    """Render a lightweight page header intended for public pages under global nav."""
+    title_html = html.escape(title)
+    subtitle_html = html.escape(subtitle)
+
+    st.markdown(
+        f"""
+        <div class="jupr-page-header">
+          <div class="jupr-page-header__left">
+            <div class="jupr-page-header__title">{title_html}</div>
+            <div class="jupr-page-header__subtitle">{subtitle_html}</div>
+          </div>
+          <div class="jupr-page-header__right">{right_html}</div>
         </div>
         """,
         unsafe_allow_html=True,

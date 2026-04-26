@@ -45,7 +45,7 @@ def _href_for_page(page_key: str, *, base_params: dict[str, str]) -> str:
     return f"?{urlencode(sorted(params.items()))}"
 
 
-def render_public_top_nav(
+def render_public_app_header(
     *,
     labels_in_order: list[str] | None = None,
     current_label: str | None = None,
@@ -81,7 +81,17 @@ def render_public_top_nav(
         for page_key in nav_page_keys
     )
 
-    admin_href = "?admin=1&page=admin_login"
+    admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
+    admin_href = "?admin=1&page=league_manager"
+    logout_href = "?logout=1"
+    admin_action_html = (
+        '<div class="jupr-public-admin-actions">'
+        f'<a class="jupr-public-admin-action" href="{admin_href}">Admin Dashboard</a>'
+        f'<a class="jupr-public-admin-action jupr-public-admin-action--secondary" href="{logout_href}">Logout</a>'
+        "</div>"
+        if admin_authenticated
+        else f'<a class="jupr-public-admin-action" href="?admin=1&page=admin_login">Admin Login</a>'
+    )
 
     st.markdown(
         f"""
@@ -94,7 +104,7 @@ def render_public_top_nav(
             <nav class="jupr-public-nav-links" aria-label="Public navigation">
               {nav_links_html}
             </nav>
-            <a class="jupr-public-admin-action" href="{admin_href}">Admin Login</a>
+            {admin_action_html}
           </div>
         </div>
         """,
@@ -102,3 +112,17 @@ def render_public_top_nav(
     )
 
     return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
+
+
+def render_public_top_nav(
+    *,
+    labels_in_order: list[str] | None = None,
+    current_label: str | None = None,
+    default_page: str = "home",
+) -> str:
+    """Backward-compatible alias for the public app header renderer."""
+    return render_public_app_header(
+        labels_in_order=labels_in_order,
+        current_label=current_label,
+        default_page=default_page,
+    )
