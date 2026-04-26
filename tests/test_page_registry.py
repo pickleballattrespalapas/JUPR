@@ -1,4 +1,6 @@
 from jupr_app.ui.page_registry import (
+    ADMIN_ONLY_PAGE_KEYS,
+    HIDDEN_PAGE_KEYS,
     LABEL_TO_PAGE_KEY,
     PAGE_KEY_TO_LABEL,
     PUBLIC_NAV_KEYS,
@@ -15,7 +17,7 @@ def test_jupr_live_is_registered_as_public_page():
     assert PAGE_KEY_TO_LABEL["jupr_live_admin"] == "🔴 JUPR Live Admin"
     assert LABEL_TO_PAGE_KEY["🔴 JUPR Live"] == "jupr_live"
     assert LABEL_TO_PAGE_KEY["🔴 JUPR Live Admin"] == "jupr_live_admin"
-    assert "🔴 JUPR Live" not in public_labels
+    assert "🔴 JUPR Live" in public_labels
     assert "🔴 JUPR Live Admin" not in public_labels
     assert "jupr_live_social" not in PAGE_KEY_TO_LABEL
     assert "🟢 JUPR Live Social" not in LABEL_TO_PAGE_KEY
@@ -28,12 +30,42 @@ def test_existing_public_pages_remain_in_shared_public_nav():
     assert public_labels == [
         "Home",
         "🏆 Leaderboards",
+        "📊 League Results",
+        "🎯 Match Explorer",
         "🔍 Player Search",
+        "📼 Badge Codex",
+        "🪜 Challenge Ladder",
+        "🔴 JUPR Live",
         "📝 Tournament Registration",
+        "🤝 Partner Board",
         "Rating Rules",
         "🗞️ Weekly Recap",
         "❓ FAQs",
     ]
+
+
+def test_restored_public_route_keys_are_visible_in_public_nav():
+    restored_keys = {
+        "league_results",
+        "match_explorer",
+        "badge_codex",
+        "challenge_ladder",
+        "jupr_live",
+        "tournament_partner_board",
+    }
+
+    assert restored_keys.issubset(set(PUBLIC_NAV_KEYS))
+
+
+def test_admin_only_pages_remain_excluded_from_public_nav():
+    assert not set(PUBLIC_NAV_KEYS).intersection(ADMIN_ONLY_PAGE_KEYS)
+
+
+def test_hidden_deep_link_pages_remain_hidden_from_public_nav():
+    assert "verified_updates_request" in HIDDEN_PAGE_KEYS
+    assert "tournament_roster" in HIDDEN_PAGE_KEYS
+    assert "verified_updates_request" not in PUBLIC_NAV_KEYS
+    assert "tournament_roster" not in PUBLIC_NAV_KEYS
 
 
 def test_player_editor_remains_admin_only():
