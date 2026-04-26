@@ -6,6 +6,7 @@ import altair as alt
 from jupr_app.ui.helpers import qp_get
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR, MIN_WIN_DELTA_ELO, CAP_LOSER_GAIN_ELO
+from jupr_app.ui.components.player_picker import render_player_picker
 from jupr_app.ui.layout import page_shell
 
 
@@ -112,13 +113,6 @@ def render(ctx):
         return
     p["id"] = p["id"].astype(int)
 
-    active_ids = sorted(p["id"].tolist())
-
-    def fmt_pid(x):
-        try:
-            return f"{id_to_name.get(int(x), f'#{int(x)}')}  (#{int(x)})"
-        except Exception:
-            return str(x)
 
     # -------- K factor --------
     def get_k_for_context(context_name: str) -> int:
@@ -151,19 +145,42 @@ def render(ctx):
     # -------- Player selection (ID-safe) --------
     st.subheader("Your matchup (doubles)")
 
-    c1, c2, c3, c4 = st.columns(4)
+    me_id = render_player_picker(
+        p,
+        label="I am",
+        key="mx_me_id",
+        default_player_id=st.session_state.get("mx_me_id"),
+        include_inactive=False,
+    )
 
-    with c1:
-        me_id = st.selectbox("I am", options=[0] + active_ids, format_func=lambda x: "" if x == 0 else fmt_pid(x), key="mx_me_id")
-    with c2:
-        partner_pool = [x for x in active_ids if x != int(me_id)]
-        partner_id = st.selectbox("My partner", options=[0] + partner_pool, format_func=lambda x: "" if x == 0 else fmt_pid(x), key="mx_partner_id")
-    with c3:
-        opp_pool_1 = [x for x in active_ids if x not in (int(me_id), int(partner_id))]
-        opp1_id = st.selectbox("Opponent 1", options=[0] + opp_pool_1, format_func=lambda x: "" if x == 0 else fmt_pid(x), key="mx_opp1_id")
-    with c4:
-        opp_pool_2 = [x for x in active_ids if x not in (int(me_id), int(partner_id), int(opp1_id))]
-        opp2_id = st.selectbox("Opponent 2", options=[0] + opp_pool_2, format_func=lambda x: "" if x == 0 else fmt_pid(x), key="mx_opp2_id")
+    partner_df = p[p["id"].astype(int) != int(me_id)].copy() if me_id else p.copy()
+    partner_id = render_player_picker(
+        partner_df,
+        label="My partner",
+        key="mx_partner_id",
+        default_player_id=st.session_state.get("mx_partner_id"),
+        include_inactive=False,
+    )
+
+    exclude_ids = {int(x) for x in [me_id, partner_id] if x}
+    opp1_df = p[~p["id"].astype(int).isin(exclude_ids)].copy() if exclude_ids else p.copy()
+    opp1_id = render_player_picker(
+        opp1_df,
+        label="Opponent 1",
+        key="mx_opp1_id",
+        default_player_id=st.session_state.get("mx_opp1_id"),
+        include_inactive=False,
+    )
+
+    exclude_ids = {int(x) for x in [me_id, partner_id, opp1_id] if x}
+    opp2_df = p[~p["id"].astype(int).isin(exclude_ids)].copy() if exclude_ids else p.copy()
+    opp2_id = render_player_picker(
+        opp2_df,
+        label="Opponent 2",
+        key="mx_opp2_id",
+        default_player_id=st.session_state.get("mx_opp2_id"),
+        include_inactive=False,
+    )
 
     if not (me_id and partner_id and opp1_id and opp2_id):
         st.info("Select yourself, your partner, and both opponents.")

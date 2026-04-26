@@ -7,6 +7,7 @@ import streamlit as st
 
 from jupr_app.domain.gamification.badge_debug import build_badge_debug_report
 from jupr_app.domain.match_filters import apply_match_filters_with_audit
+from jupr_app.ui.components.player_picker import render_player_picker
 from jupr_app.ui.layout import page_shell
 
 
@@ -45,13 +46,15 @@ def render(ctx):
         st.warning("Player data is still loading or unavailable.")
         st.stop()
 
-    player_ids = sorted(df_players["id"].dropna().astype(int).unique().tolist())
-    id_to_name = getattr(ctx, "id_to_name", {})
-    player_id = st.selectbox(
-        "Player",
-        player_ids,
-        format_func=lambda pid: f"{id_to_name.get(int(pid), 'Player')} (#{pid})",
+    player_id = render_player_picker(
+        df_players,
+        label="Search player",
+        key="badge_debug_player",
+        include_inactive=True,
     )
+    if player_id is None:
+        st.info("Choose a player to run badge debug.")
+        return
 
     if df_badges is None or df_badges.empty or "badge_id" not in df_badges.columns:
         st.warning("Badge definitions are unavailable.")
