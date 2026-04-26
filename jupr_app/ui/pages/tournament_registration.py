@@ -472,6 +472,8 @@ def _gender_filter_allows_event(event: dict[str, Any], gender: str) -> bool:
 
 
 def _rating_filter_allows_event(event: dict[str, Any], player: dict[str, Any]) -> bool:
+    if _coerce_float(player.get("doubles_skill")) is None and _coerce_float(player.get("singles_skill")) is None:
+        return True
     eligible, reason = _preview_division_eligibility(event, player)
     if eligible:
         return True
@@ -664,17 +666,26 @@ def render(ctx):
     )
 
     if current_step == 2:
-        st.markdown("### 2. Match your JUPR profile")
-        st.caption("Confirm your profile before we use it. If you select an existing JUPR profile, your current overall JUPR at registration time is what this tournament will use.")
+        st.markdown("### 2. Player profile")
+        st.caption("If you already have a JUPR profile, we’ll use it for rating and history. If not, no problem — you can still register.")
         step2_state = dict(step2)
         selected_player_id = _safe_text(step2_state.get("selected_player_id"))
         selected_existing_player = next((row for row in active_players if str(row.get("id")) == selected_player_id), None)
         candidate_player_id = _safe_text(step2_state.get("candidate_player_id"))
         candidate_confirmed = bool(step2_state.get("candidate_confirmed"))
         rejected_likely = bool(step2_state.get("rejected_likely"))
-        selection_source = _safe_text(step2_state.get("selection_source") or "likely")
+        selection_source = _safe_text(step2_state.get("selection_source") or "")
         search_query_default = _safe_text(step2_state.get("search_query"))
-        profile_mode = _safe_text(step2_state.get("profile_mode") or "new")
+        profile_mode = _safe_text(step2_state.get("profile_mode") or "")
+        default_display_name = " ".join(
+            part for part in [_safe_text(step1.get("first_name")), _safe_text(step1.get("last_name"))] if part
+        )
+        saved_display_name = _safe_text(step2_state.get("display_name")) or default_display_name
+
+        if not profile_mode:
+            profile_mode = "existing" if likely_matches else "none"
+        if not selection_source:
+            selection_source = "likely" if likely_matches else "none"
 
         if selected_existing_player and candidate_confirmed:
             st.success(f"Confirmed profile: {_player_label(selected_existing_player)}")
@@ -683,7 +694,7 @@ def render(ctx):
                 candidate_player_id = str(likely_matches[0].get("id"))
                 selection_source = "likely"
             if len(likely_matches) > 1 and not candidate_player_id and not rejected_likely:
-                st.caption("Multiple likely matches found. Choose one to review.")
+                st.caption("We found a few possible JUPR profiles. Pick one to review.")
                 likely_options = {f"{_player_label(row)}": str(row.get("id")) for row in likely_matches}
                 picked_likely = st.radio(
                     "Likely profiles",
@@ -695,7 +706,8 @@ def render(ctx):
             candidate_player = next((row for row in active_players if str(row.get("id")) == candidate_player_id), None)
             if candidate_player:
                 profile_mode = "existing"
-                st.markdown("#### Matched profile")
+                st.info("We found a possible JUPR profile.")
+                st.markdown("#### Suggested profile")
                 st.caption(_player_label(candidate_player))
                 summary = _load_profile_confirmation_data(supabase, club_id=club_id, player_id=str(candidate_player.get("id")))
                 info_cols = st.columns(3)
@@ -716,7 +728,7 @@ def render(ctx):
                         st.caption(f"{_safe_text(row.get('date'))} · {league_name} · {row.get('result')} · {row.get('score')}")
                 choice_cols = st.columns(2)
                 with choice_cols[0]:
-                    if st.button("This is me", key=f"wizard_confirm_profile_{tournament.get('id')}"):
+                    if st.button("Yes, this is me", key=f"wizard_confirm_profile_{tournament.get('id')}"):
                         selected_existing_player = candidate_player
                         selected_player_id = str(candidate_player.get("id"))
                         candidate_confirmed = True
@@ -734,14 +746,14 @@ def render(ctx):
                         }
                         st.rerun()
                 with choice_cols[1]:
-                    if st.button("This isn't me", key=f"wizard_reject_profile_{tournament.get('id')}"):
+                    if st.button("No, continue without this profile", key=f"wizard_reject_profile_{tournament.get('id')}"):
                         selected_existing_player = None
                         selected_player_id = ""
                         candidate_confirmed = False
                         candidate_player_id = ""
                         rejected_likely = True
                         profile_mode = "new"
-                        selection_source = "search"
+                        selection_source = "create"
                         wizard["step2"] = {
                             **step2_state,
                             "profile_mode": "new",
@@ -749,15 +761,23 @@ def render(ctx):
                             "candidate_player_id": "",
                             "candidate_confirmed": False,
                             "rejected_likely": True,
-                            "selection_source": "search",
+                            "selection_source": "create",
                             "search_query": search_query_default,
+                            "display_name": saved_display_name,
                         }
                         st.rerun()
-            if rejected_likely and not candidate_confirmed:
-                st.markdown("#### Choose next step")
+            if not likely_matches and not candidate_confirmed and selection_source != "search" and profile_mode != "new":
+                profile_mode = "none"
+                selection_source = "none"
+
+            if (rejected_likely or not likely_matches) and not candidate_confirmed and selection_source != "search":
+                st.info(
+                    "We didn’t find an existing JUPR profile for this name/email.\n\n"
+                    "You can continue without one. Tournament staff can review or connect your profile later."
+                )
                 option_cols = st.columns(2)
                 with option_cols[0]:
-                    if st.button("Search for my profile", key=f"wizard_search_mode_{tournament.get('id')}"):
+                    if st.button("Search for my JUPR profile", key=f"wizard_search_mode_{tournament.get('id')}"):
                         profile_mode = "existing"
                         selection_source = "search"
                         wizard["step2"] = {
@@ -766,18 +786,28 @@ def render(ctx):
                             "selection_source": "search",
                             "candidate_confirmed": False,
                             "selected_player_id": "",
+                            "candidate_player_id": "",
+                            "search_query": search_query_default,
                         }
                         st.rerun()
                 with option_cols[1]:
-                    if st.button("Create new profile", key=f"wizard_create_mode_{tournament.get('id')}"):
+                    if st.button("Continue without a JUPR profile", key=f"wizard_create_mode_{tournament.get('id')}"):
                         profile_mode = "new"
                         selection_source = "create"
+                        rejected_likely = True
+                        candidate_confirmed = False
+                        candidate_player_id = ""
+                        selected_player_id = ""
                         wizard["step2"] = {
                             **step2_state,
                             "profile_mode": "new",
                             "selection_source": "create",
                             "candidate_confirmed": False,
+                            "candidate_player_id": "",
                             "selected_player_id": "",
+                            "rejected_likely": True,
+                            "display_name": saved_display_name,
+                            "search_query": search_query_default,
                         }
                         st.rerun()
             if profile_mode == "existing" and not candidate_confirmed and selection_source == "search":
@@ -808,7 +838,26 @@ def render(ctx):
                     )
                     candidate_player_id = result_options[picked_search]
                 elif len(normalized_query) >= 2:
-                    st.info("No matching active profiles found. You can create a new profile.")
+                    st.info("No matching active profiles found.")
+                if st.button("I don’t have a JUPR profile — continue without one", key=f"wizard_search_create_mode_{tournament.get('id')}"):
+                    profile_mode = "new"
+                    selection_source = "create"
+                    rejected_likely = True
+                    candidate_player_id = ""
+                    selected_player_id = ""
+                    candidate_confirmed = False
+                    wizard["step2"] = {
+                        **step2_state,
+                        "profile_mode": "new",
+                        "selected_player_id": "",
+                        "candidate_player_id": "",
+                        "candidate_confirmed": False,
+                        "rejected_likely": True,
+                        "selection_source": "create",
+                        "search_query": search_query_default,
+                        "display_name": saved_display_name,
+                    }
+                    st.rerun()
 
         c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
@@ -828,11 +877,14 @@ def render(ctx):
                 }
                 if profile_mode == "existing":
                     if not selected_existing_player or not candidate_confirmed:
-                        st.error("Select a profile and click “This is me” before continuing.")
+                        st.error("Please confirm your JUPR profile before continuing, or choose “Continue without a JUPR profile.”")
                         st.stop()
                     next_step2["selected_player_id"] = str(selected_existing_player.get("id"))
                 else:
-                    new_display_name = st.session_state.get("wizard_new_display_name", _safe_text(step2.get("display_name")))
+                    new_display_name = st.session_state.get("wizard_new_display_name", saved_display_name)
+                    if not _safe_text(new_display_name):
+                        st.error("Display name is required.")
+                        st.stop()
                     next_step2.update(
                         {
                             "display_name": _safe_text(new_display_name),
@@ -845,16 +897,21 @@ def render(ctx):
                 wizard["current_step"] = 3
                 st.rerun()
 
-        if profile_mode == "new":
-            st.markdown("#### New profile details")
-            st.text_input("Display name", value=_safe_text(step2.get("display_name")), key="wizard_new_display_name")
+        if profile_mode == "new" and selection_source == "create":
+            st.markdown("#### Registration profile")
+            st.caption("These details help us place you in the right division. Leave ratings blank if you’re unsure.")
+            st.text_input("Display name *", value=saved_display_name, key="wizard_new_display_name")
+            prefill_email = _safe_text(step1.get("email"))
+            prefill_phone = _safe_text(step1.get("phone"))
+            st.caption(f"Email: {prefill_email or '—'}")
+            st.caption(f"Phone: {prefill_phone or '—'}")
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.text_input("DUPR ID", value=_safe_text(step2.get("dupr_id")), key="wizard_new_dupr_id")
+                st.text_input("DUPR ID (optional)", value=_safe_text(step2.get("dupr_id")), key="wizard_new_dupr_id")
             with c2:
-                st.text_input("Doubles skill", value=_safe_text(step2.get("doubles_skill")), key="wizard_new_doubles_skill")
+                st.text_input("Doubles skill (optional)", value=_safe_text(step2.get("doubles_skill")), key="wizard_new_doubles_skill")
             with c3:
-                st.text_input("Singles skill", value=_safe_text(step2.get("singles_skill")), key="wizard_new_singles_skill")
+                st.text_input("Singles skill (optional)", value=_safe_text(step2.get("singles_skill")), key="wizard_new_singles_skill")
 
     step2 = wizard.get("step2") or {}
     using_existing_player = _safe_text(step2.get("profile_mode")) == "existing"
@@ -958,6 +1015,11 @@ def render(ctx):
     if current_step == 4:
         st.markdown("### 4. Partner information")
         st.caption("Partner details are only needed for selected doubles divisions.")
+        profile_summary_name = _safe_text((selected_existing_player or {}).get("display_name") or (selected_existing_player or {}).get("name"))
+        if using_existing_player and profile_summary_name:
+            st.info(f"JUPR profile: {profile_summary_name}")
+        else:
+            st.info("JUPR profile: Not connected")
         partner_details: dict[str, Any] = step4.get("partner_details") or {}
         doubles_selected = [event_lookup[eid] for eid in selected_event_ids if bool((event_lookup.get(eid) or {}).get("partner_required"))]
 
