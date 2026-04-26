@@ -33,9 +33,7 @@ from jupr_app.domain.player_rating_series import build_player_overall_rating_ser
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_ACTIVE,
     REQUEST_STATUS_PENDING,
-    create_public_request,
     get_open_or_active_subscription,
-    mark_unsubscribed,
 )
 
 logger = logging.getLogger(__name__)
@@ -1401,10 +1399,6 @@ def render(ctx):
 
     pid_q = qp_get("pid", "").strip()
     player_id_q = qp_get("player_id", "").strip()
-    unsub_q = qp_get("unsubscribe", "").strip()
-    sid_q = qp_get("sid", "").strip()
-    verified_updates_view_q = qp_get("view", "").strip().lower()
-    route_requests_verified_updates = current_page_key == "verified_updates_request"
     selected_pid_q = player_id_q or pid_q
     pid_sig = f"pid:{selected_pid_q}" if selected_pid_q else ""
     last_sig = st.session_state.get("player_pid_sig_applied", "")
@@ -1439,19 +1433,6 @@ def render(ctx):
     )
 
     if pick_id == "":
-        if PUBLIC_MODE and route_requests_verified_updates:
-            bad_player_id = player_id_q or pid_q
-            if bad_player_id:
-                st.error(
-                    "Player not found for verified updates request. "
-                    "Please check the URL player_id and try again."
-                )
-            else:
-                st.error(
-                    "Missing required player_id for verified updates request. "
-                    "Please open this page from a player profile."
-                )
-            return
         st.info("Select a player to view details.")
         return
 
@@ -1469,34 +1450,6 @@ def render(ctx):
     _supabase = ctx.supabase
     club_id = ctx.club_id
 
-    if PUBLIC_MODE and unsub_q == "1":
-        unsub_sig = f"unsub:{pid}:{sid_q}"
-        if st.session_state.get("verified_updates_unsub_sig") != unsub_sig:
-            st.session_state["verified_updates_unsub_sig"] = unsub_sig
-            try:
-                active_sub = (
-                    _supabase.table("player_profile_update_subscriptions")
-                    .select("id")
-                    .eq("club_id", str(club_id))
-                    .eq("player_id", int(pid))
-                    .eq("request_status", REQUEST_STATUS_ACTIVE)
-                    .limit(1)
-                    .execute()
-                )
-                active_rows = active_sub.data or []
-                active_id = str((active_rows[0] if active_rows else {}).get("id") or "")
-                if sid_q and active_id and sid_q == active_id:
-                    mark_unsubscribed(_supabase, sid_q)
-                    st.success("Verified player updates have been unsubscribed.")
-                else:
-                    st.error("Unable to process unsubscribe request.")
-            except Exception:
-                st.error("Unable to process unsubscribe request.")
-            try:
-                st.query_params.pop("unsubscribe", None)
-                st.query_params.pop("sid", None)
-            except Exception:
-                pass
     pick_name = str(row["name"])
     claimed_or_verified_profile = _player_is_claimed_or_verified(row)
 
@@ -1517,7 +1470,6 @@ def render(ctx):
     )
     snapshot = _build_profile_snapshot(df_rating_all, row, pid)
     c1 = st.container()
-    verified_updates_manage_url = ""
     verified_updates_request_url = ""
     open_or_active = None
     request_status = ""
@@ -1525,17 +1477,8 @@ def render(ctx):
         open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
         request_status = str((open_or_active or {}).get("request_status") or "").strip().lower()
 
-        verified_updates_manage_params = {
-            "page": "players",
-            "public": 1,
-            "club_id": str(club_id),
-            "pid": int(pid),
-            "player_id": int(pid),
-        }
-        verified_updates_manage_url = f"/?{urlencode(verified_updates_manage_params)}"
         verified_updates_request_params = {
             "page": "verified_updates_request",
-            "public": 1,
             "club_id": str(club_id),
             "pid": int(pid),
             "player_id": int(pid),
@@ -1583,53 +1526,6 @@ def render(ctx):
                 st.caption("Verified updates request pending")
             if request_status != REQUEST_STATUS_ACTIVE:
                 st.caption(f"[Subscribe to player updates]({verified_updates_request_url})")
-
-    if PUBLIC_MODE and (
-        route_requests_verified_updates or verified_updates_view_q == "verified_updates_request"
-    ):
-        st.markdown("---")
-        st.markdown("### Subscribe to verified updates")
-        st.caption(f"You’re subscribing to updates for **{pick_name}**.")
-        st.caption("One verified email may receive weekly updates for this player profile.")
-
-        if claimed_or_verified_profile or request_status == REQUEST_STATUS_ACTIVE:
-            st.info("This player profile already has verified updates enabled.")
-        elif request_status == REQUEST_STATUS_PENDING:
-            st.info("A verified updates request is already pending for this player profile.")
-        else:
-            with st.form(f"verified_updates_public_request_{pid}"):
-                request_email = st.text_input("Email")
-                request_note = st.text_area("Note for admin (optional)")
-                submit_request = st.form_submit_button("Submit request")
-
-            if submit_request:
-                open_or_active = get_open_or_active_subscription(_supabase, str(club_id), pid)
-                status_now = str((open_or_active or {}).get("request_status") or "").strip().lower()
-                if status_now == REQUEST_STATUS_ACTIVE:
-                    st.info("This player profile already has verified updates enabled.")
-                elif status_now == REQUEST_STATUS_PENDING:
-                    st.info("A verified updates request is already pending for this player profile.")
-                else:
-                    try:
-                        create_public_request(
-                            _supabase,
-                            club_id=str(club_id),
-                            player_id=pid,
-                            email=request_email,
-                            request_note=request_note,
-                        )
-                        st.success("Success! Your verified updates request was submitted for admin review.")
-                    except Exception as exc:
-                        msg = str(exc or "").strip().lower()
-                        if "already has an active verified subscriber" in msg:
-                            st.info("This player profile already has verified updates enabled.")
-                        elif "already pending" in msg or "already exists" in msg:
-                            st.info("A verified updates request is already pending for this player profile.")
-                        else:
-                            st.error(f"Could not submit request: {exc}")
-
-        st.caption(f"[Back to player profile]({verified_updates_manage_url})")
-        return
 
     profile_tab, tape_tab, social_tab = st.tabs(["Profile", "Trophy Room", "Social"])
 
