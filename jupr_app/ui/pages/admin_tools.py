@@ -103,6 +103,21 @@ def _admin_session_debug_snapshot() -> dict[str, object]:
     }
 
 
+def _format_auth_debug_events(events: list[dict[str, object]]) -> list[dict[str, object]]:
+    formatted: list[dict[str, object]] = []
+    for event in events:
+        normalized = dict(event)
+        if "repeat_count" in normalized:
+            try:
+                normalized["repeat_count"] = int(normalized.get("repeat_count") or 1)
+            except (TypeError, ValueError):
+                normalized["repeat_count"] = 1
+        if "last_seen_at" in normalized:
+            normalized["last_seen_at"] = str(normalized.get("last_seen_at") or "")
+        formatted.append(normalized)
+    return formatted
+
+
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
     try:
         supabase.table("badge_eval_queue").select("id").eq("club_id", club_id).limit(1).execute()
@@ -147,7 +162,7 @@ def render(ctx):
 
     with st.expander("🧰 System Debug Panel", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
-        auth_events = list(st.session_state.get("jupr_auth_debug_events", []))
+        auth_events = _format_auth_debug_events(list(st.session_state.get("jupr_auth_debug_events", [])))
         current_query_params = redact_query_params(_query_params_snapshot())
         debug_session_id = str(st.session_state.setdefault("debug_session_id", str(uuid4())))
 

@@ -26,6 +26,9 @@ _BROWSER_RESTORE_INFLIGHT_SESSION_KEY = "jupr_admin_restore_inflight_at"
 _ADMIN_RESTORE_FAILED_THIS_RUN_KEY = "_admin_restore_failed_this_run"
 _AUTH_DEBUG_EVENTS_KEY = "jupr_auth_debug_events"
 _AUTH_DEBUG_EVENTS_MAX = 50
+_AUTH_DEBUG_EVENT_IMMEDIATE_DEDUPE = {
+    "restore_attempt_started",
+}
 
 
 class AdminAuthError(RuntimeError):
@@ -72,15 +75,47 @@ def _sanitize_debug_text(value: object) -> str:
 
 def _append_auth_debug_event(event_type: str, *, success: bool, reason: str = "") -> None:
     events = list(st.session_state.get(_AUTH_DEBUG_EVENTS_KEY, []))
-    events.append(
-        {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event_type": str(event_type or "").strip() or "unknown",
-            "success": bool(success),
-            "reason": _sanitize_debug_text(reason),
-            "route_query_params": _safe_route_snapshot(),
-        }
-    )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    normalized_event_type = str(event_type or "").strip() or "unknown"
+    normalized_success = bool(success)
+    normalized_reason = _sanitize_debug_text(reason)
+    normalized_route_query_params = _safe_route_snapshot()
+    incoming_event = {
+        "timestamp": now_iso,
+        "event_type": normalized_event_type,
+        "success": normalized_success,
+        "reason": normalized_reason,
+        "route_query_params": normalized_route_query_params,
+    }
+
+    if events:
+        last_event = events[-1]
+        is_duplicate_of_latest = (
+            str(last_event.get("event_type") or "") == normalized_event_type
+            and bool(last_event.get("success")) == normalized_success
+            and str(last_event.get("reason") or "") == normalized_reason
+            and last_event.get("route_query_params", {}) == normalized_route_query_params
+        )
+        should_dedupe = is_duplicate_of_latest and (
+            normalized_event_type == "restore_skipped_already_authenticated"
+            or normalized_event_type in _AUTH_DEBUG_EVENT_IMMEDIATE_DEDUPE
+            or normalized_event_type not in {
+                "restore_failed",
+                "restore_succeeded",
+                "login_succeeded",
+                "logout",
+                "browser_tokens_cleared",
+            }
+        )
+        if should_dedupe:
+            repeat_count = int(last_event.get("repeat_count", 1) or 1) + 1
+            last_event["repeat_count"] = repeat_count
+            last_event["last_seen_at"] = now_iso
+            events[-1] = last_event
+            st.session_state[_AUTH_DEBUG_EVENTS_KEY] = events[-_AUTH_DEBUG_EVENTS_MAX:]
+            return
+
+    events.append(incoming_event)
     st.session_state[_AUTH_DEBUG_EVENTS_KEY] = events[-_AUTH_DEBUG_EVENTS_MAX:]
 
 
