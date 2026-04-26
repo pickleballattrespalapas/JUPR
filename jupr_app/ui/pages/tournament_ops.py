@@ -30,20 +30,26 @@ from jupr_app.domain.tournaments import (
 )
 from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
 from jupr_app.domain.tournament_registration_repo import (
+    PARTNER_MODE_OPTIONS,
     archive_tournament,
     build_public_urls,
     build_registration_state,
+    cancel_registration,
+    create_admin_registration,
+    delete_registration,
     delete_unused_draft_tournament,
     get_registration_settings,
     list_event_options as list_registration_event_options,
     list_existing_tournaments,
+    list_registration_admin_rows,
     list_registration_days,
     registration_feature_available,
+    registration_is_imported_to_draw,
     tournament_can_be_deleted,
     unarchive_tournament,
+    update_admin_registration,
+    update_admin_registration_selection,
     upsert_registration_settings,
-    list_registrations,
-    update_registration_admin_fields,
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
 )
@@ -115,6 +121,175 @@ def _find_event_roster(registration_bridge: dict | None, *, event_option_id: str
         if str(roster.get("event_option_id")) == str(event_option_id) and str(roster.get("event_day_id")) == str(registration_day_id):
             return roster
     return None
+
+
+def _status_badge(value: Any) -> str:
+    text = _safe_text(value).lower()
+    return text.replace("_", " ").title() if text else "—"
+
+
+def _registration_roster_admin_ui(*, supabase, tournament: dict[str, Any], registration_bridge: dict[str, Any] | None, player_names: list[str]) -> None:
+    tournament_id = str(tournament.get("id"))
+    admin_rows = list_registration_admin_rows(supabase, tournament_id)
+    if not admin_rows:
+        st.info("No registration submissions yet.")
+        return
+
+    days = (registration_bridge or {}).get("days") or list_registration_days(supabase, tournament_id)
+    events = (registration_bridge or {}).get("events") or list_registration_event_options(supabase, tournament_id)
+    day_lookup = {str(row.get("id")): row for row in days}
+    event_lookup = {str(row.get("id")): row for row in events}
+
+    st.markdown("#### Summary")
+    total = len({str(row.get("registration_id")) for row in admin_rows})
+    pending = len([row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "pending"])
+    confirmed = len([row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "confirmed"])
+    waitlist = len([row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "waitlist"])
+    cancelled = len([row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "cancelled"])
+    needs_partner = len([row for row in admin_rows if _safe_text((row.get("selection") or {}).get("partner_mode")).upper() == "NEEDS_PARTNER"])
+    paid = len([row for row in admin_rows if _safe_text((row.get("registration") or {}).get("payment_status")).lower() == "paid"])
+    unpaid = len([row for row in admin_rows if _safe_text((row.get("registration") or {}).get("payment_status")).lower() == "unpaid"])
+    m = st.columns(8)
+    for idx, (label, val) in enumerate([
+        ("Total", total), ("Pending", pending), ("Confirmed", confirmed), ("Waitlist", waitlist),
+        ("Cancelled", cancelled), ("Needs Partner", needs_partner), ("Paid", paid), ("Unpaid", unpaid),
+    ]):
+        m[idx].metric(label, val)
+
+    with st.expander("Add registration", expanded=False):
+        with st.form(f"admin_add_registration_{tournament_id}"):
+            c1, c2 = st.columns(2)
+            first_name = c1.text_input("First name")
+            last_name = c2.text_input("Last name")
+            display_name = st.text_input("Display name")
+            email = st.text_input("Email")
+            phone = st.text_input("Phone")
+            status = st.selectbox("Admin status", ADMIN_REGISTRATION_STATUS_OPTIONS)
+            payment_status = st.selectbox("Payment status", ADMIN_PAYMENT_STATUS_OPTIONS)
+            day_id = st.selectbox("Day", [str(d.get("id")) for d in days], format_func=lambda did: _safe_text((day_lookup.get(did) or {}).get("label") or did))
+            event_id = st.selectbox("Division", [str(e.get("id")) for e in events], format_func=lambda eid: f"{_safe_text((event_lookup.get(eid) or {}).get('event_family_label'))} / {_safe_text((event_lookup.get(eid) or {}).get('division_name') or (event_lookup.get(eid) or {}).get('label'))}")
+            partner_mode = st.selectbox("Partner mode", PARTNER_MODE_OPTIONS)
+            partner_name = st.text_input("Partner name")
+            partner_email = st.text_input("Partner email")
+            notes = st.text_area("Notes")
+            save_add = st.form_submit_button("Save registration", use_container_width=True)
+        if save_add:
+            create_admin_registration(supabase, tournament_id=tournament_id, payload={
+                "first_name": first_name, "last_name": last_name, "display_name": display_name or " ".join([first_name, last_name]).strip(),
+                "email": email, "phone": phone, "status": status, "payment_status": payment_status, "notes": notes,
+                "selections": [{"registration_day_id": day_id, "event_option_id": event_id, "partner_mode": partner_mode, "partner_name": partner_name, "partner_email": partner_email}],
+            })
+            st.success("Registration created.")
+            st.rerun()
+
+    st.markdown("#### Registration Roster")
+    f1, f2, f3, f4, f5 = st.columns(5)
+    status_filter = f1.selectbox("Status", ["All"] + ADMIN_REGISTRATION_STATUS_OPTIONS)
+    payment_filter = f2.selectbox("Payment", ["All"] + ADMIN_PAYMENT_STATUS_OPTIONS)
+    partner_filter = f3.selectbox("Partner", ["All", "HAS_PARTNER", "NEEDS_PARTNER", "NONE"])
+    day_filter = f4.selectbox("Day", ["All"] + [str(d.get("id")) for d in days], format_func=lambda did: "All" if did == "All" else _safe_text((day_lookup.get(did) or {}).get("label") or did))
+    search = f5.text_input("Search")
+
+    filtered = []
+    for row in admin_rows:
+        reg = row.get("registration") or {}
+        sel = row.get("selection") or {}
+        if status_filter != "All" and _safe_text(reg.get("status")).lower() != status_filter:
+            continue
+        if payment_filter != "All" and _safe_text(reg.get("payment_status")).lower() != payment_filter:
+            continue
+        if partner_filter != "All" and _safe_text(sel.get("partner_mode")).upper() != partner_filter:
+            continue
+        if day_filter != "All" and _safe_text(sel.get("registration_day_id")) != day_filter:
+            continue
+        blob = " ".join([_safe_text(reg.get("display_name")), _safe_text(reg.get("email")), _safe_text(sel.get("partner_name"))]).lower()
+        if search and search.lower() not in blob:
+            continue
+        filtered.append(row)
+
+    for row in filtered:
+        reg = row.get("registration") or {}
+        sel = row.get("selection") or {}
+        event = row.get("event") or {}
+        day = row.get("day") or {}
+        sel_id = _safe_text(row.get("selection_id"))
+        reg_id = _safe_text(row.get("registration_id"))
+        imported = registration_is_imported_to_draw(supabase, tournament_id=tournament_id, selection_id=sel_id or None, registration_id=reg_id)
+        with st.expander(f"{_safe_text(reg.get('display_name') or reg.get('email'))} • {_safe_text(day.get('label'))} • {_safe_text(event.get('division_name') or event.get('label'))}", expanded=False):
+            cols = st.columns(3)
+            cols[0].caption(f"Status: {_status_badge(reg.get('status'))}")
+            cols[1].caption(f"Payment: {_status_badge(reg.get('payment_status'))}")
+            cols[2].caption(f"Partner mode: {_status_badge(sel.get('partner_mode'))}")
+            if imported:
+                st.warning("This registration has already been imported into a draw. Division/partner edits and deletion are blocked.")
+            a1, a2, a3 = st.columns(3)
+            if a1.button("Quick Confirm", key=f"confirm_{sel_id}_{reg_id}"):
+                if _safe_text(sel.get("partner_mode")).upper() == "NEEDS_PARTNER" and _safe_text(event.get("event_type")).upper() != "SINGLES":
+                    st.warning("Partner required before this can be imported into a draw.")
+                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={"status": "confirmed"})
+                st.rerun()
+            if a2.button("Move to Waitlist", key=f"waitlist_{sel_id}_{reg_id}"):
+                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={"status": "waitlist"})
+                st.rerun()
+            if a3.button("Cancel", key=f"cancel_{sel_id}_{reg_id}"):
+                cancel_registration(supabase, tournament_id=tournament_id, registration_id=reg_id)
+                st.rerun()
+
+            with st.form(f"edit_reg_{sel_id}_{reg_id}"):
+                st.markdown("**Edit registration**")
+                c1, c2 = st.columns(2)
+                first_name = c1.text_input("First name", value=_safe_text(reg.get("first_name")))
+                last_name = c2.text_input("Last name", value=_safe_text(reg.get("last_name")))
+                display_name = st.text_input("Display name", value=_safe_text(reg.get("display_name")))
+                email = st.text_input("Email", value=_safe_text(reg.get("email")))
+                phone = st.text_input("Phone", value=_safe_text(reg.get("phone")))
+                dupr = st.text_input("DUPR ID", value=_safe_text(reg.get("dupr_id")))
+                doubles_skill = st.text_input("Doubles skill", value=_safe_text(reg.get("doubles_skill")))
+                singles_skill = st.text_input("Singles skill", value=_safe_text(reg.get("singles_skill")))
+                reg_status = st.selectbox("Admin status", ADMIN_REGISTRATION_STATUS_OPTIONS, index=max(0, ADMIN_REGISTRATION_STATUS_OPTIONS.index(_safe_text(reg.get("status")).lower()) if _safe_text(reg.get("status")).lower() in ADMIN_REGISTRATION_STATUS_OPTIONS else 0))
+                reg_payment = st.selectbox("Payment status", ADMIN_PAYMENT_STATUS_OPTIONS, index=max(0, ADMIN_PAYMENT_STATUS_OPTIONS.index(_safe_text(reg.get("payment_status")).lower()) if _safe_text(reg.get("payment_status")).lower() in ADMIN_PAYMENT_STATUS_OPTIONS else 0))
+                partner_mode = st.selectbox("Partner mode", PARTNER_MODE_OPTIONS, index=max(0, PARTNER_MODE_OPTIONS.index(_safe_text(sel.get("partner_mode")).upper()) if _safe_text(sel.get("partner_mode")).upper() in PARTNER_MODE_OPTIONS else 0))
+                partner_name = st.text_input("Partner name/details", value=_safe_text(sel.get("partner_name")))
+                partner_email = st.text_input("Partner email", value=_safe_text(sel.get("partner_email")))
+                partner_note = st.text_area("Public partner note", value=_safe_text(sel.get("partner_note")))
+                notes = st.text_area("Internal/admin notes", value=_safe_text(reg.get("notes")))
+                save = st.form_submit_button("Save Changes", use_container_width=True)
+            if save:
+                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={
+                    "first_name": first_name, "last_name": last_name, "display_name": display_name, "email": email, "phone": phone,
+                    "dupr_id": dupr, "doubles_skill": float(doubles_skill) if _safe_text(doubles_skill) else None,
+                    "singles_skill": float(singles_skill) if _safe_text(singles_skill) else None,
+                    "status": reg_status, "payment_status": reg_payment, "notes": notes,
+                })
+                if sel_id and not imported:
+                    update_admin_registration_selection(supabase, tournament_id=tournament_id, selection_id=sel_id, payload={
+                        "registration_day_id": _safe_text(sel.get("registration_day_id")),
+                        "event_option_id": _safe_text(sel.get("event_option_id")),
+                        "partner_mode": partner_mode, "partner_name": partner_name, "partner_email": partner_email, "partner_note": partner_note,
+                        "show_on_partner_board": bool(_safe_text(sel.get("show_on_partner_board")).lower() in {"true", "1", "yes"}),
+                    })
+                st.success("Saved changes.")
+                st.rerun()
+
+            with st.expander("Hard delete"):
+                confirm = st.text_input("Type DELETE to hard delete", key=f"delete_confirm_{sel_id}_{reg_id}")
+                if st.button("Delete registration permanently", key=f"delete_btn_{sel_id}_{reg_id}"):
+                    if confirm != "DELETE":
+                        st.error("Type DELETE exactly.")
+                    else:
+                        delete_registration(supabase, tournament_id=tournament_id, registration_id=reg_id)
+                        st.success("Registration deleted.")
+                        st.rerun()
+
+    st.markdown("#### Players Looking for Partners")
+    partner_rows = [row for row in filtered if _safe_text((row.get("selection") or {}).get("partner_mode")).upper() == "NEEDS_PARTNER"]
+    if not partner_rows:
+        st.info("No players currently marked as NEEDS_PARTNER.")
+    else:
+        for row in partner_rows:
+            reg = row.get("registration") or {}
+            sel = row.get("selection") or {}
+            st.markdown(f"- **{_safe_text(reg.get('display_name'))}** ({_safe_text(reg.get('email'))}) — {_safe_text(sel.get('partner_note')) or 'No note'}")
 
 
 def _parse_bulk_upload(file, pasted_text: str) -> pd.DataFrame:
@@ -385,6 +560,15 @@ def render(ctx):
     selected_day_id: str | None = None
     selected_event_type = ""
     selected_event: dict[str, Any] | None = None
+
+    st.subheader("Registration Roster")
+    _registration_roster_admin_ui(
+        supabase=supabase,
+        tournament=tournament,
+        registration_bridge=registration_bridge,
+        player_names=player_names,
+    )
+    st.divider()
 
     st.subheader("Division Draw Operations")
     if modern_mode:
@@ -1077,54 +1261,6 @@ def render(ctx):
 
                             st.success(f"Imported {len(team_rows_to_write)} teams and {len(game_rows_to_write)} matches into the selected draw.")
                             st.rerun()
-
-
-
-
-    st.divider()
-    st.subheader("Registration Admin Review")
-    raw_regs = list_registrations(supabase, tournament_id)
-    if not raw_regs:
-        st.info("No registration submissions to review yet.")
-    else:
-        options = {
-            f"{_safe_text(row.get('display_name') or row.get('email') or row.get('id'))} · {_safe_text(row.get('status'))}/{_safe_text(row.get('payment_status'))} · {row.get('submitted_at') or 'no timestamp'}": row
-            for row in raw_regs
-        }
-        selected_label = st.selectbox("Select registration to review", list(options.keys()), key=f"ops_admin_pick_{tournament_id}")
-        selected_reg = options[selected_label]
-        with st.form(f"ops_admin_review_{tournament_id}"):
-            st.text_input("Display name", value=_safe_text(selected_reg.get("display_name")), disabled=True)
-            st.text_input("Email", value=_safe_text(selected_reg.get("email")), disabled=True)
-            admin_status = st.selectbox(
-                "Registration status",
-                ADMIN_REGISTRATION_STATUS_OPTIONS,
-                index=ADMIN_REGISTRATION_STATUS_OPTIONS.index(_safe_text(selected_reg.get("status")).lower())
-                if _safe_text(selected_reg.get("status")).lower() in ADMIN_REGISTRATION_STATUS_OPTIONS
-                else 0,
-            )
-            admin_payment_status = st.selectbox(
-                "Payment status",
-                ADMIN_PAYMENT_STATUS_OPTIONS,
-                index=ADMIN_PAYMENT_STATUS_OPTIONS.index(_safe_text(selected_reg.get("payment_status")).lower())
-                if _safe_text(selected_reg.get("payment_status")).lower() in ADMIN_PAYMENT_STATUS_OPTIONS
-                else 0,
-            )
-            save_admin = st.form_submit_button("Save registration admin fields", use_container_width=True)
-        if save_admin:
-            try:
-                update_registration_admin_fields(
-                    supabase,
-                    tournament_id=tournament_id,
-                    registration_id=str(selected_reg.get("id")),
-                    status=admin_status,
-                    payment_status=admin_payment_status,
-                )
-                st.success("Registration admin fields updated.")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Could not update registration: {exc}")
-
 
 def _render_registration_bridge(tournament: dict[str, Any], registration_bridge: dict[str, Any] | None) -> None:
     st.subheader("Registration Bridge")

@@ -939,6 +939,45 @@ def list_registrations(supabase, tournament_id: str) -> list[dict[str, Any]]:
     return _safe_data(resp)
 
 
+def list_registration_admin_rows(supabase, tournament_id: str) -> list[dict[str, Any]]:
+    tournament_id = str(tournament_id)
+    registrations = list_registrations(supabase, tournament_id)
+    selections = list_registration_selections(supabase, tournament_id)
+    days = {str(row.get("id")): row for row in list_registration_days(supabase, tournament_id)}
+    events = {str(row.get("id")): row for row in list_event_options(supabase, tournament_id)}
+
+    rows: list[dict[str, Any]] = []
+    for reg in registrations:
+        reg_id = str(reg.get("id") or "")
+        reg_selections = [row for row in selections if str(row.get("registration_id")) == reg_id]
+        if not reg_selections:
+            rows.append(
+                {
+                    "registration_id": reg_id,
+                    "selection_id": None,
+                    "registration": reg,
+                    "selection": None,
+                    "day": None,
+                    "event": None,
+                }
+            )
+            continue
+        for selection in reg_selections:
+            day = days.get(str(selection.get("registration_day_id")))
+            event = events.get(str(selection.get("event_option_id")))
+            rows.append(
+                {
+                    "registration_id": reg_id,
+                    "selection_id": str(selection.get("id") or ""),
+                    "registration": reg,
+                    "selection": selection,
+                    "day": day,
+                    "event": event,
+                }
+            )
+    return rows
+
+
 def update_registration_admin_fields(
     supabase,
     *,
@@ -970,6 +1009,180 @@ def update_registration_admin_fields(
     if not updated:
         raise ValueError("Registration not found for this tournament.")
     return updated
+
+
+def create_admin_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return save_registration(supabase, tournament_id=str(tournament_id), payload=payload)
+
+
+def update_admin_registration(
+    supabase,
+    *,
+    tournament_id: str,
+    registration_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    update_payload = {
+        "first_name": str(payload.get("first_name") or "").strip() or None,
+        "last_name": str(payload.get("last_name") or "").strip() or None,
+        "display_name": str(payload.get("display_name") or "").strip() or None,
+        "email": _normalize_email(payload.get("email")) or None,
+        "phone": str(payload.get("phone") or "").strip() or None,
+        "gender": str(payload.get("gender") or "").strip() or None,
+        "age": payload.get("age"),
+        "dupr_id": str(payload.get("dupr_id") or "").strip() or None,
+        "doubles_skill": payload.get("doubles_skill"),
+        "singles_skill": payload.get("singles_skill"),
+        "status": str(payload.get("status") or "").strip().lower() or None,
+        "payment_status": str(payload.get("payment_status") or "").strip().lower() or None,
+        "notes": str(payload.get("notes") or "").strip() or None,
+        "updated_at": _now_iso(),
+    }
+    clean_payload = {k: v for k, v in update_payload.items() if v is not None}
+    if clean_payload.get("status") and clean_payload["status"] not in ADMIN_REGISTRATION_STATUS_OPTIONS:
+        raise ValueError(f"Invalid registration status: {clean_payload['status']}")
+    if clean_payload.get("payment_status") and clean_payload["payment_status"] not in ADMIN_PAYMENT_STATUS_OPTIONS:
+        raise ValueError(f"Invalid payment status: {clean_payload['payment_status']}")
+    if clean_payload.get("email"):
+        existing = _get_registration_by_email(supabase, str(tournament_id), str(clean_payload["email"]))
+        if existing and str(existing.get("id")) != str(registration_id):
+            raise ValueError("Another registration already uses that email.")
+
+    resp = (
+        supabase.table("tournament_registrations")
+        .update(clean_payload)
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", str(registration_id))
+        .execute()
+    )
+    updated = _safe_first(resp)
+    if not updated:
+        raise ValueError("Registration not found for this tournament.")
+    return updated
+
+
+def update_admin_registration_selection(
+    supabase,
+    *,
+    tournament_id: str,
+    selection_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    update_payload = {
+        "registration_day_id": str(payload.get("registration_day_id") or "").strip() or None,
+        "event_option_id": str(payload.get("event_option_id") or "").strip() or None,
+        "partner_mode": str(payload.get("partner_mode") or "").strip().upper() or None,
+        "partner_name": str(payload.get("partner_name") or "").strip() or None,
+        "partner_email": _normalize_email(payload.get("partner_email")) or None,
+        "partner_phone": str(payload.get("partner_phone") or "").strip() or None,
+        "partner_dupr_id": str(payload.get("partner_dupr_id") or "").strip() or None,
+        "partner_skill": payload.get("partner_skill"),
+        "partner_age": payload.get("partner_age"),
+        "partner_note": str(payload.get("partner_note") or "").strip() or None,
+        "show_on_partner_board": _coerce_bool(payload.get("show_on_partner_board", False)),
+    }
+    clean_payload = {k: v for k, v in update_payload.items() if v is not None or k == "show_on_partner_board"}
+    if clean_payload.get("partner_mode") and clean_payload["partner_mode"] not in PARTNER_MODE_OPTIONS:
+        raise ValueError(f"Invalid partner mode: {clean_payload['partner_mode']}")
+
+    resp = (
+        supabase.table("tournament_registration_selections")
+        .update(clean_payload)
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", str(selection_id))
+        .execute()
+    )
+    updated = _safe_first(resp)
+    if not updated:
+        raise ValueError("Registration selection not found for this tournament.")
+    return updated
+
+
+def registration_is_imported_to_draw(
+    supabase,
+    *,
+    tournament_id: str,
+    selection_id: str | None = None,
+    registration_id: str | None = None,
+) -> bool:
+    if not selection_id and not registration_id:
+        return False
+    selection = None
+    if selection_id:
+        selection_resp = (
+            supabase.table("tournament_registration_selections")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", str(selection_id))
+            .limit(1)
+            .execute()
+        )
+        selection = _safe_first(selection_resp)
+    if not selection and registration_id:
+        selection_resp = (
+            supabase.table("tournament_registration_selections")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("registration_id", str(registration_id))
+            .limit(1)
+            .execute()
+        )
+        selection = _safe_first(selection_resp)
+    if not selection:
+        return False
+    day_id = str(selection.get("registration_day_id") or "")
+    event_option_id = str(selection.get("event_option_id") or "")
+    if not day_id or not event_option_id:
+        return False
+
+    teams_resp = (
+        supabase.table("tournament_teams")
+        .select("id")
+        .eq("tournament_id", str(tournament_id))
+        .eq("registration_day_id", day_id)
+        .eq("event_option_id", event_option_id)
+        .eq("source", "REGISTRATION")
+        .limit(1)
+        .execute()
+    )
+    return bool(_safe_data(teams_resp))
+
+
+def cancel_registration(supabase, *, tournament_id: str, registration_id: str) -> dict[str, Any]:
+    existing = _safe_first(
+        supabase.table("tournament_registrations")
+        .select("payment_status")
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", str(registration_id))
+        .limit(1)
+        .execute()
+    ) or {}
+    return update_registration_admin_fields(
+        supabase,
+        tournament_id=str(tournament_id),
+        registration_id=str(registration_id),
+        status="cancelled",
+        payment_status=str(existing.get("payment_status") or "unpaid").lower(),
+    )
+
+
+def delete_registration(supabase, *, tournament_id: str, registration_id: str) -> None:
+    if registration_is_imported_to_draw(supabase, tournament_id=str(tournament_id), registration_id=str(registration_id)):
+        raise ValueError("Registration is already imported into a draw. Remove the draw team first.")
+    (
+        supabase.table("tournament_registration_selections")
+        .delete()
+        .eq("tournament_id", str(tournament_id))
+        .eq("registration_id", str(registration_id))
+        .execute()
+    )
+    (
+        supabase.table("tournament_registrations")
+        .delete()
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", str(registration_id))
+        .execute()
+    )
 
 
 def list_registration_selections(supabase, tournament_id: str) -> list[dict[str, Any]]:
@@ -1263,8 +1476,9 @@ def build_public_tournament_roster_state(
                 "status": status_map.get(status),
                 "members": members,
             }
-            registrations_by_event.append(event_row)
-            event_rows.append(event_row)
+            if status in {"CONFIRMED", "WAITLIST"}:
+                registrations_by_event.append(event_row)
+                event_rows.append(event_row)
 
             if status == "NEEDS_PARTNER":
                 primary = members[0] if members else {}
