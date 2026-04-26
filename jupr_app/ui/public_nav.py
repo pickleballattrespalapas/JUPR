@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 import streamlit as st
 
 from jupr_app.ui.page_registry import LABEL_TO_PAGE_KEY, PAGE_KEY_TO_LABEL
+from jupr_app.ui.public_links import navigate_same_tab
 
 PUBLIC_LABEL_BY_KEY: dict[str, str] = {
     "home": "Home",
@@ -81,18 +82,6 @@ def render_public_app_header(
         for page_key in nav_page_keys
     )
 
-    admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
-    admin_href = "?admin=1&page=league_manager"
-    logout_href = "?logout=1"
-    admin_action_html = (
-        '<div class="jupr-public-admin-actions">'
-        f'<a class="jupr-public-admin-action" href="{admin_href}">Admin Dashboard</a>'
-        f'<a class="jupr-public-admin-action jupr-public-admin-action--secondary" href="{logout_href}">Logout</a>'
-        "</div>"
-        if admin_authenticated
-        else f'<a class="jupr-public-admin-action" href="?admin=1&page=admin_login">Admin Login</a>'
-    )
-
     st.markdown(
         f"""
         <div class="jupr-public-shell">
@@ -104,12 +93,36 @@ def render_public_app_header(
             <nav class="jupr-public-nav-links" aria-label="Public navigation">
               {nav_links_html}
             </nav>
-            {admin_action_html}
+            <div class="jupr-public-admin-actions"></div>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
+    auth_cols = st.columns([1, 1, 6], vertical_alignment="center")
+    with auth_cols[0]:
+        if admin_authenticated and st.button("Admin Dashboard", key="public_header_admin_dashboard"):
+            navigate_same_tab(
+                page="league_manager",
+                public_mode=False,
+                source="public_header:admin_dashboard",
+            )
+        elif (not admin_authenticated) and st.button("Admin Login", key="public_header_admin_login"):
+            navigate_same_tab(
+                page="admin_login",
+                public_mode=False,
+                source="public_header:admin_login",
+            )
+    with auth_cols[1]:
+        if admin_authenticated and st.button("Logout", key="public_header_logout"):
+            navigate_same_tab(
+                page=current_page_key or default_page,
+                params={"logout": "1"},
+                public_mode=True,
+                source="public_header:logout",
+            )
 
     return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
 

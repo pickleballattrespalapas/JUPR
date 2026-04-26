@@ -8,7 +8,9 @@ def test_public_nav_uses_html_anchors_instead_of_streamlit_radio():
     assert "jupr-public-nav" in contents
     assert '"./"' in contents
     assert 'params["page"] = page_key' in contents
-    assert '"?admin=1&page=admin_login"' in contents
+    assert 'source="public_header:admin_login"' in contents
+    assert 'source="public_header:admin_dashboard"' in contents
+    assert 'source="public_header:logout"' in contents
     assert 'default_page: str = "home"' in contents
 
 
