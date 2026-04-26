@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
-
 import streamlit as st
 
 from jupr_app.ui.page_registry import LABEL_TO_PAGE_KEY, PAGE_KEY_TO_LABEL
@@ -17,6 +15,18 @@ PUBLIC_LABEL_BY_KEY: dict[str, str] = {
     "faqs": "FAQs",
 }
 
+PUBLIC_SOURCE_BY_PAGE: dict[str, str] = {
+    "home": "public_header:home",
+    "leaderboards": "public_header:leaderboards",
+    "players": "public_header:players",
+    "tournament_registration": "public_header:tournament_registration",
+    "rating_rules": "public_header:rating_rules",
+    "weekly_recap": "public_header:weekly_recap",
+    "faqs": "public_header:faqs",
+}
+
+_SAFE_CONTEXT_KEYS = {"club_id"}
+
 
 def _current_query_params() -> dict[str, str]:
     params: dict[str, str] = {}
@@ -24,26 +34,84 @@ def _current_query_params() -> dict[str, str]:
         value = st.query_params.get(key, "")
         if isinstance(value, list):
             value = value[0] if value else ""
-        value_text = str(value or "")
+        value_text = str(value or "").strip()
         if value_text:
-            params[key] = value_text
+            params[str(key)] = value_text
     return params
 
 
-def _href_for_page(page_key: str, *, base_params: dict[str, str]) -> str:
-    params = dict(base_params)
-    params.pop("admin", None)
-    params.pop("public", None)
-    params.pop("next", None)
-    if page_key == "home":
-        params.pop("page", None)
-    else:
-        params["page"] = page_key
+def _safe_context_params(page_key: str, current_params: dict[str, str]) -> dict[str, str]:
+    params = {key: current_params[key] for key in _SAFE_CONTEXT_KEYS if current_params.get(key)}
+    if page_key == "leaderboards" and current_params.get("league"):
+        params["league"] = current_params["league"]
+    return params
 
-    if not params:
-        return "./"
 
-    return f"?{urlencode(sorted(params.items()))}"
+def _render_public_nav_styles() -> None:
+    st.markdown(
+        """
+        <style>
+          .jupr-public-nav-streamlit .stButton > button {
+            border-radius: 999px;
+            border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+            padding: 0.34rem 0.72rem;
+            color: var(--text-primary);
+            background: color-mix(in srgb, var(--panel) 86%, transparent);
+            text-decoration: none;
+            font-size: 0.84rem;
+            font-weight: 700;
+            white-space: nowrap;
+            min-height: 0;
+            line-height: 1.15;
+          }
+          .jupr-public-nav-streamlit .stButton > button:hover {
+            border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+            background: var(--accent-soft);
+            color: var(--text-primary);
+          }
+          .jupr-public-nav-streamlit .stButton > button:focus-visible {
+            outline: 3px solid var(--focus);
+            outline-offset: 2px;
+          }
+          .jupr-public-nav-streamlit .jupr-public-nav-active .stButton > button {
+            border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+            background: color-mix(in srgb, var(--accent-soft) 85%, var(--panel));
+            box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+          }
+          .jupr-public-nav-streamlit .jupr-public-brand-button .stButton > button {
+            border-radius: 10px;
+            padding: 0.32rem 0.6rem;
+            font-weight: 800;
+          }
+          .jupr-public-nav-streamlit .jupr-public-admin-button .stButton > button {
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: 800;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_nav_button(
+    *,
+    page_key: str,
+    label: str,
+    active: bool,
+    current_params: dict[str, str],
+    position: int,
+) -> None:
+    active_class = " jupr-public-nav-active" if active else ""
+    st.markdown(f'<div class="jupr-public-nav-item{active_class}">', unsafe_allow_html=True)
+    if st.button(label, key=f"public_header_nav_{page_key}_{position}", use_container_width=True):
+        navigate_same_tab(
+            page=page_key,
+            params=_safe_context_params(page_key, current_params),
+            public_mode=True,
+            source=PUBLIC_SOURCE_BY_PAGE[page_key],
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_public_app_header(
@@ -72,57 +140,66 @@ def render_public_app_header(
     if current_page_key not in nav_page_keys:
         current_page_key = default_page if default_page in nav_page_keys else nav_page_keys[0]
 
-    base_params = _current_query_params()
-
-    nav_links_html = "".join(
-        (
-            f'<a class="jupr-public-nav-link {"active" if page_key == current_page_key else ""}" '
-            f'href="{_href_for_page(page_key, base_params=base_params)}">{PUBLIC_LABEL_BY_KEY[page_key]}</a>'
-        )
-        for page_key in nav_page_keys
-    )
+    current_params = _current_query_params()
+    _render_public_nav_styles()
 
     st.markdown(
-        f"""
-        <div class="jupr-public-shell">
+        """
+        <div class="jupr-public-shell jupr-public-nav-streamlit">
           <div class="jupr-public-nav" role="navigation" aria-label="Public site navigation">
-            <a class="jupr-public-brand" href="./">
-              <span>JUPR</span>
-              <small>Tres Palapas Rating System</small>
-            </a>
-            <nav class="jupr-public-nav-links" aria-label="Public navigation">
-              {nav_links_html}
-            </nav>
-            <div class="jupr-public-admin-actions"></div>
-          </div>
-        </div>
         """,
         unsafe_allow_html=True,
     )
 
-    admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
-    auth_cols = st.columns([1, 1, 6], vertical_alignment="center")
-    with auth_cols[0]:
-        if admin_authenticated and st.button("Admin Dashboard", key="public_header_admin_dashboard"):
+    brand_col, nav_col, admin_col = st.columns([2.5, 7, 3], vertical_alignment="center")
+
+    with brand_col:
+        st.markdown('<div class="jupr-public-brand-button">', unsafe_allow_html=True)
+        if st.button("JUPR · Tres Palapas Rating System", key="public_header_brand_home"):
             navigate_same_tab(
-                page="league_manager",
-                public_mode=False,
-                source="public_header:admin_dashboard",
-            )
-        elif (not admin_authenticated) and st.button("Admin Login", key="public_header_admin_login"):
-            navigate_same_tab(
-                page="admin_login",
-                public_mode=False,
-                source="public_header:admin_login",
-            )
-    with auth_cols[1]:
-        if admin_authenticated and st.button("Logout", key="public_header_logout"):
-            navigate_same_tab(
-                page=current_page_key or default_page,
-                params={"logout": "1"},
+                page="home",
+                params=_safe_context_params("home", current_params),
                 public_mode=True,
-                source="public_header:logout",
+                source="public_header:home",
             )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with nav_col:
+        nav_columns = st.columns(len(nav_page_keys))
+        for idx, page_key in enumerate(nav_page_keys):
+            with nav_columns[idx]:
+                _render_nav_button(
+                    page_key=page_key,
+                    label=PUBLIC_LABEL_BY_KEY[page_key],
+                    active=page_key == current_page_key,
+                    current_params=current_params,
+                    position=idx,
+                )
+
+    with admin_col:
+        admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
+        admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
+        st.markdown('<div class="jupr-public-admin-button">', unsafe_allow_html=True)
+        if st.button(admin_label, key="public_header_admin_primary", use_container_width=True):
+            navigate_same_tab(
+                page="league_manager" if admin_authenticated else "admin_login",
+                public_mode=False,
+                source="public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        if admin_authenticated:
+            st.markdown('<div class="jupr-public-admin-button">', unsafe_allow_html=True)
+            if st.button("Logout", key="public_header_logout", use_container_width=True):
+                navigate_same_tab(
+                    page=current_page_key or default_page,
+                    params={"logout": "1", **_safe_context_params(current_page_key or default_page, current_params)},
+                    public_mode=True,
+                    source="public_header:logout",
+                )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
 
