@@ -59,6 +59,49 @@ def _get_api_error_message(exc: APIError) -> str:
         return str(payload.get("message") or payload.get("details") or payload.get("hint") or exc)
     return str(exc)
 
+
+def _session_debug_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text
+
+
+def _admin_user_debug_snapshot() -> dict[str, object]:
+    user = st.session_state.get("admin_auth_user")
+    if user is None:
+        return {"present": False}
+
+    return {
+        "present": True,
+        "id": _session_debug_text(getattr(user, "id", "")) or "(unknown)",
+        "email": redact_query_params({"email": _session_debug_text(getattr(user, "email", ""))}).get("email", ""),
+        "role": _session_debug_text(getattr(user, "role", "")) or "(unknown)",
+        "aud": _session_debug_text(getattr(user, "aud", "")) or "(unknown)",
+    }
+
+
+def _admin_session_debug_snapshot() -> dict[str, object]:
+    session = st.session_state.get("admin_auth_session")
+    if session is None:
+        return {"present": False}
+
+    access_token = _session_debug_text(getattr(session, "access_token", ""))
+    refresh_token = _session_debug_text(getattr(session, "refresh_token", ""))
+
+    return {
+        "present": True,
+        "expires_at": getattr(session, "expires_at", None),
+        "token_type": _session_debug_text(getattr(session, "token_type", "")) or "(unknown)",
+        "provider_token_present": bool(_session_debug_text(getattr(session, "provider_token", ""))),
+        "provider_refresh_token_present": bool(_session_debug_text(getattr(session, "provider_refresh_token", ""))),
+        "access_token_present": bool(access_token),
+        "access_token_length": len(access_token),
+        "refresh_token_present": bool(refresh_token),
+        "refresh_token_length": len(refresh_token),
+    }
+
+
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
     try:
         supabase.table("badge_eval_queue").select("id").eq("club_id", club_id).limit(1).execute()
@@ -101,13 +144,28 @@ def render(ctx):
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
 
-    with st.expander("🧭 Navigation Debug", expanded=False):
+    with st.expander("🧰 System Debug Panel", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
         current_query_params = redact_query_params(_query_params_snapshot())
 
-        st.caption("Admin-only report for same-tab and external-link navigation diagnostics.")
+        st.caption("Admin-only diagnostics for navigation, auth, and session restoration state.")
+
+        st.markdown("#### Phase 1 — Navigation diagnostics")
         st.write("Current query params")
         st.json(current_query_params)
+
+        nav_runtime = {
+            "main_nav": str(st.session_state.get("main_nav", "") or ""),
+            "_last_rendered_nav": str(st.session_state.get("_last_rendered_nav", "") or ""),
+            "_last_seen_page_param": str(st.session_state.get("_last_seen_page_param", "") or ""),
+            "last_page_render_error": st.session_state.get("last_page_render_error"),
+            "jupr_public_mode": bool(st.session_state.get("jupr_public_mode", False)),
+            "jupr_admin_entry_active": bool(st.session_state.get("jupr_admin_entry_active", False)),
+            "jupr_admin_authenticated": bool(st.session_state.get("jupr_admin_authenticated", False)),
+        }
+        st.write("Navigation runtime snapshot")
+        st.json(nav_runtime)
+
         st.write(f"Recent navigation events ({len(nav_events)})")
         st.json(nav_events)
 
@@ -116,15 +174,41 @@ def render(ctx):
             st.success("Navigation debug events cleared.")
             nav_events = []
 
+        st.markdown("#### Phase 3 — Auth/session diagnostics")
+        auth_debug = {
+            "query_params": {
+                "admin": current_query_params.get("admin", ""),
+                "page": current_query_params.get("page", ""),
+                "public": current_query_params.get("public", ""),
+                "jupr_admin_access_token": current_query_params.get("jupr_admin_access_token", ""),
+                "jupr_admin_refresh_token": current_query_params.get("jupr_admin_refresh_token", ""),
+                "jupr_admin_restore_from_storage": current_query_params.get("jupr_admin_restore_from_storage", ""),
+            },
+            "session_state_flags": {
+                "_admin_restore_failed_this_run": bool(st.session_state.get("_admin_restore_failed_this_run", False)),
+                "_admin_browser_clear_pending": bool(st.session_state.get("_admin_browser_clear_pending", False)),
+                "_admin_browser_sync_payload_present": bool(st.session_state.get("_admin_browser_sync_payload")),
+                "jupr_admin_restore_inflight_at": bool(st.session_state.get("jupr_admin_restore_inflight_at")),
+            },
+            "admin_user": _admin_user_debug_snapshot(),
+            "admin_session": _admin_session_debug_snapshot(),
+            "allowlist_size": len(st.session_state.get("admin_allowlist", set()) or set()),
+        }
+        st.json(auth_debug)
+
         debug_report = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "query_params": current_query_params,
-            "events": nav_events,
+            "navigation": {
+                "query_params": current_query_params,
+                "runtime": nav_runtime,
+                "events": nav_events,
+            },
+            "auth_session": auth_debug,
         }
         st.text_area(
             "Copy debug report",
             value=json.dumps(debug_report, indent=2, sort_keys=True),
-            height=260,
+            height=320,
             key="navigation_debug_copy_report",
         )
 
