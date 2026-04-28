@@ -1,61 +1,60 @@
-# JUPR Private Operator README (Joe)
+# JUPR Operator README (Joe)
 
-This README is for operating JUPR at Tres Palapas.
-It is **not** written as a public contributor guide.
+This README is for **Joe as operator** of JUPR at Tres Palapas.
+It is not a public contributor guide.
 
 > Security rule: never paste secret values into this repo, commit history, issues, PRs, or ChatGPT.
 
 ## 1) What JUPR is
 
-- JUPR is the player ratings and event operations app used at Tres Palapas.
-- It tracks official player ratings and supports official Tres Palapas events.
-- It is the source of truth for player-facing ratings and core tournament/admin workflows.
+- JUPR at Tres Palapas is the official player ratings and events system.
+- It is used for official player ratings and official Tres Palapas events.
+- Treat JUPR data and workflows as production operations.
 
 ## 2) Branch model
 
-Use this model consistently:
+Use this branch model:
 
-- `rollback-feb8` = **production** branch
-- `Test` = **staging** branch
-- `professional/*` = **work branches** that open PRs into `Test`
+- `rollback-feb8` = **production**
+- `Test` = **staging**
+- `professional/*` = **feature/PR branches** that merge into `Test`
 
-Typical flow:
+Simple workflow:
 
-1. Create/update a `professional/*` branch.
+1. Do work on `professional/*`.
 2. Open PR into `Test`.
 3. Validate in staging.
-4. Promote to production branch (`rollback-feb8`) only after staging is stable.
+4. Promote to `rollback-feb8` only after staging is stable.
 
 ## 3) Streamlit deployment
 
-- The **production Streamlit app** deploys from `rollback-feb8`.
-- The **test/staging Streamlit app** deploys from `Test`.
-- Secrets are stored in **Streamlit Community Cloud** secrets settings.
-- Never put secrets in repo files, commit messages, PR comments, or ChatGPT prompts.
+- Production Streamlit app deploys from `rollback-feb8`.
+- Test Streamlit app deploys from `Test`.
+- Secrets live in **Streamlit Community Cloud**.
+- Never paste secrets into the repo or into ChatGPT.
 
 ## 4) Supabase
 
-- There is currently **one production Supabase project**.
+- There is currently one **production Supabase project**.
 - There is **no staging Supabase project yet**.
-- SQL migrations are often manually pasted into the Supabase SQL editor.
-- Preferred canonical location for migration files is: `supabase/migrations/`.
+- SQL migrations are often manually pasted into Supabase SQL editor.
+- Prefer `supabase/migrations/` as the canonical migration folder.
 
 ## 5) MailerSend / email
 
 - Sender name: **JUPR Notifications**
-- Reply-to address: **joe@juprleagues.com**
-- Unsubscribe behavior must be enforced by the **JUPR database/state** (not only MailerSend provider state).
+- Reply-to: **joe@juprleagues.com**
+- Unsubscribe must be enforced by JUPR DB state, not only provider state.
 
-## 6) Local setup (minimal)
+## 6) Local setup (practical/minimal)
 
-If you do not run locally, **skip this section**.
+If you do not run locally, skip this.
 
-1. Install Python (use the same major/minor version configured in Streamlit settings; record that version here when confirmed).
-2. Create and activate a virtual environment.
-3. Install dependencies from `requirements.txt`.
-4. Run the app locally with Streamlit for quick checks before pushing.
-
-Example commands:
+1. Check Streamlit app settings and record the Python version used there.
+2. Install that same Python version locally.
+3. Create and activate a virtual environment.
+4. Install dependencies from `requirements.txt`.
+5. Run the app locally for quick smoke checks.
 
 ```bash
 python -m venv .venv
@@ -66,46 +65,42 @@ streamlit run streamlit_app.py
 
 ## 7) Testing checklist before deploy
 
-Before deploying any branch, smoke test these pages/flows:
+Before any deploy, smoke test:
 
-- Public home page
+- Public home
 - Leaderboards
-- Player profile + player search
+- Player profile/search
 - Tournament registration page
 - Admin login
-- Match log/admin page (basic smoke test)
+- Match log/admin page smoke test
 
 ## 8) Migration checklist
 
-When applying DB changes:
-
-1. Review SQL carefully.
+1. Review SQL.
 2. Apply SQL in Supabase SQL editor.
-3. Verify expected tables/columns/indexes exist.
-4. Deploy the correct app branch.
-5. Run smoke tests in app after migration.
+3. Verify expected columns/tables.
+4. Deploy app branch.
+5. Smoke test.
 
 ## 9) Rollback checklist
 
-If a release causes issues:
+If production has issues:
 
-1. Stop and document the issue briefly.
-2. Re-deploy known-good branch (`rollback-feb8`) to production.
-3. Confirm core user flows (home, leaderboards, login, registration).
-4. If DB changes were part of incident, assess whether a DB rollback is safe before executing anything destructive.
-5. Log what happened and what needs to be fixed before next release.
+1. Pause new changes and log the issue.
+2. Re-deploy `rollback-feb8` to production.
+3. Verify critical paths (home, leaderboards, player search/profile, admin login, registration).
+4. Confirm data integrity after rollback.
+5. Record follow-up fixes before next deploy.
 
 ## 10) Making repo private
 
-Order of operations:
-
 1. Stabilize `Test` first.
-2. Confirm Streamlit/GitHub integration has access to the private repository.
-3. Then switch repo visibility to private.
+2. Confirm Streamlit GitHub access to the private repo.
+3. Then make repo private.
 
 ## 11) What not to commit
 
-Never commit any of the following:
+Never commit:
 
 - Supabase keys
 - Streamlit secrets
@@ -113,4 +108,4 @@ Never commit any of the following:
 - Private player exports
 - Production DB dumps
 
-If a secret is accidentally exposed, rotate it immediately and remove exposure from history where possible.
+If any secret is exposed, rotate it immediately and remove it from history where possible.
