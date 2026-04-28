@@ -9,6 +9,7 @@ import pandas as pd
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.domain.gamification.live_awards import run_live_badge_awards
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,9 @@ def apply_bulk_match_edits(
     actor: str,
     source: str = "match_log.bulk_match_editor",
     correction_note: str | None = None,
+    actor_email: str | None = None,
+    actor_role: str | None = None,
+    flagged_for_review: bool = False,
 ) -> Dict[str, Any]:
     """
     Apply per-match patches safely.
@@ -319,6 +323,24 @@ def apply_bulk_match_edits(
             "warnings": warnings,
         },
     )
+    log_result = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=str(club_id),
+            actor_email=actor_email or actor,
+            actor_role=actor_role or "",
+            action_type="match_edit",
+            entity_type="match",
+            entity_id="bulk",
+            before_json=audit_before,
+            after_json=audit_after,
+            note=correction_note,
+            source_page=source,
+            flagged_for_review=flagged_for_review,
+        ),
+    )
+    if log_result.warning:
+        warnings.append(log_result.warning)
 
     # Recompute last_game_at for affected players (best effort)
     try:

@@ -12,6 +12,7 @@ from jupr_app.domain.live_social import (
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
 from jupr_app.domain.match_delete import delete_rated_matches_with_replay
+from jupr_app.domain.admin.roles import ROLE_SCOREKEEPER, normalize_role
 
 BULK_REPLAY_ERROR_STATE_KEY = "match_log_bulk_replay_error"
 
@@ -32,6 +33,8 @@ def render(ctx):
     if not bool(getattr(ctx, "admin_logged_in", False)):
         st.error("Admin login required.")
         st.stop()
+    admin_role = normalize_role(str(st.session_state.get("admin_role", "") or ""))
+    actor_email = str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin")
 
     df_matches = getattr(ctx, "df_matches", None)
     if df_matches is None or df_matches.empty:
@@ -680,6 +683,9 @@ def render(ctx):
                     patches=patches,
                     actor=actor.strip() or "admin",
                     correction_note=(correction_note.strip() or None),
+                    actor_email=actor_email,
+                    actor_role=admin_role,
+                    flagged_for_review=(admin_role == ROLE_SCOREKEEPER),
                 )
 
             replay_error = None
@@ -796,8 +802,10 @@ def render(ctx):
                     match_ids=delete_ids,
                     df_meta=getattr(ctx, "df_meta", pd.DataFrame()),
                     progress_cb=lambda x: bar.progress(float(x)),
-                    actor="match_log.bulk_delete",
+                    actor=actor_email,
+                    actor_role=admin_role,
                     source="match_log",
+                    flagged_for_review=(admin_role == ROLE_SCOREKEEPER),
                 )
             if delete_result.get("warning"):
                 st.warning(delete_result["warning"])

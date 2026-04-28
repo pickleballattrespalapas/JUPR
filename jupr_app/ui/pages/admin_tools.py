@@ -12,6 +12,12 @@ from jupr_app.domain.admin.roles import (
     can_run_replay,
     normalize_role,
 )
+from jupr_app.domain.admin_activity_log import (
+    RETENTION_DAYS,
+    can_view_admin_activity,
+    list_recent_admin_activity_logs,
+    retention_cutoff_iso,
+)
 
 from postgrest.exceptions import APIError
 
@@ -125,9 +131,34 @@ def _format_auth_debug_events(events: list[dict[str, object]]) -> list[dict[str,
     return formatted
 
 
-def _admin_role_context() -> tuple[str, bool, bool]:
+def _admin_role_context() -> tuple[str, bool, bool, bool]:
     role = normalize_role(str(st.session_state.get("admin_role", ROLE_READ_ONLY) or ROLE_READ_ONLY))
-    return role, can_manage_roles(role), can_run_replay(role)
+    return role, can_manage_roles(role), can_run_replay(role), can_view_admin_activity(role)
+
+
+def _render_admin_activity_section(supabase, club_id: str, *, current_role: str, can_view_activity: bool) -> None:
+    st.subheader("🧾 Admin Activity Log")
+    st.caption(f"Current role: **{current_role}**.")
+    st.caption("Retention guidance: keep approximately 1 year of history for trust and operational review.")
+    st.caption(f"Suggested retention cutoff: `{retention_cutoff_iso()[:10]}` (last {RETENTION_DAYS} days).")
+
+    if not can_view_activity:
+        st.info("Only Super Admin and Club Owner can view admin activity.")
+        return
+
+    flagged_only = st.checkbox("Show flagged scorekeeper edits/deletes only", value=False, key="admin_activity_flagged_only")
+    rows, warning = list_recent_admin_activity_logs(
+        supabase,
+        club_id=str(club_id),
+        include_flagged_only=flagged_only,
+        limit=300,
+    )
+    if warning:
+        st.warning(warning)
+    if not rows:
+        st.info("No admin activity rows found yet.")
+        return
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_role_assignment_section(supabase, admin_allowlist: set[str], *, current_role: str, can_assign_roles: bool) -> None:
@@ -235,13 +266,20 @@ def render(ctx):
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
     admin_allowlist = set(st.session_state.get("admin_allowlist", set()) or set())
-    admin_role, role_can_manage_roles, role_can_run_replay = _admin_role_context()
+    admin_role, role_can_manage_roles, role_can_run_replay, role_can_view_activity = _admin_role_context()
 
     _render_role_assignment_section(
         supabase,
         admin_allowlist,
         current_role=admin_role,
         can_assign_roles=role_can_manage_roles,
+    )
+    st.divider()
+    _render_admin_activity_section(
+        supabase,
+        club_id=club_id,
+        current_role=admin_role,
+        can_view_activity=role_can_view_activity,
     )
 
     st.divider()
