@@ -9,6 +9,8 @@
 
 ## Current inventory (as of 2026-04-28)
 
+Inventory below reflects files currently present in this repository.
+
 ### `supabase/migrations/` (canonical)
 
 - `20260424_matches_soft_delete.sql`
@@ -63,6 +65,11 @@ Current files in `migrations/`:
 - `20261011_tournament_dates.sql`
 - `20261018_tournament_registration_schema_contract.sql`
 
+Important:
+
+- New Supabase schema changes must be added to `supabase/migrations/`.
+- If a SQL file is added under `migrations/`, it must be treated as legacy/special-case and documented in `docs/migrations_root_explanations.md`.
+
 ## Handling duplicates or overlaps
 
 We are intentionally **not** deleting or moving old SQL files aggressively in this change.
@@ -71,6 +78,9 @@ Potential overlap area currently observed:
 
 - `supabase/migrations/2026XX_backport_tournament_engine.sql`
 - Multiple legacy tournament-related files in `migrations/` (for example `20250425_tournaments.sql`, `20260309_tournament_registration.sql`, `20261010_tournament_builder_refactor.sql`).
+- Legacy root migrations that appear to target the same badge-award text change pattern:
+  - `migrations/20260805_player_badges_awarded_by_text.sql`
+  - `migrations/20260810_player_badges_awarded_by_text.sql`
 
 If you discover clear duplicates, document them first in this file (or PR notes) before any cleanup.
 
