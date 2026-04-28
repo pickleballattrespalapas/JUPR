@@ -14,9 +14,11 @@ from jupr_app.domain.admin.roles import (
 )
 from jupr_app.domain.admin_activity_log import (
     RETENTION_DAYS,
+    build_activity_payload,
     can_view_admin_activity,
     list_recent_admin_activity_logs,
     retention_cutoff_iso,
+    write_admin_activity_log,
 )
 
 from postgrest.exceptions import APIError
@@ -161,7 +163,14 @@ def _render_admin_activity_section(supabase, club_id: str, *, current_role: str,
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-def _render_role_assignment_section(supabase, admin_allowlist: set[str], *, current_role: str, can_assign_roles: bool) -> None:
+def _render_role_assignment_section(
+    supabase,
+    admin_allowlist: set[str],
+    *,
+    club_id: str,
+    current_role: str,
+    can_assign_roles: bool,
+) -> None:
     st.subheader("🛂 Admin Role Assignments")
     role_source = str(st.session_state.get("admin_role_source", "") or "unknown")
     st.caption(f"Current role: **{current_role}** (source: `{role_source}`).")
@@ -217,11 +226,30 @@ def _render_role_assignment_section(supabase, admin_allowlist: set[str], *, curr
         if "@" not in normalized_email:
             st.error("Enter a valid email address.")
         else:
+            selected_role = normalize_role(target_role)
+            existing_row = next((row for row in rows if str(row.get("email") or "").strip().lower() == normalized_email), None)
             supabase.table("admin_role_assignments").upsert(
-                {"email": normalized_email, "role": normalize_role(target_role)},
+                {"email": normalized_email, "role": selected_role},
                 on_conflict="email",
             ).execute()
+            log_result = write_admin_activity_log(
+                supabase,
+                build_activity_payload(
+                    club_id=str(club_id),
+                    actor_email=str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin"),
+                    actor_role=current_role,
+                    action_type="role_change",
+                    entity_type="admin_role_assignment",
+                    entity_id=normalized_email,
+                    before_json={"role": str((existing_row or {}).get("role") or "") or None},
+                    after_json={"role": selected_role},
+                    note="Admin role assignment updated",
+                    source_page="admin_tools",
+                ),
+            )
             st.success(f"Updated role for {normalized_email}.")
+            if not log_result.ok and log_result.warning:
+                st.warning(log_result.warning)
             st.rerun()
 
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
@@ -271,6 +299,7 @@ def render(ctx):
     _render_role_assignment_section(
         supabase,
         admin_allowlist,
+        club_id=club_id,
         current_role=admin_role,
         can_assign_roles=role_can_manage_roles,
     )
