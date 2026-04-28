@@ -459,7 +459,7 @@ def test_resolved_save_preserves_explicit_existing_player_linkage():
     assert linked_row["linked_player_id"] == 77
 
 
-def test_resolved_save_creates_new_rated_player_and_links_participant():
+def test_resolved_save_creates_new_social_only_person_without_creating_rated_player():
     supabase = _FakeSupabase()
     supabase.store["players"] = [
         {"id": 101, "club_id": "club-1", "name": "Alice", "rating": 1600.0, "starting_rating": 1600.0},
@@ -481,7 +481,7 @@ def test_resolved_save_creates_new_rated_player_and_links_participant():
     event["participants"] = [
         {"id": "p-1", "name": "Alice", "player_id": 101, "seed": 1, "match_status": "matched_existing"},
         {"id": "p-2", "name": "Bob", "player_id": 102, "seed": 2, "match_status": "matched_existing"},
-        {"id": "p-3", "name": "New Rated", "player_id": None, "seed": 3, "match_status": "create_rated"},
+        {"id": "p-3", "name": "New Social", "player_id": None, "seed": 3, "match_status": "new_social"},
         {"id": "p-4", "name": "Drew", "player_id": None, "seed": 4, "match_status": "new_social"},
     ]
     result = save_resolved_social_live_event(
@@ -491,30 +491,27 @@ def test_resolved_save_creates_new_rated_player_and_links_participant():
         submission_mode="admin",
         host_name="admin",
     )
-    assert result["created_rated_players_count"] == 1
-    created_players = [row for row in supabase.store["players"] if row["name"] == "New Rated"]
-    assert len(created_players) == 1
-    created = created_players[0]
-    assert created["rating"] == 1400.0
+    assert result["created_rated_players_count"] == 0
+    created_players = [row for row in supabase.store["players"] if row["name"] == "New Social"]
+    assert len(created_players) == 0
     unchanged_alice = [row for row in supabase.store["players"] if row["id"] == 101][0]
     unchanged_bob = [row for row in supabase.store["players"] if row["id"] == 102][0]
     assert unchanged_alice["rating"] == 1600.0
     assert unchanged_bob["rating"] == 1200.0
     participants = supabase.store["live_event_participants"]
     created_participant = [row for row in participants if row["participant_key"] == "p-3"][0]
-    assert created_participant["linked_player_id"] == created["id"]
+    assert created_participant["linked_player_id"] is None
 
 
-def test_resolved_save_falls_back_to_default_provisional_seed_without_other_rated_players():
+def test_resolved_save_never_creates_players_even_without_any_rated_players():
     supabase = _FakeSupabase()
     supabase.store["players"] = []
     ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
-    ctx.admin_logged_in = True
     ctx.df_players_all = pd.DataFrame()
     event = _sample_event()
     for participant in event["participants"]:
         participant["player_id"] = None
-        participant["match_status"] = "create_rated"
+        participant["match_status"] = "new_social"
     save_resolved_social_live_event(
         ctx,
         event,
@@ -523,7 +520,7 @@ def test_resolved_save_falls_back_to_default_provisional_seed_without_other_rate
         host_name="admin",
     )
     created = [row for row in supabase.store["players"] if row["club_id"] == "club-1"]
-    assert all(float(row["rating"]) == 1400.0 for row in created)
+    assert created == []
 
 
 def test_resolved_save_detects_strong_duplicate_and_blocks_creation():
@@ -532,12 +529,11 @@ def test_resolved_save_detects_strong_duplicate_and_blocks_creation():
         {"id": 55, "club_id": "club-1", "name": "Jon Snow", "rating": 1500.0, "starting_rating": 1500.0}
     ]
     ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
-    ctx.admin_logged_in = True
     ctx.df_players_all = pd.DataFrame([{"id": 55, "name": "Jon Snow", "rating": 1500.0}])
     event = _sample_event()
     event["participants"][0]["name"] = "John Snow"
     event["participants"][0]["player_id"] = None
-    event["participants"][0]["match_status"] = "create_rated"
+    event["participants"][0]["match_status"] = "new_social"
     try:
         save_resolved_social_live_event(
             ctx,
@@ -550,6 +546,32 @@ def test_resolved_save_detects_strong_duplicate_and_blocks_creation():
         assert "Duplicate warning" in str(exc)
     else:
         raise AssertionError("Expected duplicate warning ValueError")
+
+
+def test_resolved_save_allows_duplicate_when_admin_confirms_with_note():
+    supabase = _FakeSupabase()
+    supabase.store["players"] = [
+        {"id": 55, "club_id": "club-1", "name": "Jon Snow", "rating": 1500.0, "starting_rating": 1500.0}
+    ]
+    ctx = _Ctx(supabase=supabase, club_id="club-1", name_to_id={})
+    ctx.df_players_all = pd.DataFrame([{"id": 55, "name": "Jon Snow", "rating": 1500.0}])
+    event = _sample_event()
+    event["participants"][0]["name"] = "John Snow"
+    event["participants"][0]["player_id"] = None
+    event["participants"][0]["match_status"] = "new_social"
+    event["participants"][0]["duplicate_confirmed"] = True
+    event["participants"][0]["duplicate_note"] = "Different member, verified at desk."
+    result = save_resolved_social_live_event(
+        ctx,
+        event,
+        target_club_id="club-1",
+        submission_mode="admin",
+        host_name="admin",
+    )
+    assert result["duplicate_confirmation_count"] == 1
+    saved = supabase.store["live_event_participants"]
+    created_row = [row for row in saved if row["participant_key"] == "p-1"][0]
+    assert created_row["linked_player_id"] is None
 
 
 def test_social_history_falls_back_to_legacy_submitted_by_column():
