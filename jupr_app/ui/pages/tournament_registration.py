@@ -155,6 +155,54 @@ def _group_events(days: list[dict[str, Any]], event_options: list[dict[str, Any]
     return grouped
 
 
+def _build_public_division_status_rows(
+    *,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+    event_rosters: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    day_lookup = {str(day.get("id")): day for day in days}
+    roster_lookup = {str(row.get("event_option_id")): row for row in (event_rosters or [])}
+    rows: list[dict[str, str]] = []
+    for event in event_options:
+        if not is_day_enabled(day_lookup.get(str(event.get("registration_day_id")), {})):
+            continue
+        visibility = public_event_option_visibility(event)
+        if visibility == "hidden":
+            continue
+        status = _safe_text(event.get("status") or "draft").lower()
+        status_label = status.replace("_", " ").title()
+        roster = roster_lookup.get(str(event.get("id"))) or {}
+        capacity = _coerce_int(event.get("capacity_teams"))
+        entries = roster.get("entries") or []
+        if capacity and len(entries) >= capacity and visibility == "selectable":
+            status_label = "Full"
+        rows.append(
+            {
+                "day": _safe_text((day_lookup.get(str(event.get("registration_day_id"))) or {}).get("label") or "Day"),
+                "event": _safe_text(event.get("event_family_label") or event.get("label") or "Event"),
+                "division": _safe_text(event.get("division_name") or event.get("label") or "Division"),
+                "status": status_label,
+            }
+        )
+    return rows
+
+
+def _public_empty_state_message(
+    *,
+    registration_open: bool,
+    selectable_count: int,
+    hidden_draft_count: int,
+) -> str | None:
+    if not registration_open:
+        return "Registration is closed."
+    if selectable_count > 0:
+        return None
+    if hidden_draft_count > 0:
+        return "Registration coming soon. Divisions are being finalized."
+    return "No open divisions are available right now."
+
+
 def _division_choice_label(event: dict[str, Any], *, eligible: bool = True) -> str:
     name = _safe_text(event.get("division_name") or event.get("label") or "Division")
     parts: list[str] = []
@@ -862,17 +910,41 @@ def render(ctx):
         with st.expander("Refund policy", expanded=False):
             st.markdown(_safe_text(settings.get("refund_policy_markdown")))
 
-    is_open, message = registration_is_open(settings)
-    if not is_open:
-        st.warning(message or "Registration is not open.")
-        st.stop()
-
     days = [row for row in days if is_day_enabled(row)]
     selectable_event_options = [row for row in event_options if public_event_option_visibility(row) == "selectable"]
     blocked_visible_options = [row for row in event_options if public_event_option_visibility(row) == "visible_blocked"]
+    hidden_draft_options = [row for row in event_options if _safe_text(row.get("status") or "draft").lower() == "draft"]
 
+    state = build_registration_state(
+        supabase,
+        tournament=tournament,
+        settings=settings,
+        days=days,
+        event_options=event_options,
+    )
+    public_status_rows = _build_public_division_status_rows(
+        days=days,
+        event_options=event_options,
+        event_rosters=state.get("event_rosters") or [],
+    )
+    if public_status_rows:
+        with st.expander("Division status", expanded=True):
+            for row in public_status_rows:
+                st.caption(
+                    f"{row['day']} · {row['event']} · {row['division']} — **{row['status']}**"
+                )
+
+    is_open, _ = registration_is_open(settings)
+    empty_message = _public_empty_state_message(
+        registration_open=is_open,
+        selectable_count=len(selectable_event_options),
+        hidden_draft_count=len(hidden_draft_options),
+    )
+    if empty_message:
+        st.warning(empty_message)
+        st.stop()
     if not days or not selectable_event_options:
-        st.warning("This tournament does not have a registration form configured yet.")
+        st.warning("No open divisions are available right now.")
         st.stop()
 
     grouped_events = _group_events(days, selectable_event_options)
