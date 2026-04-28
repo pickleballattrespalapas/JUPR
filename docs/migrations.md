@@ -3,6 +3,8 @@
 ## Canonical location
 
 `supabase/migrations/` is the **canonical location** for schema migrations that must exist in Supabase.
+Migration prefixes in this folder must be unique across files.
+Use `YYYYMMDDHHMMSS_name.sql` to avoid collisions; avoid date-only prefixes like `YYYYMMDD`.
 
 - If a migration changes Supabase schema (tables, columns, constraints, indexes, functions, grants, triggers, policies), the SQL must be captured in `supabase/migrations/`.
 - Do **not** rely on `migrations/` alone for Supabase schema changes.
@@ -14,7 +16,9 @@ Inventory below reflects files currently present in this repository.
 ### `supabase/migrations/` (canonical)
 
 - `20260424_matches_soft_delete.sql`
-- `20260428_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
+- `20260428090000_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
+- `20260428100000_admin_role_assignments.sql`
+- `20260428101000_admin_activity_log.sql`
 - `2026XX_backport_tournament_engine.sql`
 
 ### `migrations/` (legacy/archive)
@@ -98,14 +102,16 @@ For schema changes:
 
 ## Guardrail for future changes
 
-Use the guard script:
+Use the guard scripts:
 
 ```bash
 python scripts/check_migration_sources.py
+python scripts/check_supabase_migration_versions.py
 ```
 
 Behavior:
 
-- Detects newly-added `migrations/*.sql` files in the current branch (compared to `Test` by default).
-- Fails unless each new root migration is documented in `docs/migrations_root_explanations.md`.
-- This keeps contributors from accidentally treating `migrations/` as the primary Supabase source.
+- `check_migration_sources.py` detects newly-added `migrations/*.sql` files in the current branch (compared to `Test` by default).
+- `check_migration_sources.py` fails unless each new root migration is documented in `docs/migrations_root_explanations.md`.
+- `check_supabase_migration_versions.py` fails if two `supabase/migrations/*.sql` files share the same version prefix (text before the first underscore).
+- This keeps contributors from accidentally treating `migrations/` as the primary Supabase source and prevents Supabase `schema_migrations` version collisions.
