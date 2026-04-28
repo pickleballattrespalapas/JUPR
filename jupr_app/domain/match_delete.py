@@ -7,6 +7,7 @@ import pandas as pd
 
 from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 
 
 def delete_rated_matches_with_replay(
@@ -17,8 +18,10 @@ def delete_rated_matches_with_replay(
     df_meta: Optional[pd.DataFrame],
     progress_cb: Optional[Callable[[float], None]] = None,
     actor: Optional[str] = None,
+    actor_role: Optional[str] = None,
     source: Optional[str] = None,
     note: Optional[str] = None,
+    flagged_for_review: bool = False,
 ) -> Dict[str, Any]:
     """Soft-delete rated matches, recompute player activity, then run FULL replay."""
     normalized_ids = sorted({int(mid) for mid in (match_ids or []) if mid is not None})
@@ -78,6 +81,24 @@ def delete_rated_matches_with_replay(
             .in_("id", existing_ids)
             .execute()
         )
+        log_result = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=actor or "admin",
+                actor_role=actor_role or "",
+                action_type="match_delete",
+                entity_type="match",
+                entity_id=",".join(str(mid) for mid in existing_ids),
+                before_json=before_rows,
+                after_json={"deleted_ids": existing_ids, "deleted_at": now_iso},
+                note=note,
+                source_page=source or "match_log",
+                flagged_for_review=flagged_for_review,
+            ),
+        )
+        if log_result.warning:
+            warning = (f"{warning} " if warning else "") + log_result.warning
 
     if affected_player_ids:
         recompute_last_game_at_for_players(

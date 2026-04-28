@@ -26,6 +26,8 @@ from jupr_app.domain.tournament_registration_repo import (
     save_builder_draft,
     upsert_registration_settings,
 )
+from jupr_app.domain.admin.roles import normalize_role
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import navigate_same_tab
 
@@ -2200,6 +2202,23 @@ def render(ctx):
                         days=days_payload,
                         event_options=event_payload,
                     )
+                    admin_email = str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin")
+                    admin_role = normalize_role(str(st.session_state.get("admin_role", "") or ""))
+                    log_result = write_admin_activity_log(
+                        supabase,
+                        build_activity_payload(
+                            club_id=str(club_id),
+                            actor_email=admin_email,
+                            actor_role=admin_role,
+                            action_type="tournament_publish",
+                            entity_type="tournament_registration",
+                            entity_id=str(tournament_id),
+                            before_json={"publish_impact_summary": (publish_impact or {}).get("summary", {})},
+                            after_json={"days_count": len(days_payload), "event_options_count": len(event_payload)},
+                            note="Publish registration changes",
+                            source_page="tournament_manager",
+                        ),
+                    )
                 except ValueError as exc:
                     st.error(str(exc))
                     st.stop()
@@ -2214,6 +2233,8 @@ def render(ctx):
                 st.session_state[draft_last_saved_step_key] = _safe_text(saved_payload.get("saved_step"))
                 st.session_state[draft_last_saved_at_key] = _safe_text(saved_payload.get("saved_at"))
                 st.success("Registration changes published.")
+                if not log_result.ok and log_result.warning:
+                    st.warning(log_result.warning)
                 st.rerun()
 
         st.info("Registration review, issue triage, and workbook exports now live on 📋 Tournament Operations.")

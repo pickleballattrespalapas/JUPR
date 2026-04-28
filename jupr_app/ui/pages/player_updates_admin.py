@@ -26,6 +26,8 @@ from jupr_app.domain.notifications.player_update_sender import (
     send_pending_player_update_emails,
 )
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
+from jupr_app.domain.admin.roles import normalize_role
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.ui.components.player_digest_layout import render_player_digest
 from jupr_app.ui.components.player_picker import render_player_picker
 from jupr_app.ui.layout import page_shell
@@ -50,6 +52,36 @@ def _player_name(ctx, player_id: int | None) -> str:
     except Exception:
         return ""
     return str(id_to_name.get(pid, ""))
+
+
+def _log_subscription_action(
+    supabase,
+    *,
+    club_id: str,
+    actor_email: str,
+    actor_role: str,
+    action_type: str,
+    row_id: str,
+    before_json: dict | None = None,
+    after_json: dict | None = None,
+    note: str | None = None,
+) -> str | None:
+    result = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=club_id,
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=action_type,
+            entity_type="subscription",
+            entity_id=row_id,
+            before_json=before_json,
+            after_json=after_json,
+            note=note,
+            source_page="player_updates_admin",
+        ),
+    )
+    return result.warning
 
 
 def _pending_table_rows(ctx, rows: list[dict]) -> list[dict]:
@@ -191,6 +223,7 @@ def render(ctx) -> None:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
     actor = _actor_label(ctx)
+    admin_role = normalize_role(str(st.session_state.get("admin_role", "") or ""))
 
     pending_tab, active_tab, digests_tab, queue_tab = st.tabs(
         [
@@ -242,16 +275,44 @@ def render(ctx) -> None:
 
                 if approve_clicked:
                     try:
+                        before_row = dict(row)
                         approve_request(supabase, row_id, verified_by=actor, admin_note=admin_note)
+                        log_warning = _log_subscription_action(
+                            supabase,
+                            club_id=club_id,
+                            actor_email=actor,
+                            actor_role=admin_role,
+                            action_type="subscription_approve",
+                            row_id=row_id,
+                            before_json=before_row,
+                            after_json={"request_status": "active", "verified_by": actor},
+                            note=admin_note,
+                        )
                         st.success("Request approved.")
+                        if log_warning:
+                            st.warning(log_warning)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Approve failed: {_friendly_error(exc)}")
 
                 if reject_clicked:
                     try:
+                        before_row = dict(row)
                         reject_request(supabase, row_id, admin_note=admin_note, verified_by=actor)
+                        log_warning = _log_subscription_action(
+                            supabase,
+                            club_id=club_id,
+                            actor_email=actor,
+                            actor_role=admin_role,
+                            action_type="subscription_reject",
+                            row_id=row_id,
+                            before_json=before_row,
+                            after_json={"request_status": "rejected", "verified_by": actor},
+                            note=admin_note,
+                        )
                         st.success("Request rejected.")
+                        if log_warning:
+                            st.warning(log_warning)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Reject failed: {_friendly_error(exc)}")
@@ -342,8 +403,22 @@ def render(ctx) -> None:
 
                 if unsubscribe_clicked:
                     try:
+                        before_row = dict(row)
                         mark_unsubscribed(supabase, row_id)
+                        log_warning = _log_subscription_action(
+                            supabase,
+                            club_id=club_id,
+                            actor_email=actor,
+                            actor_role=admin_role,
+                            action_type="subscription_unsubscribe",
+                            row_id=row_id,
+                            before_json=before_row,
+                            after_json={"request_status": "unsubscribed"},
+                            note=admin_note,
+                        )
                         st.success("Subscription deactivated.")
+                        if log_warning:
+                            st.warning(log_warning)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Unsubscribe failed: {_friendly_error(exc)}")
