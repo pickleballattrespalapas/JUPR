@@ -20,8 +20,9 @@ def test_public_nav_uses_same_tab_routing_buttons():
     assert '"rating_rules": "public_header:rating_rules"' in contents
     assert '"weekly_recap": "public_header:weekly_recap"' in contents
     assert '"faqs": "public_header:faqs"' in contents
-    assert '"public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login"' in contents
-    assert 'source="public_header:logout"' in contents
+    assert '"public_footer:admin_dashboard" if admin_authenticated else "public_footer:admin_login"' in contents
+    assert 'source="public_footer:logout"' in contents
+    assert '"tournament_registration": "Tournaments"' in contents
     assert "default_page: str = \"home\"" in contents
 
 

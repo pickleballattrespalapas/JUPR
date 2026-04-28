@@ -4,6 +4,7 @@ import inspect
 
 import streamlit as st
 
+from jupr_app.ui.branding import CLUB_NAME, PRODUCT_NAME, TAGLINE
 from jupr_app.ui.page_registry import LABEL_TO_PAGE_KEY, PAGE_KEY_TO_LABEL
 from jupr_app.ui.public_links import navigate_same_tab
 
@@ -16,7 +17,7 @@ PUBLIC_LABEL_BY_KEY: dict[str, str] = {
     "badge_codex": "Badges",
     "challenge_ladder": "Challenge Ladder",
     "jupr_live": "JUPR Live",
-    "tournament_registration": "Events",
+    "tournament_registration": "Tournaments",
     "tournament_partner_board": "Partner Board",
     "rating_rules": "Rating Rules",
     "weekly_recap": "Weekly Recap",
@@ -79,7 +80,25 @@ def _render_public_nav_styles() -> None:
           }
           .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand {
             flex: 0 1 auto;
-            min-width: 10rem;
+            min-width: 14rem;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand-row {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-logo-slot {
+            width: 1.9rem;
+            height: 1.9rem;
+            border-radius: 999px;
+            border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            background: color-mix(in srgb, var(--panel) 88%, transparent);
           }
           .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-brand .stButton > button {
             all: unset;
@@ -116,25 +135,22 @@ def _render_public_nav_styles() -> None:
             gap: 0.35rem;
             flex-wrap: wrap;
           }
-          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin {
-            flex: 0 1 auto;
-            margin-left: auto;
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-footer-links {
+            margin-top: 0.55rem;
+            font-size: 0.76rem;
+            color: var(--text-muted);
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            justify-content: flex-end;
           }
-          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin .stButton {
-            display: inline-flex;
-          }
-          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin .stButton > button {
-            border-radius: 10px;
-            font-size: 0.8rem;
-            font-weight: 800;
-            padding: 0.35rem 0.65rem;
-            white-space: nowrap;
-            width: fit-content;
-          }
-          @media (max-width: 1080px) {
-            .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin {
-              margin-left: 0;
-            }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-footer-links .stButton > button {
+            all: unset;
+            cursor: pointer;
+            color: var(--text-muted);
+            text-decoration: underline;
+            font-size: 0.76rem;
+            font-weight: 600;
           }
         </style>
         """,
@@ -205,16 +221,15 @@ def render_public_app_header(
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="jupr-public-brand">', unsafe_allow_html=True)
-    if st.button("JUPR", key="public_header_brand_home"):
+    st.markdown('<div class="jupr-public-brand"><div class="jupr-public-brand-row"><div class="jupr-public-logo-slot" aria-hidden="true">Logo</div>', unsafe_allow_html=True)
+    if st.button(f"{PRODUCT_NAME} at {CLUB_NAME}", key="public_header_brand_home"):
         navigate_same_tab(
             page="home",
             params=_safe_context_params("home", current_params),
             public_mode=True,
             source="public_header:home",
         )
-    st.markdown('<div class="jupr-public-brand-subtitle">Tres Palapas Rating System</div>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('</div><div class="jupr-public-brand-subtitle">' + TAGLINE + '</div></div>', unsafe_allow_html=True)
 
     st.markdown('<div class="jupr-public-nav-control">', unsafe_allow_html=True)
     nav_labels = [PUBLIC_LABEL_BY_KEY[key] for key in nav_page_keys]
@@ -234,26 +249,26 @@ def render_public_app_header(
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="jupr-public-admin">', unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
+
     admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
+    st.markdown('<div class="jupr-public-footer-links">', unsafe_allow_html=True)
     admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
-    if st.button(admin_label, key="public_header_admin_primary"):
+    if st.button(admin_label, key="public_footer_admin_link"):
         navigate_same_tab(
             page="league_manager" if admin_authenticated else "admin_login",
             public_mode=False,
-            source="public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login",
+            source="public_footer:admin_dashboard" if admin_authenticated else "public_footer:admin_login",
         )
 
-    if admin_authenticated and st.button("Logout", key="public_header_logout"):
+    if admin_authenticated and st.button("Logout", key="public_footer_logout"):
         navigate_same_tab(
             page=current_page_key or default_page,
             params={"logout": "1", **_safe_context_params(current_page_key or default_page, current_params)},
             public_mode=True,
-            source="public_header:logout",
+            source="public_footer:logout",
         )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("</div></div></div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
     return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
 
