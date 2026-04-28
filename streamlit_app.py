@@ -33,6 +33,7 @@ from jupr_app.ui.page_registry import (
     PUBLIC_NAV_KEYS,
     labels_for_keys,
 )
+from jupr_app.ui.branding import CLUB_ID, PUBLIC_BASE_URL_FALLBACK
 from jupr_app.ui.public_nav import render_public_app_header
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
@@ -56,10 +57,6 @@ def _debug_exceptions_enabled() -> bool:
 # -------------------------
 # CONFIG
 # -------------------------
-CLUB_ID = "tres_palapas"
-
-# Public base URL used for share links + link buttons (Streamlit Cloud)
-PUBLIC_BASE_URL = "https://juprtrespalapas.streamlit.app"
 
 
 # -------------------------
@@ -83,6 +80,30 @@ def get_secret(path: list[str], default=None):
         cur = cur[k]
 
     return cur
+
+
+
+
+def get_public_base_url() -> str:
+    """Resolve public base URL from env/secrets with stable fallback."""
+    env_value = str(os.getenv("JUPR_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    if env_value:
+        return env_value
+
+    secret_candidates = (
+        get_secret(["JUPR_PUBLIC_BASE_URL"], ""),
+        get_secret(["PUBLIC_BASE_URL"], ""),
+        get_secret(["public", "base_url"], ""),
+    )
+    for candidate in secret_candidates:
+        secret_value = str(candidate or "").strip().rstrip("/")
+        if secret_value:
+            return secret_value
+
+    return PUBLIC_BASE_URL_FALLBACK
+
+
+PUBLIC_BASE_URL = get_public_base_url()
 
 
 # -------------------------

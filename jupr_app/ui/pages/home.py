@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import streamlit as st
 
+from jupr_app.ui.branding import CLUB_NAME, PRODUCT_NAME, TAGLINE
+
 
 def render(ctx) -> None:  # noqa: ARG001
     st.markdown(
-        """
+        f"""
         <section class="jupr-public-shell">
           <div class="jupr-hero jupr-card">
-            <div class="jupr-hero-eyebrow">JUPR</div>
-            <h1 class="jupr-hero-title">Tres Palapas ratings, profiles, and events.</h1>
+            <div class="jupr-hero-eyebrow">{PRODUCT_NAME} at {CLUB_NAME}</div>
+            <h1 class="jupr-hero-title">Official player ratings and events for {CLUB_NAME}.</h1>
             <p class="jupr-hero-subtitle">
-              Find current standings, player profiles, upcoming events, and player update subscriptions.
+              Find current ratings, player profiles, tournament registration, and player update subscriptions.
             </p>
+            <p class="jupr-hero-subtitle">{TAGLINE}</p>
             <div class="jupr-hero-actions">
               <a class="jupr-link-button" href="?page=leaderboards">Leaderboards</a>
               <a class="jupr-link-button" href="?page=players">Player Profiles</a>
-              <a class="jupr-link-button" href="?page=tournament_registration">Events</a>
+              <a class="jupr-link-button" href="?page=tournament_registration">Tournaments</a>
               <a class="jupr-link-button" href="?page=verified_updates_request">Player Updates</a>
             </div>
           </div>
@@ -56,10 +59,10 @@ def render(ctx) -> None:  # noqa: ARG001
               <p class="jupr-home-card-body">Profiles, recent results, badges, trophies, and update subscriptions.</p>
               <div class="jupr-home-card-cta">Find players →</div>
             </a>
-            <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=tournament_registration" aria-label="View event registration and updates">
-              <h3 class="jupr-home-card-title">Events &amp; Updates</h3>
-              <p class="jupr-home-card-body">Event registration, weekly recaps, partner boards, and player notifications.</p>
-              <div class="jupr-home-card-cta">See events →</div>
+            <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=tournament_registration" aria-label="View tournament registration and updates">
+              <h3 class="jupr-home-card-title">Tournaments &amp; Updates</h3>
+              <p class="jupr-home-card-body">Tournament registration, weekly recaps, partner boards, and player notifications.</p>
+              <div class="jupr-home-card-cta">See tournaments →</div>
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=rating_rules" aria-label="Read the rating rules">
               <h3 class="jupr-home-card-title">Rating Rules</h3>
