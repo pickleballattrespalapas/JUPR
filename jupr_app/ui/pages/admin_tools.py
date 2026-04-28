@@ -5,6 +5,13 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 from jupr_app.domain.replay_history import replay_history
+from jupr_app.domain.admin.roles import (
+    ALL_ROLES,
+    ROLE_READ_ONLY,
+    can_manage_roles,
+    can_run_replay,
+    normalize_role,
+)
 
 from postgrest.exceptions import APIError
 
@@ -118,6 +125,74 @@ def _format_auth_debug_events(events: list[dict[str, object]]) -> list[dict[str,
     return formatted
 
 
+def _admin_role_context() -> tuple[str, bool, bool]:
+    role = normalize_role(str(st.session_state.get("admin_role", ROLE_READ_ONLY) or ROLE_READ_ONLY))
+    return role, can_manage_roles(role), can_run_replay(role)
+
+
+def _render_role_assignment_section(supabase, admin_allowlist: set[str], *, current_role: str, can_assign_roles: bool) -> None:
+    st.subheader("🛂 Admin Role Assignments")
+    role_source = str(st.session_state.get("admin_role_source", "") or "unknown")
+    st.caption(f"Current role: **{current_role}** (source: `{role_source}`).")
+
+    rows: list[dict] = []
+    table_available = True
+    try:
+        response = (
+            supabase.table("admin_role_assignments")
+            .select("user_id,email,role,updated_at")
+            .order("email")
+            .execute()
+        )
+        rows = list(response.data or [])
+    except APIError as exc:
+        table_available = False
+        code = _get_api_error_code(exc) or ""
+        if code in {"42P01", "PGRST205"}:
+            st.info("Roles table not found yet. Falling back to admin allowlist defaults.")
+        else:
+            st.warning("Unable to load role assignments right now.")
+    except Exception:
+        table_available = False
+        st.warning("Unable to load role assignments right now.")
+
+    assigned_emails = {
+        str(row.get("email") or "").strip().lower()
+        for row in rows
+        if str(row.get("email") or "").strip()
+    }
+    for email in sorted(admin_allowlist):
+        if email not in assigned_emails:
+            rows.append({"user_id": None, "email": email, "role": "super_admin", "updated_at": None})
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if not can_assign_roles:
+        st.info("Only Super Admin can change role assignments.")
+        return
+
+    if not table_available:
+        st.caption("Apply the admin role migration before assigning roles in the UI.")
+        return
+
+    with st.form("admin_role_assignment_form"):
+        target_email = st.text_input("User email", placeholder="name@example.com")
+        target_role = st.selectbox("Role", options=list(ALL_ROLES), index=0)
+        submitted = st.form_submit_button("Save role assignment")
+
+    if submitted:
+        normalized_email = str(target_email or "").strip().lower()
+        if "@" not in normalized_email:
+            st.error("Enter a valid email address.")
+        else:
+            supabase.table("admin_role_assignments").upsert(
+                {"email": normalized_email, "role": normalize_role(target_role)},
+                on_conflict="email",
+            ).execute()
+            st.success(f"Updated role for {normalized_email}.")
+            st.rerun()
+
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
     try:
         supabase.table("badge_eval_queue").select("id").eq("club_id", club_id).limit(1).execute()
@@ -159,6 +234,17 @@ def render(ctx):
 
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
+    admin_allowlist = set(st.session_state.get("admin_allowlist", set()) or set())
+    admin_role, role_can_manage_roles, role_can_run_replay = _admin_role_context()
+
+    _render_role_assignment_section(
+        supabase,
+        admin_allowlist,
+        current_role=admin_role,
+        can_assign_roles=role_can_manage_roles,
+    )
+
+    st.divider()
 
     with st.expander("🧰 System Debug Panel", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
@@ -466,7 +552,7 @@ def render(ctx):
 
     target_reset = st.selectbox("Replay scope", league_opts)
 
-    if st.button(f"⚠️ Replay History for: {target_reset}"):
+    if st.button(f"⚠️ Replay History for: {target_reset}", disabled=not role_can_run_replay):
         bar = st.progress(0.0)
         with st.spinner("Crunching..."):
             result = replay_history(
@@ -542,7 +628,7 @@ def render(ctx):
     st.subheader("🛠️ Tournament Match Backfill")
     st.caption("Insert missing public match rows for finalized tournament games.")
 
-    if st.button("Backfill Missing Tournament Matches", key="tournament_match_backfill"):
+    if st.button("Backfill Missing Tournament Matches", key="tournament_match_backfill", disabled=not role_can_run_replay):
         summary = _run_tournament_match_backfill(ctx)
         st.info(
             "Backfill summary: "
@@ -575,7 +661,7 @@ def render(ctx):
     if use_as_of:
         as_of_date = st.date_input("As-of date", value=datetime.now(timezone.utc).date(), key="badge_backfill_date")
 
-    if st.button("Run Badge Backfill", key="badge_backfill_run"):
+    if st.button("Run Badge Backfill", key="badge_backfill_run", disabled=not role_can_run_replay):
         with st.spinner("Computing badge candidates..."):
             league_id = None if league_choice == "All leagues" else str(league_choice).strip()
             as_of_dt = None
@@ -597,13 +683,13 @@ def render(ctx):
                 st.dataframe(summary, use_container_width=True, hide_index=True)
 
     st.divider()
-    _render_badge_audit_section(ctx, club_id)
+    _render_badge_audit_section(ctx, club_id, role_can_run_replay=role_can_run_replay)
 
     st.divider()
-    _render_high_roller_diagnostic_section(ctx, club_id)
+    _render_high_roller_diagnostic_section(ctx, club_id, role_can_run_replay=role_can_run_replay)
 
     st.divider()
-    _render_badge_recompute_section(ctx, club_id)
+    _render_badge_recompute_section(ctx, club_id, role_can_run_replay=role_can_run_replay)
 
     st.divider()
     _render_club_social_review(ctx)
@@ -651,7 +737,7 @@ def render(ctx):
     reason = st.text_input("Reason for change", key="badge_state_reason")
     force = st.checkbox("Force transition (admin override)", value=False, key="badge_state_force")
 
-    if st.button("Update Badge State", key="badge_state_update"):
+    if st.button("Update Badge State", key="badge_state_update", disabled=not role_can_manage_roles):
         if not reason.strip():
             st.error("Please provide a reason for the state change.")
         else:
@@ -757,7 +843,7 @@ def _render_club_social_review(ctx) -> None:
         st.divider()
 
 
-def _render_badge_audit_section(ctx, club_id: str) -> None:
+def _render_badge_audit_section(ctx, club_id: str, *, role_can_run_replay: bool) -> None:
     st.subheader("🎯 Badge Audit")
     st.caption("Compare expected badge rows vs actual rows for targeted diagnostics and troubleshooting.")
 
@@ -779,7 +865,7 @@ def _render_badge_audit_section(ctx, club_id: str) -> None:
     include_revoked = st.checkbox("Include revoked rows", value=False, key="admin_badge_audit_include_revoked")
     include_non_live = st.checkbox("Include non-live badges", value=False, key="admin_badge_audit_include_non_live")
 
-    if st.button("Run Badge Audit", key="admin_badge_audit_run"):
+    if st.button("Run Badge Audit", key="admin_badge_audit_run", disabled=not role_can_run_replay):
         report = build_badge_audit_report(
             ctx.supabase,
             club_id=club_id,
@@ -846,7 +932,7 @@ def _render_high_roller_diagnostics(ctx, *, club_id: str, player_id: int, league
     d3.metric("Source policy", source_policy)
 
 
-def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
+def _render_high_roller_diagnostic_section(ctx, club_id: str, *, role_can_run_replay: bool) -> None:
     st.subheader("🕵️ High Roller Diagnostic")
     st.caption("Run focused diagnostics for High Roller counting and match-filter removals.")
 
@@ -864,7 +950,7 @@ def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
 
     player_options = sorted(df_players["id"].unique().tolist())
     player_id = st.selectbox("Diagnostic player", player_options, key="high_roller_diag_player")
-    if st.button("Run High Roller Diagnostic", key="high_roller_diag_run"):
+    if st.button("Run High Roller Diagnostic", key="high_roller_diag_run", disabled=not role_can_run_replay):
         report = build_high_roller_diagnostic_report(
             ctx.supabase,
             club_id=club_id,
@@ -915,7 +1001,7 @@ def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
                 )
 
 
-def _render_badge_recompute_section(ctx, club_id: str) -> None:
+def _render_badge_recompute_section(ctx, club_id: str, *, role_can_run_replay: bool) -> None:
     st.subheader("🧹 Badge Recompute / Cleanup")
     st.caption("Run scoped badge recompute. Strict mode can revoke stale rows when safely scoped.")
 
@@ -939,7 +1025,7 @@ def _render_badge_recompute_section(ctx, club_id: str) -> None:
     revoke_reason = st.text_input("Revoke reason (required for strict)", value="", key="admin_badge_recompute_reason")
     match_limit = st.number_input("Match limit", min_value=100, max_value=200000, step=100, value=5000, key="admin_badge_recompute_match_limit")
 
-    if st.button("Run Badge Recompute", key="admin_badge_recompute_run"):
+    if st.button("Run Badge Recompute", key="admin_badge_recompute_run", disabled=not role_can_run_replay):
         scoped = any(
             (
                 str(player_id).strip(),

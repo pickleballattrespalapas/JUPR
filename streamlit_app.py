@@ -11,6 +11,7 @@ import streamlit as st
 
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
+from jupr_app.domain.admin.roles import resolve_admin_role
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.admin_auth import (
@@ -310,6 +311,8 @@ def main():
         st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
         st.session_state["jupr_admin_entry_active"] = bool(admin_entry_requested)
         st.session_state["admin_allowlist"] = admin_allowlist
+        st.session_state["admin_role"] = "read_only"
+        st.session_state["admin_role_source"] = "not_authenticated"
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE or admin_login_requested:
@@ -346,6 +349,16 @@ def main():
 
         # ---- Load data + ctx ----
         supabase = get_supabase()
+
+        if admin_authenticated:
+            role_resolution = resolve_admin_role(
+                supabase=supabase,
+                email=current_admin_email,
+                user_id=str(getattr(current_admin, "id", "") or "").strip() or None,
+                allowlist=admin_allowlist,
+            )
+            st.session_state["admin_role"] = role_resolution.role
+            st.session_state["admin_role_source"] = role_resolution.source
         (
             df_players_all,
             df_players_active,
