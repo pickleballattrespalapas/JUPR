@@ -64,6 +64,12 @@ def test_admin_only_pages_remain_excluded_from_public_nav():
 def test_hidden_deep_link_pages_remain_hidden_from_public_nav():
     assert "verified_updates_request" in HIDDEN_PAGE_KEYS
     assert "tournament_roster" in HIDDEN_PAGE_KEYS
+    assert "privacy_policy" in HIDDEN_PAGE_KEYS
+    assert "terms_of_use" in HIDDEN_PAGE_KEYS
+    assert "contact_support" in HIDDEN_PAGE_KEYS
+    assert "data_corrections" in HIDDEN_PAGE_KEYS
+    assert "email_preferences" in HIDDEN_PAGE_KEYS
+    assert "profile_privacy" in HIDDEN_PAGE_KEYS
     assert "verified_updates_request" not in PUBLIC_NAV_KEYS
     assert "tournament_roster" not in PUBLIC_NAV_KEYS
 

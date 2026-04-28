@@ -212,6 +212,24 @@ def test_queue_helper_counts_duplicate_outbox_rows_as_already_queued():
     assert summary["failed"] == 0
 
 
+def test_queue_helper_does_not_queue_unsubscribed_subscriptions():
+    sb = _Supabase()
+    sb.tables["player_profile_update_subscriptions"] = [
+        {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": "unsubscribed"},
+    ]
+
+    summary = queue_player_updates_for_affected_subscribers(
+        sb,
+        club_id="club",
+        affected_player_ids=[1],
+        match_dates=["2026-02-10"],
+    )
+
+    assert summary["active_subscriptions"] == 0
+    assert summary["queued"] == 0
+    assert summary["no_active_subscription"] == 1
+
+
 def test_process_matches_queueing_errors_do_not_break_match_processing(monkeypatch):
     sb = _Supabase()
 
