@@ -76,11 +76,19 @@ Before any deploy, smoke test:
 
 ## 8) Migration checklist
 
+Detailed policy: see `docs/migrations.md`.
+
 1. Review SQL.
 2. Apply SQL in Supabase SQL editor.
 3. Verify expected columns/tables.
 4. Deploy app branch.
 5. Smoke test.
+
+Guardrail command:
+
+```bash
+make check-migration-sources
+```
 
 ## 9) Rollback checklist
 
