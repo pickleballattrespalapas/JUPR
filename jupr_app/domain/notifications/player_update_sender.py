@@ -13,6 +13,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     SEND_STATUS_SENT,
     SEND_STATUS_SKIPPED,
     create_outbox_row,
+    ensure_unsubscribe_token,
     list_active_subscriptions,
     list_outbox_rows,
     save_digest,
@@ -87,16 +88,21 @@ def _build_public_players_url(params: dict[str, str]) -> str:
     return f"{_public_base_url()}/?{urlencode(query)}"
 
 
-def _merge_links_for_send(*, digest: dict[str, Any], player_id: int, subscription_id: str) -> dict[str, Any]:
+def _merge_links_for_send(
+    *,
+    digest: dict[str, Any],
+    player_id: int,
+    subscription_id: str,
+    unsubscribe_token: str | None = None,
+) -> dict[str, Any]:
     links = dict((digest or {}).get("links") or {})
     links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))})
-    links["unsubscribe"] = _build_public_players_url(
-        {
-            "pid": str(int(player_id)),
-            "unsubscribe": "1",
-            "sid": str(subscription_id),
-        }
-    )
+    unsubscribe_params = {"page": "email_preferences"}
+    if str(unsubscribe_token or "").strip():
+        unsubscribe_params["token"] = str(unsubscribe_token).strip()
+    else:
+        unsubscribe_params["sid"] = str(subscription_id)
+    links["unsubscribe"] = f"{_public_base_url()}/?{urlencode(unsubscribe_params)}"
     merged = dict(digest or {})
     merged["links"] = links
     return merged
@@ -434,6 +440,10 @@ def send_pending_player_update_emails(ctx, *, limit: int = 100) -> dict[str, int
                 digest=digest,
                 player_id=player_id,
                 subscription_id=str(subscription.get("id") or ""),
+                unsubscribe_token=ensure_unsubscribe_token(
+                    supabase,
+                    str(subscription.get("id") or ""),
+                ),
             )
 
             if _is_send_only_if_changed_and_unchanged(subscription, digest):
@@ -533,6 +543,7 @@ def send_test_player_update_email(
         digest=digest,
         player_id=int(selected_player_id),
         subscription_id=selected_subscription_id,
+        unsubscribe_token=ensure_unsubscribe_token(supabase, selected_subscription_id),
     )
 
     chart_cid = "player-digest-chart"

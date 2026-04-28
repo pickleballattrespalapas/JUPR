@@ -6,10 +6,12 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.notifications.player_profile_update_repo import (
+    REQUEST_STATUS_UNSUBSCRIBED,
     approve_request,
     bulk_delete_pending_outbox_rows,
     delete_pending_outbox_row,
     list_active_subscriptions,
+    list_subscriptions_by_status,
     list_digests_for_range,
     list_outbox_rows,
     list_pending_requests,
@@ -78,6 +80,23 @@ def _active_table_rows(ctx, rows: list[dict]) -> list[dict]:
                 "verified_at": row.get("verified_at"),
                 "verified_by": row.get("verified_by"),
                 "last_digest_week_start": row.get("last_digest_week_start"),
+            }
+        )
+    return display_rows
+
+
+def _inactive_table_rows(ctx, rows: list[dict]) -> list[dict]:
+    display_rows: list[dict] = []
+    for row in rows:
+        pid = row.get("player_id")
+        display_rows.append(
+            {
+                "player_id": pid,
+                "player_name": _player_name(ctx, pid),
+                "email": row.get("email"),
+                "request_status": row.get("request_status"),
+                "unsubscribed_at": row.get("unsubscribed_at"),
+                "verified_at": row.get("verified_at"),
             }
         )
     return display_rows
@@ -265,6 +284,12 @@ def render(ctx) -> None:
     with active_tab:
         st.subheader("Active Profiles")
         active_rows = list_active_subscriptions(supabase, club_id, limit=200)
+        unsubscribed_rows = list_subscriptions_by_status(
+            supabase,
+            club_id,
+            statuses=[REQUEST_STATUS_UNSUBSCRIBED],
+            limit=200,
+        )
 
         if active_rows:
             st.dataframe(pd.DataFrame(_active_table_rows(ctx, active_rows)), use_container_width=True)
@@ -322,6 +347,12 @@ def render(ctx) -> None:
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Unsubscribe failed: {_friendly_error(exc)}")
+
+        st.markdown("#### Recently Unsubscribed")
+        if unsubscribed_rows:
+            st.dataframe(pd.DataFrame(_inactive_table_rows(ctx, unsubscribed_rows)), use_container_width=True)
+        else:
+            st.caption("No unsubscribed subscriptions yet.")
 
     with digests_tab:
         st.subheader("Player Digests")

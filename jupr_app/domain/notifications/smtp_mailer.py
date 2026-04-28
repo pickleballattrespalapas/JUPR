@@ -37,8 +37,8 @@ def _read_smtp_config_raw() -> dict:
     username = _secret_or_env("SMTP_USERNAME")
     password = _secret_or_env("SMTP_PASSWORD")
     from_email = _secret_or_env("SMTP_FROM_EMAIL")
-    from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR Updates"
-    reply_to = _secret_or_env("SMTP_REPLY_TO")
+    from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR Notifications"
+    reply_to = _secret_or_env("SMTP_REPLY_TO") or "joe@juprleagues.com"
     use_tls = _env_bool("SMTP_USE_TLS", default=True)
 
     return {

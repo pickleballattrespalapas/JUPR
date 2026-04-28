@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import secrets
 from typing import Any
 
 REQUEST_STATUS_PENDING = "pending_admin_review"
@@ -47,6 +48,11 @@ def _is_unique_violation(exc: Exception) -> bool:
     return "duplicate key" in text or "unique" in text
 
 
+def _is_missing_column(exc: Exception, column_name: str) -> bool:
+    text = str(exc or "").lower()
+    return "column" in text and str(column_name or "").lower() in text and "does not exist" in text
+
+
 def _coerce_date(value: date | datetime | str | None) -> date | None:
     if value is None:
         return None
@@ -85,6 +91,10 @@ def _require_nonempty(value: Any, field_name: str) -> str:
     if not text:
         raise ValueError(f"{field_name} is required")
     return text
+
+
+def _new_unsubscribe_token() -> str:
+    return secrets.token_urlsafe(24)
 
 
 def create_public_request(
@@ -370,6 +380,129 @@ def mark_unsubscribed(supabase, subscription_id: str) -> dict[str, Any]:
     if updated is None:
         raise RuntimeError("Subscription could not be marked unsubscribed")
     return updated
+
+
+def list_subscriptions_by_status(
+    supabase,
+    club_id: str,
+    *,
+    statuses: list[str] | tuple[str, ...],
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    club_id = _require_nonempty(club_id, "club_id")
+    normalized_statuses = [str(status or "").strip().lower() for status in statuses or [] if str(status or "").strip()]
+    if not normalized_statuses:
+        return []
+    upper = max(0, int(limit) - 1)
+    start = max(0, int(offset))
+    end = start + upper
+    resp = (
+        supabase.table("player_profile_update_subscriptions")
+        .select("*")
+        .eq("club_id", club_id)
+        .in_("request_status", normalized_statuses)
+        .order("updated_at", desc=True)
+        .range(start, end)
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+def get_subscription_for_unsubscribe(
+    supabase,
+    *,
+    unsubscribe_token: str | None = None,
+    subscription_id: str | None = None,
+) -> dict[str, Any] | None:
+    token = str(unsubscribe_token or "").strip()
+    sid = str(subscription_id or "").strip()
+
+    if token:
+        try:
+            row = _safe_first(
+                supabase.table("player_profile_update_subscriptions")
+                .select("*")
+                .eq("unsubscribe_token", token)
+                .limit(1)
+                .execute()
+            )
+            if row is not None:
+                return row
+        except Exception as exc:
+            if not _is_missing_column(exc, "unsubscribe_token"):
+                raise
+
+    if sid:
+        return _safe_first(
+            supabase.table("player_profile_update_subscriptions")
+            .select("*")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+        )
+    return None
+
+
+def ensure_unsubscribe_token(supabase, subscription_id: str) -> str | None:
+    sid = _require_nonempty(subscription_id, "subscription_id")
+    try:
+        existing = _safe_first(
+            supabase.table("player_profile_update_subscriptions")
+            .select("id,unsubscribe_token")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        if _is_missing_column(exc, "unsubscribe_token"):
+            return None
+        raise
+
+    if existing is None:
+        return None
+    current = str(existing.get("unsubscribe_token") or "").strip()
+    if current:
+        return current
+
+    for _ in range(3):
+        token = _new_unsubscribe_token()
+        try:
+            updated = _safe_first(
+                supabase.table("player_profile_update_subscriptions")
+                .update({"unsubscribe_token": token})
+                .eq("id", sid)
+                .execute()
+            )
+            applied = str((updated or {}).get("unsubscribe_token") or "").strip()
+            if applied:
+                return applied
+        except Exception as exc:
+            if _is_missing_column(exc, "unsubscribe_token"):
+                return None
+            if _is_unique_violation(exc):
+                continue
+            raise
+    return None
+
+
+def unsubscribe_via_public_link(
+    supabase,
+    *,
+    unsubscribe_token: str | None = None,
+    subscription_id: str | None = None,
+) -> dict[str, Any]:
+    row = get_subscription_for_unsubscribe(
+        supabase,
+        unsubscribe_token=unsubscribe_token,
+        subscription_id=subscription_id,
+    )
+    if row is None:
+        raise ValueError("Subscription not found for this unsubscribe link.")
+    status = str(row.get("request_status") or "").strip().lower()
+    if status == REQUEST_STATUS_UNSUBSCRIBED:
+        return row
+    return mark_unsubscribed(supabase, str(row.get("id") or ""))
 
 
 def save_digest(

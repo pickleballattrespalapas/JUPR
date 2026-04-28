@@ -41,6 +41,15 @@ PUBLIC_SOURCE_BY_PAGE: dict[str, str] = {
 }
 
 _SAFE_CONTEXT_KEYS = {"club_id"}
+PUBLIC_FOOTER_LINKS: tuple[tuple[str, str], ...] = (
+    ("Rating Rules", "rating_rules"),
+    ("FAQ", "faqs"),
+    ("Privacy", "privacy_policy"),
+    ("Terms", "terms_of_use"),
+    ("Contact", "contact_support"),
+    ("Data Corrections", "data_corrections"),
+    ("Email Preferences", "email_preferences"),
+)
 
 
 def _current_query_params() -> dict[str, str]:
@@ -253,6 +262,14 @@ def render_public_app_header(
 
     admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
     st.markdown('<div class="jupr-public-footer-links">', unsafe_allow_html=True)
+    for link_label, page_key in PUBLIC_FOOTER_LINKS:
+        if st.button(link_label, key=f"public_footer_link_{page_key}"):
+            navigate_same_tab(
+                page=page_key,
+                params=_safe_context_params(page_key, current_params),
+                public_mode=True,
+                source=f"public_footer:{page_key}",
+            )
     admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
     if st.button(admin_label, key="public_footer_admin_link"):
         navigate_same_tab(

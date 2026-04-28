@@ -21,6 +21,11 @@ def test_public_nav_uses_same_tab_routing_buttons():
     assert '"weekly_recap": "public_header:weekly_recap"' in contents
     assert '"faqs": "public_header:faqs"' in contents
     assert '"public_footer:admin_dashboard" if admin_authenticated else "public_footer:admin_login"' in contents
+    assert '("Privacy", "privacy_policy")' in contents
+    assert '("Terms", "terms_of_use")' in contents
+    assert '("Contact", "contact_support")' in contents
+    assert '("Data Corrections", "data_corrections")' in contents
+    assert '("Email Preferences", "email_preferences")' in contents
     assert 'source="public_footer:logout"' in contents
     assert '"tournament_registration": "Tournaments"' in contents
     assert "default_page: str = \"home\"" in contents
