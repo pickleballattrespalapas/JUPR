@@ -2122,7 +2122,10 @@ def render(ctx):
             )
         zero_selectable = readiness["total"] > 0 and readiness["selectable"] == 0
         if zero_selectable:
-            st.error("This publish would leave the public registration form with 0 selectable divisions.")
+            st.warning(
+                "This publish has no open public divisions. Public registration will show: "
+                "'Registration coming soon. Divisions are being finalized.'"
+            )
         elif readiness["hidden"] > 0:
             st.warning("Some divisions are hidden from public registration (draft/disabled).")
 
