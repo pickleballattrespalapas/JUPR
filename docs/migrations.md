@@ -13,9 +13,15 @@ Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
+- `20260420000000_verified_player_updates_foundation.sql`
 - `20260424_matches_soft_delete.sql`
 - `20260428_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
 - `2026XX_backport_tournament_engine.sql`
+
+Note (2026-04-28):
+
+- Verified player update schema migrations originally lived only in `migrations/` (`20260420_verified_player_updates.sql`, `20260421_verified_player_updates_date_window_uniqueness.sql`, and `20260421_player_update_outbox_allow_repeat_queue_rows.sql`).
+- Supabase migration runs only read `supabase/migrations/`, so we backfilled their schema intent into `supabase/migrations/20260420000000_verified_player_updates_foundation.sql` to guarantee the base tables exist before later unsubscribe/update migrations run.
 
 ### `migrations/` (legacy/archive)
 
@@ -102,6 +108,7 @@ Use the guard script:
 
 ```bash
 python scripts/check_migration_sources.py
+python scripts/check_player_update_migration_foundation.py
 ```
 
 Behavior:
