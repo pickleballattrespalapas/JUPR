@@ -316,28 +316,27 @@ def _build_roster_candidate_rows(
         elif candidate_names:
             status = "suggested match"
         else:
-            status = "create rated"
+            status = "new social-only"
 
-        create_rated_token = f"create_rated::{normalized_pasted or pasted_name}"
+        create_social_token = f"new::{normalized_pasted or pasted_name}"
         options: list[dict[str, str | int | None]] = [
             {"token": f"player::{int(player_name_to_id[name])}", "label": str(name)}
             for name in candidate_names
         ]
         options.append(
             {
-                "token": create_rated_token,
-                "label": f"Create new rated player: {normalize_name(pasted_name)}",
+                "token": create_social_token,
+                "label": f"Create new social-only player: {normalize_name(pasted_name)}",
             }
         )
-        default_token = create_rated_token
+        default_token = create_social_token
         if exact_names:
             default_token = f"player::{int(player_name_to_id[exact_names[0]])}"
-        elif candidate_names and top_score >= 0.86:
-            default_token = f"player::{int(player_name_to_id[candidate_names[0]])}"
         duplicate_warning = ""
         if (not exact_names) and candidate_names and top_score >= 0.9:
             duplicate_warning = (
-                "Possible duplicate: this name is very close to an existing rated player."
+                "Possible duplicate: this name is very close to an existing rated player. "
+                "If you still need a separate social-only profile, provide a confirmation note."
             )
         rows.append(
             {
@@ -378,19 +377,6 @@ def _resolved_participants_from_confirmation(
                     }
                 )
             continue
-        if selected_token.startswith("create_rated::"):
-            create_name = original
-            if create_name:
-                names.append(create_name)
-                resolved_rows.append(
-                    {
-                        "name": create_name,
-                        "player_id": None,
-                        "source_name": original,
-                        "match_status": "create_rated",
-                    }
-                )
-            continue
         social_name = original
         if social_name:
             names.append(social_name)
@@ -400,6 +386,8 @@ def _resolved_participants_from_confirmation(
                     "player_id": None,
                     "source_name": original,
                     "match_status": "new_social",
+                    "duplicate_confirmed": bool(row.get("duplicate_confirmed", False)),
+                    "duplicate_note": str(row.get("duplicate_note") or "").strip(),
                 }
             )
     return names, resolved_ids, resolved_rows
@@ -1047,8 +1035,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         roster_candidates = list(state.get("roster_candidates") or [])
         st.markdown("#### Step 1: Review roster matches")
         st.caption(
-            "Confirm each pasted name once. Exact or suggested matches use canonical current-player names; "
-            "or choose explicit rated-player creation."
+            "Confirm each pasted name once. Choose an existing rated profile or create a social-only profile."
         )
         with st.form(f"{config.state_key}_roster_resolution_form"):
             confirmed_rows: list[dict] = []
@@ -1072,15 +1059,47 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                     label_visibility="collapsed",
                 )
                 selected_token = tokens[labels.index(selected_label)] if selected_label in labels else default_token
+                duplicate_confirmed = False
+                duplicate_note = ""
+                if duplicate_warning and selected_token.startswith("new::"):
+                    duplicate_confirmed = selector_col.checkbox(
+                        "I intentionally want a separate social-only profile for this similar name.",
+                        value=False,
+                        key=f"{config.state_key}_dup_confirm_{idx}",
+                    )
+                    duplicate_note = selector_col.text_input(
+                        "Duplicate confirmation note (required)",
+                        value="",
+                        key=f"{config.state_key}_dup_note_{idx}",
+                    ).strip()
                 confirmed_rows.append(
                     {
                         "original": str(row.get("original") or ""),
                         "selection": selected_token,
                         "status": str(row.get("status") or ""),
+                        "duplicate_confirmed": duplicate_confirmed,
+                        "duplicate_note": duplicate_note,
                     }
                 )
             confirmed = st.form_submit_button("Confirm roster", type="primary")
         if confirmed:
+            duplicate_errors: list[str] = []
+            for row in confirmed_rows:
+                if not str(row.get("selection") or "").startswith("new::"):
+                    continue
+                if row.get("duplicate_confirmed") and str(row.get("duplicate_note") or "").strip():
+                    continue
+                for source_row in roster_candidates:
+                    if str(source_row.get("original") or "") == str(row.get("original") or "") and str(
+                        source_row.get("duplicate_warning") or ""
+                    ).strip():
+                        duplicate_errors.append(
+                            f"{row.get('original')}: check duplicate confirmation and add a note to create a separate social-only profile."
+                        )
+                        break
+            if duplicate_errors:
+                st.error("\n".join(duplicate_errors))
+                st.stop()
             canonical_names, resolved_ids, resolved_rows = _resolved_participants_from_confirmation(
                 confirmed_rows,
                 player_name_to_id,
@@ -1099,18 +1118,13 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
         if state.get("roster_confirmed"):
             confirmed_rows = list(state.get("confirmed_roster_rows") or [])
             matched_rows = [row for row in confirmed_rows if row.get("player_id") is not None]
-            new_rows = [row for row in confirmed_rows if row.get("match_status") == "create_rated"]
-            social_only_rows = [
-                row for row in confirmed_rows if row.get("player_id") is None and row.get("match_status") != "create_rated"
-            ]
+            social_only_rows = [row for row in confirmed_rows if row.get("player_id") is None]
             st.caption(
                 f"Confirmed roster: {len(matched_rows)} matched existing rated players, "
-                f"{len(new_rows)} create-new rated players."
+                f"{len(social_only_rows)} social-only players for admin review."
             )
             if matched_rows:
                 st.caption("Matched: " + ", ".join(str(row.get("name") or "") for row in matched_rows))
-            if new_rows:
-                st.caption("Create rated: " + ", ".join(str(row.get("name") or "") for row in new_rows))
             if social_only_rows:
                 st.caption("Social-only fallback: " + ", ".join(str(row.get("name") or "") for row in social_only_rows))
 
@@ -1154,12 +1168,10 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                             "selection": (
                                 f"player::{int(row.get('player_id'))}"
                                 if row.get("player_id") is not None
-                                else (
-                                    f"create_rated::{_normalized_person_key(row.get('name'))}"
-                                    if str(row.get("match_status") or "") == "create_rated"
-                                    else f"new::{_normalized_person_key(row.get('name'))}"
-                                )
+                                else f"new::{_normalized_person_key(row.get('name'))}"
                             ),
+                            "duplicate_confirmed": bool(row.get("duplicate_confirmed", False)),
+                            "duplicate_note": str(row.get("duplicate_note") or "").strip(),
                         }
                         for row in confirmed_roster_rows
                     ],

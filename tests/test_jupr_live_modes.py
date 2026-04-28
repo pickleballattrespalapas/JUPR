@@ -60,7 +60,7 @@ def test_club_social_save_handles_missing_tables_gracefully(monkeypatch):
     monkeypatch.setattr(jupr_live, "st", fake_st)
     monkeypatch.setattr(
         jupr_live,
-        "save_social_live_event",
+        "save_resolved_social_live_event",
         lambda *args, **kwargs: (_ for _ in ()).throw(_TablesMissing("missing")),
     )
 

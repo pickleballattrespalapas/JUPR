@@ -20,9 +20,7 @@ from jupr_app.domain.live_social import (
     social_league_match_rows_from_event,
     social_round_robin_match_rows_from_event,
 )
-from jupr_app.domain.player_ops import safe_add_player
 
-DEFAULT_PROVISIONAL_SEED_ELO = 1400.0
 STRONG_DUPLICATE_THRESHOLD = 0.94
 
 
@@ -82,84 +80,7 @@ def _players_frame(ctx) -> pd.DataFrame:
     frame = frame.dropna(subset=["id"]).copy()
     frame["id"] = frame["id"].astype(int)
     frame["name"] = frame.get("name", "").fillna("").astype(str).map(normalize_name)
-    if "rating" in frame.columns:
-        frame["rating"] = pd.to_numeric(frame.get("rating"), errors="coerce")
-    else:
-        frame["rating"] = float(DEFAULT_PROVISIONAL_SEED_ELO)
     return frame
-
-
-def _provisional_seed_elo(ctx, participants: list[dict]) -> float:
-    explicit_ids: list[int] = []
-    for participant in participants or []:
-        raw_pid = participant.get("player_id")
-        if raw_pid is None:
-            continue
-        text = str(raw_pid).strip()
-        if not text:
-            continue
-        try:
-            explicit_ids.append(int(text))
-        except Exception:
-            continue
-    explicit_ids = sorted(set(explicit_ids))
-    if not explicit_ids:
-        return float(DEFAULT_PROVISIONAL_SEED_ELO)
-    players_df = _players_frame(ctx)
-    if players_df.empty:
-        return float(DEFAULT_PROVISIONAL_SEED_ELO)
-    seeded = players_df[players_df["id"].isin(explicit_ids)].dropna(subset=["rating"]).copy()
-    if seeded.empty:
-        return float(DEFAULT_PROVISIONAL_SEED_ELO)
-    return float(seeded["rating"].mean())
-
-
-def _fetch_player_by_exact_name(supabase, *, club_id: str, display_name: str) -> dict | None:
-    rows = (
-        supabase.table("players")
-        .select("id,name,rating,starting_rating")
-        .eq("club_id", str(club_id))
-        .eq("name", normalize_name(display_name))
-        .limit(2)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        return None
-    return dict(rows[0])
-
-
-def _ensure_rated_player_from_social(
-    ctx,
-    *,
-    club_id: str,
-    display_name: str,
-    provisional_seed_elo: float,
-) -> tuple[dict, bool]:
-    existing = _fetch_player_by_exact_name(
-        ctx.supabase,
-        club_id=club_id,
-        display_name=display_name,
-    )
-    if existing is not None:
-        return existing, False
-    ok, err = safe_add_player(
-        supabase=ctx.supabase,
-        club_id=club_id,
-        name=normalize_name(display_name),
-        rating_jupr=float(provisional_seed_elo) / 400.0,
-    )
-    if not ok:
-        raise RuntimeError(err or f"Unable to create rated player for {display_name}.")
-    created = _fetch_player_by_exact_name(
-        ctx.supabase,
-        club_id=club_id,
-        display_name=display_name,
-    )
-    if created is None:
-        raise RuntimeError(f"Unable to resolve created rated player for {display_name}.")
-    return created, True
 
 
 def _normalized_name(value: object) -> str:
@@ -246,13 +167,9 @@ def save_resolved_social_live_event(
     event_date = str(event.get("eventDate") or "").strip() or datetime.now(timezone.utc).date().isoformat()
     source_event_uid = _event_uid(event)
     participants = list(event.get("participants") or [])
-    admin_logged_in = bool(getattr(ctx, "admin_logged_in", False))
-    provisional_seed_elo = _provisional_seed_elo(ctx, participants)
-
     created_people_count = 0
     linked_existing_players_count = 0
-    created_rated_players_count = 0
-    created_rated_player_names: list[str] = []
+    duplicate_confirmation_count = 0
     participant_rows: list[dict] = []
 
     try:
@@ -265,37 +182,24 @@ def save_resolved_social_live_event(
             else:
                 explicit_player_id = None
 
-            if (
-                explicit_player_id is None
-                and admin_logged_in
-                and match_status in {"create_rated", "create rated"}
-            ):
+            duplicate_candidates = []
+            duplicate_confirmed = bool(participant.get("duplicate_confirmed", False))
+            duplicate_note = str(participant.get("duplicate_note") or "").strip()
+            if explicit_player_id is None:
                 duplicate_candidates = _find_strong_duplicate_candidates(
                     ctx,
                     display_name=display_name,
                 )
                 if duplicate_candidates:
-                    top = duplicate_candidates[0]
-                    if _normalized_name(top.get("name")) != _normalized_name(display_name):
+                    has_explicit_duplicate_confirmation = duplicate_confirmed and bool(duplicate_note)
+                    if not has_explicit_duplicate_confirmation:
+                        top = duplicate_candidates[0]
                         raise ValueError(
                             "Duplicate warning: "
                             f"'{display_name}' is very close to existing rated player '{top.get('name')}'. "
-                            "Select the existing player in roster confirmation to continue."
+                            "Select an existing profile or confirm duplicate social-only creation with a note."
                         )
-                rated_player, created_rated = _ensure_rated_player_from_social(
-                    ctx,
-                    club_id=club_id,
-                    display_name=display_name,
-                    provisional_seed_elo=provisional_seed_elo,
-                )
-                explicit_player_id = int(rated_player["id"])
-                participant["player_id"] = explicit_player_id
-                participant["name"] = normalize_name(rated_player.get("name") or display_name)
-                participant["match_status"] = "created_rated"
-                display_name = str(participant.get("name") or display_name)
-                if created_rated:
-                    created_rated_players_count += 1
-                    created_rated_player_names.append(display_name)
+                    duplicate_confirmation_count += 1
 
             auto_link_enabled = match_status not in {"new_social", "new social person"} or explicit_player_id is not None
             club_person, created_new, matched_player = resolve_or_create_club_person(
@@ -423,9 +327,10 @@ def save_resolved_social_live_event(
             "match_count": len(match_rows),
             "created_people_count": created_people_count,
             "linked_existing_players_count": linked_existing_players_count,
-            "created_rated_players_count": created_rated_players_count,
-            "created_rated_player_names": created_rated_player_names,
-            "provisional_seed_elo": provisional_seed_elo,
+            "created_rated_players_count": 0,
+            "created_rated_player_names": [],
+            "duplicate_confirmation_count": duplicate_confirmation_count,
+            "unmatched_requires_admin_review_count": max(0, int(created_people_count) - int(linked_existing_players_count)),
         }
     except Exception as exc:
         if is_missing_social_tables_error(exc):
