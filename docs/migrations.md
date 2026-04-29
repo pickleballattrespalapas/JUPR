@@ -15,6 +15,7 @@ Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
+- `20260420000000_verified_player_updates_foundation.sql`
 - `20260424_matches_soft_delete.sql`
 - `20260428090000_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
 - `20260428100000_admin_role_assignments.sql`
