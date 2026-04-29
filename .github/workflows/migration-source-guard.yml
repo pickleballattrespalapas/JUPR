@@ -25,3 +25,6 @@ jobs:
           else
             python scripts/check_migration_sources.py --base-ref Test
           fi
+
+      - name: Check supabase migration version prefixes
+        run: python scripts/check_supabase_migration_versions.py
