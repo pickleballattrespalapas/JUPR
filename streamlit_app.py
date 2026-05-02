@@ -147,6 +147,33 @@ def get_data(club_id: str):
     return load_data(supabase, club_id, match_limit=5000)
 
 
+def _build_minimal_context(
+    *,
+    supabase,
+    club_id: str,
+    public_mode: bool,
+    admin_logged_in: bool,
+) -> AppContext:
+    empty_df = pd.DataFrame()
+    return AppContext(
+        supabase=supabase,
+        club_id=club_id,
+        df_players_all=empty_df,
+        df_players_active=empty_df,
+        df_leagues=empty_df,
+        df_matches=empty_df,
+        df_meta=empty_df,
+        df_badges=empty_df,
+        df_player_badges=empty_df,
+        name_to_id={},
+        id_to_name={},
+        public_mode=public_mode,
+        admin_logged_in=admin_logged_in,
+        schema_degraded=False,
+        schema_degraded_reason=None,
+    )
+
+
 # -------------------------
 # UI helpers
 # -------------------------
@@ -471,6 +498,23 @@ def main():
             except Exception:
                 pass
             st.session_state["force_data_refresh"] = False
+
+        # ---- Early auth-route render without full data load ----
+        auth_route_requested = admin_login_requested or recovery_flow or incoming_page_param == "reset_password"
+        if auth_route_requested:
+            from jupr_app.ui.pages import admin_login, reset_password
+
+            auth_ctx = _build_minimal_context(
+                supabase=supabase,
+                club_id=selected_club_id,
+                public_mode=PUBLIC_MODE,
+                admin_logged_in=admin_logged_in,
+            )
+            if admin_login_requested:
+                admin_login.render(auth_ctx)
+            else:
+                reset_password.render(auth_ctx)
+            return
 
         # ---- Load data + ctx ----
         
