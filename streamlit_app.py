@@ -657,11 +657,24 @@ def main():
                 )
 
         else:
-            st.sidebar.page_link(
-                "streamlit_app.py",
-                label="View Public Site",
-                icon="🌐",
-            )
+            if st.sidebar.button("🌐 View Public Site", key="admin_view_public_site_btn"):
+                st.session_state.pop("main_nav", None)
+                st.session_state.pop("public_nav", None)
+                st.session_state["jupr_public_mode"] = True
+                st.session_state["jupr_admin_entry_active"] = False
+                _set_query_params_idempotent(
+                    updates={},
+                    removals={
+                        "admin",
+                        "next",
+                        "jupr_admin_access_token",
+                        "jupr_admin_refresh_token",
+                        "jupr_admin_restore_from_storage",
+                        "logout",
+                        "page",
+                    },
+                )
+                st.rerun()
             if (admin_logged_in and st.session_state.get("admin_role_source") == "super_admin_view_as" and st.session_state.get("admin_real_role") == "super_admin"):
                 st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
                 if st.sidebar.button("Return to Super Admin"):
