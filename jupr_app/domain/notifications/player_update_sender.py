@@ -23,7 +23,7 @@ from jupr_app.domain.notifications.player_update_email_template import (
     build_player_update_email_subject,
     build_player_update_email_text,
 )
-from jupr_app.config import get_public_base_url
+from jupr_app.config import SMTPConfig, get_public_base_url
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 
@@ -384,7 +384,13 @@ def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[s
     }
 
 
-def send_pending_player_update_emails(ctx, *, limit: int = 100, public_base_url: str | None = None) -> dict[str, int]:
+def send_pending_player_update_emails(
+    ctx,
+    *,
+    limit: int = 100,
+    public_base_url: str | None = None,
+    smtp_config: SMTPConfig | None = None,
+) -> dict[str, int]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
     pending_rows = list_outbox_rows(supabase, club_id, status="pending", limit=max(1, int(limit)))
@@ -462,6 +468,7 @@ def send_pending_player_update_emails(ctx, *, limit: int = 100, public_base_url:
                 chart_png_bytes=chart_png,
                 chart_cid=chart_cid if chart_png else None,
                 unsubscribe_url=str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None,
+                smtp_config=smtp_config,
             )
 
             update_outbox_status(
@@ -503,6 +510,7 @@ def send_test_player_update_email(
     player_id: int | None = None,
     to_email: str | None = None,
     public_base_url: str | None = None,
+    smtp_config: SMTPConfig | None = None,
 ) -> dict[str, str]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
@@ -553,5 +561,6 @@ def send_test_player_update_email(
         chart_png_bytes=chart_png,
         chart_cid=chart_cid if chart_png else None,
         unsubscribe_url=unsubscribe_url,
+        smtp_config=smtp_config,
     )
     return {"to_email": admin_email, "provider_message_id": provider_message_id}
