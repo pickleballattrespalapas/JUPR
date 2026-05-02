@@ -39,6 +39,10 @@ from jupr_app.ui.public_nav import render_public_app_header, render_public_foote
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 from jupr_app.ui.admin_page_permissions import is_admin_page_available_for_role
+from jupr_app.ui.admin_view_as import (
+    can_use_view_as,
+    resolve_effective_admin_role,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -312,10 +316,36 @@ def main():
         st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
         st.session_state["jupr_admin_entry_active"] = bool(admin_entry_requested)
         st.session_state["admin_allowlist"] = admin_allowlist
-        st.session_state["admin_real_role"] = "read_only"
-        st.session_state["admin_real_role_source"] = "not_authenticated"
-        st.session_state["admin_role"] = "read_only"
-        st.session_state["admin_role_source"] = "not_authenticated"
+        st.session_state.setdefault("admin_real_role", "read_only")
+        st.session_state.setdefault("admin_real_role_source", "not_authenticated")
+        st.session_state.setdefault("admin_role", "read_only")
+        st.session_state.setdefault("admin_role_source", "not_authenticated")
+        st.session_state.setdefault("admin_view_as_role", None)
+
+        supabase = get_supabase()
+        if admin_authenticated:
+            role_resolution = resolve_admin_role(
+                supabase=supabase,
+                email=current_admin_email,
+                user_id=str(getattr(current_admin, "id", "") or "").strip() or None,
+                allowlist=admin_allowlist,
+            )
+            st.session_state["admin_real_role"] = role_resolution.role
+            st.session_state["admin_real_role_source"] = role_resolution.source
+            effective_role, effective_role_source, sanitized_view_as_role = resolve_effective_admin_role(
+                role_resolution.role,
+                role_resolution.source,
+                st.session_state.get("admin_view_as_role"),
+            )
+            st.session_state["admin_role"] = effective_role
+            st.session_state["admin_role_source"] = effective_role_source
+            st.session_state["admin_view_as_role"] = sanitized_view_as_role
+        else:
+            st.session_state["admin_real_role"] = "read_only"
+            st.session_state["admin_real_role_source"] = "not_authenticated"
+            st.session_state["admin_role"] = "read_only"
+            st.session_state["admin_role_source"] = "not_authenticated"
+            st.session_state["admin_view_as_role"] = None
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE or admin_login_requested:
@@ -342,7 +372,7 @@ def main():
                     )
                     st.rerun()
 
-            if admin_authenticated and st.session_state.get("admin_real_role") == "super_admin":
+            if admin_authenticated and can_use_view_as(st.session_state.get("admin_real_role", "")):
                 st.sidebar.markdown("### Super Admin Tools")
                 view_as_options = {
                     "Actual Super Admin": "",
@@ -355,14 +385,10 @@ def main():
                 selected_label = next((label for label, role in view_as_options.items() if role == current_view_as), "Actual Super Admin")
                 picked_label = st.sidebar.selectbox("View admin as", list(view_as_options.keys()), index=list(view_as_options.keys()).index(selected_label), help="Temporarily preview another role’s permissions. Your real account and audit identity do not change.")
                 picked_role = view_as_options[picked_label]
-                if picked_role:
-                    st.session_state["admin_view_as_role"] = picked_role
-                    st.session_state["admin_role"] = picked_role
-                    st.session_state["admin_role_source"] = "super_admin_view_as"
-                else:
-                    st.session_state.pop("admin_view_as_role", None)
-                    st.session_state["admin_role"] = st.session_state.get("admin_real_role", "super_admin")
-                    st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "admin_role_assignments")
+                current_role = str(st.session_state.get("admin_view_as_role", "") or "")
+                if picked_role != current_role:
+                    st.session_state["admin_view_as_role"] = picked_role or None
+                    st.rerun()
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
@@ -373,29 +399,7 @@ def main():
             st.session_state["force_data_refresh"] = False
 
         # ---- Load data + ctx ----
-        supabase = get_supabase()
-
-        if admin_authenticated:
-            role_resolution = resolve_admin_role(
-                supabase=supabase,
-                email=current_admin_email,
-                user_id=str(getattr(current_admin, "id", "") or "").strip() or None,
-                allowlist=admin_allowlist,
-            )
-            st.session_state["admin_real_role"] = role_resolution.role
-            st.session_state["admin_real_role_source"] = role_resolution.source
-            view_as_role = str(st.session_state.get("admin_view_as_role", "") or "").strip().lower()
-            real_is_super_admin = role_resolution.role == "super_admin"
-            if not real_is_super_admin:
-                st.session_state.pop("admin_view_as_role", None)
-                st.session_state["admin_role"] = role_resolution.role
-                st.session_state["admin_role_source"] = role_resolution.source
-            elif view_as_role and view_as_role in {"club_owner", "organizer", "scorekeeper", "read_only"}:
-                st.session_state["admin_role"] = view_as_role
-                st.session_state["admin_role_source"] = "super_admin_view_as"
-            else:
-                st.session_state["admin_role"] = role_resolution.role
-                st.session_state["admin_role_source"] = role_resolution.source
+        
         (
             df_players_all,
             df_players_active,
@@ -608,9 +612,7 @@ def main():
             if (admin_logged_in and st.session_state.get("admin_role_source") == "super_admin_view_as" and st.session_state.get("admin_real_role") == "super_admin"):
                 st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
                 if st.sidebar.button("Return to Super Admin"):
-                    st.session_state.pop("admin_view_as_role", None)
-                    st.session_state["admin_role"] = "super_admin"
-                    st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "admin_role_assignments")
+                    st.session_state["admin_view_as_role"] = None
                     st.rerun()
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 

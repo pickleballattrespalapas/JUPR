@@ -62,6 +62,42 @@ def test_build_activity_payload_sets_expected_shape():
     assert payload["entity_type"] == "match"
     assert payload["entity_id"] == "42"
     assert payload["flagged_for_review"] is True
+    assert "effective_role" not in payload
+    assert "role_source" not in payload
+
+
+def test_build_activity_payload_nests_effective_role_context():
+    payload = build_activity_payload(
+        club_id="club-1",
+        actor_email="Admin@Example.com",
+        actor_role=ROLE_SUPER_ADMIN,
+        action_type="match_edit",
+        entity_type="match",
+        entity_id="42",
+        after_json={"score_t1": 9},
+        effective_role=ROLE_SCOREKEEPER,
+        role_source="super_admin_view_as",
+    )
+    assert payload["after_json"]["_audit_context"]["effective_role"] == ROLE_SCOREKEEPER
+    assert payload["after_json"]["_audit_context"]["role_source"] == "super_admin_view_as"
+
+
+def test_write_admin_activity_log_avoids_unknown_top_level_view_as_keys():
+    supabase = _SupabaseProbe()
+    payload = build_activity_payload(
+        club_id="club-1",
+        actor_email="Admin@Example.com",
+        actor_role=ROLE_SUPER_ADMIN,
+        action_type="match_edit",
+        entity_type="match",
+        entity_id="42",
+        effective_role=ROLE_SCOREKEEPER,
+        role_source="super_admin_view_as",
+    )
+    write_admin_activity_log(supabase, payload)
+    inserted = supabase.probe.rows[0]
+    assert "effective_role" not in inserted
+    assert "role_source" not in inserted
 
 
 def test_can_view_admin_activity_is_limited_to_owner_and_super_admin():

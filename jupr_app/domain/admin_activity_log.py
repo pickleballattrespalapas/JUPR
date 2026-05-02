@@ -43,6 +43,21 @@ def build_activity_payload(
     effective_role: str | None = None,
     role_source: str | None = None,
 ) -> dict[str, Any]:
+    normalized_after_json = after_json if isinstance(after_json, dict) else ({"value": after_json} if after_json is not None else None)
+    if effective_role or role_source:
+        audit_context: dict[str, str] = {}
+        if effective_role:
+            audit_context["effective_role"] = normalize_role(effective_role)
+        if role_source:
+            audit_context["role_source"] = str(role_source or "").strip()
+        if normalized_after_json is None:
+            normalized_after_json = {"_audit_context": audit_context}
+        else:
+            normalized_after_json = {
+                **normalized_after_json,
+                "_audit_context": audit_context,
+            }
+
     return {
         "club_id": str(club_id),
         "actor_email": str(actor_email or "").strip().lower() or "unknown",
@@ -51,12 +66,10 @@ def build_activity_payload(
         "entity_type": str(entity_type or "").strip(),
         "entity_id": str(entity_id or "").strip(),
         "before_json": before_json,
-        "after_json": after_json,
+        "after_json": normalized_after_json,
         "note": str(note or "").strip() or None,
         "source_page": str(source_page or "").strip() or None,
         "flagged_for_review": bool(flagged_for_review),
-        "effective_role": normalize_role(effective_role) if effective_role else None,
-        "role_source": str(role_source or "").strip() or None,
     }
 
 

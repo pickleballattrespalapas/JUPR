@@ -6,6 +6,7 @@ from jupr_app.ui.page_registry import (
     PUBLIC_NAV_KEYS,
     labels_for_keys,
 )
+from jupr_app.ui.admin_page_permissions import ADMIN_PAGE_PERMISSION_MATRIX
 
 
 def test_jupr_live_is_registered_as_public_page():
@@ -79,3 +80,13 @@ def test_player_editor_remains_admin_only():
     assert "player_editor" not in PUBLIC_NAV_KEYS
     assert PAGE_KEY_TO_LABEL["player_editor"] == "👥 Player Editor"
     assert "👥 Player Editor" not in public_labels
+
+
+def test_every_admin_only_page_is_mapped_or_intentionally_blocked():
+    intentionally_blocked = {"admin_login", "reset_password"}
+    missing = sorted(
+        key
+        for key in ADMIN_ONLY_PAGE_KEYS
+        if key not in ADMIN_PAGE_PERMISSION_MATRIX and key not in intentionally_blocked
+    )
+    assert missing == []
