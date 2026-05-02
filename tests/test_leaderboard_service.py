@@ -126,3 +126,12 @@ def test_missing_view_falls_back_to_tables_and_stays_public_only():
                 "updated_at",
             }
         )
+from pathlib import Path
+
+
+def test_public_leaderboards_migration_is_guarded_and_has_no_metadata_dependency():
+    sql = Path("supabase/migrations/20260502133000_public_leaderboards_view.sql").read_text(encoding="utf-8")
+
+    assert "to_regclass('public.league_ratings')" in sql
+    assert "to_regclass('public.players')" in sql
+    assert "public.leagues_metadata" not in sql
