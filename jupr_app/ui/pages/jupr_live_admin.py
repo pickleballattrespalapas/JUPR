@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.live_beta_engine import clear_expired_substitutions
+from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.live.shared import (
     LivePageConfig,
@@ -32,15 +32,25 @@ ADMIN_CONFIG = LivePageConfig(
 
 
 def _process_payloads(ctx, payloads: list[dict]) -> dict:
-    return process_matches(
-        payloads,
+    service_ctx = ServiceContext(
         supabase=ctx.supabase,
         club_id=str(ctx.club_id),
+        actor_email=getattr(ctx, "admin_email", None),
+        actor_role=st.session_state.get("admin_role"),
+        source="jupr_live_admin",
+        public_base_url=st.session_state.get("public_base_url"),
+    )
+    result = submit_match_batch(
+        service_ctx,
+        payloads,
         name_to_id=ctx.name_to_id,
         df_players_all=ctx.df_players_all,
         df_leagues=ctx.df_leagues,
         df_meta=ctx.df_meta,
     )
+    if not result.ok:
+        raise ValueError("; ".join(result.errors) or "Unable to save matches.")
+    return result.data
 
 
 def _save_rr_official(ctx, state: dict, event: dict) -> None:
