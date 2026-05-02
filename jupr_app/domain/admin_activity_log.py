@@ -40,6 +40,8 @@ def build_activity_payload(
     note: str | None = None,
     source_page: str | None = None,
     flagged_for_review: bool = False,
+    effective_role: str | None = None,
+    role_source: str | None = None,
 ) -> dict[str, Any]:
     return {
         "club_id": str(club_id),
@@ -53,6 +55,8 @@ def build_activity_payload(
         "note": str(note or "").strip() or None,
         "source_page": str(source_page or "").strip() or None,
         "flagged_for_review": bool(flagged_for_review),
+        "effective_role": normalize_role(effective_role) if effective_role else None,
+        "role_source": str(role_source or "").strip() or None,
     }
 
 
