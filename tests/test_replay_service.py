@@ -88,3 +88,18 @@ def test_run_replay_with_job_tracking_failure_marks_failed(monkeypatch):
     assert supabase.state["updates"][0]["status"] == "running"
     assert supabase.state["updates"][1]["status"] == "failed"
     assert supabase.state["updates"][1]["error_text"] == "kaboom"
+
+
+def test_is_replay_jobs_table_missing_error_code_42p01():
+    exc = Exception({"code": "42P01", "message": "relation replay_jobs does not exist"})
+    assert replay_service.is_replay_jobs_table_missing_error(exc)
+
+
+def test_is_replay_jobs_table_missing_error_code_pgrst205():
+    exc = Exception({"code": "PGRST205", "message": "Could not find table replay_jobs in schema cache"})
+    assert replay_service.is_replay_jobs_table_missing_error(exc)
+
+
+def test_is_replay_jobs_table_missing_error_text_only():
+    exc = Exception("replay_jobs does not exist")
+    assert replay_service.is_replay_jobs_table_missing_error(exc)

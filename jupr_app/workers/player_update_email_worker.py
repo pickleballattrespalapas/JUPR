@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Send pending player update emails from the outbox.")
     parser.add_argument("--club-id", required=True, help="Club ID for player update outbox sends.")
     parser.add_argument("--limit", type=int, default=250)
+    parser.add_argument("--fail-on-errors", action="store_true")
     args = parser.parse_args(argv)
 
     try:
@@ -60,6 +61,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, sort_keys=True))
+        return 1
+
+    if args.fail_on_errors and int(summary.get("errors") or 0) > 0:
+        summary["ok"] = False
+        print(json.dumps(summary, sort_keys=True, default=str))
         return 1
 
     print(json.dumps(summary, sort_keys=True, default=str))

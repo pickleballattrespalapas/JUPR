@@ -35,7 +35,10 @@ from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
-from jupr_app.services.replay_service import run_replay_with_job_tracking
+from jupr_app.services.replay_service import (
+    is_replay_jobs_table_missing_error,
+    run_replay_with_job_tracking,
+)
 from jupr_app.domain.gamification.badge_audit import (
     build_badge_audit_report,
     build_high_roller_diagnostic_report,
@@ -141,6 +144,21 @@ def _format_auth_debug_events(events: list[dict[str, object]]) -> list[dict[str,
         formatted.append(normalized)
     return formatted
 
+
+
+def _admin_actor_email(ctx) -> str:
+    values = [
+        getattr(ctx, "admin_email", None),
+        getattr(ctx, "user_email", None),
+        st.session_state.get("admin_email"),
+        st.session_state.get("user_email"),
+        getattr(st.session_state.get("admin_auth_user"), "email", ""),
+    ]
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "admin"
 
 def _admin_role_context() -> tuple[str, bool, bool, bool]:
     role = normalize_role(str(st.session_state.get("admin_role", ROLE_READ_ONLY) or ROLE_READ_ONLY))
@@ -691,16 +709,24 @@ def render(ctx):
     if st.button(f"⚠️ Replay History for: {target_reset}", disabled=not role_can_run_replay):
         bar = st.progress(0.0)
         with st.spinner("Crunching..."):
-            replay_outcome = run_replay_with_job_tracking(
-                supabase=supabase,
-                club_id=club_id,
-                df_meta=df_meta,
-                target_reset=str(target_reset),
-                actor_email=getattr(ctx, "current_user_email", None),
-                actor_role=admin_role,
-                progress_cb=lambda x: bar.progress(float(x)),
-            )
-            result = replay_outcome["result"]
+            try:
+                replay_outcome = run_replay_with_job_tracking(
+                    supabase=supabase,
+                    club_id=club_id,
+                    df_meta=df_meta,
+                    target_reset=str(target_reset),
+                    actor_email=_admin_actor_email(ctx),
+                    actor_role=admin_role,
+                    progress_cb=lambda x: bar.progress(float(x)),
+                )
+                result = replay_outcome["result"]
+            except Exception as exc:  # noqa: BLE001
+                if is_replay_jobs_table_missing_error(exc):
+                    st.error("Replay job tracking table is not installed yet.")
+                    st.caption("Apply migration: `supabase/migrations/20260502120000_replay_jobs.sql`")
+                    st.code("NOTIFY pgrst, 'reload schema';", language="sql")
+                    return
+                raise
 
         st.info(f"Replay job id: {replay_outcome['job_id']}")
         st.info(f"Replay job status: {replay_outcome['job_status']}")

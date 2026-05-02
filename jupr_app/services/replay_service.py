@@ -59,6 +59,33 @@ def mark_replay_job_failed(*, supabase, job_id: str, error_text: str) -> None:
     ).eq("id", job_id).execute()
 
 
+
+def is_replay_jobs_table_missing_error(exc: Exception) -> bool:
+    code = str(getattr(exc, "code", "") or "").upper()
+    args0 = exc.args[0] if getattr(exc, "args", None) else None
+    payload_code = ""
+    payload_text = ""
+    if isinstance(args0, dict):
+        payload_code = str(args0.get("code") or "").upper()
+        payload_text = " ".join(
+            str(args0.get(k) or "") for k in ("message", "details", "hint")
+        )
+
+    if code == "42P01" or payload_code == "42P01":
+        return True
+    if code == "PGRST205" or payload_code == "PGRST205":
+        return True
+
+    text = f"{exc} {payload_text}".lower()
+    return (
+        "replay_jobs" in text
+        and (
+            "does not exist" in text
+            or "could not find" in text
+            or "schema cache" in text
+        )
+    )
+
 def run_replay_with_job_tracking(
     *,
     supabase,
