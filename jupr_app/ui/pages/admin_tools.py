@@ -8,9 +8,18 @@ from jupr_app.domain.replay_history import replay_history
 from jupr_app.domain.admin.roles import (
     ALL_ROLES,
     ROLE_READ_ONLY,
+    ROLE_SUPER_ADMIN,
     can_manage_roles,
     can_run_replay,
     normalize_role,
+)
+from jupr_app.domain.admin.role_assignments import (
+    delete_role_assignment,
+    has_other_super_admin_support,
+    is_role_table_missing_error,
+    list_role_assignments,
+    normalize_email,
+    upsert_role_assignment,
 )
 from jupr_app.domain.admin_activity_log import (
     RETENTION_DAYS,
@@ -178,23 +187,20 @@ def _render_role_assignment_section(
     rows: list[dict] = []
     table_available = True
     try:
-        response = (
-            supabase.table("admin_role_assignments")
-            .select("user_id,email,role,updated_at")
-            .order("email")
-            .execute()
-        )
-        rows = list(response.data or [])
-    except APIError as exc:
+        rows = list_role_assignments(supabase)
+    except Exception as exc:
         table_available = False
-        code = _get_api_error_code(exc) or ""
-        if code in {"42P01", "PGRST205"}:
-            st.info("Roles table not found yet. Falling back to admin allowlist defaults.")
+        if is_role_table_missing_error(exc):
+            st.warning("Admin role assignment table is not installed yet.")
+            st.caption("Apply migration: `supabase/migrations/20260428100000_admin_role_assignments.sql`")
+            st.code(
+                "supabase db push\n"
+                "# or apply manually\n"
+                "\\i supabase/migrations/20260428100000_admin_role_assignments.sql",
+                language="bash",
+            )
         else:
             st.warning("Unable to load role assignments right now.")
-    except Exception:
-        table_available = False
-        st.warning("Unable to load role assignments right now.")
 
     assigned_emails = {
         str(row.get("email") or "").strip().lower()
@@ -203,11 +209,16 @@ def _render_role_assignment_section(
     }
     for email in sorted(admin_allowlist):
         if email not in assigned_emails:
-            rows.append({"user_id": None, "email": email, "role": "super_admin", "updated_at": None})
+            rows.append({"user_id": None, "email": email, "role": "super_admin", "created_at": None, "updated_at": None})
 
     if rows:
+        st.caption("Role descriptions: super_admin = full system access; club_owner = broad club management (no role assignment); organizer = events/tournaments + scores; scorekeeper = scores only; read_only = view-only/audit where allowed.")
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption(f"Fallback super admins (allowlist): {', '.join(sorted(admin_allowlist)) or '(none)'}")
 
+    if current_role in {"organizer", "scorekeeper", "read_only"}:
+        st.info("Your role cannot view or manage role assignments.")
+        return
     if not can_assign_roles:
         st.info("Only Super Admin can change role assignments.")
         return
@@ -216,41 +227,78 @@ def _render_role_assignment_section(
         st.caption("Apply the admin role migration before assigning roles in the UI.")
         return
 
+    assignment_options = ["Create new assignment"] + [str(row.get("email") or "") for row in rows if str(row.get("email") or "")]
+    selected_assignment = st.selectbox("Select assignment to edit", options=assignment_options, index=0)
+    selected_row = next((row for row in rows if str(row.get("email") or "") == selected_assignment), None)
     with st.form("admin_role_assignment_form"):
-        target_email = st.text_input("User email", placeholder="name@example.com")
-        target_role = st.selectbox("Role", options=list(ALL_ROLES), index=0)
-        submitted = st.form_submit_button("Save role assignment")
+        target_email = st.text_input("User email", value=str((selected_row or {}).get("email") or ""), placeholder="name@example.com")
+        role_default = normalize_role((selected_row or {}).get("role"))
+        role_index = list(ALL_ROLES).index(role_default) if role_default in ALL_ROLES else 0
+        target_role = st.selectbox("Role", options=list(ALL_ROLES), index=role_index)
+        user_id_input = st.text_input("User ID (optional)", value=str((selected_row or {}).get("user_id") or ""))
+        save_clicked = st.form_submit_button("Save")
+        revoke_clicked = st.form_submit_button("Revoke")
 
-    if submitted:
-        normalized_email = str(target_email or "").strip().lower()
-        if "@" not in normalized_email:
+    normalized_email = normalize_email(target_email)
+    if save_clicked:
+        if "@" not in normalized_email or "." not in normalized_email.split("@")[-1]:
             st.error("Enter a valid email address.")
         else:
             selected_role = normalize_role(target_role)
-            existing_row = next((row for row in rows if str(row.get("email") or "").strip().lower() == normalized_email), None)
-            supabase.table("admin_role_assignments").upsert(
-                {"email": normalized_email, "role": selected_role},
-                on_conflict="email",
-            ).execute()
+            existing_row = next((row for row in rows if normalize_email(row.get("email")) == normalized_email), None)
+            if existing_row and normalize_role(existing_row.get("role")) == ROLE_SUPER_ADMIN and selected_role != ROLE_SUPER_ADMIN:
+                if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=admin_allowlist):
+                    st.error("Unsafe change blocked: this would remove the final super_admin access.")
+                    return
+            upsert_role_assignment(supabase, normalized_email, selected_role, user_id=str(user_id_input or "").strip() or None)
             log_result = write_admin_activity_log(
                 supabase,
                 build_activity_payload(
                     club_id=str(club_id),
                     actor_email=str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin"),
                     actor_role=current_role,
-                    action_type="role_change",
+                    action_type="role_assignment_upsert",
                     entity_type="admin_role_assignment",
                     entity_id=normalized_email,
                     before_json={"role": str((existing_row or {}).get("role") or "") or None},
-                    after_json={"role": selected_role},
-                    note="Admin role assignment updated",
+                    after_json={"role": selected_role, "user_id": str(user_id_input or "").strip() or None},
+                    note="Admin role assignment create/update",
                     source_page="admin_tools",
                 ),
             )
-            st.success(f"Updated role for {normalized_email}.")
+            st.success(f"Saved role assignment for {normalized_email}.")
             if not log_result.ok and log_result.warning:
                 st.warning(log_result.warning)
             st.rerun()
+    if revoke_clicked:
+        if not normalized_email:
+            st.error("Choose or enter an email to revoke.")
+            return
+        existing_row = next((row for row in rows if normalize_email(row.get("email")) == normalized_email), None)
+        if normalize_role((existing_row or {}).get("role")) == ROLE_SUPER_ADMIN:
+            if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=admin_allowlist):
+                st.error("Unsafe revoke blocked: this would remove the final super_admin access.")
+                return
+        delete_role_assignment(supabase, normalized_email)
+        log_result = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin"),
+                actor_role=current_role,
+                action_type="role_assignment_revoke",
+                entity_type="admin_role_assignment",
+                entity_id=normalized_email,
+                before_json={"role": str((existing_row or {}).get("role") or "") or None},
+                after_json=None,
+                note="Admin role assignment revoked",
+                source_page="admin_tools",
+            ),
+        )
+        st.success(f"Revoked role assignment for {normalized_email}.")
+        if not log_result.ok and log_result.warning:
+            st.warning(log_result.warning)
+        st.rerun()
 
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
     try:
