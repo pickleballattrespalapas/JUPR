@@ -42,8 +42,6 @@ PUBLIC_SOURCE_BY_PAGE: dict[str, str] = {
 
 _SAFE_CONTEXT_KEYS = {"club_id"}
 PUBLIC_FOOTER_LINKS: tuple[tuple[str, str], ...] = (
-    ("Rating Rules", "rating_rules"),
-    ("FAQ", "faqs"),
     ("Privacy", "privacy_policy"),
     ("Terms", "terms_of_use"),
     ("Contact", "contact_support"),
@@ -140,18 +138,35 @@ def _render_public_nav_styles() -> None:
             flex: 1 1 34rem;
             min-width: min(32rem, 100%);
           }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin-link {
+            flex: 0 0 auto;
+          }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-admin-link .stButton > button {
+            all: unset;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            font-weight: 600;
+            text-decoration: underline;
+            white-space: nowrap;
+          }
           .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-nav-control [role="radiogroup"] {
             gap: 0.35rem;
             flex-wrap: wrap;
           }
+          .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-footer {
+            margin-top: 1.2rem;
+            padding-top: 0.65rem;
+            border-top: 1px solid color-mix(in srgb, var(--border-strong) 38%, transparent);
+          }
           .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-footer-links {
-            margin-top: 0.55rem;
             font-size: 0.76rem;
             color: var(--text-muted);
             display: flex;
             gap: 0.5rem;
             align-items: center;
-            justify-content: flex-end;
+            flex-wrap: wrap;
+            justify-content: center;
           }
           .jupr-public-shell.jupr-public-nav-streamlit .jupr-public-footer-links .stButton > button {
             all: unset;
@@ -258,10 +273,26 @@ def render_public_app_header(
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
     admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
-    st.markdown('<div class="jupr-public-footer-links">', unsafe_allow_html=True)
+    admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
+    st.markdown('<div class="jupr-public-admin-link">', unsafe_allow_html=True)
+    if st.button(admin_label, key="public_header_admin_link"):
+        navigate_same_tab(
+            page="league_manager" if admin_authenticated else "admin_login",
+            public_mode=False,
+            source="public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login",
+        )
+    st.markdown("</div></div></div>", unsafe_allow_html=True)
+
+    return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
+
+
+def render_public_footer(*, current_label: str | None = None, default_page: str = "home") -> None:
+    current_params = _current_query_params()
+    current_page_key = LABEL_TO_PAGE_KEY.get(current_label or "") or default_page
+    admin_authenticated = bool(st.session_state.get("jupr_admin_authenticated", False))
+
+    st.markdown('<div class="jupr-public-shell jupr-public-nav-streamlit"><div class="jupr-public-footer"><div class="jupr-public-footer-links">', unsafe_allow_html=True)
     for link_label, page_key in PUBLIC_FOOTER_LINKS:
         if st.button(link_label, key=f"public_footer_link_{page_key}"):
             navigate_same_tab(
@@ -270,13 +301,6 @@ def render_public_app_header(
                 public_mode=True,
                 source=f"public_footer:{page_key}",
             )
-    admin_label = "Admin Dashboard" if admin_authenticated else "Admin Login"
-    if st.button(admin_label, key="public_footer_admin_link"):
-        navigate_same_tab(
-            page="league_manager" if admin_authenticated else "admin_login",
-            public_mode=False,
-            source="public_footer:admin_dashboard" if admin_authenticated else "public_footer:admin_login",
-        )
 
     if admin_authenticated and st.button("Logout", key="public_footer_logout"):
         navigate_same_tab(
@@ -285,9 +309,7 @@ def render_public_app_header(
             public_mode=True,
             source="public_footer:logout",
         )
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    return PAGE_KEY_TO_LABEL.get(current_page_key, PAGE_KEY_TO_LABEL[default_page])
+    st.markdown("</div></div></div>", unsafe_allow_html=True)
 
 
 def render_public_top_nav(
