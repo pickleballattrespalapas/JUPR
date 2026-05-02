@@ -93,11 +93,27 @@ def test_every_admin_only_page_is_mapped_or_intentionally_blocked():
     assert missing == []
 
 
-def test_admin_sidebar_excludes_public_pages_and_exposes_public_link():
+def test_admin_sidebar_excludes_public_pages_and_uses_safe_public_link_control():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
     assert "if x in ADMIN_ONLY_LABELS" in app
-    assert 'label="View Public Site"' in app
+    assert "st.sidebar.page_link(" not in app
+    assert 'st.sidebar.button("🌐 View Public Site", key="admin_view_public_site_btn")' in app
 
+
+
+
+def test_view_public_site_clears_admin_query_params_and_enters_public_mode():
+    app = Path("streamlit_app.py").read_text(encoding="utf-8")
+    assert '"admin_view_public_site_btn"' in app
+    assert 'st.session_state["jupr_public_mode"] = True' in app
+    assert 'st.session_state["jupr_admin_entry_active"] = False' in app
+    assert '"admin",' in app
+    assert '"next",' in app
+    assert '"jupr_admin_access_token",' in app
+    assert '"jupr_admin_refresh_token",' in app
+    assert '"jupr_admin_restore_from_storage",' in app
+    assert '"logout",' in app
+    assert '"page",' in app
 
 def test_mixed_admin_public_route_is_not_kept_canonical():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
