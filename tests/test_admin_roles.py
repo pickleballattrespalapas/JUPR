@@ -19,6 +19,7 @@ from jupr_app.domain.admin.roles import (
     can_view_audit_log,
     resolve_admin_role,
 )
+from jupr_app.ui.admin_page_permissions import is_admin_page_available_for_role
 
 
 class _Query:
@@ -163,3 +164,7 @@ def test_permission_matrix(role: str, expected: dict[str, bool]):
         "can_enter_scores": can_enter_scores(role),
     }
     assert actual == expected
+
+
+def test_unmapped_admin_only_page_is_denied_by_default():
+    assert is_admin_page_available_for_role("nonexistent_admin_page", ROLE_SUPER_ADMIN, is_admin_only=True) is False
