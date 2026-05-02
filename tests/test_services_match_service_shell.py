@@ -42,6 +42,7 @@ def test_submit_match_batch_wraps_process_matches(monkeypatch):
 
     ctx = ServiceContext(supabase=object(), club_id="club-xyz")
     matches = [{"t1_p1": 1, "t2_p1": 2}]
+    fake_retry = object()
 
     result = submit_match_batch(
         ctx,
@@ -50,6 +51,10 @@ def test_submit_match_batch_wraps_process_matches(monkeypatch):
         df_players_all="players",
         df_leagues="leagues",
         df_meta="meta",
+        sb_retry=fake_retry,
+        default_k_factor=40,
+        min_win_delta_elo=2.5,
+        cap_loser_gain_elo=12.0,
     )
 
     assert result.ok is True
@@ -58,3 +63,7 @@ def test_submit_match_batch_wraps_process_matches(monkeypatch):
     assert captured["match_list"] == matches
     assert captured["kwargs"]["club_id"] == "club-xyz"
     assert captured["kwargs"]["supabase"] is ctx.supabase
+    assert captured["kwargs"]["sb_retry"] is fake_retry
+    assert captured["kwargs"]["default_k_factor"] == 40
+    assert captured["kwargs"]["min_win_delta_elo"] == 2.5
+    assert captured["kwargs"]["cap_loser_gain_elo"] == 12.0

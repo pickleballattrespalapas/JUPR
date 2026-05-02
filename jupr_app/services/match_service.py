@@ -15,6 +15,10 @@ def submit_match_batch(
     df_players_all,
     df_leagues,
     df_meta,
+    sb_retry=None,
+    default_k_factor: float = 32,
+    min_win_delta_elo: float = 1.0,
+    cap_loser_gain_elo: float = 16.0,
 ) -> ServiceResult:
     try:
         result = process_matches(
@@ -25,6 +29,10 @@ def submit_match_batch(
             df_players_all=df_players_all,
             df_leagues=df_leagues,
             df_meta=df_meta,
+            sb_retry=sb_retry,
+            default_k_factor=default_k_factor,
+            min_win_delta_elo=min_win_delta_elo,
+            cap_loser_gain_elo=cap_loser_gain_elo,
         )
     except Exception as exc:
         return ServiceResult.failure(str(exc))
