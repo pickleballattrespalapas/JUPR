@@ -117,3 +117,23 @@ Never commit:
 - Production DB dumps
 
 If any secret is exposed, rotate it immediately and remove it from history where possible.
+
+## 12) Badge queue worker CLI
+
+You can process badge evaluation queue jobs outside Streamlit Admin Tools with a worker/scheduler process.
+
+Required environment variables:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` (preferred)
+- `SUPABASE_ANON_KEY` (fallback only when service role key is unavailable)
+
+Example:
+
+```bash
+python -m jupr_app.workers.badge_queue_worker \
+  --club-id tres_palapas \
+  --max-total-jobs 500 \
+  --max-wall-clock-seconds 90
+```
+
+The command prints a JSON summary and exits nonzero when configuration is missing or queue errors hit the configured safety threshold.
