@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.schedule import get_match_schedule
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.data.load import load_data
 from jupr_app.ui.layout import page_shell
 
@@ -516,15 +516,25 @@ def render(ctx):
                         }
                     )
 
-                process_matches(
-                    payload,
+                service_ctx = ServiceContext(
                     supabase=supabase,
                     club_id=club_id,
+                    actor_email=st.session_state.get("admin_email"),
+                    actor_role=st.session_state.get("admin_role"),
+                    source="moneyball",
+                    public_base_url=st.session_state.get("public_base_url"),
+                )
+                result = submit_match_batch(
+                    service_ctx,
+                    payload,
                     name_to_id=name_to_id,
                     df_players_all=df_players_all,
                     df_leagues=df_leagues,
                     df_meta=df_meta,
                 )
+                if not result.ok:
+                    st.error("; ".join(result.errors) or "Unable to save matches.")
+                    return
                 st.session_state["mb_saved"] = True
                 st.session_state["mb_event_id"] = st.session_state.get("mb_event_id") or str(uuid4())
                 load_data(supabase, club_id, match_limit=5000)

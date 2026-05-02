@@ -34,7 +34,6 @@ from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
-from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.domain.gamification.badge_audit import (
@@ -55,6 +54,7 @@ from jupr_app.domain.live_social import (
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import redact_query_params
+from jupr_app.services import ServiceContext, submit_match_batch
 
 
 def _query_params_snapshot() -> dict[str, str]:
@@ -1249,15 +1249,25 @@ def _run_tournament_match_backfill(ctx):
             continue
 
         try:
-            result = process_matches(
-                [payload],
+            service_ctx = ServiceContext(
                 supabase=supabase,
                 club_id=club_id,
+                actor_email=st.session_state.get("admin_email"),
+                actor_role=st.session_state.get("admin_role"),
+                source="admin_tools",
+                public_base_url=st.session_state.get("public_base_url"),
+            )
+            service_result = submit_match_batch(
+                service_ctx,
+                [payload],
                 name_to_id=name_to_id,
                 df_players_all=df_players_all,
                 df_leagues=df_leagues,
                 df_meta=df_meta,
             )
+            if not service_result.ok:
+                raise RuntimeError("; ".join(service_result.errors) or "Unknown backfill error")
+            result = service_result.data
         except Exception as exc:
             errors += 1
             st.error(f"Backfill failed for tournament game {game.get('id')}: {exc}")
