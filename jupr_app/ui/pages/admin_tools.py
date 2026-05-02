@@ -363,6 +363,7 @@ def render(ctx):
 
     with st.expander("🧰 System Debug Panel", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
+        route_sync_events = list(st.session_state.get("jupr_route_sync_debug_events", []))
         auth_events = _format_auth_debug_events(list(st.session_state.get("jupr_auth_debug_events", [])))
         current_query_params = redact_query_params(_query_params_snapshot())
         debug_session_id = str(st.session_state.setdefault("debug_session_id", str(uuid4())))
@@ -374,6 +375,7 @@ def render(ctx):
                 "debug_session_id": debug_session_id,
                 "navigation_events_present": bool(nav_events),
                 "navigation_event_count": len(nav_events),
+                "route_sync_event_count": len(route_sync_events),
                 "auth_event_count": len(auth_events),
             }
         )
@@ -390,17 +392,25 @@ def render(ctx):
             "jupr_public_mode": bool(st.session_state.get("jupr_public_mode", False)),
             "jupr_admin_entry_active": bool(st.session_state.get("jupr_admin_entry_active", False)),
             "jupr_admin_authenticated": bool(st.session_state.get("jupr_admin_authenticated", False)),
+            "route_stability_repeat_count": int(st.session_state.get("jupr_route_stability_repeat_count", 0) or 0),
+            "route_stability_warning": bool(st.session_state.get("jupr_route_stability_warning", False)),
         }
         st.write("Navigation runtime snapshot")
         st.json(nav_runtime)
 
         st.write(f"Recent navigation events ({len(nav_events)})")
         st.json(nav_events)
+        st.write(f"Recent canonical route sync events ({len(route_sync_events)})")
+        st.json(route_sync_events)
+        if bool(st.session_state.get("jupr_route_stability_warning", False)):
+            st.warning("Possible rerun loop detected.")
 
         if st.button("Clear navigation debug events", key="clear_navigation_debug_events"):
             st.session_state["jupr_nav_debug_events"] = []
+            st.session_state["jupr_route_sync_debug_events"] = []
             st.success("Navigation debug events cleared.")
             nav_events = []
+            route_sync_events = []
 
         st.markdown("#### Phase 3 — Auth/session diagnostics")
         auth_debug = {
@@ -436,12 +446,14 @@ def render(ctx):
             "session_continuity": {
                 "navigation_events_present": bool(nav_events),
                 "navigation_event_count": len(nav_events),
+                "route_sync_event_count": len(route_sync_events),
                 "auth_event_count": len(auth_events),
             },
             "navigation": {
                 "query_params": current_query_params,
                 "runtime": nav_runtime,
                 "events": nav_events,
+                "route_sync_events": route_sync_events,
             },
             "auth_session": auth_debug,
         }

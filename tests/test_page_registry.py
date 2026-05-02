@@ -7,6 +7,7 @@ from jupr_app.ui.page_registry import (
     labels_for_keys,
 )
 from jupr_app.ui.admin_page_permissions import ADMIN_PAGE_PERMISSION_MATRIX
+from pathlib import Path
 
 
 def test_jupr_live_is_registered_as_public_page():
@@ -90,3 +91,14 @@ def test_every_admin_only_page_is_mapped_or_intentionally_blocked():
         if key not in ADMIN_PAGE_PERMISSION_MATRIX and key not in intentionally_blocked
     )
     assert missing == []
+
+
+def test_admin_sidebar_excludes_public_pages_and_exposes_public_link():
+    app = Path("streamlit_app.py").read_text(encoding="utf-8")
+    assert "if x in ADMIN_ONLY_LABELS" in app
+    assert 'label="View Public Site"' in app
+
+
+def test_mixed_admin_public_route_is_not_kept_canonical():
+    app = Path("streamlit_app.py").read_text(encoding="utf-8")
+    assert "requested_public_page_while_admin" in app

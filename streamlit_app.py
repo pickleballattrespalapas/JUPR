@@ -189,6 +189,27 @@ def _set_query_params_idempotent(
     return changed
 
 
+def _record_route_sync_event(event: dict) -> None:
+    events = st.session_state.setdefault("jupr_route_sync_debug_events", [])
+    events.append(event)
+    if len(events) > 100:
+        del events[:-100]
+
+
+def _track_route_stability(route_fingerprint: str) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    history = st.session_state.setdefault("jupr_route_stability_history", [])
+    history.append((now, route_fingerprint))
+    cutoff = now - timedelta(seconds=30)
+    history = [(ts, fp) for ts, fp in history if ts >= cutoff]
+    st.session_state["jupr_route_stability_history"] = history
+    repeats = sum(1 for _ts, fp in history if fp == route_fingerprint)
+    st.session_state["jupr_route_stability_repeat_count"] = repeats
+    st.session_state["jupr_route_stability_warning"] = repeats > 20
+
+
 def main():
     """
     Main Streamlit entrypoint. Keep this deterministic for reloads.
@@ -237,7 +258,7 @@ def main():
         render_admin_browser_session_bridge()
 
         admin_allowlist = load_admin_allowlist()
-        if admin_entry_requested:
+        if admin_entry_requested and not get_current_admin_user():
             maybe_restore_admin_login_from_browser()
 
         current_admin = get_current_admin_user()
@@ -299,7 +320,29 @@ def main():
             if params_changed:
                 st.rerun()
 
-        PUBLIC_MODE = not admin_entry_requested
+        # Route contract:
+        # - Admin mode must only target admin-only pages.
+        # - Mixed route admin=1&page=<public_page> is canonicalized once into public mode.
+        requested_public_page_while_admin = admin_requested and (
+            incoming_page_param in PAGE_KEY_TO_LABEL and incoming_page_param not in ADMIN_ONLY_PAGE_KEYS
+        )
+        if requested_public_page_while_admin:
+            normalized_public_page = incoming_page_param if incoming_page_param and incoming_page_param != "home" else ""
+            params_changed = _set_query_params_idempotent(
+                updates={"page": normalized_public_page} if normalized_public_page else {},
+                removals={
+                    "admin",
+                    "next",
+                    "jupr_admin_access_token",
+                    "jupr_admin_refresh_token",
+                    "jupr_admin_restore_from_storage",
+                },
+            )
+            st.session_state["jupr_public_mode"] = True
+            if params_changed:
+                st.rerun()
+
+        PUBLIC_MODE = not admin_entry_requested or requested_public_page_while_admin
         if public_requested and not admin_entry_requested:
             PUBLIC_MODE = True
         unauthenticated_admin_page_request = requested_admin_page and not admin_authenticated
@@ -566,7 +609,12 @@ def main():
         if not admin_logged_in:
             visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         else:
-            visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS or is_admin_page_available_for_role(LABEL_TO_PAGE_KEY.get(x, ""), effective_role)]
+            visible_labels = [
+                x
+                for x in all_labels
+                if x in ADMIN_ONLY_LABELS
+                and is_admin_page_available_for_role(LABEL_TO_PAGE_KEY.get(x, ""), effective_role)
+            ]
 
         public_labels_in_order = labels_for_keys(PUBLIC_NAV_KEYS)
 
@@ -609,6 +657,11 @@ def main():
                 )
 
         else:
+            st.sidebar.page_link(
+                "streamlit_app.py",
+                label="View Public Site",
+                icon="🌐",
+            )
             if (admin_logged_in and st.session_state.get("admin_role_source") == "super_admin_view_as" and st.session_state.get("admin_real_role") == "super_admin"):
                 st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
                 if st.sidebar.button("Return to Super Admin"):
@@ -636,6 +689,8 @@ def main():
                 "main_nav" not in st.session_state
                 or (current_nav not in visible_labels and current_nav not in HIDDEN_PAGE_LABELS)
             ):
+                st.session_state["main_nav"] = visible_labels[0]
+            if current_nav and LABEL_TO_PAGE_KEY.get(str(current_nav), "") not in ADMIN_ONLY_PAGE_KEYS:
                 st.session_state["main_nav"] = visible_labels[0]
 
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
@@ -696,6 +751,18 @@ def main():
                 updates=canonical_updates,
                 removals=canonical_removals,
             )
+            _record_route_sync_event(
+                {
+                    "before": dict(st.query_params),
+                    "updates": canonical_updates,
+                    "removals": sorted(canonical_removals),
+                    "selected_page": target_page,
+                    "public_mode": PUBLIC_MODE,
+                    "admin_mode": not PUBLIC_MODE,
+                    "params_changed": params_changed,
+                    "rerun_triggered": bool(params_changed and current_page != (target_page or "")),
+                }
+            )
 
             st.session_state["_last_rendered_nav"] = sel
 
@@ -726,6 +793,17 @@ def main():
             st.stop()
 
         target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
+        route_fingerprint = "|".join(
+            [
+                str(target_page_key or ""),
+                f"admin={int(bool(admin_requested))}",
+                f"public={int(bool(PUBLIC_MODE))}",
+                f"main_nav={str(st.session_state.get('main_nav', '') or '')}",
+                f"public_mode={int(bool(st.session_state.get('jupr_public_mode', False)))}",
+                f"admin_entry={int(bool(st.session_state.get('jupr_admin_entry_active', False)))}",
+            ]
+        )
+        _track_route_stability(route_fingerprint)
         if target_page_key in ADMIN_ONLY_PAGE_KEYS and not admin_logged_in:
             st.info("Admin login required to access this page.")
             st.stop()

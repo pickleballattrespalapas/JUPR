@@ -135,7 +135,8 @@ def test_maybe_restore_success_persists_rotated_tokens(monkeypatch):
 def test_streamlit_app_only_restores_browser_tokens_for_admin_entry():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
 
-    assert "if admin_entry_requested:\n            maybe_restore_admin_login_from_browser()" in app
+    assert "if admin_entry_requested and not get_current_admin_user():" in app
+    assert "maybe_restore_admin_login_from_browser()" in app
 
 
 def test_append_auth_debug_event_redacts_sensitive_reason_and_query_params(monkeypatch):
