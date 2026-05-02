@@ -369,6 +369,11 @@ def main():
         VIEW_AS_RESET_PENDING_KEY = "admin_view_as_reset_pending"
         VIEW_AS_LAST_SELECTOR_KEY = "admin_view_as_last_selector_label"
 
+        if st.session_state.pop(VIEW_AS_RESET_PENDING_KEY, False):
+            st.session_state["admin_view_as_role"] = None
+            st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
+            st.session_state[VIEW_AS_LAST_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
+
         supabase = get_supabase()
         if admin_authenticated:
             role_resolution = resolve_admin_role(
@@ -387,6 +392,12 @@ def main():
             st.session_state["admin_role"] = effective_role
             st.session_state["admin_role_source"] = effective_role_source
             st.session_state["admin_view_as_role"] = sanitized_view_as_role
+            if (
+                st.session_state.get("admin_view_as_role") is None
+                and st.session_state.get("admin_role_source") == "super_admin_view_as"
+            ):
+                st.session_state["admin_role"] = st.session_state.get("admin_real_role", "read_only")
+                st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "not_authenticated")
         else:
             st.session_state["admin_real_role"] = "read_only"
             st.session_state["admin_real_role_source"] = "not_authenticated"
@@ -428,9 +439,6 @@ def main():
                     "View as Scorekeeper": "scorekeeper",
                     "View as Read Only": "read_only",
                 }
-                if st.session_state.pop(VIEW_AS_RESET_PENDING_KEY, False):
-                    st.session_state["admin_view_as_role"] = None
-                    st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
                 current_view_as = str(st.session_state.get("admin_view_as_role", "") or "")
                 selected_label = next((label for label, role in view_as_options.items() if role == current_view_as), VIEW_AS_ACTUAL_LABEL)
                 selector_label = st.session_state.get(VIEW_AS_SELECTOR_KEY)
