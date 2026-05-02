@@ -364,6 +364,8 @@ def main():
         st.session_state.setdefault("admin_role", "read_only")
         st.session_state.setdefault("admin_role_source", "not_authenticated")
         st.session_state.setdefault("admin_view_as_role", None)
+        VIEW_AS_ACTUAL_LABEL = "Actual Super Admin"
+        VIEW_AS_SELECTOR_KEY = "admin_view_as_selector_label"
 
         supabase = get_supabase()
         if admin_authenticated:
@@ -418,15 +420,25 @@ def main():
             if admin_authenticated and can_use_view_as(st.session_state.get("admin_real_role", "")):
                 st.sidebar.markdown("### Super Admin Tools")
                 view_as_options = {
-                    "Actual Super Admin": "",
+                    VIEW_AS_ACTUAL_LABEL: "",
                     "View as Club Owner": "club_owner",
                     "View as Organizer": "organizer",
                     "View as Scorekeeper": "scorekeeper",
                     "View as Read Only": "read_only",
                 }
                 current_view_as = str(st.session_state.get("admin_view_as_role", "") or "")
-                selected_label = next((label for label, role in view_as_options.items() if role == current_view_as), "Actual Super Admin")
-                picked_label = st.sidebar.selectbox("View admin as", list(view_as_options.keys()), index=list(view_as_options.keys()).index(selected_label), help="Temporarily preview another role’s permissions. Your real account and audit identity do not change.")
+                selected_label = next((label for label, role in view_as_options.items() if role == current_view_as), VIEW_AS_ACTUAL_LABEL)
+                selector_label = st.session_state.get(VIEW_AS_SELECTOR_KEY)
+                if (selector_label not in view_as_options) or (
+                    current_view_as == "" and selector_label != VIEW_AS_ACTUAL_LABEL
+                ):
+                    st.session_state[VIEW_AS_SELECTOR_KEY] = selected_label
+                picked_label = st.sidebar.selectbox(
+                    "View admin as",
+                    list(view_as_options.keys()),
+                    key=VIEW_AS_SELECTOR_KEY,
+                    help="Temporarily preview another role’s permissions. Your real account and audit identity do not change.",
+                )
                 picked_role = view_as_options[picked_label]
                 current_role = str(st.session_state.get("admin_view_as_role", "") or "")
                 if picked_role != current_role:
@@ -679,6 +691,7 @@ def main():
                 st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
                 if st.sidebar.button("Return to Super Admin"):
                     st.session_state["admin_view_as_role"] = None
+                    st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
                     st.rerun()
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 
