@@ -72,3 +72,43 @@ def test_main_prints_json_summary(monkeypatch, capsys):
     assert '"sent": 2' in out
     assert '"skipped": 1' in out
     assert '"errors": 0' in out
+
+
+def test_main_errors_do_not_fail_without_flag(monkeypatch):
+    monkeypatch.setattr(
+        "jupr_app.workers.player_update_email_worker.run_player_update_email_worker",
+        lambda club_id, limit: {
+            "ok": True,
+            "club_id": club_id,
+            "key_source": "SUPABASE_SERVICE_ROLE_KEY",
+            "attempted": 2,
+            "sent": 1,
+            "skipped": 0,
+            "errors": 1,
+        },
+    )
+
+    rc = main(["--club-id", "tres_palapas", "--limit", "250"])
+
+    assert rc == 0
+
+
+def test_main_fail_on_errors_sets_nonzero_and_ok_false(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "jupr_app.workers.player_update_email_worker.run_player_update_email_worker",
+        lambda club_id, limit: {
+            "ok": True,
+            "club_id": club_id,
+            "key_source": "SUPABASE_SERVICE_ROLE_KEY",
+            "attempted": 2,
+            "sent": 1,
+            "skipped": 0,
+            "errors": 1,
+        },
+    )
+
+    rc = main(["--club-id", "tres_palapas", "--limit", "250", "--fail-on-errors"])
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert '"ok": false' in out.lower()
