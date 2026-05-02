@@ -38,6 +38,7 @@ from jupr_app.ui.branding import CLUB_ID, PUBLIC_BASE_URL_FALLBACK
 from jupr_app.ui.public_nav import render_public_app_header, render_public_footer
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
+from jupr_app.ui.admin_page_permissions import is_admin_page_available_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +312,8 @@ def main():
         st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
         st.session_state["jupr_admin_entry_active"] = bool(admin_entry_requested)
         st.session_state["admin_allowlist"] = admin_allowlist
+        st.session_state["admin_real_role"] = "read_only"
+        st.session_state["admin_real_role_source"] = "not_authenticated"
         st.session_state["admin_role"] = "read_only"
         st.session_state["admin_role_source"] = "not_authenticated"
 
@@ -339,6 +342,28 @@ def main():
                     )
                     st.rerun()
 
+            if admin_authenticated and st.session_state.get("admin_real_role") == "super_admin":
+                st.sidebar.markdown("### Super Admin Tools")
+                view_as_options = {
+                    "Actual Super Admin": "",
+                    "View as Club Owner": "club_owner",
+                    "View as Organizer": "organizer",
+                    "View as Scorekeeper": "scorekeeper",
+                    "View as Read Only": "read_only",
+                }
+                current_view_as = str(st.session_state.get("admin_view_as_role", "") or "")
+                selected_label = next((label for label, role in view_as_options.items() if role == current_view_as), "Actual Super Admin")
+                picked_label = st.sidebar.selectbox("View admin as", list(view_as_options.keys()), index=list(view_as_options.keys()).index(selected_label), help="Temporarily preview another role’s permissions. Your real account and audit identity do not change.")
+                picked_role = view_as_options[picked_label]
+                if picked_role:
+                    st.session_state["admin_view_as_role"] = picked_role
+                    st.session_state["admin_role"] = picked_role
+                    st.session_state["admin_role_source"] = "super_admin_view_as"
+                else:
+                    st.session_state.pop("admin_view_as_role", None)
+                    st.session_state["admin_role"] = st.session_state.get("admin_real_role", "super_admin")
+                    st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "admin_role_assignments")
+
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
             try:
@@ -357,8 +382,20 @@ def main():
                 user_id=str(getattr(current_admin, "id", "") or "").strip() or None,
                 allowlist=admin_allowlist,
             )
-            st.session_state["admin_role"] = role_resolution.role
-            st.session_state["admin_role_source"] = role_resolution.source
+            st.session_state["admin_real_role"] = role_resolution.role
+            st.session_state["admin_real_role_source"] = role_resolution.source
+            view_as_role = str(st.session_state.get("admin_view_as_role", "") or "").strip().lower()
+            real_is_super_admin = role_resolution.role == "super_admin"
+            if not real_is_super_admin:
+                st.session_state.pop("admin_view_as_role", None)
+                st.session_state["admin_role"] = role_resolution.role
+                st.session_state["admin_role_source"] = role_resolution.source
+            elif view_as_role and view_as_role in {"club_owner", "organizer", "scorekeeper", "read_only"}:
+                st.session_state["admin_role"] = view_as_role
+                st.session_state["admin_role_source"] = "super_admin_view_as"
+            else:
+                st.session_state["admin_role"] = role_resolution.role
+                st.session_state["admin_role_source"] = role_resolution.source
         (
             df_players_all,
             df_players_active,
@@ -519,12 +556,13 @@ def main():
             "📬 Player Updates Admin": player_updates_admin,
         }
 
+        effective_role = str(st.session_state.get("admin_role", "read_only") or "read_only")
         # Visible labels based on auth
         all_labels = list(PAGES.keys())
         if not admin_logged_in:
             visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         else:
-            visible_labels = all_labels
+            visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS or is_admin_page_available_for_role(LABEL_TO_PAGE_KEY.get(x, ""), effective_role)]
 
         public_labels_in_order = labels_for_keys(PUBLIC_NAV_KEYS)
 
@@ -567,6 +605,13 @@ def main():
                 )
 
         else:
+            if (admin_logged_in and st.session_state.get("admin_role_source") == "super_admin_view_as" and st.session_state.get("admin_real_role") == "super_admin"):
+                st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
+                if st.sidebar.button("Return to Super Admin"):
+                    st.session_state.pop("admin_view_as_role", None)
+                    st.session_state["admin_role"] = "super_admin"
+                    st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "admin_role_assignments")
+                    st.rerun()
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 
             valid_admin_deep_label = ""
@@ -681,6 +726,9 @@ def main():
         target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
         if target_page_key in ADMIN_ONLY_PAGE_KEYS and not admin_logged_in:
             st.info("Admin login required to access this page.")
+            st.stop()
+        if target_page_key in ADMIN_ONLY_PAGE_KEYS and admin_logged_in and not is_admin_page_available_for_role(target_page_key, effective_role):
+            st.info("Not available in current admin view.")
             st.stop()
 
         try:
