@@ -35,6 +35,7 @@ from jupr_app.ui.page_registry import (
     labels_for_keys,
 )
 from jupr_app.ui.branding import CLUB_ID, PUBLIC_BASE_URL_FALLBACK
+from jupr_app.domain.clubs import get_default_club_id
 from jupr_app.ui.public_nav import render_public_app_header, render_public_footer
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
@@ -246,6 +247,9 @@ def main():
         debug_exceptions = _debug_exceptions_enabled()
 
         # Make base_url available to all pages (leaderboards uses this for share links)
+
+        selected_club_id = get_default_club_id() or CLUB_ID
+
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
         st.session_state["base_url"] = PUBLIC_BASE_URL
 
@@ -482,11 +486,11 @@ def main():
             id_to_name,
             schema_degraded,
             schema_degraded_reason,
-        ) = get_data(CLUB_ID)
+        ) = get_data(selected_club_id)
 
         ctx = AppContext(
             supabase=supabase,
-            club_id=CLUB_ID,
+            club_id=selected_club_id,
             df_players_all=df_players_all,
             df_players_active=df_players_active,
             df_leagues=df_leagues,
@@ -520,10 +524,10 @@ def main():
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
             enqueue_result = enqueue_badge_eval(
                 supabase,
-                club_id=CLUB_ID,
+                club_id=selected_club_id,
                 event_type="match_recorded",
                 player_ids=player_ids,
-                match_id=f"initial_load:{CLUB_ID}",
+                match_id=f"initial_load:{selected_club_id}",
                 payload={"initial_load": True},
             )
             if enqueue_result.get("queued"):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 PRODUCT_NAME = "JUPR"
+# Fallback defaults retained for backward compatibility while DB club config rollout is in progress.
 CLUB_NAME = "Tres Palapas"
 CLUB_ID = "tres_palapas"
 TAGLINE = "Official player ratings and events for Tres Palapas"
