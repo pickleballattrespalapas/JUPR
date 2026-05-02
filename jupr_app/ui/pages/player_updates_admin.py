@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from jupr_app.config import get_public_base_url
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_UNSUBSCRIBED,
     approve_request,
@@ -179,6 +180,12 @@ def _render_digest_preview(digest: dict) -> None:
         else:
             st.caption("No chart points available in selected date range.")
 
+
+
+
+def _resolve_public_base_url() -> str:
+    base = str(st.session_state.get("base_url", "") or "").strip().rstrip("/")
+    return base or get_public_base_url()
 
 def _friendly_error(exc: Exception) -> str:
     text = str(exc or "").strip()
@@ -606,7 +613,7 @@ def render(ctx) -> None:
         with c1:
             if st.button("Send Pending", use_container_width=True):
                 try:
-                    result = send_pending_player_update_emails(ctx, limit=500)
+                    result = send_pending_player_update_emails(ctx, limit=500, public_base_url=_resolve_public_base_url())
                     st.success(
                         f"Attempted: {result['attempted']} · Sent: {result['sent']} · "
                         f"Skipped: {result['skipped']} · Errors: {result['errors']}"

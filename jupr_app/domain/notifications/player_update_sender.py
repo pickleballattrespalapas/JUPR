@@ -4,8 +4,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
-import streamlit as st
-
 from jupr_app.domain.notifications.player_profile_update_repo import (
     DEFAULT_PREFERENCES,
     REQUEST_STATUS_ACTIVE,
@@ -25,6 +23,7 @@ from jupr_app.domain.notifications.player_update_email_template import (
     build_player_update_email_subject,
     build_player_update_email_text,
 )
+from jupr_app.config import get_public_base_url
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 
@@ -68,24 +67,15 @@ def _safe_digest_for_week(
         return None
 
 
-def _public_base_url() -> str:
-    base = str(st.session_state.get("base_url", "") or "").strip().rstrip("/")
-    if base:
-        return base
-    try:
-        base = str(st.secrets.get("PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
-        if base:
-            return base
-    except Exception:
-        pass
-    return "http://localhost:8501"
+def _normalize_public_base_url(public_base_url: str | None = None) -> str:
+    return str(public_base_url or get_public_base_url()).strip().rstrip("/")
 
 
-def _build_public_players_url(params: dict[str, str]) -> str:
+def _build_public_players_url(params: dict[str, str], *, public_base_url: str | None = None) -> str:
     query = {"page": "players", "public": "1"}
     for key, value in (params or {}).items():
         query[str(key)] = str(value)
-    return f"{_public_base_url()}/?{urlencode(query)}"
+    return f"{_normalize_public_base_url(public_base_url)}/?{urlencode(query)}"
 
 
 def _merge_links_for_send(
@@ -94,15 +84,16 @@ def _merge_links_for_send(
     player_id: int,
     subscription_id: str,
     unsubscribe_token: str | None = None,
+    public_base_url: str | None = None,
 ) -> dict[str, Any]:
     links = dict((digest or {}).get("links") or {})
-    links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))})
+    links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))}, public_base_url=public_base_url)
     unsubscribe_params = {"page": "email_preferences"}
     if str(unsubscribe_token or "").strip():
         unsubscribe_params["token"] = str(unsubscribe_token).strip()
     else:
         unsubscribe_params["sid"] = str(subscription_id)
-    links["unsubscribe"] = f"{_public_base_url()}/?{urlencode(unsubscribe_params)}"
+    links["unsubscribe"] = f"{_normalize_public_base_url(public_base_url)}/?{urlencode(unsubscribe_params)}"
     merged = dict(digest or {})
     merged["links"] = links
     return merged
@@ -393,7 +384,7 @@ def queue_saved_digest_rows(ctx, *, digest_rows: list[dict[str, Any]]) -> dict[s
     }
 
 
-def send_pending_player_update_emails(ctx, *, limit: int = 100) -> dict[str, int]:
+def send_pending_player_update_emails(ctx, *, limit: int = 100, public_base_url: str | None = None) -> dict[str, int]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
     pending_rows = list_outbox_rows(supabase, club_id, status="pending", limit=max(1, int(limit)))
@@ -444,6 +435,7 @@ def send_pending_player_update_emails(ctx, *, limit: int = 100) -> dict[str, int
                     supabase,
                     str(subscription.get("id") or ""),
                 ),
+                public_base_url=public_base_url,
             )
 
             if _is_send_only_if_changed_and_unchanged(subscription, digest):
@@ -510,15 +502,14 @@ def send_test_player_update_email(
     end_date: date,
     player_id: int | None = None,
     to_email: str | None = None,
+    public_base_url: str | None = None,
 ) -> dict[str, str]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
     admin_email = str(
         to_email
         or getattr(ctx, "admin_email", "")
-        or st.session_state.get("admin_email", "")
         or getattr(ctx, "user_email", "")
-        or st.session_state.get("user_email", "")
     ).strip()
     if not admin_email:
         raise ValueError("No admin email available for test send.")
@@ -544,6 +535,7 @@ def send_test_player_update_email(
         player_id=int(selected_player_id),
         subscription_id=selected_subscription_id,
         unsubscribe_token=ensure_unsubscribe_token(supabase, selected_subscription_id),
+        public_base_url=public_base_url,
     )
 
     chart_cid = "player-digest-chart"

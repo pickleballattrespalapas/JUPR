@@ -1,112 +1,42 @@
 from __future__ import annotations
 
-import os
 import smtplib
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import streamlit as st
 
-
-def _secret_or_env(name: str, default: str = "") -> str:
-    env_val = str(os.getenv(name, "")).strip()
-    if env_val:
-        return env_val
-
-    try:
-        secret_val = st.secrets.get(name, default)
-    except Exception:
-        return str(default).strip()
-
-    if secret_val is None:
-        return str(default).strip()
-    return str(secret_val).strip()
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    val = _secret_or_env(name).lower()
-    if not val:
-        return default
-    return val in {"1", "true", "yes", "y", "on"}
-
-
-def _read_smtp_config_raw() -> dict:
-    host = _secret_or_env("SMTP_HOST")
-    port_raw = _secret_or_env("SMTP_PORT")
-    username = _secret_or_env("SMTP_USERNAME")
-    password = _secret_or_env("SMTP_PASSWORD")
-    from_email = _secret_or_env("SMTP_FROM_EMAIL")
-    from_name = _secret_or_env("SMTP_FROM_NAME") or "JUPR Notifications"
-    reply_to = _secret_or_env("SMTP_REPLY_TO") or "joe@juprleagues.com"
-    use_tls = _env_bool("SMTP_USE_TLS", default=True)
-
-    return {
-        "host": host,
-        "port_raw": port_raw,
-        "username": username,
-        "password": password,
-        "from_email": from_email,
-        "from_name": from_name,
-        "reply_to": reply_to,
-        "use_tls": use_tls,
-    }
+from jupr_app.config import get_env_or_default, get_smtp_config
 
 
 def get_smtp_config_status() -> dict:
-    raw = _read_smtp_config_raw()
-    missing = [
-        key
-        for key, value in [
-            ("SMTP_HOST", raw.get("host")),
-            ("SMTP_PORT", raw.get("port_raw")),
-            ("SMTP_USERNAME", raw.get("username")),
-            ("SMTP_PASSWORD", raw.get("password")),
-            ("SMTP_FROM_EMAIL", raw.get("from_email")),
-        ]
-        if not value
-    ]
+    missing: list[str] = []
+    host = get_env_or_default("SMTP_HOST")
+    port_raw = get_env_or_default("SMTP_PORT")
+    username = get_env_or_default("SMTP_USERNAME")
+    password = get_env_or_default("SMTP_PASSWORD")
+    from_email = get_env_or_default("SMTP_FROM_EMAIL")
+    from_name = get_env_or_default("SMTP_FROM_NAME", "JUPR Notifications")
+    reply_to = get_env_or_default("SMTP_REPLY_TO", "joe@juprleagues.com")
 
-    port: int | None = None
-    port_error: str | None = None
-    if raw.get("port_raw"):
+    for key, value in (("SMTP_HOST", host),("SMTP_PORT", port_raw),("SMTP_USERNAME", username),("SMTP_PASSWORD", password),("SMTP_FROM_EMAIL", from_email)):
+        if not value:
+            missing.append(key)
+
+    port=None
+    port_error=None
+    if port_raw:
         try:
-            port = int(raw["port_raw"])
+            port=int(port_raw)
         except Exception:
             port_error = "SMTP_PORT must be an integer"
 
-    return {
-        "ok": len(missing) == 0 and port_error is None,
-        "missing": missing,
-        "host": raw.get("host"),
-        "port": port,
-        "from_email": raw.get("from_email"),
-        "from_name": raw.get("from_name"),
-        "reply_to": raw.get("reply_to"),
-        "reply_to_configured": bool(raw.get("reply_to")),
-        "use_tls": bool(raw.get("use_tls", True)),
-        "port_error": port_error,
-    }
+    return {"ok": len(missing)==0 and port_error is None, "missing": missing, "host": host, "port": port, "from_email": from_email, "from_name": from_name, "reply_to": reply_to, "reply_to_configured": bool(reply_to), "use_tls": get_smtp_config().use_tls if len(missing)==0 and port_error is None else True, "port_error": port_error}
 
 
 def _smtp_config_from_env() -> dict:
-    status = get_smtp_config_status()
-    if status["missing"]:
-        raise ValueError(f"Missing SMTP configuration: {', '.join(status['missing'])}")
-    if status.get("port_error"):
-        raise ValueError(str(status["port_error"]))
-
-    raw = _read_smtp_config_raw()
-    return {
-        "host": status["host"],
-        "port": int(status["port"]),
-        "username": raw["username"],
-        "password": raw["password"],
-        "from_email": status["from_email"],
-        "from_name": status["from_name"],
-        "reply_to": raw["reply_to"],
-        "use_tls": status["use_tls"],
-    }
+    cfg = get_smtp_config()
+    return {"host": cfg.host, "port": cfg.port, "username": cfg.username, "password": cfg.password, "from_email": cfg.from_email, "from_name": cfg.from_name, "reply_to": cfg.reply_to, "use_tls": cfg.use_tls}
 
 
 def send_email_with_inline_chart(
