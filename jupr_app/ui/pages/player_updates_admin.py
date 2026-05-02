@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from jupr_app.config import SMTPConfig, get_env_or_default, get_public_base_url
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_UNSUBSCRIBED,
     approve_request,
@@ -179,6 +180,59 @@ def _render_digest_preview(digest: dict) -> None:
         else:
             st.caption("No chart points available in selected date range.")
 
+
+
+
+
+
+def _ui_env_or_secret(name: str, default: str = "") -> str:
+    value = get_env_or_default(name).strip()
+    if value:
+        return value
+    try:
+        secret_val = st.secrets.get(name, default)
+    except Exception:
+        return str(default).strip()
+    if secret_val is None:
+        return str(default).strip()
+    return str(secret_val).strip()
+
+
+def _ui_env_or_secret_bool(name: str, default: bool = False) -> bool:
+    value = _ui_env_or_secret(name).lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_smtp_config_from_ui() -> SMTPConfig | None:
+    host = _ui_env_or_secret("SMTP_HOST")
+    port_raw = _ui_env_or_secret("SMTP_PORT")
+    username = _ui_env_or_secret("SMTP_USERNAME")
+    password = _ui_env_or_secret("SMTP_PASSWORD")
+    from_email = _ui_env_or_secret("SMTP_FROM_EMAIL")
+    if not all([host, port_raw, username, password, from_email]):
+        return None
+
+    try:
+        port = int(port_raw)
+    except Exception:
+        return None
+
+    return SMTPConfig(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        from_email=from_email,
+        from_name=_ui_env_or_secret("SMTP_FROM_NAME", "JUPR Notifications"),
+        reply_to=_ui_env_or_secret("SMTP_REPLY_TO", "joe@juprleagues.com"),
+        use_tls=_ui_env_or_secret_bool("SMTP_USE_TLS", default=True),
+    )
+
+def _resolve_public_base_url() -> str:
+    base = str(st.session_state.get("base_url", "") or "").strip().rstrip("/")
+    return base or get_public_base_url()
 
 def _friendly_error(exc: Exception) -> str:
     text = str(exc or "").strip()
@@ -606,7 +660,12 @@ def render(ctx) -> None:
         with c1:
             if st.button("Send Pending", use_container_width=True):
                 try:
-                    result = send_pending_player_update_emails(ctx, limit=500)
+                    result = send_pending_player_update_emails(
+                        ctx,
+                        limit=500,
+                        public_base_url=_resolve_public_base_url(),
+                        smtp_config=_resolve_smtp_config_from_ui(),
+                    )
                     st.success(
                         f"Attempted: {result['attempted']} · Sent: {result['sent']} · "
                         f"Skipped: {result['skipped']} · Errors: {result['errors']}"
