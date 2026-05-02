@@ -4,7 +4,6 @@ import time
 import json
 from datetime import datetime, timezone
 from uuid import uuid4
-from jupr_app.domain.replay_history import replay_history
 from jupr_app.domain.admin.roles import (
     ALL_ROLES,
     ROLE_READ_ONLY,
@@ -36,6 +35,7 @@ from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
+from jupr_app.services.replay_service import run_replay_with_job_tracking
 from jupr_app.domain.gamification.badge_audit import (
     build_badge_audit_report,
     build_high_roller_diagnostic_report,
@@ -691,14 +691,19 @@ def render(ctx):
     if st.button(f"⚠️ Replay History for: {target_reset}", disabled=not role_can_run_replay):
         bar = st.progress(0.0)
         with st.spinner("Crunching..."):
-            result = replay_history(
+            replay_outcome = run_replay_with_job_tracking(
                 supabase=supabase,
                 club_id=club_id,
                 df_meta=df_meta,
                 target_reset=str(target_reset),
+                actor_email=getattr(ctx, "current_user_email", None),
+                actor_role=admin_role,
                 progress_cb=lambda x: bar.progress(float(x)),
             )
+            result = replay_outcome["result"]
 
+        st.info(f"Replay job id: {replay_outcome['job_id']}")
+        st.info(f"Replay job status: {replay_outcome['job_status']}")
         st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
         st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
         st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
