@@ -35,7 +35,7 @@ from jupr_app.ui.page_registry import (
     labels_for_keys,
 )
 from jupr_app.ui.branding import CLUB_ID, PUBLIC_BASE_URL_FALLBACK
-from jupr_app.ui.public_nav import render_public_app_header
+from jupr_app.ui.public_nav import render_public_app_header, render_public_footer
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
 
@@ -685,6 +685,8 @@ def main():
 
         try:
             render_fn(ctx)
+            if PUBLIC_MODE:
+                render_public_footer(current_label=sel)
         except Exception as exc:
             requested_page_key = qp_get("page", "").strip().lower()
             route_info = {
