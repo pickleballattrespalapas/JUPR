@@ -392,6 +392,13 @@ def render(ctx):
             "jupr_public_mode": bool(st.session_state.get("jupr_public_mode", False)),
             "jupr_admin_entry_active": bool(st.session_state.get("jupr_admin_entry_active", False)),
             "jupr_admin_authenticated": bool(st.session_state.get("jupr_admin_authenticated", False)),
+            "admin_real_role": str(st.session_state.get("admin_real_role", "") or ""),
+            "admin_real_role_source": str(st.session_state.get("admin_real_role_source", "") or ""),
+            "admin_role": str(st.session_state.get("admin_role", "") or ""),
+            "admin_role_source": str(st.session_state.get("admin_role_source", "") or ""),
+            "admin_view_as_role": str(st.session_state.get("admin_view_as_role", "") or ""),
+            "admin_view_as_selector_label": str(st.session_state.get("admin_view_as_selector_label", "") or ""),
+            "view_as_mode_active": bool(st.session_state.get("admin_role_source", "") == "super_admin_view_as"),
             "route_stability_repeat_count": int(st.session_state.get("jupr_route_stability_repeat_count", 0) or 0),
             "route_stability_warning": bool(st.session_state.get("jupr_route_stability_warning", False)),
         }
