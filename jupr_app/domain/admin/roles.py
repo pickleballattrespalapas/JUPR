@@ -108,19 +108,37 @@ def resolve_admin_role(
     normalized_user_id = str(user_id or "").strip() or None
 
     try:
-        query = (
+        response = (
             supabase.table("admin_role_assignments")
-            .select("role")
+            .select("role,user_id")
             .eq("email", normalized_email)
-            .limit(1)
+            .execute()
         )
-        if normalized_user_id:
-            query = query.eq("user_id", normalized_user_id)
-        response = query.execute()
         rows = response.data or []
         if rows:
+            preferred_row = None
+            if normalized_user_id:
+                preferred_row = next(
+                    (
+                        row
+                        for row in rows
+                        if str(row.get("user_id") or "").strip() == normalized_user_id
+                    ),
+                    None,
+                )
+            if preferred_row is None:
+                preferred_row = next(
+                    (
+                        row
+                        for row in rows
+                        if str(row.get("user_id") or "").strip() == ""
+                    ),
+                    None,
+                )
+            if preferred_row is None:
+                preferred_row = rows[0]
             return AdminRoleResolution(
-                role=normalize_role(rows[0].get("role")),
+                role=normalize_role(preferred_row.get("role")),
                 source="admin_role_assignments",
                 table_available=True,
             )

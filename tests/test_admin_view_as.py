@@ -47,19 +47,19 @@ def test_view_as_selector_uses_explicit_widget_key():
     assert 'key=VIEW_AS_SELECTOR_KEY' in app
 
 
-def test_return_to_super_admin_sets_pending_reset_and_reruns():
+def test_return_to_super_admin_sets_actual_label_and_reruns():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
     assert 'if st.sidebar.button("Return to Super Admin"):' in app
     assert 'st.session_state["admin_view_as_role"] = None' in app
+    assert 'st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL' in app
     assert "st.session_state[VIEW_AS_RESET_PENDING_KEY] = True" in app
-    assert "st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL" not in app.split('if st.sidebar.button("Return to Super Admin"):', 1)[1].split('st.rerun()', 1)[0]
 
 
-def test_stale_selector_value_is_guarded_after_return_to_actual_super_admin():
+def test_selected_label_is_source_of_truth_for_view_as_role_every_run():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
-    assert "last_selector_label = st.session_state.get(VIEW_AS_LAST_SELECTOR_KEY)" in app
-    assert "selector_changed = picked_label != last_selector_label" in app
-    assert "if selector_changed and picked_role != current_role:" in app
+    assert "mapped_role = picked_role or None" in app
+    assert "if mapped_role != current_role:" in app
+    assert 'st.session_state["admin_view_as_role"] = mapped_role' in app
 
 
 def test_pending_reset_applies_before_selectbox_render():
@@ -73,8 +73,9 @@ def test_selectbox_change_paths_still_switch_between_actual_and_organizer():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
     assert '"View as Organizer": "organizer"' in app
     assert "picked_role = view_as_options[picked_label]" in app
-    assert "if selector_changed and picked_role != current_role:" in app
-    assert 'st.session_state["admin_view_as_role"] = picked_role or None' in app
+    assert "mapped_role = picked_role or None" in app
+    assert "if mapped_role != current_role:" in app
+    assert 'st.session_state["admin_view_as_role"] = mapped_role' in app
 
 
 def test_pending_reset_handled_before_effective_role_resolution():
@@ -90,11 +91,10 @@ def test_pending_reset_clears_view_as_before_role_resolution():
     assert 'st.session_state["admin_view_as_role"] = None' in pre_resolve
 
 
-def test_pending_reset_sets_selector_and_last_selector_before_selectbox():
+def test_pending_reset_sets_selector_before_selectbox():
     app = Path("streamlit_app.py").read_text(encoding="utf-8")
     pre_selectbox = app.split("picked_label = st.sidebar.selectbox", 1)[0]
     assert "st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL" in pre_selectbox
-    assert "st.session_state[VIEW_AS_LAST_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL" in pre_selectbox
 
 
 def test_impossible_state_guard_present_after_effective_role_resolution():

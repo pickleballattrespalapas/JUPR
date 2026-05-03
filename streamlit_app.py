@@ -398,12 +398,10 @@ def main():
         VIEW_AS_ACTUAL_LABEL = "Actual Super Admin"
         VIEW_AS_SELECTOR_KEY = "admin_view_as_selector_label"
         VIEW_AS_RESET_PENDING_KEY = "admin_view_as_reset_pending"
-        VIEW_AS_LAST_SELECTOR_KEY = "admin_view_as_last_selector_label"
 
         if st.session_state.pop(VIEW_AS_RESET_PENDING_KEY, False):
             st.session_state["admin_view_as_role"] = None
             st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
-            st.session_state[VIEW_AS_LAST_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
 
         supabase = get_supabase()
         if admin_authenticated:
@@ -483,12 +481,10 @@ def main():
                     help="Temporarily preview another role’s permissions. Your real account and audit identity do not change.",
                 )
                 picked_role = view_as_options[picked_label]
-                current_role = str(st.session_state.get("admin_view_as_role", "") or "")
-                last_selector_label = st.session_state.get(VIEW_AS_LAST_SELECTOR_KEY)
-                selector_changed = picked_label != last_selector_label
-                st.session_state[VIEW_AS_LAST_SELECTOR_KEY] = picked_label
-                if selector_changed and picked_role != current_role:
-                    st.session_state["admin_view_as_role"] = picked_role or None
+                mapped_role = picked_role or None
+                current_role = st.session_state.get("admin_view_as_role")
+                if mapped_role != current_role:
+                    st.session_state["admin_view_as_role"] = mapped_role
                     st.rerun()
 
         # Optional: allow pages to request a refresh of cached data
@@ -754,6 +750,7 @@ def main():
                 st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
                 if st.sidebar.button("Return to Super Admin"):
                     st.session_state["admin_view_as_role"] = None
+                    st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
                     st.session_state[VIEW_AS_RESET_PENDING_KEY] = True
                     st.rerun()
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]

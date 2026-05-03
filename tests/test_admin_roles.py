@@ -8,6 +8,7 @@ from jupr_app.domain.admin.roles import (
     ROLE_READ_ONLY,
     ROLE_SCOREKEEPER,
     ROLE_SUPER_ADMIN,
+    ROLE_ORGANIZER,
     can_delete_matches,
     can_enter_scores,
     can_manage_matches,
@@ -88,6 +89,36 @@ def test_resolve_admin_role_defaults_to_read_only_without_assignment():
     )
     assert result.role == ROLE_READ_ONLY
     assert result.source == "default"
+
+
+def test_resolve_admin_role_prefers_null_user_id_for_email_only_assignment_when_user_id_present():
+    supabase = _Supabase(_Query(response_data=[
+        {"role": ROLE_ORGANIZER, "user_id": None},
+        {"role": ROLE_READ_ONLY, "user_id": "other-user"},
+    ]))
+    result = resolve_admin_role(
+        supabase=supabase,
+        email="organizer@example.com",
+        user_id="logged-in-user",
+        allowlist=set(),
+    )
+    assert result.role == ROLE_ORGANIZER
+    assert result.source == "admin_role_assignments"
+
+
+def test_resolve_admin_role_prefers_exact_user_id_match_over_null_user_id():
+    supabase = _Supabase(_Query(response_data=[
+        {"role": ROLE_ORGANIZER, "user_id": None},
+        {"role": ROLE_SCOREKEEPER, "user_id": "user-123"},
+    ]))
+    result = resolve_admin_role(
+        supabase=supabase,
+        email="multi@example.com",
+        user_id="user-123",
+        allowlist=set(),
+    )
+    assert result.role == ROLE_SCOREKEEPER
+    assert result.source == "admin_role_assignments"
 
 
 @pytest.mark.parametrize(
