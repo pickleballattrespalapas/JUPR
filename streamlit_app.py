@@ -399,6 +399,14 @@ def main():
         VIEW_AS_SELECTOR_KEY = "admin_view_as_selector_label"
         VIEW_AS_RESET_PENDING_KEY = "admin_view_as_reset_pending"
 
+        def _apply_effective_admin_role_from_view_as(mapped_role: str | None) -> None:
+            if mapped_role:
+                st.session_state["admin_role"] = mapped_role
+                st.session_state["admin_role_source"] = "super_admin_view_as"
+            else:
+                st.session_state["admin_role"] = st.session_state.get("admin_real_role", "read_only")
+                st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "not_authenticated")
+
         if st.session_state.pop(VIEW_AS_RESET_PENDING_KEY, False):
             st.session_state["admin_view_as_role"] = None
             st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
@@ -485,7 +493,7 @@ def main():
                 current_role = st.session_state.get("admin_view_as_role")
                 if mapped_role != current_role:
                     st.session_state["admin_view_as_role"] = mapped_role
-                    st.rerun()
+                    _apply_effective_admin_role_from_view_as(mapped_role)
 
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
@@ -751,8 +759,8 @@ def main():
                 if st.sidebar.button("Return to Super Admin"):
                     st.session_state["admin_view_as_role"] = None
                     st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
-                    st.session_state[VIEW_AS_RESET_PENDING_KEY] = True
-                    st.rerun()
+                    st.session_state["admin_role"] = st.session_state.get("admin_real_role", "read_only")
+                    st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "not_authenticated")
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 
             valid_admin_deep_label = ""
