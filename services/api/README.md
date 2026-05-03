@@ -23,3 +23,14 @@ uvicorn services.api.main:app --reload
 - `GET /clubs/{club_slug}/leaderboards?league_name=...`
 
 The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
+- `POST /admin/clubs/{club_id}/matches/batch`
+
+## Admin score-entry guard (v1 placeholder)
+
+`POST /admin/clubs/{club_id}/matches/batch` currently uses a **server token placeholder guard** and is not production-grade auth.
+
+Required headers:
+- `x-admin-token: <JUPR_ADMIN_API_TOKEN>`
+- `x-admin-permission: enter_scores`
+
+This endpoint is intentionally structured so Supabase JWT and role-based authorization can replace the placeholder guard later without changing the route contract.
