@@ -14,6 +14,7 @@ uvicorn services.api.main:app --reload
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY` (preferred for server-side API)
 - `SUPABASE_ANON_KEY` (read-only local fallback)
+- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` (`1` / `true` / `yes` to enable, disabled by default)
 
 ## Endpoints
 
@@ -26,9 +27,17 @@ uvicorn services.api.main:app --reload
 The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
 - `POST /admin/clubs/{club_id}/matches/batch`
 
-## Admin score-entry guard (v1 placeholder)
+## Admin score-entry guard (experimental + temporary)
 
-`POST /admin/clubs/{club_id}/matches/batch` currently uses a **server token placeholder guard** and is not production-grade auth.
+`POST /admin/clubs/{club_id}/matches/batch` is **disabled by default**.
+
+When disabled, the endpoint returns:
+
+`Next admin score entry is disabled. Use Streamlit admin until Supabase JWT role auth is implemented.`
+
+To enable in staging experiments only, set `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` (or `true` / `yes`).
+
+When enabled, this route still uses a **server token placeholder guard** and is not production-grade auth.
 
 Required headers:
 - `x-admin-token: <JUPR_ADMIN_API_TOKEN>`

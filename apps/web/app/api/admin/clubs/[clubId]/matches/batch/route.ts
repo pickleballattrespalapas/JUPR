@@ -4,7 +4,22 @@ function getApiBaseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
+function isNextAdminScoreEntryEnabled(): boolean {
+  const value = (process.env.JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY || "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
 export async function POST(request: NextRequest, { params }: { params: { clubId: string } }) {
+  if (!isNextAdminScoreEntryEnabled()) {
+    return NextResponse.json(
+      {
+        error:
+          "Next admin score entry is disabled. Use Streamlit admin until Supabase JWT role auth is implemented.",
+      },
+      { status: 403 }
+    );
+  }
+
   const apiBase = getApiBaseUrl();
   const adminToken = process.env.JUPR_ADMIN_API_TOKEN;
 

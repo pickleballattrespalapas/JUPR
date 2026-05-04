@@ -22,6 +22,10 @@ def is_staging_env() -> bool:
     return get_jupr_env() == "staging"
 
 
+def is_next_admin_score_entry_enabled() -> bool:
+    return os.getenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "").strip().lower() in {"1", "true", "yes"}
+
+
 def _warn_if_not_staging_configured() -> None:
     env = get_jupr_env()
     if not env:
@@ -235,6 +239,16 @@ def submit_admin_match_batch(
     x_admin_token: str | None = Header(default=None),
     x_admin_permission: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    if not is_next_admin_score_entry_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Next admin score entry is disabled. Use Streamlit admin until Supabase JWT role auth is implemented."
+            ),
+        )
+
+    # Temporary guard only: this path must migrate to Supabase JWT + admin role checks
+    # before it can be considered production-grade authorization.
     auth_mode = _authorize_score_entry(token=x_admin_token, requested_permission=str(x_admin_permission or ""))
 
     supabase = get_supabase_client()
