@@ -5,8 +5,7 @@ Minimal read-only API scaffold for future service integration.
 ## Run locally
 
 ```bash
-cd services/api
-pip install -r requirements.txt
+pip install -r services/api/requirements.txt
 uvicorn services.api.main:app --reload
 ```
 
