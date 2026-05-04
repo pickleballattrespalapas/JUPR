@@ -17,8 +17,7 @@ export default async function ClubPage({ params }: ClubPageProps) {
       ) : (
         <>
           <p style={{ marginBottom: "0.25rem" }}><strong>Slug:</strong> {data?.slug}</p>
-          {data?.location ? <p style={{ margin: "0.25rem 0" }}><strong>Location:</strong> {data.location}</p> : null}
-          {data?.description ? <p style={{ margin: "0.25rem 0" }}>{data.description}</p> : null}
+          {data?.tagline ? <p style={{ margin: "0.25rem 0" }}>{data.tagline}</p> : null}
         </>
       )}
       <p>

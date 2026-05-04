@@ -58,6 +58,20 @@ def get_supabase_client() -> Client:
     return create_client(url, key)
 
 
+def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
+    detail = str(exc).lower()
+    table = table_name.lower()
+    return (
+        table in detail
+        and (
+            "does not exist" in detail
+            or "undefined table" in detail
+            or "relation" in detail
+            or "not found" in detail
+        )
+    )
+
+
 def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
@@ -126,11 +140,18 @@ def get_club(club_slug: str) -> dict[str, Any]:
     supabase = get_supabase_client()
     club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
 
-    rows = (
-        supabase.table("clubs").select(club_fields).eq("slug", slug).limit(1).execute().data or []
-    )
-    if not rows:
-        rows = supabase.table("clubs").select(club_fields).eq("id", slug).limit(1).execute().data or []
+    rows: list[dict[str, Any]] = []
+    try:
+        rows = (
+            supabase.table("clubs").select(club_fields).eq("slug", slug).limit(1).execute().data or []
+        )
+        if not rows:
+            rows = supabase.table("clubs").select(club_fields).eq("id", slug).limit(1).execute().data or []
+    except Exception as exc:
+        if _is_missing_table_error(exc, "clubs"):
+            rows = []
+        else:
+            raise
 
     if rows:
         row = rows[0] or {}

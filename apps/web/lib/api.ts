@@ -1,8 +1,13 @@
 export type ClubSummary = {
+  id: string;
   slug: string;
   name: string;
-  location?: string | null;
-  description?: string | null;
+  tagline?: string | null;
+  support_email?: string | null;
+  public_base_url?: string | null;
+  logo_url?: string | null;
+  primary_color?: string | null;
+  is_active?: boolean | null;
 };
 
 export type LeaderboardEntry = {
