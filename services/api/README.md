@@ -35,3 +35,15 @@ Required headers:
 - `x-admin-permission: enter_scores`
 
 This endpoint is intentionally structured so Supabase JWT and role-based authorization can replace the placeholder guard later without changing the route contract.
+
+
+## Staging deployment guardrails
+
+This API path is currently **staging-only** for the new SaaS rollout.
+
+- Set `JUPR_ENV=staging` in staging runtime.
+- Use a **staging Supabase project** via `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+- Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` until explicitly approved.
+- Do **not** point this staging API at production Supabase.
+
+See `docs/saas_staging_deploy.md` for the full checklist and rollout constraints.

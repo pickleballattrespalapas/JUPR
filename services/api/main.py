@@ -14,6 +14,26 @@ from jupr_app.services.leaderboard_service import get_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
 
 
+def get_jupr_env() -> str:
+    return os.getenv("JUPR_ENV", "").strip().lower()
+
+
+def is_staging_env() -> bool:
+    return get_jupr_env() == "staging"
+
+
+def _warn_if_not_staging_configured() -> None:
+    env = get_jupr_env()
+    if not env:
+        print(
+            "[JUPR API] JUPR_ENV is not set. Local development is allowed, but staging deployments must set JUPR_ENV=staging and use staging Supabase credentials."
+        )
+        return
+    if env != "staging":
+        print(
+            f"[JUPR API] WARNING: JUPR_ENV={env!r}. The new FastAPI + Next.js SaaS path is staging-only until a dedicated staging Supabase project rollout is validated."
+        )
+
 app = FastAPI(title="JUPR API", version="0.1.0")
 
 
@@ -124,6 +144,11 @@ def _authorize_score_entry(*, token: str | None, requested_permission: str) -> s
         raise HTTPException(status_code=401, detail="invalid admin token")
 
     return "token_guard_placeholder"
+
+
+@app.on_event("startup")
+def startup_checks() -> None:
+    _warn_if_not_staging_configured()
 
 
 @app.get("/health")
