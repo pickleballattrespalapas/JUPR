@@ -30,6 +30,7 @@ Set these when deploying the staging stack:
 - **Do not point staging API at production Supabase.**
 - **Do not deploy Next admin score entry for rated matches.** Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0`.
 - **Do not migrate production traffic to Next yet.**
+- **Streamlit remains the active admin console for rated events.**
 
 ## Staging deployment checklist
 
@@ -45,3 +46,18 @@ Set these when deploying the staging stack:
 - Production deployment config for FastAPI.
 - Production Vercel/custom-domain cutover for Next.js.
 - Production traffic migration from Streamlit.
+
+## Next admin score entry status
+
+The Next.js admin score-entry flow is **experimental** and intentionally de-risked:
+
+- Disabled by default unless `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` is exactly `1`, `true`, or `yes`.
+- Even when enabled, current token checks are temporary and **not** production auth.
+
+Before this flow can be active for rated events, it must implement:
+
+- Supabase JWT validation.
+- Admin role lookup.
+- Club-scoped authorization.
+- Audit identity attribution.
+- CSRF/session strategy for the chosen auth model (if applicable).

@@ -13,6 +13,10 @@ type MatchPayload = {
 };
 
 export default function ScoreEntryPage({ params }: { params: { clubId: string } }) {
+  const isEnabled = (() => {
+    const value = (process.env.NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY || "").trim().toLowerCase();
+    return value === "1" || value === "true" || value === "yes";
+  })();
   const [match, setMatch] = useState<MatchPayload>({
     league: "",
     t1_p1: "",
@@ -54,6 +58,12 @@ export default function ScoreEntryPage({ params }: { params: { clubId: string } 
     <main style={{ maxWidth: 700, margin: "2rem auto", padding: "0 1rem" }}>
       <h1>Score Entry</h1>
       <p>Club: {params.clubId}</p>
+      {!isEnabled ? (
+        <p>
+          Score entry is not enabled in the Next.js admin yet. Use the Streamlit admin console for rated events.
+        </p>
+      ) : null}
+      {!isEnabled ? null : (
       <form onSubmit={onSubmit} style={{ display: "grid", gap: "0.75rem" }}>
         <label>
           League
@@ -85,6 +95,7 @@ export default function ScoreEntryPage({ params }: { params: { clubId: string } 
         </label>
         <button type="submit" disabled={busy}>{busy ? "Submitting..." : "Submit"}</button>
       </form>
+      )}
       {status ? <p>{status}</p> : null}
     </main>
   );
