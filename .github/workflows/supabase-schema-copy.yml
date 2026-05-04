@@ -1,0 +1,86 @@
+name: Supabase Schema Copy (Prod -> Test)
+
+# WARNING:
+# - This workflow is for staging/Test operations only.
+# - Never point SUPABASE_TEST_DATABASE_URL at production.
+# - Do not use this workflow to copy production data.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Choose operation mode"
+        required: true
+        type: choice
+        options:
+          - dump-prod-schema-artifact
+          - apply-prod-schema-to-test
+
+jobs:
+  schema-copy:
+    name: Run schema copy mode
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      # Secrets are injected at runtime and must never be committed.
+      SUPABASE_PROD_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+      SUPABASE_TEST_DATABASE_URL: ${{ secrets.SUPABASE_TEST_DATABASE_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "$SUPABASE_PROD_DATABASE_URL" ]; then
+            echo "SUPABASE_PROD_DATABASE_URL is not set."
+            exit 1
+          fi
+
+          if [ -z "$SUPABASE_TEST_DATABASE_URL" ]; then
+            echo "SUPABASE_TEST_DATABASE_URL is not set."
+            exit 1
+          fi
+
+      - name: Dump production public schema to artifact file
+        if: ${{ github.event.inputs.mode == 'dump-prod-schema-artifact' }}
+        run: |
+          pg_dump \
+            --schema-only \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            "$SUPABASE_PROD_DATABASE_URL" \
+            > prod_public_schema.sql
+
+      - name: Upload production public schema artifact
+        if: ${{ github.event.inputs.mode == 'dump-prod-schema-artifact' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-public-schema
+          path: prod_public_schema.sql
+          if-no-files-found: error
+
+      - name: Apply production public schema to Supabase Test branch
+        if: ${{ github.event.inputs.mode == 'apply-prod-schema-to-test' }}
+        run: |
+          # SAFETY WARNING:
+          # This step must target the Supabase Test branch database only.
+          # Never set SUPABASE_TEST_DATABASE_URL to a production database.
+          # Schema-only copy; this does not copy table data.
+          pg_dump \
+            --schema-only \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --clean \
+            --if-exists \
+            "$SUPABASE_PROD_DATABASE_URL" \
+            | psql "$SUPABASE_TEST_DATABASE_URL"
