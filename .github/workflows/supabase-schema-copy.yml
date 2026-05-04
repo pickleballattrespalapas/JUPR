@@ -1,0 +1,73 @@
+name: Supabase Schema Copy (Prod -> Test)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Operation mode"
+        required: true
+        type: choice
+        options:
+          - dump-prod-schema-artifact
+          - apply-prod-schema-to-test
+
+jobs:
+  supabase-schema-copy:
+    name: Supabase Schema Copy (Prod -> Test)
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_PROD_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+      SUPABASE_TEST_DATABASE_URL: ${{ secrets.SUPABASE_TEST_DATABASE_URL }}
+
+    steps:
+      # SAFETY: This workflow is for staging/Test operations only.
+      # SAFETY: Never point SUPABASE_TEST_DATABASE_URL at production.
+      # SAFETY: Do not use this workflow to copy production data.
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_PROD_DATABASE_URL:-}" ]; then
+            echo "Missing SUPABASE_PROD_DATABASE_URL secret"
+            exit 1
+          fi
+          if [ -z "${SUPABASE_TEST_DATABASE_URL:-}" ]; then
+            echo "Missing SUPABASE_TEST_DATABASE_URL secret"
+            exit 1
+          fi
+
+      - name: Dump production public schema to artifact file
+        if: ${{ inputs.mode == 'dump-prod-schema-artifact' }}
+        run: |
+          set -euo pipefail
+          pg_dump "$SUPABASE_PROD_DATABASE_URL" \
+            --schema-only \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --file=prod_public_schema.sql
+
+      - name: Upload production public schema artifact
+        if: ${{ inputs.mode == 'dump-prod-schema-artifact' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-public-schema
+          path: prod_public_schema.sql
+          if-no-files-found: error
+
+      - name: Apply production public schema to test
+        if: ${{ inputs.mode == 'apply-prod-schema-to-test' }}
+        run: |
+          set -euo pipefail
+          pg_dump "$SUPABASE_PROD_DATABASE_URL" \
+            --schema-only \
+            --schema=public \
+            --no-owner \
+            --no-privileges \
+            --clean \
+            --if-exists \
+          | psql "$SUPABASE_TEST_DATABASE_URL"
