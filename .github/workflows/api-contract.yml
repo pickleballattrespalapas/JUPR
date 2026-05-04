@@ -23,7 +23,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r services/api/requirements.txt
+          python -m pip install pytest
 
       - name: Run API contract tests
         run: |
-          pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py
+          python -m pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py
