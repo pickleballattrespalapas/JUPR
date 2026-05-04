@@ -45,6 +45,9 @@ Required headers:
 
 This endpoint is intentionally structured so Supabase JWT and role-based authorization can replace the placeholder guard later without changing the route contract.
 
+Auth design reference for future replacement of the temporary guard:
+- `docs/next_admin_auth_design.md`
+
 
 ## Staging deployment guardrails
 

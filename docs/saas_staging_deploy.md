@@ -54,6 +54,9 @@ The Next.js admin score-entry flow is **experimental** and intentionally de-risk
 - Disabled by default unless `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` is exactly `1`, `true`, or `yes`.
 - Even when enabled, current token checks are temporary and **not** production auth.
 
+
+See `docs/next_admin_auth_design.md` for the minimum real-auth contract required before enabling Next.js admin score entry.
+
 Before this flow can be active for rated events, it must implement:
 
 - Supabase JWT validation.
