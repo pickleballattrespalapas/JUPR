@@ -30,6 +30,9 @@ class _FakeQuery:
         return self
 
     def execute(self):
+        execute_error = self._db.get(f"{self._table_name}__execute_error")
+        if execute_error is not None:
+            raise execute_error
         rows = list(self._db.get(self._table_name, []))
         for key, expected in self._eq.items():
             rows = [r for r in rows if r.get(key) == expected]
@@ -124,3 +127,29 @@ def test_missing_club_returns_404_when_no_fallback_data_exists(client):
     response = client.get("/clubs/missing-club")
 
     assert response.status_code == 404
+
+
+def test_club_players_fallback_works_when_clubs_table_is_missing(monkeypatch):
+    db = {
+        "clubs__execute_error": RuntimeError('relation "clubs" does not exist'),
+        "players": [{"club_id": "legacy-club"}],
+    }
+    monkeypatch.setattr("services.api.main.get_supabase_client", lambda: _FakeSupabase(db))
+    client = TestClient(app)
+
+    legacy_response = client.get("/clubs/legacy-club")
+    assert legacy_response.status_code == 200
+    assert legacy_response.json() == {
+        "id": "legacy-club",
+        "slug": "legacy-club",
+        "name": "legacy-club",
+        "tagline": None,
+        "support_email": None,
+        "public_base_url": None,
+        "logo_url": None,
+        "primary_color": None,
+        "is_active": True,
+    }
+
+    missing_response = client.get("/clubs/missing-club")
+    assert missing_response.status_code == 404
