@@ -5,3 +5,8 @@ db-migrate: ## Apply pending SQL migrations (requires DATABASE_URL)
 
 check-migration-sources: ## Guard: block undocumented new root migrations
 	@python scripts/check_migration_sources.py
+
+
+.PHONY: api-test
+api-test: ## Run API contract tests
+	@pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py
