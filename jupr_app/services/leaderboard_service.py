@@ -4,6 +4,7 @@ from typing import Any
 
 
 PUBLIC_LEADERBOARD_FIELDS = {
+    "rank",
     "club_id",
     "league_name",
     "player_id",
@@ -25,6 +26,8 @@ def _normalize_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         clean = {k: row.get(k) for k in PUBLIC_LEADERBOARD_FIELDS if k in row}
         clean.setdefault("rating_jupr", clean.get("rating"))
         clean.setdefault("matches_played", (clean.get("wins") or 0) + (clean.get("losses") or 0))
+        if clean.get("rank") is None and clean.get("rank_position") is not None:
+            clean["rank"] = clean.get("rank_position")
         normalized.append(clean)
     return normalized
 

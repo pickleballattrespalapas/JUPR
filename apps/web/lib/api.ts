@@ -6,10 +6,28 @@ export type ClubSummary = {
 };
 
 export type LeaderboardEntry = {
-  rank: number;
+  rank?: number | null;
+  rank_position?: number | null;
+  club_id?: string;
+  league_name?: string | null;
+  player_id?: string | number;
   player_name: string;
   rating?: number | null;
+  rating_jupr?: number | null;
+  wins?: number | null;
+  losses?: number | null;
   matches_played?: number | null;
+  is_active?: boolean | null;
+  updated_at?: string | null;
+};
+
+export type LeaderboardResponse = {
+  club: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  leaderboard: LeaderboardEntry[];
 };
 
 type ApiResult<T> = {
@@ -49,6 +67,6 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
   return fetchJson<ClubSummary>(`/clubs/${clubSlug}`);
 }
 
-export async function getClubLeaderboard(clubSlug: string): Promise<ApiResult<LeaderboardEntry[]>> {
-  return fetchJson<LeaderboardEntry[]>(`/clubs/${clubSlug}/leaderboards/public`);
+export async function getClubLeaderboard(clubSlug: string): Promise<ApiResult<LeaderboardResponse>> {
+  return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards`);
 }

@@ -7,13 +7,15 @@ type LeaderboardPageProps = {
 export default async function ClubLeaderboardPage({ params }: LeaderboardPageProps) {
   const { clubSlug } = params;
   const { data, error } = await getClubLeaderboard(clubSlug);
+  const entries = data?.leaderboard ?? [];
+  const clubName = data?.club?.name ?? clubSlug;
 
   return (
     <section>
-      <h1>{clubSlug} Leaderboards</h1>
+      <h1>{clubName} Leaderboards</h1>
       {error ? <p style={{ color: "#b91c1c" }}>Could not load leaderboard data. {error}</p> : null}
-      {!error && (!data || data.length === 0) ? <p>No leaderboard data is currently available.</p> : null}
-      {data && data.length > 0 ? (
+      {!error && entries.length === 0 ? <p>No leaderboard data is currently available.</p> : null}
+      {entries.length > 0 ? (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", background: "white" }}>
             <thead>
@@ -25,9 +27,11 @@ export default async function ClubLeaderboardPage({ params }: LeaderboardPagePro
               </tr>
             </thead>
             <tbody>
-              {data.map((entry) => (
-                <tr key={`${entry.player_name}-${entry.rank}`}>
-                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{entry.rank}</td>
+              {entries.map((entry, index) => (
+                <tr key={`${entry.player_name}-${entry.player_id ?? index}`}>
+                  <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>
+                    {entry.rank ?? entry.rank_position ?? index + 1}
+                  </td>
                   <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{entry.player_name}</td>
                   <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{entry.rating ?? "—"}</td>
                   <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{entry.matches_played ?? "—"}</td>

@@ -17,6 +17,23 @@ from jupr_app.services.match_service import submit_match_batch
 app = FastAPI(title="JUPR API", version="0.1.0")
 
 
+PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
+    "rank",
+    "rank_position",
+    "club_id",
+    "league_name",
+    "player_id",
+    "player_name",
+    "rating",
+    "rating_jupr",
+    "wins",
+    "losses",
+    "matches_played",
+    "is_active",
+    "updated_at",
+}
+
+
 class MatchBatchRequest(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "next_admin_score_entry"
@@ -39,6 +56,34 @@ def _get_supabase_credentials() -> tuple[str, str]:
 def get_supabase_client() -> Client:
     url, key = _get_supabase_credentials()
     return create_client(url, key)
+
+
+def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows, start=1):
+        clean = {k: row.get(k) for k in PUBLIC_LEADERBOARD_ENTRY_FIELDS if k in row}
+        if clean.get("rank") is None:
+            if clean.get("rank_position") is not None:
+                clean["rank"] = clean.get("rank_position")
+            else:
+                clean["rank"] = idx
+        normalized.append(clean)
+    return normalized
+
+
+def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict[str, Any]:
+    club = get_club(club_slug)
+    club_id = str(club.get("club_id") or club_slug)
+    supabase = get_supabase_client()
+    rows = get_public_leaderboard(supabase=supabase, club_id=club_id, league_name=league_name)
+    return {
+        "club": {
+            "id": str(club.get("club_id") or club_id),
+            "slug": str(club.get("club_slug") or club_slug),
+            "name": str(club.get("club_name") or club.get("display_name") or club_slug),
+        },
+        "leaderboard": _normalize_public_leaderboard_rows(rows),
+    }
 
 
 def _authorize_score_entry(*, token: str | None, requested_permission: str) -> str:
@@ -115,18 +160,14 @@ def get_club(club_slug: str) -> dict[str, Any]:
 
 @app.get("/clubs/{club_slug}/leaderboards")
 def get_club_leaderboard(club_slug: str, league_name: str | None = Query(default=None)) -> dict[str, Any]:
-    club = get_club(club_slug)
-    club_id = str(club.get("club_id") or club_slug)
-    supabase = get_supabase_client()
-    rows = get_public_leaderboard(supabase=supabase, club_id=club_id, league_name=league_name)
-    return {
-        "club": {
-            "club_id": club.get("club_id", club_id),
-            "club_slug": club.get("club_slug", club_slug),
-            "club_name": club.get("club_name") or club.get("display_name") or club_slug,
-        },
-        "leaderboard": rows,
-    }
+    return _build_leaderboard_response(club_slug, league_name)
+
+
+@app.get("/clubs/{club_slug}/leaderboards/public")
+def get_club_leaderboard_compat(club_slug: str, league_name: str | None = Query(default=None)) -> dict[str, Any]:
+    # Temporary compatibility alias for Next.js clients still calling /leaderboards/public.
+    # Remove this route after the web app fully migrates to /leaderboards.
+    return _build_leaderboard_response(club_slug, league_name)
 
 
 @app.post("/admin/clubs/{club_id}/matches/batch")
