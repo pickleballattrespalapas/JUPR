@@ -22,6 +22,8 @@ uvicorn services.api.main:app --reload
 - `GET /clubs/{club_slug}`
 - `GET /clubs/{club_slug}/leaderboards?league_name=...`
 
+`GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
+
 The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
 - `POST /admin/clubs/{club_id}/matches/batch`
 
