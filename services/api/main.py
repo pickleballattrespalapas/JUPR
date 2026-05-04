@@ -73,14 +73,14 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
 
 def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict[str, Any]:
     club = get_club(club_slug)
-    club_id = str(club.get("club_id") or club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     rows = get_public_leaderboard(supabase=supabase, club_id=club_id, league_name=league_name)
     return {
         "club": {
-            "id": str(club.get("club_id") or club_id),
-            "slug": str(club.get("club_slug") or club_slug),
-            "name": str(club.get("club_name") or club.get("display_name") or club_slug),
+            "id": str(club.get("id") or club.get("club_id") or club_id),
+            "slug": str(club.get("slug") or club.get("club_slug") or club_slug),
+            "name": str(club.get("name") or club.get("club_name") or club.get("display_name") or club_slug),
         },
         "leaderboard": _normalize_public_leaderboard_rows(rows),
     }
@@ -124,38 +124,50 @@ def get_club(club_slug: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="club_slug is required")
 
     supabase = get_supabase_client()
+    club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
 
-    row = (
-        supabase.table("clubs_config")
-        .select("club_id,club_slug,club_name,display_name,is_public")
-        .eq("club_slug", slug)
+    rows = (
+        supabase.table("clubs").select(club_fields).eq("slug", slug).limit(1).execute().data or []
+    )
+    if not rows:
+        rows = supabase.table("clubs").select(club_fields).eq("id", slug).limit(1).execute().data or []
+
+    if rows:
+        row = rows[0] or {}
+        return {
+            "id": row.get("id"),
+            "slug": row.get("slug"),
+            "name": row.get("name"),
+            "tagline": row.get("tagline"),
+            "support_email": row.get("support_email"),
+            "public_base_url": row.get("public_base_url"),
+            "logo_url": row.get("logo_url"),
+            "primary_color": row.get("primary_color"),
+            "is_active": row.get("is_active"),
+        }
+
+    fallback = (
+        supabase.table("players")
+        .select("club_id")
+        .eq("club_id", slug)
         .limit(1)
         .execute()
         .data
         or []
     )
-
-    if not row:
-        fallback = (
-            supabase.table("players")
-            .select("club_id")
-            .eq("club_id", slug)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
-        if not fallback:
-            raise HTTPException(status_code=404, detail="club not found")
-        return {
-            "club_id": slug,
-            "club_slug": slug,
-            "club_name": slug,
-            "display_name": slug,
-            "is_public": True,
-        }
-
-    return row[0]
+    if not fallback:
+        raise HTTPException(status_code=404, detail="club not found")
+    return {
+        "id": slug,
+        "slug": slug,
+        "name": slug,
+        "tagline": None,
+        "support_email": None,
+        "public_base_url": None,
+        "logo_url": None,
+        "primary_color": None,
+        "is_active": True,
+    }
 
 
 @app.get("/clubs/{club_slug}/leaderboards")
