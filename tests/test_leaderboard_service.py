@@ -123,6 +123,7 @@ def test_missing_view_falls_back_to_tables_and_stays_public_only():
                 "matches_played",
                 "is_active",
                 "rank_position",
+                "rank",
                 "updated_at",
             }
         )
