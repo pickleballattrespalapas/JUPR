@@ -27,6 +27,7 @@ jobs:
       # Secrets are injected at runtime and must never be committed.
       SUPABASE_PROD_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
       SUPABASE_TEST_DATABASE_URL: ${{ secrets.SUPABASE_TEST_DATABASE_URL }}
+      PG_BIN: /usr/lib/postgresql/17/bin
 
     steps:
       - name: Checkout repository
@@ -35,7 +36,21 @@ jobs:
       - name: Install PostgreSQL client tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-client
+          sudo apt-get install -y wget ca-certificates gnupg lsb-release
+
+          sudo install -d /usr/share/postgresql-common/pgdg
+          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+          echo "$PG_BIN" >> "$GITHUB_PATH"
+          "$PG_BIN/pg_dump" --version
+          "$PG_BIN/psql" --version
 
       - name: Validate required secrets
         run: |
@@ -49,10 +64,18 @@ jobs:
             exit 1
           fi
 
+      - name: Check database connectivity
+        run: |
+          echo "Checking production database connectivity..."
+          "$PG_BIN/psql" "$SUPABASE_PROD_DATABASE_URL" -c "select current_database(), current_user, now();" >/dev/null
+
+          echo "Checking test database connectivity..."
+          "$PG_BIN/psql" "$SUPABASE_TEST_DATABASE_URL" -c "select current_database(), current_user, now();" >/dev/null
+
       - name: Dump production public schema to artifact file
         if: ${{ github.event.inputs.mode == 'dump-prod-schema-artifact' }}
         run: |
-          pg_dump \
+          "$PG_BIN/pg_dump" \
             --schema-only \
             --schema=public \
             --no-owner \
@@ -75,7 +98,7 @@ jobs:
           # This step must target the Supabase Test branch database only.
           # Never set SUPABASE_TEST_DATABASE_URL to a production database.
           # Schema-only copy; this does not copy table data.
-          pg_dump \
+          "$PG_BIN/pg_dump" \
             --schema-only \
             --schema=public \
             --no-owner \
@@ -83,4 +106,4 @@ jobs:
             --clean \
             --if-exists \
             "$SUPABASE_PROD_DATABASE_URL" \
-            | psql "$SUPABASE_TEST_DATABASE_URL"
+            | "$PG_BIN/psql" "$SUPABASE_TEST_DATABASE_URL"
