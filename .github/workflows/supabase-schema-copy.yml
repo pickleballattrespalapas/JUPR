@@ -39,8 +39,11 @@ jobs:
           sudo apt-get install -y wget ca-certificates gnupg lsb-release
 
           sudo install -d /usr/share/postgresql-common/pgdg
-          wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          wget -qO /tmp/postgresql.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo rm -f /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          sudo gpg --batch --yes --dearmor \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
+            /tmp/postgresql.asc
 
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list
