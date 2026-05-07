@@ -67,11 +67,14 @@ jobs:
             exit 1
           fi
 
-      - name: Check database connectivity
+      - name: Check production database connectivity
         run: |
           echo "Checking production database connectivity..."
           "$PG_BIN/psql" "$SUPABASE_PROD_DATABASE_URL" -c "select current_database(), current_user, now();" >/dev/null
 
+      - name: Check test database connectivity
+        if: ${{ github.event.inputs.mode == 'apply-prod-schema-to-test' }}
+        run: |
           echo "Checking test database connectivity..."
           "$PG_BIN/psql" "$SUPABASE_TEST_DATABASE_URL" -c "select current_database(), current_user, now();" >/dev/null
 
