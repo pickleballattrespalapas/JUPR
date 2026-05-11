@@ -4,7 +4,7 @@ This is a minimal, read-only-first Next.js app for public pages that can eventua
 
 ## Routes
 
-- `/` public JUPR landing page.
+- `/` public JUPR landing page with SaaS pilot shell navigation.
 - `/clubs/[clubSlug]` club landing page.
 - `/clubs/[clubSlug]/leaderboards` public leaderboard page.
 
@@ -14,6 +14,7 @@ Use one of the following:
 
 - `JUPR_API_BASE_URL` (preferred for server-side runtime)
 - `NEXT_PUBLIC_JUPR_API_BASE_URL` (fallback for browser-visible configuration)
+- `NEXT_PUBLIC_JUPR_ENV` (optional; set to `staging` to show a staging badge)
 
 Example:
 
