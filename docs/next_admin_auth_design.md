@@ -100,3 +100,12 @@ Before enabling Next.js admin score entry for rated workflows, future implementa
 - `read_only` and wrong-club bindings are denied with `403`; missing/invalid auth returns `401`.
 - `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` is still disabled by default and blocks before auth/write work.
 - Next.js admin score entry remains non-production-active by default.
+
+
+## Audit runtime behavior (Prompt 08)
+
+- `POST /admin/clubs/{club_id}/matches/batch` now attempts audit writes on successful writes and denied authenticated attempts.
+- Denied authenticated attempts are logged with `flagged_for_review=true`.
+- Unauthenticated requests are not audit-logged to avoid token leakage risk.
+- Strict mode: set `JUPR_REQUIRE_API_AUDIT_LOG=1` to fail writes when audit persistence fails.
+- Default mode degrades gracefully if `admin_activity_log` is unavailable in staging.

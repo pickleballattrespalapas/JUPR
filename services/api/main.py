@@ -9,6 +9,7 @@ from supabase import Client, create_client
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.leaderboard_service import get_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
@@ -25,6 +26,10 @@ def is_staging_env() -> bool:
 
 def is_next_admin_score_entry_enabled() -> bool:
     return os.getenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def is_api_audit_log_required() -> bool:
+    return os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in {"1", "true", "yes"}
 
 
 def _warn_if_not_staging_configured() -> None:
@@ -232,6 +237,18 @@ def submit_admin_match_batch(
         allowlist=set(),
     )
     if not has_permission(role_resolution.role, PERMISSION_ENTER_SCORES):
+        denied_payload = build_activity_payload(
+            club_id=str(club_id),
+            actor_email=user.email,
+            actor_role=role_resolution.role,
+            action_type="submit_match_batch_denied",
+            entity_type="matches",
+            entity_id="batch",
+            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission"},
+            source_page=payload.source,
+            flagged_for_review=True,
+        )
+        write_admin_activity_log(supabase, denied_payload)
         raise HTTPException(status_code=403, detail="insufficient permission")
     df_players_all, _, df_leagues, _, df_meta, _, _, _, _, name_to_id = load_data(supabase, club_id)
 
@@ -252,6 +269,25 @@ def submit_admin_match_batch(
     )
     if not result.ok:
         raise HTTPException(status_code=400, detail="; ".join(result.errors) or "Unable to submit match batch")
+
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=user.email,
+        actor_role=role_resolution.role,
+        action_type="submit_match_batch",
+        entity_type="matches",
+        entity_id="batch",
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": payload.source,
+            "match_count": len(payload.matches),
+            "result_summary": result.data if isinstance(result.data, dict) else {"ok": True},
+        },
+        source_page=payload.source,
+    )
+    audit_write = write_admin_activity_log(supabase, audit_payload)
+    if not audit_write.ok and is_api_audit_log_required():
+        raise HTTPException(status_code=500, detail="audit log write required but unavailable")
 
     return {
         "ok": True,
