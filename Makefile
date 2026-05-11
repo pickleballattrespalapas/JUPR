@@ -9,4 +9,4 @@ check-migration-sources: ## Guard: block undocumented new root migrations
 
 .PHONY: api-test
 api-test: ## Run API contract tests
-	@python -m pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py
+	@python -m pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py tests/test_api_admin_score_entry_disabled.py
