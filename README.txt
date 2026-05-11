@@ -343,3 +343,7 @@ If any secret is exposed, rotate it immediately and remove it from history where
 - `README.txt` = operator source of truth.
 - `docs/saas_staging_deploy.md` = staging deployment guardrails for FastAPI + Next.js.
 - `docs/next_admin_auth_design.md` = future admin auth contract before Next admin score entry can be enabled for rated workflows.
+
+## Manual staging smoke workflow
+
+Run GitHub Actions workflow `Staging Smoke` via `workflow_dispatch` to perform read-only API/web checks against staging. Configure `STAGING_JUPR_API_BASE_URL` secret (required) and `STAGING_WEB_BASE_URL` (optional).
