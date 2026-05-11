@@ -1,7 +1,9 @@
 import pytest
 
-fastapi = pytest.importorskip("fastapi")
-pytest.importorskip("supabase")
+from tests.conftest import require_api_dependency
+
+require_api_dependency("fastapi")
+require_api_dependency("supabase")
 
 from fastapi.testclient import TestClient
 
