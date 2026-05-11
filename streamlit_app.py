@@ -415,6 +415,7 @@ def main():
         if admin_authenticated:
             role_resolution = resolve_admin_role(
                 supabase=supabase,
+                club_id=selected_club_id,
                 email=current_admin_email,
                 user_id=str(getattr(current_admin, "id", "") or "").strip() or None,
                 allowlist=admin_allowlist,

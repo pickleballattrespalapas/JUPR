@@ -100,6 +100,7 @@ def is_roles_table_missing_error(exc: Exception) -> bool:
 def resolve_admin_role(
     *,
     supabase: Any,
+    club_id: str,
     email: str,
     user_id: str | None,
     allowlist: set[str],
@@ -111,6 +112,7 @@ def resolve_admin_role(
         response = (
             supabase.table("admin_role_assignments")
             .select("role,user_id")
+            .eq("club_id", str(club_id or "").strip())
             .eq("email", normalized_email)
             .execute()
         )
@@ -144,7 +146,8 @@ def resolve_admin_role(
             )
     except Exception as exc:  # noqa: BLE001 - graceful fallback required
         if is_roles_table_missing_error(exc):
-            if normalized_email in allowlist:
+            # Keep legacy allowlist fallback only for Tres Palapas during migration rollout.
+            if str(club_id or "").strip() == "tres_palapas" and normalized_email in allowlist:
                 return AdminRoleResolution(
                     role=ROLE_SUPER_ADMIN,
                     source="allowlist_fallback_missing_table",
@@ -157,7 +160,8 @@ def resolve_admin_role(
             )
         raise
 
-    if normalized_email in allowlist:
+    # Keep legacy allowlist fallback only for Tres Palapas.
+    if str(club_id or "").strip() == "tres_palapas" and normalized_email in allowlist:
         return AdminRoleResolution(
             role=ROLE_SUPER_ADMIN,
             source="allowlist_default",
