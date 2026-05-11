@@ -3,15 +3,16 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
 from jupr_app.data.load import load_data
-from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES
+from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.leaderboard_service import get_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
+from services.api.auth import authenticate_bearer, auth_header
 
 
 def get_jupr_env() -> str:
@@ -124,32 +125,6 @@ def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict
     }
 
 
-def _authorize_score_entry(*, token: str | None, requested_permission: str) -> str:
-    """Temporary guard for v1 admin workflow.
-
-    This is intentionally a placeholder and NOT production auth. It verifies an
-    environment token and leaves room for future Supabase JWT + role validation.
-    """
-
-    if requested_permission != PERMISSION_ENTER_SCORES:
-        raise HTTPException(status_code=403, detail="insufficient permission")
-
-    expected = os.getenv("JUPR_ADMIN_API_TOKEN", "").strip()
-    provided = str(token or "").strip()
-    if not expected:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Admin score-entry token is not configured. Set JUPR_ADMIN_API_TOKEN. "
-                "This endpoint currently uses a placeholder token guard."
-            ),
-        )
-    if provided != expected:
-        raise HTTPException(status_code=401, detail="invalid admin token")
-
-    return "token_guard_placeholder"
-
-
 @app.on_event("startup")
 def startup_checks() -> None:
     _warn_if_not_staging_configured()
@@ -236,8 +211,7 @@ def get_club_leaderboard_compat(club_slug: str, league_name: str | None = Query(
 def submit_admin_match_batch(
     club_id: str,
     payload: MatchBatchRequest,
-    x_admin_token: str | None = Header(default=None),
-    x_admin_permission: str | None = Header(default=None),
+    authorization: str | None = auth_header(),
 ) -> dict[str, Any]:
     if not is_next_admin_score_entry_enabled():
         raise HTTPException(
@@ -247,18 +221,26 @@ def submit_admin_match_batch(
             ),
         )
 
-    # Temporary guard only: this path must migrate to Supabase JWT + admin role checks
-    # before it can be considered production-grade authorization.
-    auth_mode = _authorize_score_entry(token=x_admin_token, requested_permission=str(x_admin_permission or ""))
+    user = authenticate_bearer(authorization)
 
     supabase = get_supabase_client()
+    role_resolution = resolve_admin_role(
+        supabase=supabase,
+        club_id=str(club_id),
+        email=user.email,
+        user_id=user.user_id,
+        allowlist=set(),
+    )
+    if not has_permission(role_resolution.role, PERMISSION_ENTER_SCORES):
+        raise HTTPException(status_code=403, detail="insufficient permission")
     df_players_all, _, df_leagues, _, df_meta, _, _, _, _, name_to_id = load_data(supabase, club_id)
 
     service_ctx = ServiceContext(
         supabase=supabase,
         club_id=str(club_id),
         source=payload.source,
-        actor_role="scorekeeper",
+        actor_email=user.email,
+        actor_role=role_resolution.role,
     )
     result = submit_match_batch(
         service_ctx,
@@ -273,7 +255,7 @@ def submit_admin_match_batch(
 
     return {
         "ok": True,
-        "auth_mode": auth_mode,
+        "auth_mode": "supabase_jwt",
         "required_permission": PERMISSION_ENTER_SCORES,
         "result": result.data,
     }

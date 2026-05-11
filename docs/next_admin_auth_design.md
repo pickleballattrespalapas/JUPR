@@ -91,3 +91,12 @@ Rollout must proceed in this order:
 ## Implementation gate for future PRs
 
 Before enabling Next.js admin score entry for rated workflows, future implementation PRs must satisfy this design contract end-to-end.
+
+
+## Implementation status (Prompt 07)
+
+- FastAPI admin score entry route now uses Bearer JWT auth scaffolding for Supabase tokens.
+- Authorization resolves role from `admin_role_assignments` by `club_id` + `email/user_id` and enforces `enter_scores`.
+- `read_only` and wrong-club bindings are denied with `403`; missing/invalid auth returns `401`.
+- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` is still disabled by default and blocks before auth/write work.
+- Next.js admin score entry remains non-production-active by default.
