@@ -201,11 +201,12 @@ def _render_role_assignment_section(
     st.subheader("🛂 Admin Role Assignments")
     role_source = str(st.session_state.get("admin_role_source", "") or "unknown")
     st.caption(f"Current role: **{current_role}** (source: `{role_source}`).")
+    st.caption(f"Managing roles for club: `{club_id}`")
 
     rows: list[dict] = []
     table_available = True
     try:
-        rows = list_role_assignments(supabase)
+        rows = list_role_assignments(supabase, club_id=str(club_id))
     except Exception as exc:
         table_available = False
         if is_role_table_missing_error(exc):
@@ -268,7 +269,7 @@ def _render_role_assignment_section(
                 if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=admin_allowlist):
                     st.error("Unsafe change blocked: this would remove the final super_admin access.")
                     return
-            upsert_role_assignment(supabase, normalized_email, selected_role, user_id=str(user_id_input or "").strip() or None)
+            upsert_role_assignment(supabase, str(club_id), normalized_email, selected_role, user_id=str(user_id_input or "").strip() or None)
             log_result = write_admin_activity_log(
                 supabase,
                 build_activity_payload(
@@ -297,7 +298,7 @@ def _render_role_assignment_section(
             if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=admin_allowlist):
                 st.error("Unsafe revoke blocked: this would remove the final super_admin access.")
                 return
-        delete_role_assignment(supabase, normalized_email)
+        delete_role_assignment(supabase, str(club_id), normalized_email)
         log_result = write_admin_activity_log(
             supabase,
             build_activity_payload(

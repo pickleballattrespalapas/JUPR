@@ -9,10 +9,11 @@ def normalize_email(email: str | None) -> str:
     return str(email or "").strip().lower()
 
 
-def list_role_assignments(supabase: Any) -> list[dict[str, Any]]:
+def list_role_assignments(supabase: Any, club_id: str) -> list[dict[str, Any]]:
     response = (
         supabase.table("admin_role_assignments")
-        .select("email,role,user_id,created_at,updated_at")
+        .select("club_id,email,role,user_id,created_at,updated_at")
+        .eq("club_id", str(club_id or "").strip())
         .order("email")
         .execute()
     )
@@ -23,17 +24,18 @@ def list_role_assignments(supabase: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def upsert_role_assignment(supabase: Any, email: str, role: str, user_id: str | None = None) -> None:
+def upsert_role_assignment(supabase: Any, club_id: str, email: str, role: str, user_id: str | None = None) -> None:
     payload = {
+        "club_id": str(club_id or "").strip(),
         "email": normalize_email(email),
         "role": normalize_role(role),
         "user_id": str(user_id or "").strip() or None,
     }
-    supabase.table("admin_role_assignments").upsert(payload, on_conflict="email").execute()
+    supabase.table("admin_role_assignments").upsert(payload, on_conflict="club_id,email").execute()
 
 
-def delete_role_assignment(supabase: Any, email: str) -> None:
-    supabase.table("admin_role_assignments").delete().eq("email", normalize_email(email)).execute()
+def delete_role_assignment(supabase: Any, club_id: str, email: str) -> None:
+    supabase.table("admin_role_assignments").delete().eq("club_id", str(club_id or "").strip()).eq("email", normalize_email(email)).execute()
 
 
 def count_super_admin_assignments(rows: list[dict[str, Any]]) -> int:

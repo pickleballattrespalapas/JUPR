@@ -59,6 +59,7 @@ def test_resolve_admin_role_uses_assignment_row():
     supabase = _Supabase(_Query(response_data=[{"role": ROLE_CLUB_OWNER}]))
     result = resolve_admin_role(
         supabase=supabase,
+        club_id="club-a",
         email="owner@example.com",
         user_id=None,
         allowlist={"joe@example.com"},
@@ -71,6 +72,7 @@ def test_resolve_admin_role_missing_table_falls_back_to_allowlist_super_admin():
     supabase = _Supabase(_Query(error=_api_error("42P01")))
     result = resolve_admin_role(
         supabase=supabase,
+        club_id="tres_palapas",
         email="joe@example.com",
         user_id=None,
         allowlist={"joe@example.com"},
@@ -83,6 +85,7 @@ def test_resolve_admin_role_defaults_to_read_only_without_assignment():
     supabase = _Supabase(_Query(response_data=[]))
     result = resolve_admin_role(
         supabase=supabase,
+        club_id="club-a",
         email="viewer@example.com",
         user_id=None,
         allowlist={"joe@example.com"},
@@ -98,6 +101,7 @@ def test_resolve_admin_role_prefers_null_user_id_for_email_only_assignment_when_
     ]))
     result = resolve_admin_role(
         supabase=supabase,
+        club_id="club-a",
         email="organizer@example.com",
         user_id="logged-in-user",
         allowlist=set(),
@@ -113,6 +117,7 @@ def test_resolve_admin_role_prefers_exact_user_id_match_over_null_user_id():
     ]))
     result = resolve_admin_role(
         supabase=supabase,
+        club_id="club-a",
         email="multi@example.com",
         user_id="user-123",
         allowlist=set(),
@@ -199,3 +204,23 @@ def test_permission_matrix(role: str, expected: dict[str, bool]):
 
 def test_unmapped_admin_only_page_is_denied_by_default():
     assert is_admin_page_available_for_role("nonexistent_admin_page", ROLE_SUPER_ADMIN, is_admin_only=True) is False
+
+
+def test_resolve_admin_role_allowlist_fallback_only_for_tres_palapas():
+    supabase = _Supabase(_Query(response_data=[]))
+    tres = resolve_admin_role(
+        supabase=supabase,
+        club_id="tres_palapas",
+        email="joe@example.com",
+        user_id=None,
+        allowlist={"joe@example.com"},
+    )
+    other = resolve_admin_role(
+        supabase=supabase,
+        club_id="club-b",
+        email="joe@example.com",
+        user_id=None,
+        allowlist={"joe@example.com"},
+    )
+    assert tres.role == ROLE_SUPER_ADMIN
+    assert other.role == ROLE_READ_ONLY
