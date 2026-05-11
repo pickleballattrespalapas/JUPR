@@ -5,16 +5,18 @@ Minimal read-only API scaffold for future service integration.
 ## Run locally
 
 ```bash
+pip install -r requirements.txt
 pip install -r services/api/requirements.txt
 uvicorn services.api.main:app --reload
 ```
 
 ## Environment variables
 
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` (preferred for server-side API)
+- `JUPR_ENV=staging`
+- `SUPABASE_URL` (must be the staging Supabase project URL for staging runtime)
+- `SUPABASE_SERVICE_ROLE_KEY` (preferred for server-side API; use staging credentials in staging)
 - `SUPABASE_ANON_KEY` (read-only local fallback)
-- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` (`1` / `true` / `yes` to enable, disabled by default)
+- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (leave disabled by default)
 
 ## Endpoints
 
@@ -28,6 +30,8 @@ The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get
 - `POST /admin/clubs/{club_id}/matches/batch`
 
 ## Admin score-entry guard (experimental + temporary)
+
+Admin score-entry is **experimental and disabled by default**. Keep it disabled unless running explicit staging-only experiments.
 
 `POST /admin/clubs/{club_id}/matches/batch` is **disabled by default**.
 
@@ -59,3 +63,5 @@ This API path is currently **staging-only** for the new SaaS rollout.
 - Do **not** point this staging API at production Supabase.
 
 See `docs/saas_staging_deploy.md` for the full checklist and rollout constraints.
+
+When running staging API deployments, credentials must come from the staging Supabase project only.
