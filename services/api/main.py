@@ -14,6 +14,7 @@ from jupr_app.services.context import ServiceContext
 from jupr_app.services.leaderboard_service import get_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
 from services.api.auth import authenticate_bearer, auth_header
+from services.api.middleware import StructuredRequestLoggingMiddleware
 
 
 def get_jupr_env() -> str:
@@ -45,6 +46,7 @@ def _warn_if_not_staging_configured() -> None:
         )
 
 app = FastAPI(title="JUPR API", version="0.1.0")
+app.add_middleware(StructuredRequestLoggingMiddleware)
 
 
 PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
