@@ -65,3 +65,14 @@ This API path is currently **staging-only** for the new SaaS rollout.
 See `docs/saas_staging_deploy.md` for the full checklist and rollout constraints.
 
 When running staging API deployments, credentials must come from the staging Supabase project only.
+
+
+## Admin JWT auth (Supabase)
+
+- `POST /admin/clubs/{club_id}/matches/batch` requires `Authorization: Bearer <access_token>`.
+- Feature flag `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` remains disabled by default.
+- When disabled, endpoint returns `403` before auth and writes.
+- JWT verification config (server-side only):
+  - Secret mode (default): `SUPABASE_JWT_SECRET` (+ optional `SUPABASE_JWT_AUDIENCE`, default `authenticated`).
+  - JWKS mode: `JUPR_SUPABASE_JWT_MODE=jwks` + `SUPABASE_JWKS_URL` (+ optional audience).
+- Do not use service-role or JWT secrets in browser/client code.
