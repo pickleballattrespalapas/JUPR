@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 from typing import Any
@@ -20,31 +21,71 @@ def _resolve_supabase_config() -> tuple[str, str, str]:
     if not url:
         raise ValueError("Missing required environment variable: SUPABASE_URL")
     if not key:
-        raise ValueError(
-            "Missing Supabase key. Set SUPABASE_SERVICE_ROLE_KEY (preferred) or SUPABASE_ANON_KEY."
-        )
+        raise ValueError("Missing Supabase key. Set SUPABASE_SERVICE_ROLE_KEY (preferred) or SUPABASE_ANON_KEY.")
     return url, key, key_source
+
+
+def _require_worker_run_log() -> bool:
+    return str(os.getenv("JUPR_REQUIRE_WORKER_RUN_LOG") or "").strip().lower() in {"1", "true", "yes"}
+
+
+def _is_missing_table_error(exc: Exception) -> bool:
+    detail = str(exc).lower()
+    return "worker_run_log" in detail and ("does not exist" in detail or "undefined table" in detail or "relation" in detail)
 
 
 def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[str, Any]:
     url, key, key_source = _resolve_supabase_config()
     supabase = make_supabase(url, key)
+    run_id: str | None = None
+
+    try:
+        created = supabase.table("worker_run_log").insert(
+            {"worker_name": "player_update_email_worker", "club_id": club_id, "status": "started", "summary_json": {}}
+        ).execute().data or []
+        run_id = str((created[0] or {}).get("id")) if created else None
+    except Exception as exc:  # noqa: BLE001
+        if not (_is_missing_table_error(exc) and not _require_worker_run_log()):
+            raise
+
     public_base_url = get_public_base_url()
     ctx = ServiceContext(supabase=supabase, club_id=club_id, public_base_url=public_base_url)
-    summary = send_pending_player_update_emails(
-        ctx,
-        limit=max(1, int(limit)),
-        public_base_url=public_base_url,
-    )
-    return {
-        "ok": True,
-        "club_id": club_id,
-        "key_source": key_source,
-        "attempted": int(summary.get("attempted") or 0),
-        "sent": int(summary.get("sent") or 0),
-        "skipped": int(summary.get("skipped") or 0),
-        "errors": int(summary.get("errors") or 0),
-    }
+
+    try:
+        summary = send_pending_player_update_emails(ctx, limit=max(1, int(limit)), public_base_url=public_base_url)
+        result = {
+            "ok": True,
+            "club_id": club_id,
+            "key_source": key_source,
+            "attempted": int(summary.get("attempted") or 0),
+            "sent": int(summary.get("sent") or 0),
+            "skipped": int(summary.get("skipped") or 0),
+            "errors": int(summary.get("errors") or 0),
+        }
+        if run_id:
+            supabase.table("worker_run_log").update(
+                {
+                    "status": "success",
+                    "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "summary_json": {
+                        "attempted": result["attempted"],
+                        "sent": result["sent"],
+                        "skipped": result["skipped"],
+                        "errors": result["errors"],
+                    },
+                }
+            ).eq("id", run_id).execute()
+        return result
+    except Exception as exc:  # noqa: BLE001
+        if run_id:
+            try:
+                supabase.table("worker_run_log").update(
+                    {"status": "failed", "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(), "error_text": f"{type(exc).__name__}: {exc}"}
+                ).eq("id", run_id).execute()
+            except Exception as log_exc:  # noqa: BLE001
+                if not (_is_missing_table_error(log_exc) and not _require_worker_run_log()):
+                    raise
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
