@@ -168,6 +168,7 @@ Guardrail commands:
 ```bash
 make check-migration-sources
 python scripts/check_supabase_migration_versions.py
+python scripts/check_staging_environment.py --require-supabase --require-api --club-slug tres-palapas --club-id tres_palapas
 ```
 
 API/web checks:
