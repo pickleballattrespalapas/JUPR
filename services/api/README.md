@@ -41,13 +41,7 @@ When disabled, the endpoint returns:
 
 To enable in staging experiments only, set `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` (or `true` / `yes`).
 
-When enabled, this route still uses a **server token placeholder guard** and is not production-grade auth.
-
-Required headers:
-- `x-admin-token: <JUPR_ADMIN_API_TOKEN>`
-- `x-admin-permission: enter_scores`
-
-This endpoint is intentionally structured so Supabase JWT and role-based authorization can replace the placeholder guard later without changing the route contract.
+When enabled, this route requires Supabase JWT Bearer auth and role-based authorization for `enter_scores`.
 
 Auth design reference for future replacement of the temporary guard:
 - `docs/next_admin_auth_design.md`
@@ -76,3 +70,11 @@ When running staging API deployments, credentials must come from the staging Sup
   - Secret mode (default): `SUPABASE_JWT_SECRET` (+ optional `SUPABASE_JWT_AUDIENCE`, default `authenticated`).
   - JWKS mode: `JUPR_SUPABASE_JWT_MODE=jwks` + `SUPABASE_JWKS_URL` (+ optional audience).
 - Do not use service-role or JWT secrets in browser/client code.
+
+## Admin audit logging
+
+- Successful admin match-batch writes attempt to write `admin_activity_log` records with actor + club attribution.
+- Denied authenticated writes are flagged for review in audit logs when safe to do so.
+- `JUPR_REQUIRE_API_AUDIT_LOG=1` enables strict mode: write requests fail if audit logging cannot be recorded.
+- Default behavior degrades gracefully when audit table migration is missing (staging-safe).
+- Audit payloads include summary metadata (`source_page`, `source_client`) and do not include raw bearer tokens or secrets.
