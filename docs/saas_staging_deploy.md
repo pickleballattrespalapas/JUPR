@@ -2,6 +2,8 @@
 
 This document defines deployment guardrails for the new SaaS stack.
 
+Operator source of truth: `README.txt`. If any conflict exists, follow `README.txt`.
+
 ## Status: staging only
 
 The **Next.js + FastAPI** path is currently approved for **staging only**.
@@ -28,7 +30,9 @@ Set these when deploying the staging stack:
 ## Guardrails and explicit warnings
 
 - **Do not point staging API at production Supabase.**
-- **Do not deploy Next admin score entry for rated matches.** Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0`.
+- **Do not point `SUPABASE_TEST_DATABASE_URL` at production.**
+- **Do not deploy Next admin score entry for rated matches.**
+- **Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0`.**
 - **Do not migrate production traffic to Next yet.**
 - **Streamlit remains the active admin console for rated events.**
 

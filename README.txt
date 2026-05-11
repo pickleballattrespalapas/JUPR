@@ -336,3 +336,9 @@ Never commit:
 - GitHub Actions logs containing secrets
 
 If any secret is exposed, rotate it immediately and remove it from history where possible.
+
+## 13) Docs consistency check
+
+- `README.txt` = operator source of truth.
+- `docs/saas_staging_deploy.md` = staging deployment guardrails for FastAPI + Next.js.
+- `docs/next_admin_auth_design.md` = future admin auth contract before Next admin score entry can be enabled for rated workflows.
