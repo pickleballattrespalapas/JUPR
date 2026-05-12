@@ -89,17 +89,17 @@ Potential overlap area currently observed:
 
 If you discover clear duplicates, document them first in this file (or PR notes) before any cleanup.
 
-## Manual SQL apply checklist (production Supabase)
+## Manual SQL apply checklist (staging then production)
 
-There is currently no staging Supabase. Do not auto-apply SQL from this repo.
+Staging Supabase exists and is required for staging-first validation. Do not auto-apply SQL blindly; review and apply intentionally per environment.
 
 For schema changes:
 
 1. Review SQL in the PR.
-2. Paste and run SQL in **Supabase SQL editor** (production project).
-3. Confirm expected table/column/constraint exists.
-4. Deploy the `Test` branch application.
-5. Run smoke tests on key flows.
+2. Paste and run SQL in **Supabase SQL editor** (staging project first).
+3. Confirm expected table/column/constraint exists in staging.
+4. Deploy the `Test` branch application and run staging smoke checks.
+5. Promote to production only after staging verification; then run reviewed SQL in production.
 
 ## Guardrail for future changes
 

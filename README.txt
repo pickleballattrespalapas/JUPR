@@ -34,6 +34,25 @@ Direction rules:
 - Do not introduce a second match-processing write path.
 - Use `docs/saas_status.md` as the durable SaaS implementation status tracker (done/in progress/blocked/not started).
 
+Roadmap phases (staging-first):
+
+1. Phase 1: staging environment verification.
+2. Phase 2: public read-only SaaS demo.
+3. Phase 3: club-scoped auth/admin writes in staging.
+4. Phase 4: second-club staging pilot.
+5. Phase 5: production read-only public cutover.
+6. Phase 6: admin migration after proven.
+
+Key docs:
+
+- `docs/saas_status.md` (status + roadmap tracker)
+- `docs/saas_staging_deploy.md` (staging deployment guardrails)
+- `docs/next_admin_auth_design.md` (admin auth contract; not production-ready by default)
+- `docs/streamlit_to_saas_migration.md` (full migration context)
+- `docs/migrations.md` (staging-first migration discipline)
+- `docs/second_club_staging_pilot.md` (phase-4 pilot plan)
+- `services/api/README.md` and `apps/web/README.md` (surface-specific staging constraints)
+
 ## 3) Branch and environment model
 
 Branch model:

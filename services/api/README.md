@@ -57,6 +57,7 @@ This API path is currently **staging-only** for the new SaaS rollout.
 - Do **not** point this staging API at production Supabase.
 
 See `docs/saas_staging_deploy.md` for the full checklist and rollout constraints.
+Also see `README.txt` (operator branch/promotion model) and `docs/saas_status.md` (current SaaS phase/status).
 
 When running staging API deployments, credentials must come from the staging Supabase project only.
 
