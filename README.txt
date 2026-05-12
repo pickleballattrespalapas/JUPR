@@ -32,6 +32,7 @@ Direction rules:
 - Do not enable Next.js admin score entry for rated matches until real auth, club-scoped authorization, and audit attribution are implemented.
 - Do not duplicate rating logic in JavaScript.
 - Do not introduce a second match-processing write path.
+- Use `docs/saas_status.md` as the durable SaaS implementation status tracker (done/in progress/blocked/not started).
 
 ## 3) Branch and environment model
 
