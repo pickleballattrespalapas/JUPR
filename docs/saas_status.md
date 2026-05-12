@@ -34,7 +34,7 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 
 1. **Milestone 1:** Staging read-only public SaaS demo.
 2. **Milestone 2:** Tenant-safe admin auth and scorekeeper workflow in staging.
-3. **Milestone 3:** Second club pilot in staging.
+3. **Milestone 3:** Second club pilot in staging (see `docs/second_club_staging_pilot.md`).
 4. **Milestone 4:** Production public read-only Next.js/FastAPI cutover.
 5. **Milestone 5:** Production admin migration from Streamlit, only after proven.
 
@@ -52,3 +52,4 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 - `docs/next_admin_auth_design.md`
 - `docs/streamlit_to_saas_migration.md`
 - `docs/migrations.md`
+- `docs/second_club_staging_pilot.md`
