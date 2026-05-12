@@ -16,6 +16,12 @@ class SMTPConfig:
     use_tls: bool
 
 
+EMAIL_MODE_LIVE = "live"
+EMAIL_MODE_DRY_RUN = "dry_run"
+EMAIL_MODE_STAGING_REDIRECT = "staging_redirect"
+SUPPORTED_EMAIL_MODES = {EMAIL_MODE_LIVE, EMAIL_MODE_DRY_RUN, EMAIL_MODE_STAGING_REDIRECT}
+
+
 def get_env_or_default(name: str, default: str = "") -> str:
     value = str(os.getenv(name, "")).strip()
     if value:
@@ -77,3 +83,25 @@ def get_smtp_config() -> SMTPConfig:
         reply_to=reply_to,
         use_tls=use_tls,
     )
+
+
+def get_jupr_env() -> str:
+    return get_env_or_default("JUPR_ENV", "production").lower()
+
+
+def get_email_mode() -> str:
+    env = get_jupr_env()
+    configured = get_env_or_default("JUPR_EMAIL_MODE").lower()
+    if configured:
+        if configured not in SUPPORTED_EMAIL_MODES:
+            raise ValueError(f"Invalid JUPR_EMAIL_MODE: {configured}")
+        if (
+            env == "staging"
+            and configured == EMAIL_MODE_LIVE
+            and get_env_or_default("JUPR_ALLOW_STAGING_LIVE_EMAIL") != "1"
+        ):
+            raise ValueError("Staging live email blocked. Set JUPR_ALLOW_STAGING_LIVE_EMAIL=1 to allow live sends.")
+        return configured
+    if env == "staging":
+        return EMAIL_MODE_DRY_RUN
+    return EMAIL_MODE_LIVE

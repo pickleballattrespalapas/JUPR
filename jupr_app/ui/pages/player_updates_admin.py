@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
-from jupr_app.config import SMTPConfig, get_env_or_default, get_public_base_url
+from jupr_app.config import SMTPConfig, get_email_mode, get_env_or_default, get_public_base_url
 from jupr_app.domain.notifications.player_profile_update_repo import (
     REQUEST_STATUS_UNSUBSCRIBED,
     approve_request,
@@ -638,6 +638,11 @@ def render(ctx) -> None:
     with queue_tab:
         st.subheader("Send Queue")
         st.caption("Digests generated on Player Digests are queued automatically. Just hit send here.")
+        try:
+            current_email_mode = get_email_mode()
+        except Exception as exc:
+            current_email_mode = f"invalid ({_friendly_error(exc)})"
+        st.info(f"Email mode: {current_email_mode}")
 
         try:
             outbox_rows = list_outbox_rows(supabase, club_id, limit=1000)
@@ -668,7 +673,8 @@ def render(ctx) -> None:
                     )
                     st.success(
                         f"Attempted: {result['attempted']} · Sent: {result['sent']} · "
-                        f"Skipped: {result['skipped']} · Errors: {result['errors']}"
+                        f"Skipped: {result['skipped']} · Errors: {result['errors']} · "
+                        f"Mode: {result.get('email_mode', 'unknown')}"
                     )
                     st.rerun()
                 except Exception as exc:

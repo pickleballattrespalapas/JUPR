@@ -23,7 +23,14 @@ from jupr_app.domain.notifications.player_update_email_template import (
     build_player_update_email_subject,
     build_player_update_email_text,
 )
-from jupr_app.config import SMTPConfig, get_public_base_url
+from jupr_app.config import (
+    EMAIL_MODE_DRY_RUN,
+    EMAIL_MODE_STAGING_REDIRECT,
+    SMTPConfig,
+    get_email_mode,
+    get_env_or_default,
+    get_public_base_url,
+)
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
 
@@ -250,7 +257,7 @@ def generate_and_queue_digests_for_active_subscriptions(
     start_date: date,
     end_date: date,
     only_players_with_matches: bool = False,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
 
@@ -395,6 +402,7 @@ def send_pending_player_update_emails(
     club_id = str(ctx.club_id)
     pending_rows = list_outbox_rows(supabase, club_id, status="pending", limit=max(1, int(limit)))
 
+    email_mode = get_email_mode()
     sent = 0
     skipped = 0
     errors = 0
@@ -460,8 +468,20 @@ def send_pending_player_update_emails(
             html_body = build_player_update_email_html(digest, chart_cid if chart_png else None)
             text_body = build_player_update_email_text(digest)
 
-            provider_message_id = send_email_with_inline_chart(
-                to_email=str(outbox.get("email") or ""),
+            original_to_email = str(outbox.get("email") or "").strip()
+            effective_to_email = original_to_email
+            if email_mode == EMAIL_MODE_STAGING_REDIRECT:
+                redirect_to = get_env_or_default("JUPR_STAGING_EMAIL_REDIRECT_TO").strip()
+                if not redirect_to:
+                    raise ValueError("JUPR_STAGING_EMAIL_REDIRECT_TO is required when JUPR_EMAIL_MODE=staging_redirect.")
+                effective_to_email = redirect_to
+                subject = f"[STAGING→{original_to_email}] {subject}"
+
+            if email_mode == EMAIL_MODE_DRY_RUN:
+                provider_message_id = "dry_run"
+            else:
+                provider_message_id = send_email_with_inline_chart(
+                    to_email=effective_to_email,
                 subject=subject,
                 html_body=html_body,
                 text_body=text_body,
@@ -469,7 +489,7 @@ def send_pending_player_update_emails(
                 chart_cid=chart_cid if chart_png else None,
                 unsubscribe_url=str(((digest.get("links") or {}).get("unsubscribe")) or "").strip() or None,
                 smtp_config=smtp_config,
-            )
+                )
 
             update_outbox_status(
                 supabase,
@@ -499,6 +519,7 @@ def send_pending_player_update_emails(
         "sent": sent,
         "skipped": skipped,
         "errors": errors,
+        "email_mode": email_mode,
     }
 
 

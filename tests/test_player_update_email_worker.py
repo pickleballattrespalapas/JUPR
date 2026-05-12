@@ -10,17 +10,32 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
 
     captured = {}
 
+    class _FakeTable:
+        def insert(self, *_args, **_kwargs):
+            return self
+        def update(self, *_args, **_kwargs):
+            return self
+        def eq(self, *_args, **_kwargs):
+            return self
+        def execute(self):
+            class R: data = []
+            return R()
+
+    class _FakeSupabase:
+        def table(self, _name):
+            return _FakeTable()
+
     def fake_make_supabase(url, key):
         captured["url"] = url
         captured["key"] = key
-        return "fake-client"
+        return _FakeSupabase()
 
     def fake_send_pending(ctx, *, limit, public_base_url=None, smtp_config=None):
         captured["club_id"] = ctx.club_id
         captured["supabase"] = ctx.supabase
         captured["limit"] = limit
         captured["public_base_url"] = public_base_url
-        return {"attempted": 8, "sent": 5, "skipped": 2, "errors": 1}
+        return {"attempted": 8, "sent": 5, "skipped": 2, "errors": 1, "email_mode": "dry_run"}
 
     monkeypatch.setattr("jupr_app.workers.player_update_email_worker.make_supabase", fake_make_supabase)
     monkeypatch.setattr(
@@ -34,7 +49,7 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "url": "https://example.supabase.co",
         "key": "service-role",
         "club_id": "tres_palapas",
-        "supabase": "fake-client",
+        "supabase": captured["supabase"],
         "limit": 250,
         "public_base_url": "https://jupr.example.com",
     }
@@ -46,6 +61,7 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "sent": 5,
         "skipped": 2,
         "errors": 1,
+        "email_mode": "dry_run",
     }
 
 
@@ -60,6 +76,7 @@ def test_main_prints_json_summary(monkeypatch, capsys):
             "sent": 2,
             "skipped": 1,
             "errors": 0,
+            "email_mode": "live",
         },
     )
 
@@ -85,6 +102,7 @@ def test_main_errors_do_not_fail_without_flag(monkeypatch):
             "sent": 1,
             "skipped": 0,
             "errors": 1,
+            "email_mode": "live",
         },
     )
 
@@ -104,6 +122,7 @@ def test_main_fail_on_errors_sets_nonzero_and_ok_false(monkeypatch, capsys):
             "sent": 1,
             "skipped": 0,
             "errors": 1,
+            "email_mode": "live",
         },
     )
 

@@ -61,6 +61,7 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
             "sent": int(summary.get("sent") or 0),
             "skipped": int(summary.get("skipped") or 0),
             "errors": int(summary.get("errors") or 0),
+            "email_mode": str(summary.get("email_mode") or "unknown"),
         }
         if run_id:
             supabase.table("worker_run_log").update(
@@ -72,6 +73,7 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
                         "sent": result["sent"],
                         "skipped": result["skipped"],
                         "errors": result["errors"],
+                        "email_mode": result["email_mode"],
                     },
                 }
             ).eq("id", run_id).execute()
