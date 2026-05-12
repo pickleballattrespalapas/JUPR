@@ -46,3 +46,4 @@ This Next.js path is currently **staging-only** for the SaaS migration.
 - Never expose `SUPABASE_SERVICE_ROLE_KEY` (or any service-role key) in browser/client env vars.
 
 See `docs/saas_staging_deploy.md` for required environment variables and warnings.
+Also see `README.txt` (operator branch/promotion model) and `docs/saas_status.md` (current SaaS phase/status).
