@@ -347,3 +347,17 @@ If any secret is exposed, rotate it immediately and remove it from history where
 ## Manual staging smoke workflow
 
 Run GitHub Actions workflow `Staging Smoke` via `workflow_dispatch` to perform read-only API/web checks against staging. Configure `STAGING_JUPR_API_BASE_URL` secret (required) and `STAGING_WEB_BASE_URL` (optional).
+
+## 10) Production promotion readiness report
+
+Before promoting `Test` to `rollback-feb8`, generate a readiness summary:
+
+```bash
+python scripts/production_readiness_report.py --base rollback-feb8 --head Test
+```
+
+Optional JSON output:
+
+```bash
+python scripts/production_readiness_report.py --base rollback-feb8 --head Test --json
+```
