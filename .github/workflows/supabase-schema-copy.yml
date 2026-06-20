@@ -51,6 +51,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
 
+          pg_dump --version
+          psql --version
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_PROD_DATABASE_URL:-}" ]; then
+            echo "Missing SUPABASE_PROD_DATABASE_URL secret"
+            exit 1
+          fi
+          if [ -z "${SUPABASE_TEST_DATABASE_URL:-}" ]; then
+            echo "Missing SUPABASE_TEST_DATABASE_URL secret"
+            exit 1
+          fi
+
+      - name: Dump production public schema to artifact file
+        if: ${{ inputs.mode == 'dump-prod-schema-artifact' }}
+        run: |
+          set -euo pipefail
+          pg_dump "$SUPABASE_PROD_DATABASE_URL" \
           echo "$PG_BIN" >> "$GITHUB_PATH"
           "$PG_BIN/pg_dump" --version
           "$PG_BIN/psql" --version
