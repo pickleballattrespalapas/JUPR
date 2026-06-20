@@ -1,5 +1,5 @@
-streamlit
-pandas
-supabase
-openpyxl>=3.1
-matplotlib>=3.8
+streamlit>=1.32,<2
+pandas>=2.0,<3
+supabase>=2.4,<3
+openpyxl>=3.1,<4
+matplotlib>=3.8,<4

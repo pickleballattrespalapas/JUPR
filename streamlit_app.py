@@ -11,6 +11,7 @@ import streamlit as st
 
 from jupr_app.data.client import make_supabase
 from jupr_app.data.load import load_data
+from jupr_app.domain.admin.roles import resolve_admin_role
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 from jupr_app.ui.admin_auth import (
@@ -33,9 +34,16 @@ from jupr_app.ui.page_registry import (
     PUBLIC_NAV_KEYS,
     labels_for_keys,
 )
-from jupr_app.ui.public_nav import render_public_app_header
+from jupr_app.ui.branding import CLUB_ID, PUBLIC_BASE_URL_FALLBACK
+from jupr_app.domain.clubs import get_default_club_id
+from jupr_app.ui.public_nav import render_public_app_header, render_public_footer
 from jupr_app.ui.theme_clean import apply_clean_theme
 from jupr_app.ui.url import qp_get
+from jupr_app.ui.admin_page_permissions import is_admin_page_available_for_role
+from jupr_app.ui.admin_view_as import (
+    can_use_view_as,
+    resolve_effective_admin_role,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +64,6 @@ def _debug_exceptions_enabled() -> bool:
 # -------------------------
 # CONFIG
 # -------------------------
-CLUB_ID = "tres_palapas"
-
-# Public base URL used for share links + link buttons (Streamlit Cloud)
-PUBLIC_BASE_URL = "https://juprtrespalapas.streamlit.app"
 
 
 # -------------------------
@@ -83,6 +87,30 @@ def get_secret(path: list[str], default=None):
         cur = cur[k]
 
     return cur
+
+
+
+
+def get_public_base_url() -> str:
+    """Resolve public base URL from env/secrets with stable fallback."""
+    env_value = str(os.getenv("JUPR_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    if env_value:
+        return env_value
+
+    secret_candidates = (
+        get_secret(["JUPR_PUBLIC_BASE_URL"], ""),
+        get_secret(["PUBLIC_BASE_URL"], ""),
+        get_secret(["public", "base_url"], ""),
+    )
+    for candidate in secret_candidates:
+        secret_value = str(candidate or "").strip().rstrip("/")
+        if secret_value:
+            return secret_value
+
+    return PUBLIC_BASE_URL_FALLBACK
+
+
+PUBLIC_BASE_URL = get_public_base_url()
 
 
 # -------------------------
@@ -117,6 +145,33 @@ def get_supabase():
 def get_data(club_id: str):
     supabase = get_supabase()
     return load_data(supabase, club_id, match_limit=5000)
+
+
+def _build_minimal_context(
+    *,
+    supabase,
+    club_id: str,
+    public_mode: bool,
+    admin_logged_in: bool,
+) -> AppContext:
+    empty_df = pd.DataFrame()
+    return AppContext(
+        supabase=supabase,
+        club_id=club_id,
+        df_players_all=empty_df,
+        df_players_active=empty_df,
+        df_leagues=empty_df,
+        df_matches=empty_df,
+        df_meta=empty_df,
+        df_badges=empty_df,
+        df_player_badges=empty_df,
+        name_to_id={},
+        id_to_name={},
+        public_mode=public_mode,
+        admin_logged_in=admin_logged_in,
+        schema_degraded=False,
+        schema_degraded_reason=None,
+    )
 
 
 # -------------------------
@@ -162,6 +217,27 @@ def _set_query_params_idempotent(
     return changed
 
 
+def _record_route_sync_event(event: dict) -> None:
+    events = st.session_state.setdefault("jupr_route_sync_debug_events", [])
+    events.append(event)
+    if len(events) > 100:
+        del events[:-100]
+
+
+def _track_route_stability(route_fingerprint: str) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    history = st.session_state.setdefault("jupr_route_stability_history", [])
+    history.append((now, route_fingerprint))
+    cutoff = now - timedelta(seconds=30)
+    history = [(ts, fp) for ts, fp in history if ts >= cutoff]
+    st.session_state["jupr_route_stability_history"] = history
+    repeats = sum(1 for _ts, fp in history if fp == route_fingerprint)
+    st.session_state["jupr_route_stability_repeat_count"] = repeats
+    st.session_state["jupr_route_stability_warning"] = repeats > 20
+
+
 def main():
     """
     Main Streamlit entrypoint. Keep this deterministic for reloads.
@@ -198,6 +274,9 @@ def main():
         debug_exceptions = _debug_exceptions_enabled()
 
         # Make base_url available to all pages (leaderboards uses this for share links)
+
+        selected_club_id = get_default_club_id() or CLUB_ID
+
         # Use session_state because ctx is a frozen-ish dataclass and you don't want to refactor it mid-stream.
         st.session_state["base_url"] = PUBLIC_BASE_URL
 
@@ -210,7 +289,7 @@ def main():
         render_admin_browser_session_bridge()
 
         admin_allowlist = load_admin_allowlist()
-        if admin_entry_requested:
+        if admin_entry_requested and not get_current_admin_user():
             maybe_restore_admin_login_from_browser()
 
         current_admin = get_current_admin_user()
@@ -272,7 +351,29 @@ def main():
             if params_changed:
                 st.rerun()
 
-        PUBLIC_MODE = not admin_entry_requested
+        # Route contract:
+        # - Admin mode must only target admin-only pages.
+        # - Mixed route admin=1&page=<public_page> is canonicalized once into public mode.
+        requested_public_page_while_admin = admin_requested and (
+            incoming_page_param in PAGE_KEY_TO_LABEL and incoming_page_param not in ADMIN_ONLY_PAGE_KEYS
+        )
+        if requested_public_page_while_admin:
+            normalized_public_page = incoming_page_param if incoming_page_param and incoming_page_param != "home" else ""
+            params_changed = _set_query_params_idempotent(
+                updates={"page": normalized_public_page} if normalized_public_page else {},
+                removals={
+                    "admin",
+                    "next",
+                    "jupr_admin_access_token",
+                    "jupr_admin_refresh_token",
+                    "jupr_admin_restore_from_storage",
+                },
+            )
+            st.session_state["jupr_public_mode"] = True
+            if params_changed:
+                st.rerun()
+
+        PUBLIC_MODE = not admin_entry_requested or requested_public_page_while_admin
         if public_requested and not admin_entry_requested:
             PUBLIC_MODE = True
         unauthenticated_admin_page_request = requested_admin_page and not admin_authenticated
@@ -289,6 +390,58 @@ def main():
         st.session_state["jupr_public_mode"] = bool(PUBLIC_MODE)
         st.session_state["jupr_admin_entry_active"] = bool(admin_entry_requested)
         st.session_state["admin_allowlist"] = admin_allowlist
+        st.session_state.setdefault("admin_real_role", "read_only")
+        st.session_state.setdefault("admin_real_role_source", "not_authenticated")
+        st.session_state.setdefault("admin_role", "read_only")
+        st.session_state.setdefault("admin_role_source", "not_authenticated")
+        st.session_state.setdefault("admin_view_as_role", None)
+        VIEW_AS_ACTUAL_LABEL = "Actual Super Admin"
+        VIEW_AS_SELECTOR_KEY = "admin_view_as_selector_label"
+        VIEW_AS_RESET_PENDING_KEY = "admin_view_as_reset_pending"
+
+        def _apply_effective_admin_role_from_view_as(mapped_role: str | None) -> None:
+            if mapped_role:
+                st.session_state["admin_role"] = mapped_role
+                st.session_state["admin_role_source"] = "super_admin_view_as"
+            else:
+                st.session_state["admin_role"] = st.session_state.get("admin_real_role", "read_only")
+                st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "not_authenticated")
+
+        if st.session_state.pop(VIEW_AS_RESET_PENDING_KEY, False):
+            st.session_state["admin_view_as_role"] = None
+            st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
+
+        supabase = get_supabase()
+        if admin_authenticated:
+            role_resolution = resolve_admin_role(
+                supabase=supabase,
+                club_id=selected_club_id,
+                email=current_admin_email,
+                user_id=str(getattr(current_admin, "id", "") or "").strip() or None,
+                allowlist=admin_allowlist,
+            )
+            st.session_state["admin_real_role"] = role_resolution.role
+            st.session_state["admin_real_role_source"] = role_resolution.source
+            effective_role, effective_role_source, sanitized_view_as_role = resolve_effective_admin_role(
+                role_resolution.role,
+                role_resolution.source,
+                st.session_state.get("admin_view_as_role"),
+            )
+            st.session_state["admin_role"] = effective_role
+            st.session_state["admin_role_source"] = effective_role_source
+            st.session_state["admin_view_as_role"] = sanitized_view_as_role
+            if (
+                st.session_state.get("admin_view_as_role") is None
+                and st.session_state.get("admin_role_source") == "super_admin_view_as"
+            ):
+                st.session_state["admin_role"] = st.session_state.get("admin_real_role", "read_only")
+                st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "not_authenticated")
+        else:
+            st.session_state["admin_real_role"] = "read_only"
+            st.session_state["admin_real_role_source"] = "not_authenticated"
+            st.session_state["admin_role"] = "read_only"
+            st.session_state["admin_role_source"] = "not_authenticated"
+            st.session_state["admin_view_as_role"] = None
 
         # ---- Sidebar / Auth ----
         if PUBLIC_MODE or admin_login_requested:
@@ -315,6 +468,34 @@ def main():
                     )
                     st.rerun()
 
+            if admin_authenticated and can_use_view_as(st.session_state.get("admin_real_role", "")):
+                st.sidebar.markdown("### Super Admin Tools")
+                view_as_options = {
+                    VIEW_AS_ACTUAL_LABEL: "",
+                    "View as Club Owner": "club_owner",
+                    "View as Organizer": "organizer",
+                    "View as Scorekeeper": "scorekeeper",
+                    "View as Read Only": "read_only",
+                }
+                current_view_as = str(st.session_state.get("admin_view_as_role", "") or "")
+                selected_label = next((label for label, role in view_as_options.items() if role == current_view_as), VIEW_AS_ACTUAL_LABEL)
+                selector_label = st.session_state.get(VIEW_AS_SELECTOR_KEY)
+                if selector_label not in view_as_options:
+                    st.session_state[VIEW_AS_SELECTOR_KEY] = selected_label
+                    selector_label = selected_label
+                picked_label = st.sidebar.selectbox(
+                    "View admin as",
+                    list(view_as_options.keys()),
+                    key=VIEW_AS_SELECTOR_KEY,
+                    help="Temporarily preview another role’s permissions. Your real account and audit identity do not change.",
+                )
+                picked_role = view_as_options[picked_label]
+                mapped_role = picked_role or None
+                current_role = st.session_state.get("admin_view_as_role")
+                if mapped_role != current_role:
+                    st.session_state["admin_view_as_role"] = mapped_role
+                    _apply_effective_admin_role_from_view_as(mapped_role)
+
         # Optional: allow pages to request a refresh of cached data
         if bool(st.session_state.get("force_data_refresh", False)):
             try:
@@ -323,8 +504,25 @@ def main():
                 pass
             st.session_state["force_data_refresh"] = False
 
+        # ---- Early auth-route render without full data load ----
+        auth_route_requested = admin_login_requested or recovery_flow or incoming_page_param == "reset_password"
+        if auth_route_requested:
+            from jupr_app.ui.pages import admin_login, reset_password
+
+            auth_ctx = _build_minimal_context(
+                supabase=supabase,
+                club_id=selected_club_id,
+                public_mode=PUBLIC_MODE,
+                admin_logged_in=admin_logged_in,
+            )
+            if admin_login_requested:
+                admin_login.render(auth_ctx)
+            else:
+                reset_password.render(auth_ctx)
+            return
+
         # ---- Load data + ctx ----
-        supabase = get_supabase()
+        
         (
             df_players_all,
             df_players_active,
@@ -337,11 +535,11 @@ def main():
             id_to_name,
             schema_degraded,
             schema_degraded_reason,
-        ) = get_data(CLUB_ID)
+        ) = get_data(selected_club_id)
 
         ctx = AppContext(
             supabase=supabase,
-            club_id=CLUB_ID,
+            club_id=selected_club_id,
             df_players_all=df_players_all,
             df_players_active=df_players_active,
             df_leagues=df_leagues,
@@ -375,10 +573,10 @@ def main():
                 player_ids = df_players_all["id"].dropna().astype(int).tolist()
             enqueue_result = enqueue_badge_eval(
                 supabase,
-                club_id=CLUB_ID,
+                club_id=selected_club_id,
                 event_type="match_recorded",
                 player_ids=player_ids,
-                match_id=f"initial_load:{CLUB_ID}",
+                match_id=f"initial_load:{selected_club_id}",
                 payload={"initial_load": True},
             )
             if enqueue_result.get("queued"):
@@ -396,6 +594,9 @@ def main():
             badge_audit,
             challenge_ladder,
             challenge_ladder_admin,
+            contact_support,
+            data_corrections,
+            email_preferences,
             faqs,
             home,
             jupr_live,
@@ -413,8 +614,11 @@ def main():
             player_updates_subscribe,
             player_editor,
             players,
+            privacy_policy,
+            profile_privacy,
             rating_rules,
             reset_password,
+            terms_of_use,
             theme_gallery,
             top_players_printable,
             tournament_manager,
@@ -443,6 +647,12 @@ def main():
             "🧩 Match Canonical Audit": match_canonical_audit,
             "🪜 Challenge Ladder": challenge_ladder,
             "❓ FAQs": faqs,
+            "Privacy Policy": privacy_policy,
+            "Terms of Use": terms_of_use,
+            "Contact Support": contact_support,
+            "Data Corrections": data_corrections,
+            "Email Preferences": email_preferences,
+            "Profile Privacy": profile_privacy,
             # Admin-only
             "🏟️ League Manager": league_manager,
             "📝 Match Uploader": match_uploader,
@@ -473,12 +683,18 @@ def main():
             "📬 Player Updates Admin": player_updates_admin,
         }
 
+        effective_role = str(st.session_state.get("admin_role", "read_only") or "read_only")
         # Visible labels based on auth
         all_labels = list(PAGES.keys())
         if not admin_logged_in:
             visible_labels = [x for x in all_labels if x not in ADMIN_ONLY_LABELS]
         else:
-            visible_labels = all_labels
+            visible_labels = [
+                x
+                for x in all_labels
+                if x in ADMIN_ONLY_LABELS
+                and is_admin_page_available_for_role(LABEL_TO_PAGE_KEY.get(x, ""), effective_role)
+            ]
 
         public_labels_in_order = labels_for_keys(PUBLIC_NAV_KEYS)
 
@@ -521,6 +737,31 @@ def main():
                 )
 
         else:
+            if st.sidebar.button("🌐 View Public Site", key="admin_view_public_site_btn"):
+                st.session_state.pop("main_nav", None)
+                st.session_state.pop("public_nav", None)
+                st.session_state["jupr_public_mode"] = True
+                st.session_state["jupr_admin_entry_active"] = False
+                _set_query_params_idempotent(
+                    updates={},
+                    removals={
+                        "admin",
+                        "next",
+                        "jupr_admin_access_token",
+                        "jupr_admin_refresh_token",
+                        "jupr_admin_restore_from_storage",
+                        "logout",
+                        "page",
+                    },
+                )
+                st.rerun()
+            if (admin_logged_in and st.session_state.get("admin_role_source") == "super_admin_view_as" and st.session_state.get("admin_real_role") == "super_admin"):
+                st.sidebar.warning(f"View As mode active: {effective_role}\n\nActions still log under your real super_admin account.")
+                if st.sidebar.button("Return to Super Admin"):
+                    st.session_state["admin_view_as_role"] = None
+                    st.session_state[VIEW_AS_SELECTOR_KEY] = VIEW_AS_ACTUAL_LABEL
+                    st.session_state["admin_role"] = st.session_state.get("admin_real_role", "read_only")
+                    st.session_state["admin_role_source"] = st.session_state.get("admin_real_role_source", "not_authenticated")
             visible_labels = [x for x in visible_labels if x not in HIDDEN_PAGE_LABELS]
 
             valid_admin_deep_label = ""
@@ -543,6 +784,8 @@ def main():
                 "main_nav" not in st.session_state
                 or (current_nav not in visible_labels and current_nav not in HIDDEN_PAGE_LABELS)
             ):
+                st.session_state["main_nav"] = visible_labels[0]
+            if current_nav and LABEL_TO_PAGE_KEY.get(str(current_nav), "") not in ADMIN_ONLY_PAGE_KEYS:
                 st.session_state["main_nav"] = visible_labels[0]
 
             if admin_logged_in and st.sidebar.button("🔄 Refresh data"):
@@ -603,6 +846,18 @@ def main():
                 updates=canonical_updates,
                 removals=canonical_removals,
             )
+            _record_route_sync_event(
+                {
+                    "before": dict(st.query_params),
+                    "updates": canonical_updates,
+                    "removals": sorted(canonical_removals),
+                    "selected_page": target_page,
+                    "public_mode": PUBLIC_MODE,
+                    "admin_mode": not PUBLIC_MODE,
+                    "params_changed": params_changed,
+                    "rerun_triggered": bool(params_changed and current_page != (target_page or "")),
+                }
+            )
 
             st.session_state["_last_rendered_nav"] = sel
 
@@ -633,12 +888,28 @@ def main():
             st.stop()
 
         target_page_key = LABEL_TO_PAGE_KEY.get(sel, "")
+        route_fingerprint = "|".join(
+            [
+                str(target_page_key or ""),
+                f"admin={int(bool(admin_requested))}",
+                f"public={int(bool(PUBLIC_MODE))}",
+                f"main_nav={str(st.session_state.get('main_nav', '') or '')}",
+                f"public_mode={int(bool(st.session_state.get('jupr_public_mode', False)))}",
+                f"admin_entry={int(bool(st.session_state.get('jupr_admin_entry_active', False)))}",
+            ]
+        )
+        _track_route_stability(route_fingerprint)
         if target_page_key in ADMIN_ONLY_PAGE_KEYS and not admin_logged_in:
             st.info("Admin login required to access this page.")
+            st.stop()
+        if target_page_key in ADMIN_ONLY_PAGE_KEYS and admin_logged_in and not is_admin_page_available_for_role(target_page_key, effective_role):
+            st.info("Not available in current admin view.")
             st.stop()
 
         try:
             render_fn(ctx)
+            if PUBLIC_MODE:
+                render_public_footer(current_label=sel)
         except Exception as exc:
             requested_page_key = qp_get("page", "").strip().lower()
             route_info = {

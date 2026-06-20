@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Tuple
 import pandas as pd
 import streamlit as st
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.services import ServiceContext, submit_match_batch
 
 from jupr_app.domain.challenge_ladder import (
     TIER_ORDER,
@@ -818,16 +818,26 @@ def render(ctx):
                             }
 
                             try:
-                                pm_result = process_matches(
-                                    [match_a, match_b],
+                                service_ctx = ServiceContext(
                                     supabase=ctx.supabase,
                                     club_id=str(ctx.club_id),
+                                    actor_email=getattr(ctx, "admin_email", None),
+                                    actor_role=st.session_state.get("admin_role"),
+                                    source="challenge_ladder_admin",
+                                    public_base_url=st.session_state.get("public_base_url"),
+                                )
+                                result = submit_match_batch(
+                                    service_ctx,
+                                    [match_a, match_b],
                                     name_to_id=ctx.name_to_id,
                                     df_players_all=ctx.df_players_all,
                                     df_leagues=ctx.df_leagues,
                                     df_meta=ctx.df_meta,
                                     sb_retry=sb_retry,
                                 )
+                                if not result.ok:
+                                    raise ValueError("; ".join(result.errors) or "Could not process challenge matches")
+                                pm_result = result.data
                             except Exception as e:
                                 st.error(f"Could not process challenge matches: {e}")
                                 st.stop()

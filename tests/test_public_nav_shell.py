@@ -21,7 +21,15 @@ def test_public_nav_uses_same_tab_routing_buttons():
     assert '"weekly_recap": "public_header:weekly_recap"' in contents
     assert '"faqs": "public_header:faqs"' in contents
     assert '"public_header:admin_dashboard" if admin_authenticated else "public_header:admin_login"' in contents
-    assert 'source="public_header:logout"' in contents
+    assert '("Rating Rules", "rating_rules")' not in contents
+    assert '("FAQ", "faqs")' not in contents
+    assert '("Privacy", "privacy_policy")' in contents
+    assert '("Terms", "terms_of_use")' in contents
+    assert '("Contact", "contact_support")' in contents
+    assert '("Data Corrections", "data_corrections")' in contents
+    assert '("Email Preferences", "email_preferences")' in contents
+    assert 'source="public_footer:logout"' in contents
+    assert '"tournament_registration": "Tournaments"' in contents
     assert "default_page: str = \"home\"" in contents
 
 
@@ -38,3 +46,9 @@ def test_public_mode_hides_only_streamlit_header():
 
     assert "header{visibility:hidden;}" not in contents
     assert 'header[data-testid="stHeader"]{visibility:hidden;}' in contents
+
+def test_public_footer_renders_after_public_page_content():
+    contents = Path("streamlit_app.py").read_text(encoding="utf-8")
+
+    assert "from jupr_app.ui.public_nav import render_public_app_header, render_public_footer" in contents
+    assert "render_fn(ctx)\n            if PUBLIC_MODE:\n                render_public_footer(current_label=sel)" in contents

@@ -27,7 +27,7 @@ from jupr_app.domain.leagues import (
     normalize_league_status,
 )
 from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.domain.roster import (
     compress_courts,
     courts_to_roster_df,
@@ -1040,15 +1040,26 @@ def render(ctx):
                             st.warning("No scores entered (all matches 0–0).")
                             st.stop()
 
-                        res = process_matches(
-                            valid_matches,
+                        service_ctx = ServiceContext(
                             supabase=ctx.supabase,
                             club_id=str(ctx.club_id),
+                            actor_email=getattr(ctx, "admin_email", None),
+                            actor_role=st.session_state.get("admin_role"),
+                            source="league_manager",
+                            public_base_url=st.session_state.get("public_base_url"),
+                        )
+                        result = submit_match_batch(
+                            service_ctx,
+                            valid_matches,
                             name_to_id=name_to_id,
                             df_players_all=ctx.df_players_all,
                             df_leagues=ctx.df_leagues,
                             df_meta=ctx.df_meta,
                         )
+                        if not result.ok:
+                            st.error("; ".join(result.errors) or "Unable to save matches.")
+                            st.stop()
+                        res = result.data
                         st.success(f"Matches saved ({res['inserted']}). Skipped incomplete: {res['skipped_incomplete']}.")
 
                         roster_pids = st.session_state.ladder_live_roster["player_id"].astype(int).tolist()

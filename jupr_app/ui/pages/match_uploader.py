@@ -13,8 +13,8 @@ from jupr_app.domain.schedule import (
     SUPPORTED_DOUBLES_FORMAT_TYPES,
     get_match_schedule,
 )
-from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.player_ops import safe_add_player
+from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.ui.layout import page_shell
 
 
@@ -55,6 +55,21 @@ def render(ctx):
     if supabase is None or not club_id or name_to_id is None:
         st.error("Match Uploader missing required ctx fields: supabase, club_id, or name_to_id.")
         return
+
+    actor_email = (
+        st.session_state.get("admin_email")
+        or st.session_state.get("email")
+        or getattr(ctx, "admin_email", None)
+        or getattr(ctx, "user_email", None)
+    )
+    ctx_service = ServiceContext(
+        supabase=supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=st.session_state.get("admin_role"),
+        source="match_uploader",
+        public_base_url=st.session_state.get("base_url"),
+    )
 
     if "mu_pending_new_players" not in st.session_state:
         st.session_state.mu_pending_new_players = []
@@ -191,15 +206,19 @@ def render(ctx):
                 st.warning("No valid rows found. Add at least T1_P1, T2_P1, and a non-zero score.")
                 return
 
-            process_matches(
+            result = submit_match_batch(
+                ctx_service,
                 valid_batch,
-                supabase=supabase,
-                club_id=str(club_id),
                 name_to_id=name_to_id,
                 df_players_all=df_players_all,
                 df_leagues=df_leagues,
                 df_meta=df_meta,
             )
+            if not result.ok:
+                st.error("Failed to submit matches.")
+                for err in result.errors:
+                    st.error(str(err))
+                return
             st.success("✅ Processed!")
             st.session_state["force_data_refresh"] = True
             time.sleep(0.8)
@@ -491,20 +510,20 @@ def render(ctx):
                             )
 
                     if payload:
-                        try:
-                            res = process_matches(
-                                payload,
-                                supabase=supabase,
-                                club_id=str(club_id),
-                                name_to_id=name_to_id,
-                                df_players_all=df_players_all,
-                                df_leagues=df_leagues,
-                                df_meta=df_meta,
-                            )
-                        except Exception as e:
+                        result = submit_match_batch(
+                            ctx_service,
+                            payload,
+                            name_to_id=name_to_id,
+                            df_players_all=df_players_all,
+                            df_leagues=df_leagues,
+                            df_meta=df_meta,
+                        )
+                        if not result.ok:
                             st.error("Failed to submit matches.")
-                            st.exception(e)
+                            for err in result.errors:
+                                st.error(str(err))
                             st.stop()
+                        res = result.data or {}
                         st.success(
                             f"Inserted {res.get('inserted', 0)} • "
                             f"Skipped incomplete {res.get('skipped_incomplete', 0)} • "

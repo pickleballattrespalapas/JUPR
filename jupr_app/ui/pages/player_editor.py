@@ -2,10 +2,56 @@ import streamlit as st
 import pandas as pd
 import time
 from datetime import datetime, timezone
+try:
+    from postgrest.exceptions import APIError
+except Exception:  # pragma: no cover
+    APIError = Exception
 
 from jupr_app.ui.layout import page_shell
 from jupr_app.domain.live_social import auto_link_exact_matches, social_person_rollup_rows
 from jupr_app.domain.player_ops import safe_add_player
+
+
+def _plan_league_rating_merge(supabase, club_id: str, src_id: int, dst_id: int) -> dict:
+    src_rows = (
+        supabase.table("league_ratings")
+        .select("id,league_name")
+        .eq("club_id", club_id)
+        .eq("player_id", int(src_id))
+        .execute()
+        .data
+        or []
+    )
+    dst_rows = (
+        supabase.table("league_ratings")
+        .select("id,league_name")
+        .eq("club_id", club_id)
+        .eq("player_id", int(dst_id))
+        .execute()
+        .data
+        or []
+    )
+    dst_names = {str(r.get("league_name") or "") for r in dst_rows}
+    conflicts = []
+    move_ids = []
+    delete_ids = []
+    for row in src_rows:
+        league_name = str(row.get("league_name") or "")
+        rid = int(row["id"])
+        if league_name in dst_names:
+            conflicts.append(league_name)
+            delete_ids.append(rid)
+        else:
+            move_ids.append(rid)
+    return {
+        "src_rows": src_rows,
+        "dst_rows": dst_rows,
+        "target_league_names": sorted(dst_names),
+        "conflicts": sorted(set(conflicts)),
+        "move_ids": move_ids,
+        "delete_ids": delete_ids,
+    }
+
 
 def render(ctx):
     mode_label = "Public" if bool(ctx.public_mode) else "Admin"
@@ -232,34 +278,60 @@ def render(ctx):
 
     with st.expander("Dry-run impact (counts)", expanded=True):
         st.write("Matches referencing Source:")
-        st.json({c: count_eq("matches", c, src_id) for c in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]})
-        st.write("League rows for Source:")
-        st.write(count_eq("league_ratings", "player_id", src_id))
+        match_counts = {c: count_eq("matches", c, src_id) for c in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]}
+        st.json(match_counts)
+        plan = _plan_league_rating_merge(supabase, club_id, src_id, dst_id)
+        st.write("Source league_ratings rows (id, league_name):")
+        st.json(plan["src_rows"])
+        st.write("Target league_ratings rows (id, league_name):")
+        st.json(plan["dst_rows"])
+        st.write("League conflicts (same league_name in source and target):")
+        st.json(plan["conflicts"])
+        st.caption(
+            f"Planned league_ratings actions → move: {len(plan['move_ids'])}, delete: {len(plan['delete_ids'])}."
+        )
 
     confirm = st.text_input("Type MERGE to confirm", value="", key="merge_confirm_text")
     if st.button("🧬 Execute Merge Now", type="primary", disabled=(confirm.strip().upper() != "MERGE")):
-        # Update matches
-        for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
-            supabase.table("matches").update({col: int(dst_id)}).eq("club_id", club_id).eq(col, int(src_id)).execute()
+        try:
+            # Update matches
+            for col in ["t1_p1", "t1_p2", "t2_p1", "t2_p2"]:
+                supabase.table("matches").update({col: int(dst_id)}).eq("club_id", club_id).eq(col, int(src_id)).execute()
 
-        # Move league_ratings
-        supabase.table("league_ratings").update({"player_id": int(dst_id)}).eq("club_id", club_id).eq("player_id", int(src_id)).execute()
+            # Safely move league_ratings
+            plan = _plan_league_rating_merge(supabase, club_id, src_id, dst_id)
+            for rid in plan["delete_ids"]:
+                supabase.table("league_ratings").delete().eq("club_id", club_id).eq("id", int(rid)).execute()
+            for rid in plan["move_ids"]:
+                supabase.table("league_ratings").update({"player_id": int(dst_id)}).eq("club_id", club_id).eq(
+                    "id", int(rid)
+                ).execute()
 
-        # Deactivate source player
-        src_p = supabase.table("players").select("name").eq("club_id", club_id).eq("id", int(src_id)).limit(1).execute().data
-        dst_p = supabase.table("players").select("name").eq("club_id", club_id).eq("id", int(dst_id)).limit(1).execute().data
-        src_name = str(src_p[0]["name"]) if src_p else f"#{src_id}"
-        dst_name = str(dst_p[0]["name"]) if dst_p else f"#{dst_id}"
-        now_iso = datetime.now(timezone.utc).isoformat()
-        supabase.table("players").update(
-            {
-                "active": False,
-                "inactive_at": now_iso,
-                "name": f"{src_name} (MERGED into {dst_name} #{dst_id})",
-            }
-        ).eq("club_id", club_id).eq("id", int(src_id)).execute()
+            # Deactivate source player
+            src_p = supabase.table("players").select("name").eq("club_id", club_id).eq("id", int(src_id)).limit(1).execute().data
+            dst_p = supabase.table("players").select("name").eq("club_id", club_id).eq("id", int(dst_id)).limit(1).execute().data
+            src_name = str(src_p[0]["name"]) if src_p else f"#{src_id}"
+            dst_name = str(dst_p[0]["name"]) if dst_p else f"#{dst_id}"
+            now_iso = datetime.now(timezone.utc).isoformat()
+            supabase.table("players").update(
+                {
+                    "active": False,
+                    "inactive_at": now_iso,
+                    "name": f"{src_name} (MERGED into {dst_name} #{dst_id})",
+                }
+            ).eq("club_id", club_id).eq("id", int(src_id)).execute()
+        except APIError as exc:
+            st.error("Merge failed. Review details below; no rerun was triggered.")
+            st.code(str(exc))
+            return
+        except Exception as exc:
+            st.error("Merge failed. Review details below; no rerun was triggered.")
+            st.code(str(exc))
+            return
 
-        st.success("Merge completed. Now run Admin Tools → Replay History → ALL.")
+        for key in ["merge_src_label", "merge_dst_label", "merge_confirm_text"]:
+            st.session_state.pop(key, None)
+        st.success("Merge completed. Run Admin Tools → Replay History → ALL if this player had match history.")
         time.sleep(0.4)
         st.rerun()
 

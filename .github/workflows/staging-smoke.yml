@@ -1,0 +1,41 @@
+name: Staging Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: Optional API base URL override for staging smoke checks
+        required: false
+        type: string
+      web_base_url:
+        description: Optional web base URL override for staging smoke checks
+        required: false
+        type: string
+      club_slug:
+        description: Club slug to validate
+        required: false
+        default: tres-palapas
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE_URL: ${{ inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
+      WEB_BASE_URL: ${{ inputs.web_base_url || secrets.STAGING_WEB_BASE_URL }}
+      CLUB_SLUG: ${{ inputs.club_slug || 'tres-palapas' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run read-only staging smoke checks
+        run: |
+          python scripts/staging_smoke.py \
+            --api-base-url "$API_BASE_URL" \
+            --web-base-url "$WEB_BASE_URL" \
+            --club-slug "$CLUB_SLUG"

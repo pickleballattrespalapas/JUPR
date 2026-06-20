@@ -4,15 +4,41 @@ import time
 import json
 from datetime import datetime, timezone
 from uuid import uuid4
-from jupr_app.domain.replay_history import replay_history
+from jupr_app.domain.admin.roles import (
+    ALL_ROLES,
+    ROLE_READ_ONLY,
+    ROLE_SUPER_ADMIN,
+    can_manage_roles,
+    can_run_replay,
+    normalize_role,
+)
+from jupr_app.domain.admin.role_assignments import (
+    delete_role_assignment,
+    has_other_super_admin_support,
+    is_role_table_missing_error,
+    list_role_assignments,
+    normalize_email,
+    upsert_role_assignment,
+)
+from jupr_app.domain.admin_activity_log import (
+    RETENTION_DAYS,
+    build_activity_payload,
+    can_view_admin_activity,
+    list_recent_admin_activity_logs,
+    retention_cutoff_iso,
+    write_admin_activity_log,
+)
 
 from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
-from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
+from jupr_app.services.replay_service import (
+    is_replay_jobs_table_missing_error,
+    run_replay_with_job_tracking,
+)
 from jupr_app.domain.gamification.badge_audit import (
     build_badge_audit_report,
     build_high_roller_diagnostic_report,
@@ -31,6 +57,7 @@ from jupr_app.domain.live_social import (
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import redact_query_params
+from jupr_app.services import ServiceContext, submit_match_batch
 
 
 def _query_params_snapshot() -> dict[str, str]:
@@ -118,6 +145,180 @@ def _format_auth_debug_events(events: list[dict[str, object]]) -> list[dict[str,
     return formatted
 
 
+
+def _admin_actor_email(ctx) -> str:
+    values = [
+        getattr(ctx, "admin_email", None),
+        getattr(ctx, "user_email", None),
+        st.session_state.get("admin_email"),
+        st.session_state.get("user_email"),
+        getattr(st.session_state.get("admin_auth_user"), "email", ""),
+    ]
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "admin"
+
+def _admin_role_context() -> tuple[str, bool, bool, bool]:
+    role = normalize_role(str(st.session_state.get("admin_role", ROLE_READ_ONLY) or ROLE_READ_ONLY))
+    return role, can_manage_roles(role), can_run_replay(role), can_view_admin_activity(role)
+
+
+def _render_admin_activity_section(supabase, club_id: str, *, current_role: str, can_view_activity: bool) -> None:
+    st.subheader("🧾 Admin Activity Log")
+    st.caption(f"Current role: **{current_role}**.")
+    st.caption("Retention guidance: keep approximately 1 year of history for trust and operational review.")
+    st.caption(f"Suggested retention cutoff: `{retention_cutoff_iso()[:10]}` (last {RETENTION_DAYS} days).")
+
+    if not can_view_activity:
+        st.info("Only Super Admin and Club Owner can view admin activity.")
+        return
+
+    flagged_only = st.checkbox("Show flagged scorekeeper edits/deletes only", value=False, key="admin_activity_flagged_only")
+    rows, warning = list_recent_admin_activity_logs(
+        supabase,
+        club_id=str(club_id),
+        include_flagged_only=flagged_only,
+        limit=300,
+    )
+    if warning:
+        st.warning(warning)
+    if not rows:
+        st.info("No admin activity rows found yet.")
+        return
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _render_role_assignment_section(
+    supabase,
+    admin_allowlist: set[str],
+    *,
+    club_id: str,
+    current_role: str,
+    can_assign_roles: bool,
+) -> None:
+    st.subheader("🛂 Admin Role Assignments")
+    role_source = str(st.session_state.get("admin_role_source", "") or "unknown")
+    st.caption(f"Current role: **{current_role}** (source: `{role_source}`).")
+    st.caption(f"Managing roles for club: `{club_id}`")
+
+    rows: list[dict] = []
+    table_available = True
+    try:
+        rows = list_role_assignments(supabase, club_id=str(club_id))
+    except Exception as exc:
+        table_available = False
+        if is_role_table_missing_error(exc):
+            st.warning("Admin role assignment table is not installed yet.")
+            st.caption("Apply migration: `supabase/migrations/20260428100000_admin_role_assignments.sql`")
+            st.code(
+                "supabase db push\n"
+                "# or apply manually\n"
+                "\\i supabase/migrations/20260428100000_admin_role_assignments.sql",
+                language="bash",
+            )
+        else:
+            st.warning("Unable to load role assignments right now.")
+
+    assigned_emails = {
+        str(row.get("email") or "").strip().lower()
+        for row in rows
+        if str(row.get("email") or "").strip()
+    }
+    for email in sorted(admin_allowlist):
+        if email not in assigned_emails:
+            rows.append({"user_id": None, "email": email, "role": "super_admin", "created_at": None, "updated_at": None})
+
+    if rows:
+        st.caption("Role descriptions: super_admin = full system access; club_owner = broad club management (no role assignment); organizer = events/tournaments + scores; scorekeeper = scores only; read_only = view-only/audit where allowed.")
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption(f"Fallback super admins (allowlist): {', '.join(sorted(admin_allowlist)) or '(none)'}")
+
+    if current_role in {"organizer", "scorekeeper", "read_only"}:
+        st.info("Your role cannot view or manage role assignments.")
+        return
+    if not can_assign_roles:
+        st.info("Only Super Admin can change role assignments.")
+        return
+
+    if not table_available:
+        st.caption("Apply the admin role migration before assigning roles in the UI.")
+        return
+
+    assignment_options = ["Create new assignment"] + [str(row.get("email") or "") for row in rows if str(row.get("email") or "")]
+    selected_assignment = st.selectbox("Select assignment to edit", options=assignment_options, index=0)
+    selected_row = next((row for row in rows if str(row.get("email") or "") == selected_assignment), None)
+    with st.form("admin_role_assignment_form"):
+        target_email = st.text_input("User email", value=str((selected_row or {}).get("email") or ""), placeholder="name@example.com")
+        role_default = normalize_role((selected_row or {}).get("role"))
+        role_index = list(ALL_ROLES).index(role_default) if role_default in ALL_ROLES else 0
+        target_role = st.selectbox("Role", options=list(ALL_ROLES), index=role_index)
+        user_id_input = st.text_input("User ID (optional)", value=str((selected_row or {}).get("user_id") or ""))
+        save_clicked = st.form_submit_button("Save")
+        revoke_clicked = st.form_submit_button("Revoke")
+
+    normalized_email = normalize_email(target_email)
+    if save_clicked:
+        if "@" not in normalized_email or "." not in normalized_email.split("@")[-1]:
+            st.error("Enter a valid email address.")
+        else:
+            selected_role = normalize_role(target_role)
+            existing_row = next((row for row in rows if normalize_email(row.get("email")) == normalized_email), None)
+            if existing_row and normalize_role(existing_row.get("role")) == ROLE_SUPER_ADMIN and selected_role != ROLE_SUPER_ADMIN:
+                if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=admin_allowlist):
+                    st.error("Unsafe change blocked: this would remove the final super_admin access.")
+                    return
+            upsert_role_assignment(supabase, str(club_id), normalized_email, selected_role, user_id=str(user_id_input or "").strip() or None)
+            log_result = write_admin_activity_log(
+                supabase,
+                build_activity_payload(
+                    club_id=str(club_id),
+                    actor_email=str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin"),
+                    actor_role=current_role,
+                    action_type="role_assignment_upsert",
+                    entity_type="admin_role_assignment",
+                    entity_id=normalized_email,
+                    before_json={"role": str((existing_row or {}).get("role") or "") or None},
+                    after_json={"role": selected_role, "user_id": str(user_id_input or "").strip() or None},
+                    note="Admin role assignment create/update",
+                    source_page="admin_tools",
+                ),
+            )
+            st.success(f"Saved role assignment for {normalized_email}.")
+            if not log_result.ok and log_result.warning:
+                st.warning(log_result.warning)
+            st.rerun()
+    if revoke_clicked:
+        if not normalized_email:
+            st.error("Choose or enter an email to revoke.")
+            return
+        existing_row = next((row for row in rows if normalize_email(row.get("email")) == normalized_email), None)
+        if normalize_role((existing_row or {}).get("role")) == ROLE_SUPER_ADMIN:
+            if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=admin_allowlist):
+                st.error("Unsafe revoke blocked: this would remove the final super_admin access.")
+                return
+        delete_role_assignment(supabase, str(club_id), normalized_email)
+        log_result = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=str(getattr(st.session_state.get("admin_auth_user"), "email", "") or st.session_state.get("admin_email") or "admin"),
+                actor_role=current_role,
+                action_type="role_assignment_revoke",
+                entity_type="admin_role_assignment",
+                entity_id=normalized_email,
+                before_json={"role": str((existing_row or {}).get("role") or "") or None},
+                after_json=None,
+                note="Admin role assignment revoked",
+                source_page="admin_tools",
+            ),
+        )
+        st.success(f"Revoked role assignment for {normalized_email}.")
+        if not log_result.ok and log_result.warning:
+            st.warning(log_result.warning)
+        st.rerun()
+
 def _badge_queue_preflight(supabase, club_id: str) -> bool:
     try:
         supabase.table("badge_eval_queue").select("id").eq("club_id", club_id).limit(1).execute()
@@ -159,9 +360,29 @@ def render(ctx):
 
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
+    admin_allowlist = set(st.session_state.get("admin_allowlist", set()) or set())
+    admin_role, role_can_manage_roles, role_can_run_replay, role_can_view_activity = _admin_role_context()
+
+    _render_role_assignment_section(
+        supabase,
+        admin_allowlist,
+        club_id=club_id,
+        current_role=admin_role,
+        can_assign_roles=role_can_manage_roles,
+    )
+    st.divider()
+    _render_admin_activity_section(
+        supabase,
+        club_id=club_id,
+        current_role=admin_role,
+        can_view_activity=role_can_view_activity,
+    )
+
+    st.divider()
 
     with st.expander("🧰 System Debug Panel", expanded=False):
         nav_events = list(st.session_state.get("jupr_nav_debug_events", []))
+        route_sync_events = list(st.session_state.get("jupr_route_sync_debug_events", []))
         auth_events = _format_auth_debug_events(list(st.session_state.get("jupr_auth_debug_events", [])))
         current_query_params = redact_query_params(_query_params_snapshot())
         debug_session_id = str(st.session_state.setdefault("debug_session_id", str(uuid4())))
@@ -173,6 +394,7 @@ def render(ctx):
                 "debug_session_id": debug_session_id,
                 "navigation_events_present": bool(nav_events),
                 "navigation_event_count": len(nav_events),
+                "route_sync_event_count": len(route_sync_events),
                 "auth_event_count": len(auth_events),
             }
         )
@@ -189,17 +411,34 @@ def render(ctx):
             "jupr_public_mode": bool(st.session_state.get("jupr_public_mode", False)),
             "jupr_admin_entry_active": bool(st.session_state.get("jupr_admin_entry_active", False)),
             "jupr_admin_authenticated": bool(st.session_state.get("jupr_admin_authenticated", False)),
+            "admin_real_role": str(st.session_state.get("admin_real_role", "") or ""),
+            "admin_real_role_source": str(st.session_state.get("admin_real_role_source", "") or ""),
+            "admin_role": str(st.session_state.get("admin_role", "") or ""),
+            "admin_role_source": str(st.session_state.get("admin_role_source", "") or ""),
+            "admin_view_as_role": str(st.session_state.get("admin_view_as_role", "") or ""),
+            "admin_view_as_selector_label": str(st.session_state.get("admin_view_as_selector_label", "") or ""),
+            "admin_view_as_reset_pending": bool(st.session_state.get("admin_view_as_reset_pending", False)),
+            "admin_view_as_last_selector_label": str(st.session_state.get("admin_view_as_last_selector_label", "") or ""),
+            "view_as_mode_active": bool(st.session_state.get("admin_role_source", "") == "super_admin_view_as"),
+            "route_stability_repeat_count": int(st.session_state.get("jupr_route_stability_repeat_count", 0) or 0),
+            "route_stability_warning": bool(st.session_state.get("jupr_route_stability_warning", False)),
         }
         st.write("Navigation runtime snapshot")
         st.json(nav_runtime)
 
         st.write(f"Recent navigation events ({len(nav_events)})")
         st.json(nav_events)
+        st.write(f"Recent canonical route sync events ({len(route_sync_events)})")
+        st.json(route_sync_events)
+        if bool(st.session_state.get("jupr_route_stability_warning", False)):
+            st.warning("Possible rerun loop detected.")
 
         if st.button("Clear navigation debug events", key="clear_navigation_debug_events"):
             st.session_state["jupr_nav_debug_events"] = []
+            st.session_state["jupr_route_sync_debug_events"] = []
             st.success("Navigation debug events cleared.")
             nav_events = []
+            route_sync_events = []
 
         st.markdown("#### Phase 3 — Auth/session diagnostics")
         auth_debug = {
@@ -235,12 +474,14 @@ def render(ctx):
             "session_continuity": {
                 "navigation_events_present": bool(nav_events),
                 "navigation_event_count": len(nav_events),
+                "route_sync_event_count": len(route_sync_events),
                 "auth_event_count": len(auth_events),
             },
             "navigation": {
                 "query_params": current_query_params,
                 "runtime": nav_runtime,
                 "events": nav_events,
+                "route_sync_events": route_sync_events,
             },
             "auth_session": auth_debug,
         }
@@ -466,17 +707,30 @@ def render(ctx):
 
     target_reset = st.selectbox("Replay scope", league_opts)
 
-    if st.button(f"⚠️ Replay History for: {target_reset}"):
+    if st.button(f"⚠️ Replay History for: {target_reset}", disabled=not role_can_run_replay):
         bar = st.progress(0.0)
         with st.spinner("Crunching..."):
-            result = replay_history(
-                supabase=supabase,
-                club_id=club_id,
-                df_meta=df_meta,
-                target_reset=str(target_reset),
-                progress_cb=lambda x: bar.progress(float(x)),
-            )
+            try:
+                replay_outcome = run_replay_with_job_tracking(
+                    supabase=supabase,
+                    club_id=club_id,
+                    df_meta=df_meta,
+                    target_reset=str(target_reset),
+                    actor_email=_admin_actor_email(ctx),
+                    actor_role=admin_role,
+                    progress_cb=lambda x: bar.progress(float(x)),
+                )
+                result = replay_outcome["result"]
+            except Exception as exc:  # noqa: BLE001
+                if is_replay_jobs_table_missing_error(exc):
+                    st.error("Replay job tracking table is not installed yet.")
+                    st.caption("Apply migration: `supabase/migrations/20260502120000_replay_jobs.sql`")
+                    st.code("NOTIFY pgrst, 'reload schema';", language="sql")
+                    return
+                raise
 
+        st.info(f"Replay job id: {replay_outcome['job_id']}")
+        st.info(f"Replay job status: {replay_outcome['job_status']}")
         st.info(f"Skipped incomplete doubles rows: {result['skipped_incomplete']}")
         st.info(f"Matches to rewrite snapshots for: {result['matches_rewritten']}")
         st.info(f"League ratings rows rebuilt: {result['league_ratings_rows']}")
@@ -542,7 +796,7 @@ def render(ctx):
     st.subheader("🛠️ Tournament Match Backfill")
     st.caption("Insert missing public match rows for finalized tournament games.")
 
-    if st.button("Backfill Missing Tournament Matches", key="tournament_match_backfill"):
+    if st.button("Backfill Missing Tournament Matches", key="tournament_match_backfill", disabled=not role_can_run_replay):
         summary = _run_tournament_match_backfill(ctx)
         st.info(
             "Backfill summary: "
@@ -575,7 +829,7 @@ def render(ctx):
     if use_as_of:
         as_of_date = st.date_input("As-of date", value=datetime.now(timezone.utc).date(), key="badge_backfill_date")
 
-    if st.button("Run Badge Backfill", key="badge_backfill_run"):
+    if st.button("Run Badge Backfill", key="badge_backfill_run", disabled=not role_can_run_replay):
         with st.spinner("Computing badge candidates..."):
             league_id = None if league_choice == "All leagues" else str(league_choice).strip()
             as_of_dt = None
@@ -597,13 +851,13 @@ def render(ctx):
                 st.dataframe(summary, use_container_width=True, hide_index=True)
 
     st.divider()
-    _render_badge_audit_section(ctx, club_id)
+    _render_badge_audit_section(ctx, club_id, role_can_run_replay=role_can_run_replay)
 
     st.divider()
-    _render_high_roller_diagnostic_section(ctx, club_id)
+    _render_high_roller_diagnostic_section(ctx, club_id, role_can_run_replay=role_can_run_replay)
 
     st.divider()
-    _render_badge_recompute_section(ctx, club_id)
+    _render_badge_recompute_section(ctx, club_id, role_can_run_replay=role_can_run_replay)
 
     st.divider()
     _render_club_social_review(ctx)
@@ -651,7 +905,7 @@ def render(ctx):
     reason = st.text_input("Reason for change", key="badge_state_reason")
     force = st.checkbox("Force transition (admin override)", value=False, key="badge_state_force")
 
-    if st.button("Update Badge State", key="badge_state_update"):
+    if st.button("Update Badge State", key="badge_state_update", disabled=not role_can_manage_roles):
         if not reason.strip():
             st.error("Please provide a reason for the state change.")
         else:
@@ -757,7 +1011,7 @@ def _render_club_social_review(ctx) -> None:
         st.divider()
 
 
-def _render_badge_audit_section(ctx, club_id: str) -> None:
+def _render_badge_audit_section(ctx, club_id: str, *, role_can_run_replay: bool) -> None:
     st.subheader("🎯 Badge Audit")
     st.caption("Compare expected badge rows vs actual rows for targeted diagnostics and troubleshooting.")
 
@@ -779,7 +1033,7 @@ def _render_badge_audit_section(ctx, club_id: str) -> None:
     include_revoked = st.checkbox("Include revoked rows", value=False, key="admin_badge_audit_include_revoked")
     include_non_live = st.checkbox("Include non-live badges", value=False, key="admin_badge_audit_include_non_live")
 
-    if st.button("Run Badge Audit", key="admin_badge_audit_run"):
+    if st.button("Run Badge Audit", key="admin_badge_audit_run", disabled=not role_can_run_replay):
         report = build_badge_audit_report(
             ctx.supabase,
             club_id=club_id,
@@ -846,7 +1100,7 @@ def _render_high_roller_diagnostics(ctx, *, club_id: str, player_id: int, league
     d3.metric("Source policy", source_policy)
 
 
-def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
+def _render_high_roller_diagnostic_section(ctx, club_id: str, *, role_can_run_replay: bool) -> None:
     st.subheader("🕵️ High Roller Diagnostic")
     st.caption("Run focused diagnostics for High Roller counting and match-filter removals.")
 
@@ -864,7 +1118,7 @@ def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
 
     player_options = sorted(df_players["id"].unique().tolist())
     player_id = st.selectbox("Diagnostic player", player_options, key="high_roller_diag_player")
-    if st.button("Run High Roller Diagnostic", key="high_roller_diag_run"):
+    if st.button("Run High Roller Diagnostic", key="high_roller_diag_run", disabled=not role_can_run_replay):
         report = build_high_roller_diagnostic_report(
             ctx.supabase,
             club_id=club_id,
@@ -915,7 +1169,7 @@ def _render_high_roller_diagnostic_section(ctx, club_id: str) -> None:
                 )
 
 
-def _render_badge_recompute_section(ctx, club_id: str) -> None:
+def _render_badge_recompute_section(ctx, club_id: str, *, role_can_run_replay: bool) -> None:
     st.subheader("🧹 Badge Recompute / Cleanup")
     st.caption("Run scoped badge recompute. Strict mode can revoke stale rows when safely scoped.")
 
@@ -939,7 +1193,7 @@ def _render_badge_recompute_section(ctx, club_id: str) -> None:
     revoke_reason = st.text_input("Revoke reason (required for strict)", value="", key="admin_badge_recompute_reason")
     match_limit = st.number_input("Match limit", min_value=100, max_value=200000, step=100, value=5000, key="admin_badge_recompute_match_limit")
 
-    if st.button("Run Badge Recompute", key="admin_badge_recompute_run"):
+    if st.button("Run Badge Recompute", key="admin_badge_recompute_run", disabled=not role_can_run_replay):
         scoped = any(
             (
                 str(player_id).strip(),
@@ -1027,15 +1281,25 @@ def _run_tournament_match_backfill(ctx):
             continue
 
         try:
-            result = process_matches(
-                [payload],
+            service_ctx = ServiceContext(
                 supabase=supabase,
                 club_id=club_id,
+                actor_email=st.session_state.get("admin_email"),
+                actor_role=st.session_state.get("admin_role"),
+                source="admin_tools",
+                public_base_url=st.session_state.get("public_base_url"),
+            )
+            service_result = submit_match_batch(
+                service_ctx,
+                [payload],
                 name_to_id=name_to_id,
                 df_players_all=df_players_all,
                 df_leagues=df_leagues,
                 df_meta=df_meta,
             )
+            if not service_result.ok:
+                raise RuntimeError("; ".join(service_result.errors) or "Unknown backfill error")
+            result = service_result.data
         except Exception as exc:
             errors += 1
             st.error(f"Backfill failed for tournament game {game.get('id')}: {exc}")

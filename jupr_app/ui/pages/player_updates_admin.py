@@ -5,11 +5,14 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from jupr_app.config import SMTPConfig, get_email_mode, get_env_or_default, get_public_base_url
 from jupr_app.domain.notifications.player_profile_update_repo import (
+    REQUEST_STATUS_UNSUBSCRIBED,
     approve_request,
     bulk_delete_pending_outbox_rows,
     delete_pending_outbox_row,
     list_active_subscriptions,
+    list_subscriptions_by_status,
     list_digests_for_range,
     list_outbox_rows,
     list_pending_requests,
@@ -24,6 +27,8 @@ from jupr_app.domain.notifications.player_update_sender import (
     send_pending_player_update_emails,
 )
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
+from jupr_app.domain.admin.roles import normalize_role
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.ui.components.player_digest_layout import render_player_digest
 from jupr_app.ui.components.player_picker import render_player_picker
 from jupr_app.ui.layout import page_shell
@@ -48,6 +53,36 @@ def _player_name(ctx, player_id: int | None) -> str:
     except Exception:
         return ""
     return str(id_to_name.get(pid, ""))
+
+
+def _log_subscription_action(
+    supabase,
+    *,
+    club_id: str,
+    actor_email: str,
+    actor_role: str,
+    action_type: str,
+    row_id: str,
+    before_json: dict | None = None,
+    after_json: dict | None = None,
+    note: str | None = None,
+) -> str | None:
+    result = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=club_id,
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=action_type,
+            entity_type="subscription",
+            entity_id=row_id,
+            before_json=before_json,
+            after_json=after_json,
+            note=note,
+            source_page="player_updates_admin",
+        ),
+    )
+    return result.warning
 
 
 def _pending_table_rows(ctx, rows: list[dict]) -> list[dict]:
@@ -78,6 +113,23 @@ def _active_table_rows(ctx, rows: list[dict]) -> list[dict]:
                 "verified_at": row.get("verified_at"),
                 "verified_by": row.get("verified_by"),
                 "last_digest_week_start": row.get("last_digest_week_start"),
+            }
+        )
+    return display_rows
+
+
+def _inactive_table_rows(ctx, rows: list[dict]) -> list[dict]:
+    display_rows: list[dict] = []
+    for row in rows:
+        pid = row.get("player_id")
+        display_rows.append(
+            {
+                "player_id": pid,
+                "player_name": _player_name(ctx, pid),
+                "email": row.get("email"),
+                "request_status": row.get("request_status"),
+                "unsubscribed_at": row.get("unsubscribed_at"),
+                "verified_at": row.get("verified_at"),
             }
         )
     return display_rows
@@ -129,6 +181,59 @@ def _render_digest_preview(digest: dict) -> None:
             st.caption("No chart points available in selected date range.")
 
 
+
+
+
+
+def _ui_env_or_secret(name: str, default: str = "") -> str:
+    value = get_env_or_default(name).strip()
+    if value:
+        return value
+    try:
+        secret_val = st.secrets.get(name, default)
+    except Exception:
+        return str(default).strip()
+    if secret_val is None:
+        return str(default).strip()
+    return str(secret_val).strip()
+
+
+def _ui_env_or_secret_bool(name: str, default: bool = False) -> bool:
+    value = _ui_env_or_secret(name).lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_smtp_config_from_ui() -> SMTPConfig | None:
+    host = _ui_env_or_secret("SMTP_HOST")
+    port_raw = _ui_env_or_secret("SMTP_PORT")
+    username = _ui_env_or_secret("SMTP_USERNAME")
+    password = _ui_env_or_secret("SMTP_PASSWORD")
+    from_email = _ui_env_or_secret("SMTP_FROM_EMAIL")
+    if not all([host, port_raw, username, password, from_email]):
+        return None
+
+    try:
+        port = int(port_raw)
+    except Exception:
+        return None
+
+    return SMTPConfig(
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+        from_email=from_email,
+        from_name=_ui_env_or_secret("SMTP_FROM_NAME", "JUPR Notifications"),
+        reply_to=_ui_env_or_secret("SMTP_REPLY_TO", "joe@juprleagues.com"),
+        use_tls=_ui_env_or_secret_bool("SMTP_USE_TLS", default=True),
+    )
+
+def _resolve_public_base_url() -> str:
+    base = str(st.session_state.get("base_url", "") or "").strip().rstrip("/")
+    return base or get_public_base_url()
+
 def _friendly_error(exc: Exception) -> str:
     text = str(exc or "").strip()
     return text or "Unknown error."
@@ -172,6 +277,7 @@ def render(ctx) -> None:
     supabase = ctx.supabase
     club_id = str(ctx.club_id)
     actor = _actor_label(ctx)
+    admin_role = normalize_role(str(st.session_state.get("admin_role", "") or ""))
 
     pending_tab, active_tab, digests_tab, queue_tab = st.tabs(
         [
@@ -223,16 +329,44 @@ def render(ctx) -> None:
 
                 if approve_clicked:
                     try:
+                        before_row = dict(row)
                         approve_request(supabase, row_id, verified_by=actor, admin_note=admin_note)
+                        log_warning = _log_subscription_action(
+                            supabase,
+                            club_id=club_id,
+                            actor_email=actor,
+                            actor_role=admin_role,
+                            action_type="subscription_approve",
+                            row_id=row_id,
+                            before_json=before_row,
+                            after_json={"request_status": "active", "verified_by": actor},
+                            note=admin_note,
+                        )
                         st.success("Request approved.")
+                        if log_warning:
+                            st.warning(log_warning)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Approve failed: {_friendly_error(exc)}")
 
                 if reject_clicked:
                     try:
+                        before_row = dict(row)
                         reject_request(supabase, row_id, admin_note=admin_note, verified_by=actor)
+                        log_warning = _log_subscription_action(
+                            supabase,
+                            club_id=club_id,
+                            actor_email=actor,
+                            actor_role=admin_role,
+                            action_type="subscription_reject",
+                            row_id=row_id,
+                            before_json=before_row,
+                            after_json={"request_status": "rejected", "verified_by": actor},
+                            note=admin_note,
+                        )
                         st.success("Request rejected.")
+                        if log_warning:
+                            st.warning(log_warning)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Reject failed: {_friendly_error(exc)}")
@@ -265,6 +399,12 @@ def render(ctx) -> None:
     with active_tab:
         st.subheader("Active Profiles")
         active_rows = list_active_subscriptions(supabase, club_id, limit=200)
+        unsubscribed_rows = list_subscriptions_by_status(
+            supabase,
+            club_id,
+            statuses=[REQUEST_STATUS_UNSUBSCRIBED],
+            limit=200,
+        )
 
         if active_rows:
             st.dataframe(pd.DataFrame(_active_table_rows(ctx, active_rows)), use_container_width=True)
@@ -317,11 +457,31 @@ def render(ctx) -> None:
 
                 if unsubscribe_clicked:
                     try:
+                        before_row = dict(row)
                         mark_unsubscribed(supabase, row_id)
+                        log_warning = _log_subscription_action(
+                            supabase,
+                            club_id=club_id,
+                            actor_email=actor,
+                            actor_role=admin_role,
+                            action_type="subscription_unsubscribe",
+                            row_id=row_id,
+                            before_json=before_row,
+                            after_json={"request_status": "unsubscribed"},
+                            note=admin_note,
+                        )
                         st.success("Subscription deactivated.")
+                        if log_warning:
+                            st.warning(log_warning)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Unsubscribe failed: {_friendly_error(exc)}")
+
+        st.markdown("#### Recently Unsubscribed")
+        if unsubscribed_rows:
+            st.dataframe(pd.DataFrame(_inactive_table_rows(ctx, unsubscribed_rows)), use_container_width=True)
+        else:
+            st.caption("No unsubscribed subscriptions yet.")
 
     with digests_tab:
         st.subheader("Player Digests")
@@ -478,6 +638,11 @@ def render(ctx) -> None:
     with queue_tab:
         st.subheader("Send Queue")
         st.caption("Digests generated on Player Digests are queued automatically. Just hit send here.")
+        try:
+            current_email_mode = get_email_mode()
+        except Exception as exc:
+            current_email_mode = f"invalid ({_friendly_error(exc)})"
+        st.info(f"Email mode: {current_email_mode}")
 
         try:
             outbox_rows = list_outbox_rows(supabase, club_id, limit=1000)
@@ -500,10 +665,16 @@ def render(ctx) -> None:
         with c1:
             if st.button("Send Pending", use_container_width=True):
                 try:
-                    result = send_pending_player_update_emails(ctx, limit=500)
+                    result = send_pending_player_update_emails(
+                        ctx,
+                        limit=500,
+                        public_base_url=_resolve_public_base_url(),
+                        smtp_config=_resolve_smtp_config_from_ui(),
+                    )
                     st.success(
                         f"Attempted: {result['attempted']} · Sent: {result['sent']} · "
-                        f"Skipped: {result['skipped']} · Errors: {result['errors']}"
+                        f"Skipped: {result['skipped']} · Errors: {result['errors']} · "
+                        f"Mode: {result.get('email_mode', 'unknown')}"
                     )
                     st.rerun()
                 except Exception as exc:

@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
-from jupr_app.domain.match_processing import process_matches
+from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.domain.player_ops import safe_add_player
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.tournament_results_import import (
@@ -1301,15 +1301,25 @@ def _save_games(ctx, tournament: dict[str, Any], teams_by_id: dict[str, dict], g
         except ValueError:
             continue
         match_payload = build_tournament_match_payload(tournament, game, teams_by_id, score_a=score_a, score_b=score_b)
-        process_matches(
-            [match_payload],
+        service_ctx = ServiceContext(
             supabase=supabase,
             club_id=str(ctx.club_id),
+            actor_email=getattr(ctx, "admin_email", None),
+            actor_role=st.session_state.get("admin_role"),
+            source="tournament_ops",
+            public_base_url=st.session_state.get("public_base_url"),
+        )
+        result = submit_match_batch(
+            service_ctx,
+            [match_payload],
             name_to_id=ctx.name_to_id,
             df_players_all=ctx.df_players_all,
             df_leagues=ctx.df_leagues,
             df_meta=ctx.df_meta,
         )
+        if not result.ok:
+            st.error("; ".join(result.errors) or "Could not save tournament match.")
+            continue
         supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
 
         if stage == "PLAYOFF":
