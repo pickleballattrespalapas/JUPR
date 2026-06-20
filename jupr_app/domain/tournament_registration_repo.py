@@ -1431,12 +1431,13 @@ def build_public_tournament_roster_state(
     state = build_registration_state(supabase, tournament, settings, days, event_options)
     event_lookup = {str(row.get("id")): row for row in (state.get("event_options") or [])}
 
+    roster_visible_statuses = {"CONFIRMED", "WAITLIST", "NEEDS_PARTNER"}
     status_map = {
         "CONFIRMED": "Confirmed",
         "WAITLIST": "Waitlist",
         "REVIEW": "Pending Review",
         "PARTNER_MISSING": "Pending Review",
-        "NEEDS_PARTNER": "Pending Review",
+        "NEEDS_PARTNER": "Needs Partner",
     }
 
     def _public_member(member: dict[str, Any]) -> dict[str, Any]:
@@ -1476,7 +1477,7 @@ def build_public_tournament_roster_state(
                 "status": status_map.get(status),
                 "members": members,
             }
-            if status in {"CONFIRMED", "WAITLIST"}:
+            if status in roster_visible_statuses:
                 registrations_by_event.append(event_row)
                 event_rows.append(event_row)
 
