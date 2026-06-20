@@ -47,11 +47,7 @@ def _skill_band_for_label(skill_label: Any) -> tuple[float, float] | None:
     return floor, _next_half_step(floor)
 
 
-def _rating_in_band(rating: float | None, floor: float, ceiling_exclusive: float) -> bool:
-    return rating is not None and rating >= floor and rating < ceiling_exclusive
-
-
-def _rating_above_band(rating: float | None, ceiling_exclusive: float) -> bool:
+def _rating_at_or_above_ceiling(rating: float | None, ceiling_exclusive: float) -> bool:
     return rating is not None and rating >= ceiling_exclusive
 
 
@@ -88,17 +84,13 @@ def _validate_singles_selection_against_skill(event: dict[str, Any], player: dic
 
     floor, ceiling = band
     rating = _effective_singles_skill(player)
-    if rating is None:
-        return False, "This division requires a rating to verify eligibility. Please enter your rating."
-    if _rating_in_band(rating, floor, ceiling):
-        return True, None
-    if _rating_above_band(rating, ceiling):
+    if _rating_at_or_above_ceiling(rating, ceiling):
         recommended = _recommended_anchor_for_rating(rating)
         return False, (
-            f"Your rating is {_format_skill(rating)}, so you are not eligible for {_format_skill(floor)}. "
-            f"Please register for a {_format_skill(recommended)} division."
+            f"Your rating is {_format_skill(rating)}, which is above the {_format_skill(floor)} division cap. "
+            f"Please register for a {_format_skill(recommended)} or higher division."
         )
-    return False, f"Your rating is {_format_skill(rating)}, so you are not eligible for {_format_skill(floor)}."
+    return True, None
 
 
 def _validate_doubles_selection_against_skill(
@@ -116,34 +108,15 @@ def _validate_doubles_selection_against_skill(
     player_rating = _effective_doubles_skill(player)
     partner_rating = _effective_doubles_skill(partner or {}) if partner else None
 
-    if player_rating is None:
-        return False, "This division requires a rating to verify eligibility. Please enter your rating."
-
-    if partner is None and allow_missing_partner_for_preview:
-        if _rating_in_band(player_rating, floor, ceiling):
-            return True, None
-        if _rating_above_band(player_rating, ceiling):
-            recommended = _recommended_anchor_for_rating(player_rating)
-            return False, (
-                f"Your rating is {_format_skill(player_rating)}, so you are not eligible for {_format_skill(floor)}. "
-                f"Please register for a {_format_skill(recommended)} division."
-            )
-        return False, f"Your rating is {_format_skill(player_rating)}, so you are not eligible for {_format_skill(floor)}."
-
-    if partner_rating is None:
-        return False, "This division requires a rating to verify eligibility. Please enter your rating."
-
-    ratings = [player_rating, partner_rating]
-    if any(_rating_above_band(value, ceiling) for value in ratings):
-        highest = max(ratings)
+    known_ratings = [value for value in (player_rating, partner_rating) if value is not None]
+    over_cap_ratings = [value for value in known_ratings if _rating_at_or_above_ceiling(value, ceiling)]
+    if over_cap_ratings:
+        highest = max(over_cap_ratings)
         recommended = _recommended_anchor_for_rating(highest)
         return False, (
-            f"Your team is not eligible for {_format_skill(floor)} because one player is rated above that division. "
-            f"Please register for a {_format_skill(recommended)} division."
+            f"Your team is rated above the {_format_skill(floor)} division cap. "
+            f"Please register for a {_format_skill(recommended)} or higher division."
         )
-
-    if not any(_rating_in_band(value, floor, ceiling) for value in ratings):
-        return False, f"Your team is not eligible for {_format_skill(floor)} because neither player is in the {_format_skill(floor)} skill band."
 
     return True, None
 
