@@ -3,17 +3,23 @@ from types import SimpleNamespace
 from jupr_app.ui.pages import tournament_registration as reg
 from jupr_app.ui.pages import tournament_registration_confirmation as confirm
 from jupr_app.ui import tournament_registration_confirmation_view as view
+from jupr_app.ui.tournament_registration_session import (
+    clear_registration_wizard_for_new_start,
+    get_submission_result,
+    store_submission_result,
+    wizard_state_key,
+)
 
 
 def test_submission_result_helpers_store_get_and_clear(monkeypatch):
     state = {}
     monkeypatch.setattr(reg.st, "session_state", state)
-    reg._store_submission_result(tournament_id="t1", registration_id="r1", email_status="sent", nav_params={"a": "b"})
-    assert reg._get_submission_result("t1") == {"registration_id": "r1", "email_status": "sent", "nav_params": {"a": "b"}}
-    state[reg._wizard_key("t1")] = {"current_step": 5}
-    reg._clear_registration_wizard_for_new_start("t1")
-    assert reg._get_submission_result("t1") == {}
-    assert reg._wizard_key("t1") not in state
+    store_submission_result(tournament_id="t1", registration_id="r1", email_status="sent", nav_params={"a": "b"})
+    assert get_submission_result("t1") == {"registration_id": "r1", "email_status": "sent", "nav_params": {"a": "b"}}
+    state[wizard_state_key("t1")] = {"current_step": 5}
+    clear_registration_wizard_for_new_start("t1")
+    assert get_submission_result("t1") == {}
+    assert wizard_state_key("t1") not in state
 
 
 def test_confirmation_summary_renders_bundle_missing_email_status(monkeypatch):

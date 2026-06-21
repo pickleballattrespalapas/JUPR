@@ -7,7 +7,8 @@ import streamlit as st
 from jupr_app.domain.tournament_registration_edit_tokens import verify_registration_edit_token
 from jupr_app.domain.tournament_registration_repo import get_public_tournament_bundle, get_registration_confirmation_bundle, registration_feature_available
 from jupr_app.ui.layout import page_shell
-from jupr_app.ui.pages.tournament_registration import _hydrate_registration_wizard_from_bundle, _safe_text, _wizard_key
+from jupr_app.ui.pages.tournament_registration import _hydrate_registration_wizard_from_bundle, _safe_text
+from jupr_app.ui.tournament_registration_session import submission_state_key, wizard_state_key
 from jupr_app.ui.public_links import navigate_same_tab
 
 
@@ -49,9 +50,17 @@ def render(ctx) -> None:
             navigate_same_tab(page="tournament_registration", params={"tournament_id": tournament_id, "tournament": slug}, public_mode=True)
         return
 
-    key = _wizard_key(tournament_id)
+    st.session_state.pop(submission_state_key(tournament_id), None)
+    key = wizard_state_key(tournament_id)
     wizard: dict[str, Any] = st.session_state.setdefault(key, {})
-    _hydrate_registration_wizard_from_bundle(wizard, bundle)
+    same_registration = bool(wizard.get("edit_mode")) and _safe_text(wizard.get("edit_registration_id")) == registration_id
+    _hydrate_registration_wizard_from_bundle(
+        wizard,
+        bundle,
+        preserve_existing_progress=same_registration,
+    )
+    wizard["edit_link_verified"] = True
+    wizard["edit_link_registration_id"] = registration_id
     st.session_state[key] = wizard
     params = {"tournament_id": tournament_id, "edit": "1"}
     registration_slug = _safe_text((bundle.get("settings") or {}).get("registration_slug")) or slug
