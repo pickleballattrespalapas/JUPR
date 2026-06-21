@@ -31,6 +31,7 @@ ADMIN_PAGE_PERMISSION_MATRIX: dict[str, tuple[str, ...]] = {
     "tournament_live": (PERMISSION_MANAGE_TOURNAMENTS, PERMISSION_ENTER_SCORES),
     "tournament_manager": (PERMISSION_MANAGE_TOURNAMENTS,),
     "tournament_ops": (PERMISSION_MANAGE_TOURNAMENTS, PERMISSION_ENTER_SCORES),
+    "tournament_registration_admin": (PERMISSION_MANAGE_TOURNAMENTS,),
     "tournaments": (PERMISSION_MANAGE_TOURNAMENTS, PERMISSION_ENTER_SCORES),
     "weekly_recap_admin": (PERMISSION_RUN_REPLAY,),
 }
