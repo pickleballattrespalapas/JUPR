@@ -343,8 +343,9 @@ def render(ctx):
         _go_to_tournament_manager(tournament_id)
     if st.button("Manage Registrations", key=f"manage_registrations_{tournament_id}"):
         st.query_params["admin"] = "1"
-        st.query_params["page"] = "tournament_registration"
+        st.query_params["page"] = "tournament_registration_admin"
         st.query_params["tournament_id"] = str(tournament_id)
+        st.query_params.pop("public", None)
         st.rerun()
 
     st.markdown("#### Admin Actions")

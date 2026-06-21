@@ -1038,10 +1038,16 @@ def render(ctx):
         st.stop()
 
     admin_mode = bool(getattr(ctx, "admin_logged_in", False)) and not bool(getattr(ctx, "public_mode", False))
+    current_page_key = _safe_text(st.query_params.get("page"))
+    admin_page_key = (
+        "tournament_registration_admin"
+        if admin_mode and current_page_key == "tournament_registration_admin"
+        else "tournament_registration"
+    )
     qp_tournament_id = _safe_text(st.query_params.get("tournament_id"))
     qp_slug = _safe_text(st.query_params.get("tournament"))
     tournament, settings, days, event_options = (
-        _select_admin_tournament(ctx, supabase, page_key="tournament_registration")
+        _select_admin_tournament(ctx, supabase, page_key=admin_page_key)
         if admin_mode
         else _select_public_tournament(ctx, supabase, page_key="tournament_registration")
     )

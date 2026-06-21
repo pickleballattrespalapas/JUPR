@@ -672,6 +672,7 @@ def main():
             "📋 Tournament Operations": tournament_ops,
             "🔴 Tournament Live": tournament_live,
             "📝 Tournament Registration": tournament_registration,
+            "🧾 Registration Management": tournament_registration,
             "✅ Registration Confirmation": tournament_registration_confirmation,
             "✏️ Edit Registration": tournament_registration_edit,
             "📋 Tournament Roster": tournament_roster,
