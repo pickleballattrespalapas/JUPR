@@ -8,6 +8,8 @@ import streamlit as st
 
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
+from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token
 from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
     build_registration_confirmation_view_model,
     send_tournament_registration_confirmation_email,
@@ -22,6 +24,7 @@ from jupr_app.domain.tournament_registration_repo import (
     create_admin_registration,
     delete_registration,
     get_public_tournament_bundle,
+    get_registration_by_email,
     get_registration_settings,
     is_day_enabled,
     list_event_options as list_registration_event_options,
@@ -560,6 +563,78 @@ def _visible_division_options(options: list[dict[str, Any]], *, gender: str, pla
     return filtered
 
 
+def _mask_email(email: str) -> str:
+    text = _safe_text(email).lower()
+    if "@" not in text:
+        return "***"
+    local, domain = text.split("@", 1)
+    if len(local) <= 1:
+        masked = local[:1] + "***"
+    elif len(local) == 2:
+        masked = local[0] + "***" + local[-1]
+    else:
+        masked = local[0] + "***" + local[-1]
+    return f"{masked}@{domain}"
+
+
+def _selected_event_ids_from_selections(selections: list[dict[str, Any]]) -> list[str]:
+    return [_safe_text(row.get("event_option_id")) for row in selections if _safe_text(row.get("event_option_id"))]
+
+
+def _partner_details_from_selections(selections: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    details: dict[str, dict[str, Any]] = {}
+    for row in selections:
+        event_id = _safe_text(row.get("event_option_id"))
+        if not event_id:
+            continue
+        details[event_id] = {
+            "partner_mode": _safe_text(row.get("partner_mode") or "NONE").upper() or "NONE",
+            "partner_name": _safe_text(row.get("partner_name")),
+            "partner_email": _safe_text(row.get("partner_email")),
+            "partner_phone": _safe_text(row.get("partner_phone")),
+            "partner_dupr_id": _safe_text(row.get("partner_dupr_id")),
+            "partner_skill": row.get("partner_skill"),
+            "partner_age": row.get("partner_age"),
+            "show_on_partner_board": bool(row.get("show_on_partner_board")),
+            "partner_note": _safe_text(row.get("partner_note")),
+        }
+    return details
+
+
+def _hydrate_registration_wizard_from_bundle(wizard: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]:
+    registration = bundle.get("registration") or {}
+    selections = bundle.get("selections") or []
+    wizard["edit_mode"] = True
+    wizard["email_locked"] = True
+    wizard["edit_registration_id"] = _safe_text(registration.get("id"))
+    wizard["current_step"] = 1
+    wizard["step1"] = {
+        "first_name": _safe_text(registration.get("first_name")),
+        "last_name": _safe_text(registration.get("last_name")),
+        "email": _safe_text(registration.get("email")),
+        "phone": _safe_text(registration.get("phone")),
+        "gender": _safe_text(registration.get("gender")),
+        "age": _safe_text(registration.get("age")),
+        "notes": _safe_text(registration.get("notes")),
+    }
+    wizard["step2"] = {
+        "profile_mode": "new",
+        "selected_player_id": "",
+        "candidate_player_id": "",
+        "candidate_confirmed": False,
+        "rejected_likely": False,
+        "search_query": "",
+        "selection_source": "",
+        "display_name": _safe_text(registration.get("display_name")),
+        "dupr_id": _safe_text(registration.get("dupr_id")),
+        "doubles_skill": registration.get("doubles_skill"),
+        "singles_skill": registration.get("singles_skill"),
+    }
+    wizard["step3"] = {"selected_event_ids": _selected_event_ids_from_selections(selections)}
+    wizard["step4"] = {"partner_details": _partner_details_from_selections(selections)}
+    return wizard
+
+
 def _wizard_key(tournament_id: Any) -> str:
     return f"registration_wizard_state_{tournament_id}"
 
@@ -581,6 +656,12 @@ def _init_wizard_state(tournament_id: Any) -> dict[str, Any]:
             },
             "step3": {"selected_event_ids": []},
             "step4": {"partner_details": {}},
+            "edit_mode": False,
+            "edit_registration_id": "",
+            "returning_registration_id": "",
+            "returning_email": "",
+            "returning_email_sent": False,
+            "returning_email_error": "",
         }
     return st.session_state[key]
 
@@ -947,14 +1028,16 @@ def render(ctx):
     step4 = wizard.get("step4") or {}
     active_players = _load_active_players(supabase, club_id=club_id, ctx=ctx)
 
-    st.caption(f"Step {current_step} of 4")
+    st.caption("Editing existing registration" if wizard.get("edit_mode") else f"Step {current_step} of 4")
 
     if current_step == 1:
         st.markdown("### 1. Name and contact")
+        if wizard.get("edit_mode"):
+            st.info("You are editing an existing registration.")
         c1, c2 = st.columns(2)
         with c1:
             first_name = st.text_input("First name *", value=_safe_text(step1.get("first_name")))
-            email = st.text_input("Email *", value=_safe_text(step1.get("email")))
+            email = st.text_input("Email *", value=_safe_text(step1.get("email")), disabled=bool(wizard.get("edit_mode")))
             gender = st.selectbox(
                 "Gender *",
                 ["", "Female", "Male", "Other", "Prefer not to say"],
@@ -982,17 +1065,65 @@ def render(ctx):
                 if not _safe_text(gender):
                     st.error("Gender is required.")
                     st.stop()
+                normalized_email = _safe_text(email).lower()
                 wizard["step1"] = {
                     "first_name": first_name,
                     "last_name": last_name,
-                    "email": email,
+                    "email": normalized_email,
                     "phone": phone,
                     "gender": gender,
                     "age": age,
                     "notes": notes,
                 }
+                if not wizard.get("edit_mode"):
+                    existing_registration = get_registration_by_email(supabase, str(tournament.get("id")), normalized_email)
+                    if existing_registration:
+                        wizard["returning_registration_id"] = str(existing_registration.get("id") or "")
+                        wizard["returning_email"] = normalized_email
+                        wizard["returning_email_sent"] = False
+                        wizard["returning_email_error"] = ""
+                        wizard["current_step"] = 0
+                        st.rerun()
                 wizard["current_step"] = 2
                 st.rerun()
+
+    if current_step == 0:
+        masked = _mask_email(_safe_text(wizard.get("returning_email")))
+        st.markdown("### You already have a registration for this tournament.")
+        st.write(f"For your security, we’ll email a secure edit link to {masked}.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Email me a secure edit link", type="primary"):
+                try:
+                    token = build_registration_edit_token(
+                        tournament_id=str(tournament.get("id")),
+                        registration_id=_safe_text(wizard.get("returning_registration_id")),
+                        email=_safe_text(wizard.get("returning_email")),
+                    )
+                    slug = _safe_text(settings.get("registration_slug"))
+                    edit_url = build_public_url(page="tournament_registration_edit", params={"tournament_id": str(tournament.get("id")), "tournament": slug, "edit_token": token})
+                    send_tournament_registration_edit_email(
+                        tournament_name=_safe_text(tournament.get("name") or "Tournament"),
+                        registered_email=_safe_text(wizard.get("returning_email")),
+                        edit_url=edit_url,
+                    )
+                    wizard["returning_email_sent"] = True
+                    wizard["returning_email_error"] = ""
+                except Exception:
+                    wizard["returning_email_sent"] = False
+                    wizard["returning_email_error"] = "We could not send the edit link automatically. Please contact tournament staff."
+                st.rerun()
+        with c2:
+            if st.button("Back / use a different email"):
+                wizard["current_step"] = 1
+                wizard["returning_registration_id"] = ""
+                wizard["returning_email"] = ""
+                st.rerun()
+        if wizard.get("returning_email_sent"):
+            st.success(f"We sent an edit link to {masked}. Please check spam/junk.")
+        if wizard.get("returning_email_error"):
+            st.warning(_safe_text(wizard.get("returning_email_error")))
+        return
 
     step1 = wizard.get("step1") or {}
     likely_matches, _match_type = _likely_active_player_matches(
@@ -1540,7 +1671,7 @@ def render(ctx):
                         "first_name": first_name,
                         "last_name": last_name,
                         "display_name": final_display_name,
-                        "email": email,
+                        "email": _safe_text(wizard.get("step1", {}).get("email")) if wizard.get("edit_mode") else email,
                         "phone": phone,
                         "dupr_id": dupr_id,
                         "doubles_skill": submit_player.get("doubles_skill"),
@@ -1552,6 +1683,7 @@ def render(ctx):
                         "wants_partner_board_contact": any(bool(row.get("show_on_partner_board")) for row in selections),
                         "selections": selections,
                     },
+                    expected_registration_id=_safe_text(wizard.get("edit_registration_id")) if wizard.get("edit_mode") else None,
                 )
                 registration_id = _safe_text(result.get("registration_id"))
                 slug = _safe_text(settings.get("registration_slug"))
@@ -1573,7 +1705,7 @@ def render(ctx):
                         registration={
                             "id": registration_id,
                             "display_name": final_display_name,
-                            "email": email,
+                            "email": _safe_text(wizard.get("step1", {}).get("email")) if wizard.get("edit_mode") else email,
                         },
                         selections=selections,
                         days=days,

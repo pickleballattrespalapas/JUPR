@@ -133,40 +133,62 @@ class _CaptureSupabase:
         return _CaptureQuery(name, self.storage, self.calls)
 
 
-def test_duplicate_registration_reuses_returned_id_and_replaces_selections(monkeypatch):
+def test_non_edit_duplicate_registration_does_not_silently_overwrite(monkeypatch):
     from jupr_app.domain import tournament_registration_repo as repo
 
     supabase = _CaptureSupabase()
-    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: {"id": "reg_existing"})
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: {"id": "reg_existing", "email": "ada@example.com"})
+
+    import pytest
+    with pytest.raises(ValueError, match="secure edit link"):
+        repo.save_registration(
+            supabase,
+            tournament_id="tournament_1",
+            payload={"display_name": "Ada Lovelace", "email": "ADA@EXAMPLE.COM", "selections": []},
+        )
+
+
+def test_edit_registration_updates_expected_id_and_replaces_selections(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureSupabase()
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: {"id": "reg_existing", "email": "ada@example.com"})
+    monkeypatch.setattr(repo, "get_registration_by_id", lambda *_args: {"id": "reg_existing", "email": "ada@example.com", "tournament_id": "tournament_1"})
     monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [{"id": "day_1", "enabled": True}])
-    monkeypatch.setattr(
-        repo,
-        "list_event_options",
-        lambda *_args: [
-            {
-                "id": "event_1",
-                "registration_day_id": "day_1",
-                "status": "open",
-                "enabled": True,
-                "division_name": "3.5",
-            }
-        ],
-    )
+    monkeypatch.setattr(repo, "list_event_options", lambda *_args: [{"id": "event_1", "registration_day_id": "day_1", "status": "open", "enabled": True, "division_name": "3.5"}])
     monkeypatch.setattr(repo, "validate_selection_against_skill", lambda **_kwargs: (True, None))
 
     result = repo.save_registration(
         supabase,
         tournament_id="tournament_1",
-        payload={
-            "display_name": "Ada Lovelace",
-            "email": "ADA@EXAMPLE.COM",
-            "selections": [{"event_option_id": "event_1", "registration_day_id": "day_1"}],
-        },
+        expected_registration_id="reg_existing",
+        payload={"display_name": "Ada Lovelace", "email": "ADA@EXAMPLE.COM", "selections": [{"event_option_id": "event_1", "registration_day_id": "day_1"}]},
     )
 
     assert result["registration_id"] == "reg_existing"
-    assert result["selection_count"] == 1
-    assert supabase.storage["tournament_registrations"][0]["id"] == "reg_existing"
-    assert supabase.storage["tournament_registration_selections"][0]["registration_id"] == "reg_existing"
+    assert supabase.storage["tournament_registrations"][0]["email"] == "ada@example.com"
     assert ("delete", "tournament_registration_selections") in supabase.calls
-    assert ("eq", "tournament_registration_selections", "registration_id", "reg_existing") in supabase.calls
+
+
+def test_edit_registration_mismatched_expected_id_raises(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+    import pytest
+
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: {"id": "reg_existing", "email": "ada@example.com"})
+    monkeypatch.setattr(repo, "get_registration_by_id", lambda *_args: {"id": "other", "email": "other@example.com", "tournament_id": "tournament_1"})
+
+    with pytest.raises(ValueError, match="email cannot be changed"):
+        repo.save_registration(_CaptureSupabase(), tournament_id="tournament_1", expected_registration_id="other", payload={"display_name": "Ada", "email": "ada@example.com", "selections": []})
+
+
+def test_normal_new_registration_with_unused_email_creates(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureSupabase()
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: None)
+    monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [])
+    monkeypatch.setattr(repo, "list_event_options", lambda *_args: [])
+
+    result = repo.save_registration(supabase, tournament_id="tournament_1", payload={"display_name": "New Player", "email": "new@example.com", "selections": []})
+    assert result["registration_id"].startswith("reg_")
+    assert supabase.storage["tournament_registrations"][0]["email"] == "new@example.com"
