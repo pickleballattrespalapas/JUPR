@@ -295,6 +295,39 @@ def _player_label(player: dict[str, Any]) -> str:
     return f"{display_name} · Rating {rating_text}"
 
 
+def _find_player_by_id(players: list[dict[str, Any]], player_id: Any) -> dict[str, Any] | None:
+    clean_id = _safe_text(player_id)
+    if not clean_id:
+        return None
+    return next((row for row in players if str(row.get("id")) == clean_id), None)
+
+
+def _resolve_existing_profile_for_next(
+    active_players: list[dict[str, Any]],
+    *,
+    profile_mode: str,
+    selection_source: str,
+    selected_player_id: str,
+    candidate_player_id: str,
+    candidate_confirmed: bool,
+    rejected_likely: bool,
+) -> tuple[dict[str, Any] | None, str, str, bool, bool]:
+    selected_player_id = _safe_text(selected_player_id)
+    candidate_player_id = _safe_text(candidate_player_id)
+    selected_existing_player = _find_player_by_id(active_players, selected_player_id)
+
+    if _safe_text(profile_mode) == "existing" and _safe_text(selection_source) == "search":
+        search_selected_player = _find_player_by_id(active_players, candidate_player_id)
+        if search_selected_player:
+            selected_existing_player = search_selected_player
+            selected_player_id = str(search_selected_player.get("id"))
+            candidate_player_id = selected_player_id
+            candidate_confirmed = True
+            rejected_likely = False
+
+    return selected_existing_player, selected_player_id, candidate_player_id, candidate_confirmed, rejected_likely
+
+
 @st.cache_data(ttl=90)
 def _load_profile_confirmation_data(_supabase, club_id: str, player_id: str) -> dict[str, Any]:
     pid = int(player_id)
@@ -969,7 +1002,7 @@ def render(ctx):
         st.caption("If you already have a JUPR profile, we’ll use it for rating and history. If not, no problem — you can still register.")
         step2_state = dict(step2)
         selected_player_id = _safe_text(step2_state.get("selected_player_id"))
-        selected_existing_player = next((row for row in active_players if str(row.get("id")) == selected_player_id), None)
+        selected_existing_player = _find_player_by_id(active_players, selected_player_id)
         candidate_player_id = _safe_text(step2_state.get("candidate_player_id"))
         candidate_confirmed = bool(step2_state.get("candidate_confirmed"))
         rejected_likely = bool(step2_state.get("rejected_likely"))
@@ -1002,7 +1035,7 @@ def render(ctx):
                 )
                 candidate_player_id = likely_options[picked_likely]
                 selection_source = "likely"
-            candidate_player = next((row for row in active_players if str(row.get("id")) == candidate_player_id), None)
+            candidate_player = _find_player_by_id(active_players, candidate_player_id)
             if candidate_player:
                 profile_mode = "existing"
                 st.info("We found a possible JUPR profile.")
@@ -1136,6 +1169,7 @@ def render(ctx):
                         key=f"wizard_search_pick_{tournament.get('id')}",
                     )
                     candidate_player_id = result_options[picked_search]
+                    st.caption("Select a profile, then click Next to continue with that JUPR profile.")
                 elif len(normalized_query) >= 2:
                     st.info("No matching active profiles found.")
                 if st.button("I don’t have a JUPR profile — continue without one", key=f"wizard_search_create_mode_{tournament.get('id')}"):
@@ -1165,6 +1199,21 @@ def render(ctx):
                 st.rerun()
         with c2:
             if st.button("Next ➜", type="primary"):
+                (
+                    selected_existing_player,
+                    selected_player_id,
+                    candidate_player_id,
+                    candidate_confirmed,
+                    rejected_likely,
+                ) = _resolve_existing_profile_for_next(
+                    active_players,
+                    profile_mode=profile_mode,
+                    selection_source=selection_source,
+                    selected_player_id=selected_player_id,
+                    candidate_player_id=candidate_player_id,
+                    candidate_confirmed=candidate_confirmed,
+                    rejected_likely=rejected_likely,
+                )
                 next_step2: dict[str, Any] = {
                     "profile_mode": profile_mode,
                     "selected_player_id": "",
@@ -1216,10 +1265,7 @@ def render(ctx):
     using_existing_player = _safe_text(step2.get("profile_mode")) == "existing"
     selected_existing_player = None
     if using_existing_player:
-        selected_existing_player = next(
-            (row for row in active_players if str(row.get("id")) == _safe_text(step2.get("selected_player_id"))),
-            None,
-        )
+        selected_existing_player = _find_player_by_id(active_players, step2.get("selected_player_id"))
     if using_existing_player and selected_existing_player:
         canonical_overall_rating = _player_current_overall_jupr(selected_existing_player)
         if canonical_overall_rating is not None:
