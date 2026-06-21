@@ -91,3 +91,82 @@ def test_live_send_path_uses_registrant_email(monkeypatch):
     assert result["status"] == "sent"
     assert calls[0]["to_email"] == "ada@example.com"
     assert calls[0]["chart_png_bytes"] is None
+
+
+class _CaptureQuery:
+    def __init__(self, table_name, storage, calls):
+        self.table_name = table_name
+        self.storage = storage
+        self.calls = calls
+        self.filters = []
+
+    def upsert(self, row, on_conflict=None):
+        self.calls.append(("upsert", self.table_name, row, on_conflict))
+        self.storage[self.table_name] = [row]
+        return self
+
+    def delete(self):
+        self.calls.append(("delete", self.table_name))
+        self.storage[self.table_name] = []
+        return self
+
+    def insert(self, rows):
+        self.calls.append(("insert", self.table_name, rows))
+        self.storage.setdefault(self.table_name, []).extend(rows)
+        return self
+
+    def eq(self, column, value):
+        self.filters.append((column, value))
+        self.calls.append(("eq", self.table_name, column, value))
+        return self
+
+    def execute(self):
+        return type("Resp", (), {"data": self.storage.get(self.table_name, [])})()
+
+
+class _CaptureSupabase:
+    def __init__(self):
+        self.storage = {}
+        self.calls = []
+
+    def table(self, name):
+        return _CaptureQuery(name, self.storage, self.calls)
+
+
+def test_duplicate_registration_reuses_returned_id_and_replaces_selections(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureSupabase()
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: {"id": "reg_existing"})
+    monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [{"id": "day_1", "enabled": True}])
+    monkeypatch.setattr(
+        repo,
+        "list_event_options",
+        lambda *_args: [
+            {
+                "id": "event_1",
+                "registration_day_id": "day_1",
+                "status": "open",
+                "enabled": True,
+                "division_name": "3.5",
+            }
+        ],
+    )
+    monkeypatch.setattr(repo, "validate_selection_against_skill", lambda **_kwargs: (True, None))
+
+    result = repo.save_registration(
+        supabase,
+        tournament_id="tournament_1",
+        payload={
+            "display_name": "Ada Lovelace",
+            "email": "ADA@EXAMPLE.COM",
+            "selections": [{"event_option_id": "event_1", "registration_day_id": "day_1"}],
+        },
+    )
+
+    assert result["registration_id"] == "reg_existing"
+    assert result["selection_count"] == 1
+    assert supabase.storage["tournament_registrations"][0]["id"] == "reg_existing"
+    assert supabase.storage["tournament_registration_selections"][0]["registration_id"] == "reg_existing"
+    assert ("delete", "tournament_registration_selections") in supabase.calls
+    assert ("eq", "tournament_registration_selections", "registration_id", "reg_existing") in supabase.calls
