@@ -41,3 +41,12 @@ def test_confirmation_page_does_not_use_page_shell_context_or_public_kwarg():
     source = Path("jupr_app/ui/pages/tournament_registration_confirmation.py").read_text()
     assert "with page_shell(" not in source
     assert "public=True" not in source
+
+
+def test_tournament_registration_edit_registered_public_hidden():
+    key = "tournament_registration_edit"
+    definition = next(page for page in PAGE_DEFINITIONS if page.key == key)
+    assert PAGE_KEY_TO_LABEL[key] == "✏️ Edit Registration"
+    assert definition.public is True
+    assert key in HIDDEN_PAGE_KEYS
+    assert key not in PUBLIC_NAV_KEYS

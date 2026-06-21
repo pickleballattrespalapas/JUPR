@@ -1215,7 +1215,11 @@ def _get_registration_by_email(supabase, tournament_id: str, email: str) -> dict
     return _safe_first(resp)
 
 
-def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+def get_registration_by_email(supabase, tournament_id: str, email: str) -> dict[str, Any] | None:
+    return _get_registration_by_email(supabase, tournament_id, email)
+
+
+def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any], expected_registration_id: str | None = None) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
         raise ValueError("Email is required.")
@@ -1229,7 +1233,19 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) 
         raise ValueError("Player name is required.")
 
     existing = _get_existing_registration_by_email(supabase, tournament_id, email)
-    registration_id = str(existing.get("id")) if existing else _uid("reg")
+    if expected_registration_id:
+        expected = get_registration_by_id(supabase, tournament_id, str(expected_registration_id))
+        if not expected:
+            raise ValueError("Expected registration was not found for this tournament.")
+        if _normalize_email(expected.get("email")) != email:
+            raise ValueError("Registration email cannot be changed from this edit link.")
+        if existing and str(existing.get("id")) != str(expected_registration_id):
+            raise ValueError("Expected registration does not match the registered email.")
+        registration_id = str(expected_registration_id)
+    elif existing:
+        raise ValueError("A registration already exists for this email. Please use the secure edit link flow.")
+    else:
+        registration_id = _uid("reg")
     submitted_at = _now_iso()
 
     reg_row = {

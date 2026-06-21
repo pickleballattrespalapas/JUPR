@@ -105,3 +105,10 @@ def get_email_mode() -> str:
     if env == "staging":
         return EMAIL_MODE_DRY_RUN
     return EMAIL_MODE_LIVE
+
+
+def get_registration_edit_token_secret() -> str:
+    secret = get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET")
+    if not secret:
+        raise ValueError("JUPR_REGISTRATION_EDIT_SECRET is required for registration edit links.")
+    return secret
