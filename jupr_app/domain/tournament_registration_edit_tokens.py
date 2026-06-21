@@ -7,7 +7,6 @@ import json
 import time
 from typing import Any
 
-from jupr_app.config import get_registration_edit_token_secret
 
 TOKEN_VERSION = "v1"
 
@@ -29,8 +28,19 @@ def _email_hash(email: str) -> str:
     return hashlib.sha256(_normalize_email(email).encode("utf-8")).hexdigest()
 
 
+def _load_registration_edit_token_secret() -> str:
+    try:
+        from jupr_app.config import get_registration_edit_token_secret
+    except ImportError as exc:
+        raise ValueError(
+            "Registration edit token support is not configured correctly. "
+            "Missing get_registration_edit_token_secret in jupr_app.config."
+        ) from exc
+    return get_registration_edit_token_secret()
+
+
 def _secret_bytes(secret: str | None) -> bytes:
-    value = secret if secret is not None else get_registration_edit_token_secret()
+    value = secret if secret is not None else _load_registration_edit_token_secret()
     if not str(value or "").strip():
         raise ValueError("Registration edit token secret is required.")
     return str(value).encode("utf-8")

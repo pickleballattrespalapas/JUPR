@@ -39,8 +39,12 @@ def render(ctx) -> None:
         if not registration:
             raise ValueError("Registration was not found.")
         verify_registration_edit_token(token, expected_tournament_id=tournament_id, expected_registration_id=registration_id, expected_email=_safe_text(registration.get("email")))
-    except Exception:
-        st.error("This secure edit link is invalid or expired. Please request a new edit link from tournament registration.")
+    except Exception as exc:
+        error_text = str(exc).lower()
+        if "configuration" in error_text or "jupr_registration_edit_secret" in error_text:
+            st.error("Registration edit links are not configured yet. Please contact tournament staff.")
+        else:
+            st.error("This secure edit link is invalid or expired. Please request a new edit link from tournament registration.")
         if st.button("Back to tournament registration"):
             navigate_same_tab(page="tournament_registration", params={"tournament_id": tournament_id, "tournament": slug}, public_mode=True)
         return

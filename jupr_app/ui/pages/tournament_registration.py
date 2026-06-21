@@ -1109,9 +1109,13 @@ def render(ctx):
                     )
                     wizard["returning_email_sent"] = True
                     wizard["returning_email_error"] = ""
-                except Exception:
+                except Exception as exc:
                     wizard["returning_email_sent"] = False
-                    wizard["returning_email_error"] = "We could not send the edit link automatically. Please contact tournament staff."
+                    error_text = str(exc).lower()
+                    if "configuration" in error_text or "jupr_registration_edit_secret" in error_text:
+                        wizard["returning_email_error"] = "Secure edit links are not configured yet. Please contact tournament staff to update your registration."
+                    else:
+                        wizard["returning_email_error"] = "We could not send the edit link automatically. Please contact tournament staff."
                 st.rerun()
         with c2:
             if st.button("Back / use a different email"):
