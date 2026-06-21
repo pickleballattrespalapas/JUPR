@@ -7,6 +7,11 @@ import uuid
 import streamlit as st
 
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
+    build_registration_confirmation_view_model,
+    send_tournament_registration_confirmation_email,
+)
 from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
@@ -33,7 +38,7 @@ from jupr_app.domain.tournament_registration_repo import (
     update_admin_registration_selection,
 )
 from jupr_app.ui.layout import page_shell
-from jupr_app.ui.public_links import navigate_same_tab
+from jupr_app.ui.public_links import build_public_url, navigate_same_tab
 
 
 def _uid(prefix: str) -> str:
@@ -1548,17 +1553,50 @@ def render(ctx):
                         "selections": selections,
                     },
                 )
-                st.success(
-                    f"Registration saved. Confirmation record: {result.get('registration_id')}. Submitting again with the same email updates your registration. Final placement may still change after partner matching and waitlist review."
+                registration_id = _safe_text(result.get("registration_id"))
+                slug = _safe_text(settings.get("registration_slug"))
+                nav_params = {
+                    "tournament_id": str(tournament.get("id")),
+                    "registration_id": registration_id,
+                }
+                if slug:
+                    nav_params["tournament"] = slug
+                confirmation_url = build_public_url(
+                    page="tournament_registration_confirmation",
+                    params=nav_params,
                 )
-                if st.button("View Tournament Roster", key=f"view_tournament_roster_post_save_{tournament.get('id')}"):
-                    nav_params = {"tournament_id": str(tournament.get("id"))}
-                    slug = _safe_text(settings.get("registration_slug"))
-                    if slug:
-                        nav_params["tournament"] = slug
-                    navigate_same_tab(page="tournament_roster", params=nav_params, public_mode=True)
+                email_status = "sent"
+                try:
+                    smtp_status = get_smtp_config_status()
+                    view_model = build_registration_confirmation_view_model(
+                        tournament=tournament,
+                        registration={
+                            "id": registration_id,
+                            "display_name": final_display_name,
+                            "email": email,
+                        },
+                        selections=selections,
+                        days=days,
+                        event_options=event_options,
+                        confirmation_url=confirmation_url,
+                        sender_from_name=smtp_status.get("from_name"),
+                        sender_from_email=smtp_status.get("from_email"),
+                    )
+                    send_result = send_tournament_registration_confirmation_email(view_model=view_model)
+                    email_status = _safe_text(send_result.get("status")) or "sent"
+                    if email_status == "staging_redirect":
+                        email_status = "sent"
+                except Exception as exc:
+                    print(f"Tournament registration confirmation email failed: {exc}")
+                    email_status = "failed"
+                nav_params["email_status"] = "dry_run" if email_status == "dry_run" else ("failed" if email_status == "failed" else "sent")
                 wizard["current_step"] = 1
                 wizard["step3"] = {"selected_event_ids": []}
                 wizard["step4"] = {"partner_details": {}}
+                navigate_same_tab(
+                    page="tournament_registration_confirmation",
+                    params=nav_params,
+                    public_mode=True,
+                )
             except Exception as exc:
                 st.error(f"Could not save registration: {exc}")

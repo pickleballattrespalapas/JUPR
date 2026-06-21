@@ -1545,3 +1545,60 @@ def registration_is_open(settings: dict[str, Any]) -> tuple[bool, str | None]:
         except Exception:
             pass
     return True, None
+
+
+def get_registration_by_id(supabase, tournament_id: str, registration_id: str) -> dict[str, Any] | None:
+    resp = (
+        supabase.table("tournament_registrations")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .eq("id", str(registration_id))
+        .limit(1)
+        .execute()
+    )
+    return _safe_first(resp)
+
+
+def get_registration_confirmation_bundle(supabase, tournament_id: str, registration_id: str) -> dict[str, Any]:
+    tournament_id = str(tournament_id)
+    registration_id = str(registration_id)
+    tournament = get_tournament_record(supabase, tournament_id) or {}
+    settings = get_registration_settings(supabase, tournament_id) or {}
+    registration = get_registration_by_id(supabase, tournament_id, registration_id)
+    if not registration:
+        return {
+            "tournament": tournament,
+            "settings": settings,
+            "registration": None,
+            "selections": [],
+            "days": [],
+            "event_options": [],
+            "total_price_usd": 0,
+        }
+    days = list_registration_days(supabase, tournament_id)
+    event_options = list_event_options(supabase, tournament_id)
+    selections = _safe_data(
+        supabase.table("tournament_registration_selections")
+        .select("*")
+        .eq("tournament_id", tournament_id)
+        .eq("registration_id", registration_id)
+        .order("sort_order")
+        .execute()
+    )
+    event_lookup = {str(row.get("id")): row for row in event_options}
+    total = 0.0
+    for selection in selections:
+        event = event_lookup.get(str(selection.get("event_option_id") or "")) or {}
+        try:
+            total += float(event.get("price_usd") or 0)
+        except Exception:
+            total += 0.0
+    return {
+        "tournament": tournament,
+        "settings": settings,
+        "registration": registration,
+        "selections": selections,
+        "days": days,
+        "event_options": event_options,
+        "total_price_usd": total,
+    }
