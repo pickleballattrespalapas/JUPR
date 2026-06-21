@@ -26,6 +26,7 @@ from jupr_app.domain.tournament_registration_repo import (
     get_public_tournament_bundle,
     get_registration_by_email,
     get_registration_settings,
+    get_registration_confirmation_bundle,
     is_day_enabled,
     list_event_options as list_registration_event_options,
     list_existing_tournaments,
@@ -42,6 +43,14 @@ from jupr_app.domain.tournament_registration_repo import (
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import build_public_url, navigate_same_tab
+from jupr_app.ui.tournament_registration_confirmation_view import render_registration_confirmation_summary
+from jupr_app.ui.tournament_registration_session import (
+    clear_registration_wizard_for_new_start,
+    get_submission_result,
+    store_submission_result,
+    submission_state_key,
+    wizard_state_key,
+)
 
 
 def _uid(prefix: str) -> str:
@@ -308,6 +317,27 @@ def _find_player_by_id(players: list[dict[str, Any]], player_id: Any) -> dict[st
     if not clean_id:
         return None
     return next((row for row in players if str(row.get("id")) == clean_id), None)
+
+
+def _confirm_suggested_profile_state(step2_state: dict[str, Any], *, player_id: str, selection_source: str, search_query: str) -> dict[str, Any]:
+    return {
+        **step2_state,
+        "profile_mode": "existing",
+        "selected_player_id": _safe_text(player_id),
+        "candidate_player_id": _safe_text(player_id),
+        "candidate_confirmed": True,
+        "rejected_likely": False,
+        "selection_source": _safe_text(selection_source) or "likely",
+        "search_query": _safe_text(search_query),
+    }
+
+
+def _can_advance_profile_step(*, profile_mode: str, selection_source: str, candidate_player_id: str, candidate_confirmed: bool) -> bool:
+    if _safe_text(profile_mode) != "existing":
+        return True
+    if _safe_text(selection_source) == "search" and _safe_text(candidate_player_id):
+        return True
+    return bool(candidate_confirmed)
 
 
 def _resolve_existing_profile_for_next(
@@ -635,8 +665,24 @@ def _hydrate_registration_wizard_from_bundle(wizard: dict[str, Any], bundle: dic
     return wizard
 
 
+def _submission_state_key(tournament_id: Any) -> str:
+    return submission_state_key(tournament_id)
+
+
+def _store_submission_result(*, tournament_id: str, registration_id: str, email_status: str, nav_params: dict[str, str]) -> None:
+    store_submission_result(tournament_id=tournament_id, registration_id=registration_id, email_status=email_status, nav_params=nav_params)
+
+
+def _get_submission_result(tournament_id: str) -> dict[str, Any]:
+    return get_submission_result(tournament_id)
+
+
+def _clear_registration_wizard_for_new_start(tournament_id: str) -> None:
+    clear_registration_wizard_for_new_start(tournament_id)
+
+
 def _wizard_key(tournament_id: Any) -> str:
-    return f"registration_wizard_state_{tournament_id}"
+    return wizard_state_key(tournament_id)
 
 
 def _init_wizard_state(tournament_id: Any) -> dict[str, Any]:
@@ -864,6 +910,56 @@ def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], d
             st.markdown(f"- **{_safe_text(reg.get('display_name'))}** ({_safe_text(reg.get('email'))}) — {_safe_text(sel.get('partner_note')) or 'No note'}")
 
 
+
+def _render_step5_confirmation_fallback(
+    *,
+    supabase,
+    tournament_id: str,
+    settings: dict[str, Any],
+    registration_id: str,
+    email_status: str,
+) -> None:
+    registration_id = _safe_text(registration_id)
+    if not registration_id:
+        st.error("We saved your registration, but could not load the confirmation details. Please contact tournament staff.")
+        return
+    try:
+        bundle = get_registration_confirmation_bundle(supabase, tournament_id, registration_id)
+    except Exception:
+        st.error("Your registration was saved, but we could not load the confirmation summary right now. Please contact tournament staff.")
+        return
+    if not (bundle.get("registration") or {}):
+        st.error("Your registration was saved, but we could not find the confirmation summary right now. Please contact tournament staff.")
+        return
+
+    render_registration_confirmation_summary(
+        bundle=bundle,
+        email_status=email_status,
+        sender_status=get_smtp_config_status(),
+        show_title=True,
+    )
+    slug = _safe_text(settings.get("registration_slug")) or _safe_text((bundle.get("settings") or {}).get("registration_slug"))
+    nav_params = {"tournament_id": tournament_id, "registration_id": registration_id}
+    if slug:
+        nav_params["tournament"] = slug
+    if email_status:
+        nav_params["email_status"] = email_status
+    roster_params = {"tournament_id": tournament_id}
+    if slug:
+        roster_params["tournament"] = slug
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("View Tournament Roster", key="fallback_view_roster"):
+            navigate_same_tab(page="tournament_roster", params=roster_params, public_mode=True)
+    with col2:
+        if st.button("Open Confirmation Page", key="fallback_open_confirmation"):
+            navigate_same_tab(page="tournament_registration_confirmation", params=nav_params, public_mode=True)
+    with col3:
+        if st.button("Start another registration", key="fallback_start_another"):
+            _clear_registration_wizard_for_new_start(tournament_id)
+            navigate_same_tab(page="tournament_registration", params=roster_params, public_mode=True)
+            st.rerun()
+
 def render(ctx):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell(
@@ -1020,8 +1116,26 @@ def render(ctx):
         division_name = _safe_text(event.get("division_name") or event.get("label") or "Division")
         blocked_by_family.setdefault((day_id, family), []).append(division_name)
 
+    tournament_id = str(tournament.get("id"))
     wizard = _init_wizard_state(tournament.get("id"))
+    submission_result = _get_submission_result(tournament_id)
+    if submission_result and int(wizard.get("current_step") or 1) != 5:
+        wizard["current_step"] = 5
+        wizard["submitted_registration_id"] = _safe_text(submission_result.get("registration_id"))
+        wizard["submitted_email_status"] = _safe_text(submission_result.get("email_status"))
     current_step = int(wizard.get("current_step") or 1)
+    if current_step == 5:
+        registration_id = _safe_text(wizard.get("submitted_registration_id") or submission_result.get("registration_id"))
+        email_status = _safe_text(wizard.get("submitted_email_status") or submission_result.get("email_status") or "sent")
+        st.caption("Registration submitted")
+        _render_step5_confirmation_fallback(
+            supabase=supabase,
+            tournament_id=tournament_id,
+            settings=settings,
+            registration_id=registration_id,
+            email_status=email_status,
+        )
+        return
     step1 = wizard.get("step1") or {}
     step2 = wizard.get("step2") or {}
     step3 = wizard.get("step3") or {}
@@ -1206,16 +1320,13 @@ def render(ctx):
                         candidate_confirmed = True
                         rejected_likely = False
                         profile_mode = "existing"
-                        wizard["step2"] = {
-                            **step2_state,
-                            "profile_mode": "existing",
-                            "selected_player_id": selected_player_id,
-                            "candidate_player_id": selected_player_id,
-                            "candidate_confirmed": True,
-                            "rejected_likely": False,
-                            "selection_source": selection_source,
-                            "search_query": search_query_default,
-                        }
+                        wizard["step2"] = _confirm_suggested_profile_state(
+                            step2_state,
+                            player_id=selected_player_id,
+                            selection_source=selection_source,
+                            search_query=search_query_default,
+                        )
+                        wizard["current_step"] = 3
                         st.rerun()
                 with choice_cols[1]:
                     if st.button("No, continue without this profile", key=f"wizard_reject_profile_{tournament.get('id')}"):
@@ -1332,13 +1443,22 @@ def render(ctx):
                     }
                     st.rerun()
 
+        next_allowed = _can_advance_profile_step(
+            profile_mode=profile_mode,
+            selection_source=selection_source,
+            candidate_player_id=candidate_player_id,
+            candidate_confirmed=candidate_confirmed,
+        )
+        if profile_mode == "existing" and selection_source == "likely" and candidate_player_id and not candidate_confirmed:
+            st.caption("Confirm the suggested profile above, or choose to continue without it.")
         c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
             if st.button("← Back"):
                 wizard["current_step"] = 1
                 st.rerun()
         with c2:
-            if st.button("Next ➜", type="primary"):
+            next_label = "Next ➜" if next_allowed else "Confirm profile above"
+            if st.button(next_label, type="primary", disabled=not next_allowed):
                 (
                     selected_existing_player,
                     selected_player_id,
@@ -1726,13 +1846,36 @@ def render(ctx):
                     print(f"Tournament registration confirmation email failed: {exc}")
                     email_status = "failed"
                 nav_params["email_status"] = "dry_run" if email_status == "dry_run" else ("failed" if email_status == "failed" else "sent")
-                wizard["current_step"] = 1
-                wizard["step3"] = {"selected_event_ids": []}
-                wizard["step4"] = {"partner_details": {}}
-                navigate_same_tab(
-                    page="tournament_registration_confirmation",
-                    params=nav_params,
-                    public_mode=True,
+                _store_submission_result(
+                    tournament_id=str(tournament.get("id")),
+                    registration_id=registration_id,
+                    email_status=nav_params["email_status"],
+                    nav_params=nav_params,
+                )
+                wizard["current_step"] = 5
+                wizard["submitted_registration_id"] = registration_id
+                wizard["submitted_email_status"] = nav_params["email_status"]
+                st.session_state["last_registration_submit_debug"] = {
+                    "registration_id": registration_id,
+                    "email_status": nav_params["email_status"],
+                    "confirmation_page": "tournament_registration_confirmation",
+                    "nav_params": dict(nav_params),
+                }
+                try:
+                    navigate_same_tab(
+                        page="tournament_registration_confirmation",
+                        params=nav_params,
+                        public_mode=True,
+                    )
+                except Exception as nav_exc:
+                    st.warning("Your registration was saved, but we could not open the separate confirmation page automatically. Showing your confirmation below.")
+                    st.caption(f"Navigation detail: {nav_exc}")
+                _render_step5_confirmation_fallback(
+                    supabase=supabase,
+                    tournament_id=str(tournament.get("id")),
+                    settings=settings,
+                    registration_id=registration_id,
+                    email_status=nav_params["email_status"],
                 )
             except Exception as exc:
                 st.error(f"Could not save registration: {exc}")
