@@ -48,7 +48,6 @@ from jupr_app.ui.tournament_registration_session import (
     clear_registration_wizard_for_new_start,
     get_submission_result,
     store_submission_result,
-    submission_state_key,
     wizard_state_key,
 )
 
@@ -631,62 +630,119 @@ def _partner_details_from_selections(selections: list[dict[str, Any]]) -> dict[s
     return details
 
 
-def _hydrate_registration_wizard_from_bundle(wizard: dict[str, Any], bundle: dict[str, Any]) -> dict[str, Any]:
+def _split_display_name(display_name: Any) -> tuple[str, str]:
+    parts = _safe_text(display_name).split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _hydrate_registration_wizard_from_bundle(
+    wizard: dict[str, Any],
+    bundle: dict[str, Any],
+    *,
+    preserve_existing_progress: bool = False,
+) -> dict[str, Any]:
     registration = bundle.get("registration") or {}
     selections = bundle.get("selections") or []
+    registration_id = _safe_text(registration.get("id"))
+    same_registration = bool(wizard.get("edit_mode")) and _safe_text(wizard.get("edit_registration_id")) == registration_id
+    should_preserve_progress = preserve_existing_progress and same_registration
+    current_step = int(wizard.get("current_step") or 1)
+
+    first_name = _safe_text(registration.get("first_name"))
+    last_name = _safe_text(registration.get("last_name"))
+    if (not first_name or not last_name) and _safe_text(registration.get("display_name")):
+        display_first, display_last = _split_display_name(registration.get("display_name"))
+        first_name = first_name or display_first
+        last_name = last_name or display_last
+
     wizard["edit_mode"] = True
     wizard["email_locked"] = True
-    wizard["edit_registration_id"] = _safe_text(registration.get("id"))
-    wizard["current_step"] = 1
-    wizard["step1"] = {
-        "first_name": _safe_text(registration.get("first_name")),
-        "last_name": _safe_text(registration.get("last_name")),
-        "email": _safe_text(registration.get("email")),
-        "phone": _safe_text(registration.get("phone")),
-        "gender": _safe_text(registration.get("gender")),
-        "age": _safe_text(registration.get("age")),
-        "notes": _safe_text(registration.get("notes")),
-    }
-    wizard["step2"] = {
-        "profile_mode": "new",
-        "selected_player_id": "",
-        "candidate_player_id": "",
-        "candidate_confirmed": False,
-        "rejected_likely": False,
-        "search_query": "",
-        "selection_source": "",
-        "display_name": _safe_text(registration.get("display_name")),
-        "dupr_id": _safe_text(registration.get("dupr_id")),
-        "doubles_skill": registration.get("doubles_skill"),
-        "singles_skill": registration.get("singles_skill"),
-    }
-    wizard["step3"] = {"selected_event_ids": _selected_event_ids_from_selections(selections)}
-    wizard["step4"] = {"partner_details": _partner_details_from_selections(selections)}
+    wizard["edit_registration_id"] = registration_id
+    if not should_preserve_progress:
+        wizard["current_step"] = 1
+
+    wizard.setdefault("step1", {})
+    wizard["step1"].update(
+        {
+            "first_name": first_name,
+            "last_name": last_name,
+            "email": _safe_text(registration.get("email")),
+            "phone": _safe_text(registration.get("phone")),
+            "gender": _safe_text(registration.get("gender")),
+            "age": _safe_text(registration.get("age")),
+            "notes": _safe_text(registration.get("notes")),
+        }
+    )
+    wizard.setdefault("step2", {})
+    wizard["step2"].update(
+        {
+            "profile_mode": "new",
+            "selected_player_id": "",
+            "candidate_player_id": "",
+            "candidate_confirmed": False,
+            "rejected_likely": False,
+            "search_query": "",
+            "selection_source": "",
+            "display_name": _safe_text(registration.get("display_name")),
+            "dupr_id": _safe_text(registration.get("dupr_id")),
+            "doubles_skill": registration.get("doubles_skill"),
+            "singles_skill": registration.get("singles_skill"),
+        }
+    )
+    if not (should_preserve_progress and current_step > 1):
+        wizard["step3"] = {"selected_event_ids": _selected_event_ids_from_selections(selections)}
+        wizard["step4"] = {"partner_details": _partner_details_from_selections(selections)}
+    else:
+        wizard.setdefault("step3", {"selected_event_ids": _selected_event_ids_from_selections(selections)})
+        wizard.setdefault("step4", {"partner_details": _partner_details_from_selections(selections)})
     return wizard
 
 
-def _submission_state_key(tournament_id: Any) -> str:
-    return submission_state_key(tournament_id)
-
-
-def _store_submission_result(*, tournament_id: str, registration_id: str, email_status: str, nav_params: dict[str, str]) -> None:
-    store_submission_result(tournament_id=tournament_id, registration_id=registration_id, email_status=email_status, nav_params=nav_params)
-
-
-def _get_submission_result(tournament_id: str) -> dict[str, Any]:
-    return get_submission_result(tournament_id)
-
-
-def _clear_registration_wizard_for_new_start(tournament_id: str) -> None:
-    clear_registration_wizard_for_new_start(tournament_id)
-
-
-def _wizard_key(tournament_id: Any) -> str:
-    return wizard_state_key(tournament_id)
-
+def _advance_step1_registration_wizard(
+    wizard: dict[str, Any],
+    *,
+    tournament_id: str,
+    first_name: Any,
+    last_name: Any,
+    email_for_submit: Any,
+    phone: Any,
+    gender: Any,
+    age: Any,
+    notes: Any,
+    find_existing_registration,
+) -> tuple[bool, str]:
+    if not _safe_text(first_name) or not _safe_text(last_name) or not _safe_text(email_for_submit) or not _safe_text(age) or not _safe_text(gender):
+        return False, "Please complete the highlighted required fields before continuing."
+    normalized_email = _safe_text(email_for_submit).lower()
+    wizard["step1"] = {
+        "first_name": _safe_text(first_name),
+        "last_name": _safe_text(last_name),
+        "email": normalized_email,
+        "phone": _safe_text(phone),
+        "gender": _safe_text(gender),
+        "age": _safe_text(age),
+        "notes": _safe_text(notes),
+    }
+    if bool(wizard.get("edit_mode")):
+        wizard["current_step"] = 3
+        return True, ""
+    existing_registration = find_existing_registration(tournament_id, normalized_email) if find_existing_registration else None
+    if existing_registration:
+        wizard["returning_registration_id"] = str(existing_registration.get("id") or "")
+        wizard["returning_email"] = normalized_email
+        wizard["returning_email_sent"] = False
+        wizard["returning_email_error"] = ""
+        wizard["current_step"] = 0
+        return True, ""
+    wizard["current_step"] = 2
+    return True, ""
 
 def _init_wizard_state(tournament_id: Any) -> dict[str, Any]:
-    key = _wizard_key(tournament_id)
+    key = wizard_state_key(tournament_id)
     if key not in st.session_state:
         st.session_state[key] = {
             "current_step": 1,
@@ -956,7 +1012,7 @@ def _render_step5_confirmation_fallback(
             navigate_same_tab(page="tournament_registration_confirmation", params=nav_params, public_mode=True)
     with col3:
         if st.button("Start another registration", key="fallback_start_another"):
-            _clear_registration_wizard_for_new_start(tournament_id)
+            clear_registration_wizard_for_new_start(tournament_id)
             navigate_same_tab(page="tournament_registration", params=roster_params, public_mode=True)
             st.rerun()
 
@@ -1118,7 +1174,7 @@ def render(ctx):
 
     tournament_id = str(tournament.get("id"))
     wizard = _init_wizard_state(tournament.get("id"))
-    submission_result = _get_submission_result(tournament_id)
+    submission_result = get_submission_result(tournament_id)
     if submission_result and int(wizard.get("current_step") or 1) != 5:
         wizard["current_step"] = 5
         wizard["submitted_registration_id"] = _safe_text(submission_result.get("registration_id"))
@@ -1142,16 +1198,24 @@ def render(ctx):
     step4 = wizard.get("step4") or {}
     active_players = _load_active_players(supabase, club_id=club_id, ctx=ctx)
 
-    st.caption("Editing existing registration" if wizard.get("edit_mode") else f"Step {current_step} of 4")
+    edit_mode = bool(wizard.get("edit_mode"))
+    if edit_mode:
+        st.info("Editing existing registration. Contact info → Events → Partner information → Confirmation.")
+    st.caption("Editing existing registration" if edit_mode else f"Step {current_step} of 4")
 
     if current_step == 1:
         st.markdown("### 1. Name and contact")
-        if wizard.get("edit_mode"):
-            st.info("You are editing an existing registration.")
         c1, c2 = st.columns(2)
         with c1:
             first_name = st.text_input("First name *", value=_safe_text(step1.get("first_name")))
-            email = st.text_input("Email *", value=_safe_text(step1.get("email")), disabled=bool(wizard.get("edit_mode")))
+            locked_email = _safe_text((wizard.get("step1") or {}).get("email"))
+            email_widget = st.text_input(
+                "Email *",
+                value=locked_email,
+                disabled=edit_mode,
+                key=f"wizard_step1_email_{tournament_id}",
+            )
+            email_for_submit = locked_email if edit_mode else email_widget
             gender = st.selectbox(
                 "Gender *",
                 ["", "Female", "Male", "Other", "Prefer not to say"],
@@ -1167,38 +1231,21 @@ def render(ctx):
         _, next_col = st.columns([4, 1])
         with next_col:
             if st.button("Next ➜", type="primary"):
-                if not _safe_text(first_name) or not _safe_text(last_name):
-                    st.error("First name and last name are required.")
+                advanced, error = _advance_step1_registration_wizard(
+                    wizard,
+                    tournament_id=str(tournament.get("id")),
+                    first_name=first_name,
+                    last_name=last_name,
+                    email_for_submit=email_for_submit,
+                    phone=phone,
+                    gender=gender,
+                    age=age,
+                    notes=notes,
+                    find_existing_registration=lambda tid, email: get_registration_by_email(supabase, tid, email),
+                )
+                if not advanced:
+                    st.error(error)
                     st.stop()
-                if not _safe_text(email):
-                    st.error("Email is required.")
-                    st.stop()
-                if not _safe_text(age):
-                    st.error("Age is required.")
-                    st.stop()
-                if not _safe_text(gender):
-                    st.error("Gender is required.")
-                    st.stop()
-                normalized_email = _safe_text(email).lower()
-                wizard["step1"] = {
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "email": normalized_email,
-                    "phone": phone,
-                    "gender": gender,
-                    "age": age,
-                    "notes": notes,
-                }
-                if not wizard.get("edit_mode"):
-                    existing_registration = get_registration_by_email(supabase, str(tournament.get("id")), normalized_email)
-                    if existing_registration:
-                        wizard["returning_registration_id"] = str(existing_registration.get("id") or "")
-                        wizard["returning_email"] = normalized_email
-                        wizard["returning_email_sent"] = False
-                        wizard["returning_email_error"] = ""
-                        wizard["current_step"] = 0
-                        st.rerun()
-                wizard["current_step"] = 2
                 st.rerun()
 
     if current_step == 0:
@@ -1846,7 +1893,7 @@ def render(ctx):
                     print(f"Tournament registration confirmation email failed: {exc}")
                     email_status = "failed"
                 nav_params["email_status"] = "dry_run" if email_status == "dry_run" else ("failed" if email_status == "failed" else "sent")
-                _store_submission_result(
+                store_submission_result(
                     tournament_id=str(tournament.get("id")),
                     registration_id=registration_id,
                     email_status=nav_params["email_status"],
