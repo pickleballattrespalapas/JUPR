@@ -57,7 +57,7 @@ create table if not exists tournament_registrations (
   tournament_id text not null,
   submitted_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  status text not null default 'pending',
+  status text not null default 'confirmed',
   payment_status text not null default 'unpaid',
   first_name text,
   last_name text,

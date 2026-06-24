@@ -14,7 +14,7 @@ REGISTRATION_STATUS_OPTIONS = ["draft", "open", "closed"]
 EVENT_TYPE_OPTIONS = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"]
 GENDER_RESTRICTION_OPTIONS = ["ANY", "MEN", "WOMEN", "MIXED"]
 PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
-ADMIN_REGISTRATION_STATUS_OPTIONS = ["pending", "confirmed", "waitlist", "cancelled"]
+ADMIN_REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"]
 ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
@@ -1247,12 +1247,20 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any], 
     else:
         registration_id = _uid("reg")
     submitted_at = _now_iso()
+    if "status" in payload and payload.get("status") not in (None, ""):
+        registration_status = str(payload.get("status")).strip().lower()
+        if registration_status not in ADMIN_REGISTRATION_STATUS_OPTIONS:
+            raise ValueError(f"Invalid registration status: {payload.get('status')}")
+    elif expected_registration_id:
+        registration_status = str((expected or {}).get("status") or "confirmed").strip().lower()
+    else:
+        registration_status = "confirmed"
 
     reg_row = {
         "id": registration_id,
         "tournament_id": str(tournament_id),
         "submitted_at": submitted_at,
-        "status": str(payload.get("status") or "pending").lower(),
+        "status": registration_status,
         "payment_status": str(payload.get("payment_status") or "unpaid").lower(),
         "first_name": str(payload.get("first_name") or "").strip() or None,
         "last_name": str(payload.get("last_name") or "").strip() or None,

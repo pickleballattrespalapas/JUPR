@@ -192,3 +192,63 @@ def test_normal_new_registration_with_unused_email_creates(monkeypatch):
     result = repo.save_registration(supabase, tournament_id="tournament_1", payload={"display_name": "New Player", "email": "new@example.com", "selections": []})
     assert result["registration_id"].startswith("reg_")
     assert supabase.storage["tournament_registrations"][0]["email"] == "new@example.com"
+
+
+def test_new_registration_without_status_defaults_confirmed(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureSupabase()
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: None)
+    monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [])
+    monkeypatch.setattr(repo, "list_event_options", lambda *_args: [])
+
+    repo.save_registration(
+        supabase,
+        tournament_id="tournament_1",
+        payload={"display_name": "Confirmed Player", "email": "confirmed@example.com", "selections": []},
+    )
+
+    assert supabase.storage["tournament_registrations"][0]["status"] == "confirmed"
+
+
+def test_admin_supplied_registration_status_is_respected(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureSupabase()
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: None)
+    monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [])
+    monkeypatch.setattr(repo, "list_event_options", lambda *_args: [])
+
+    repo.save_registration(
+        supabase,
+        tournament_id="tournament_1",
+        payload={"display_name": "Waitlisted Player", "email": "waitlist@example.com", "status": "waitlist", "selections": []},
+    )
+    assert supabase.storage["tournament_registrations"][0]["status"] == "waitlist"
+
+    repo.save_registration(
+        supabase,
+        tournament_id="tournament_1",
+        payload={"display_name": "Cancelled Player", "email": "cancelled@example.com", "status": "cancelled", "selections": []},
+    )
+    assert supabase.storage["tournament_registrations"][0]["status"] == "cancelled"
+
+
+def test_edit_registration_without_status_preserves_existing_status(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureSupabase()
+    existing = {"id": "reg_existing", "email": "ada@example.com", "tournament_id": "tournament_1", "status": "waitlist"}
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: existing)
+    monkeypatch.setattr(repo, "get_registration_by_id", lambda *_args: existing)
+    monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [])
+    monkeypatch.setattr(repo, "list_event_options", lambda *_args: [])
+
+    repo.save_registration(
+        supabase,
+        tournament_id="tournament_1",
+        expected_registration_id="reg_existing",
+        payload={"display_name": "Ada Lovelace", "email": "ADA@EXAMPLE.COM", "selections": []},
+    )
+
+    assert supabase.storage["tournament_registrations"][0]["status"] == "waitlist"
