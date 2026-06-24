@@ -35,6 +35,9 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
                         "show_on_partner_board": False,
                         "members": [
                             {
+                                "registration_id": "reg-joe",
+                                "selection_id": "sel-joe",
+                                "player_id": 42,
                                 "display_name": "Joe Baumann",
                                 "skill": "3.5",
                                 "age": 42,
@@ -65,7 +68,14 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
                 "entries": [
                     {
                         "status": "NEEDS_PARTNER",
-                        "members": [{"display_name": "Mixed Needs Partner"}],
+                        "members": [
+                            {
+                                "display_name": "Mixed Needs Partner",
+                                "registration_id": "reg-mixed",
+                                "selection_id": "sel-mixed",
+                                "player_id": 88,
+                            }
+                        ],
                     },
                 ],
             },
@@ -119,6 +129,10 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
     assert state["players_needing_partners"] == [
         {
             "player_name": "Joe Baumann",
+            "selection_id": "sel-joe",
+            "registration_id": "reg-joe",
+            "player_id": 42,
+            "event_option_id": "event-1",
             "event_day_label": "Day 3",
             "event_family": "Men's Doubles",
             "division": "3.5",
@@ -130,6 +144,10 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
         },
         {
             "player_name": "Mixed Needs Partner",
+            "selection_id": "sel-mixed",
+            "registration_id": "reg-mixed",
+            "player_id": 88,
+            "event_option_id": "event-2",
             "event_day_label": "Day 4/5",
             "event_family": "Mixed Doubles",
             "division": "4.0",
@@ -141,3 +159,6 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
         },
     ]
     assert state["summary"]["waitlist"] == 1
+    assert [row["members"][0]["display_name"] for row in state["confirmed_teams"]] == ["Confirmed Player", "Waitlist Player"]
+    assert state["pending_partner_requests"] == []
+    assert [row["members"][0]["display_name"] for row in state["unresolved_partner_entries"]] == ["Review Player", "Partner Missing Player"]

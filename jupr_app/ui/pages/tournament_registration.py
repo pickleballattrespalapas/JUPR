@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from difflib import SequenceMatcher
 import json
+import re
 import uuid
 
 import streamlit as st
@@ -14,6 +16,7 @@ from jupr_app.domain.notifications.tournament_registration_confirmation_email im
     build_registration_confirmation_view_model,
     send_tournament_registration_confirmation_email,
 )
+from jupr_app.domain.tournament_partner_service import admin_confirm_partner_link, create_partner_request
 from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
@@ -31,6 +34,8 @@ from jupr_app.domain.tournament_registration_repo import (
     list_event_options as list_registration_event_options,
     list_existing_tournaments,
     list_open_public_tournaments,
+    list_partner_requests,
+    list_partner_team_members,
     list_registration_admin_rows,
     list_registration_days,
     public_event_option_visibility,
@@ -316,6 +321,206 @@ def _find_player_by_id(players: list[dict[str, Any]], player_id: Any) -> dict[st
     if not clean_id:
         return None
     return next((row for row in players if str(row.get("id")) == clean_id), None)
+
+
+def _partner_search_matches(player: dict[str, Any], query: str) -> bool:
+    needle = _safe_text(query).lower()
+    if not needle:
+        return False
+    haystack = " ".join(
+        _safe_text(player.get(key))
+        for key in ["id", "name", "display_name", "dupr_id", "rating", "doubles_skill", "singles_skill"]
+    ).lower()
+    return needle in haystack
+
+
+def _player_display_name(player: dict[str, Any] | None) -> str:
+    row = player or {}
+    return _safe_text(row.get("display_name") or row.get("name") or (f"Player #{row.get('id')}" if row.get("id") not in (None, "") else ""))
+
+
+def _selection_ids_in_confirmed_teams(registration_state: dict[str, Any], event_option_id: str) -> set[str]:
+    confirmed: set[str] = set()
+    for roster in registration_state.get("event_rosters") or []:
+        if _safe_text(roster.get("event_option_id")) != _safe_text(event_option_id):
+            continue
+        for entry in roster.get("entries") or []:
+            if _safe_text(entry.get("status")).upper() not in {"CONFIRMED", "ADMIN_CONFIRMED"}:
+                continue
+            for member in entry.get("members") or []:
+                selection_id = _safe_text(member.get("selection_id"))
+                if selection_id:
+                    confirmed.add(selection_id)
+    return confirmed
+
+
+def _partner_board_targets_for_event(
+    registration_state: dict[str, Any],
+    event_option_id: str,
+    *,
+    exclude_player_id: Any | None = None,
+    exclude_selection_id: Any | None = None,
+) -> list[dict[str, Any]]:
+    exclude_player = _safe_text(exclude_player_id)
+    exclude_selection = _safe_text(exclude_selection_id)
+    rows: list[dict[str, Any]] = []
+    for roster in registration_state.get("event_rosters") or []:
+        if _safe_text(roster.get("event_option_id")) != _safe_text(event_option_id):
+            continue
+        for entry in roster.get("entries") or []:
+            if _safe_text(entry.get("status")).upper() != "NEEDS_PARTNER":
+                continue
+            member = (entry.get("members") or [{}])[0] or {}
+            selection_id = _safe_text(member.get("selection_id") or entry.get("selection_id"))
+            player_id = _safe_text(member.get("player_id") or entry.get("player_id"))
+            if (exclude_selection and selection_id == exclude_selection) or (exclude_player and player_id == exclude_player):
+                continue
+            rows.append(
+                {
+                    "target_selection_id": selection_id,
+                    "target_registration_id": _safe_text(member.get("registration_id") or entry.get("registration_id")),
+                    "target_player_id": player_id,
+                    "event_option_id": _safe_text(event_option_id),
+                    "display_name": _safe_text(member.get("display_name") or entry.get("display_name")),
+                    "partner_note": _safe_text(entry.get("partner_note")),
+                }
+            )
+    return rows
+
+
+def _registered_partner_target_for_player(registration_state: dict[str, Any], event_option_id: str, player_id: Any) -> dict[str, Any] | None:
+    pid = _safe_text(player_id)
+    if not pid:
+        return None
+    for roster in registration_state.get("event_rosters") or []:
+        if _safe_text(roster.get("event_option_id")) != _safe_text(event_option_id):
+            continue
+        for entry in roster.get("entries") or []:
+            for member in entry.get("members") or []:
+                if _safe_text(member.get("player_id")) == pid:
+                    return {
+                        "target_selection_id": _safe_text(member.get("selection_id")),
+                        "target_registration_id": _safe_text(member.get("registration_id")),
+                        "target_player_id": pid,
+                        "status": _safe_text(entry.get("status")).upper(),
+                    }
+    return None
+
+
+def _partner_request_ready(details: dict[str, Any]) -> bool:
+    return _safe_text(details.get("partner_mode")).upper() == "REQUEST_PARTNER" and bool(
+        _safe_text(details.get("target_selection_id")) or _safe_text(details.get("target_player_id"))
+    )
+
+
+def _legacy_partner_match_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _safe_text(value).lower())
+
+
+def _legacy_partner_name_match_score(legacy_name: Any, candidate_name: Any) -> float:
+    legacy_key = _legacy_partner_match_key(legacy_name)
+    candidate_key = _legacy_partner_match_key(candidate_name)
+    if not legacy_key or not candidate_key:
+        return 0.0
+    if legacy_key == candidate_key:
+        return 1.0
+    if legacy_key in candidate_key or candidate_key in legacy_key:
+        return 0.92
+    return SequenceMatcher(None, legacy_key, candidate_key).ratio()
+
+
+def _selection_ids_with_active_team_members(team_members: list[dict[str, Any]]) -> set[str]:
+    return {
+        _safe_text(row.get("selection_id"))
+        for row in team_members
+        if _safe_text(row.get("selection_id")) and _safe_text(row.get("status") or "ACTIVE").upper() == "ACTIVE"
+    }
+
+
+def _selection_ids_with_pending_partner_requests(partner_requests: list[dict[str, Any]]) -> set[str]:
+    selection_ids: set[str] = set()
+    for request in partner_requests:
+        if _safe_text(request.get("status")).upper() != "PENDING":
+            continue
+        for key in ["requester_selection_id", "target_selection_id"]:
+            selection_id = _safe_text(request.get(key))
+            if selection_id:
+                selection_ids.add(selection_id)
+    return selection_ids
+
+
+def _legacy_partner_reconciliation_issues(
+    admin_rows: list[dict[str, Any]],
+    partner_requests: list[dict[str, Any]],
+    team_members: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    confirmed_selection_ids = _selection_ids_with_active_team_members(team_members)
+    pending_selection_ids = _selection_ids_with_pending_partner_requests(partner_requests)
+    issues: list[dict[str, Any]] = []
+    for row in admin_rows:
+        sel = row.get("selection") or {}
+        selection_id = _safe_text(row.get("selection_id") or sel.get("id"))
+        if _safe_text(sel.get("partner_mode")).upper() != "HAS_PARTNER":
+            continue
+        if not (_safe_text(sel.get("partner_name")) or _safe_text(sel.get("partner_email"))):
+            continue
+        if "admin hold: legacy partner text reviewed" in _safe_text(sel.get("partner_note")).lower():
+            continue
+        if selection_id in confirmed_selection_ids or selection_id in pending_selection_ids:
+            continue
+        issues.append(row)
+    return issues
+
+
+def _legacy_partner_suggestions(
+    issue: dict[str, Any],
+    admin_rows: list[dict[str, Any]],
+    *,
+    max_results: int = 5,
+) -> list[dict[str, Any]]:
+    issue_reg = issue.get("registration") or {}
+    issue_sel = issue.get("selection") or {}
+    issue_selection_id = _safe_text(issue.get("selection_id") or issue_sel.get("id"))
+    issue_registration_id = _safe_text(issue.get("registration_id") or issue_sel.get("registration_id"))
+    legacy_name = _safe_text(issue_sel.get("partner_name"))
+    legacy_email = _safe_text(issue_sel.get("partner_email")).lower()
+    same_event: list[dict[str, Any]] = []
+    same_tournament: list[dict[str, Any]] = []
+
+    for row in admin_rows:
+        reg = row.get("registration") or {}
+        sel = row.get("selection") or {}
+        selection_id = _safe_text(row.get("selection_id") or sel.get("id"))
+        registration_id = _safe_text(row.get("registration_id") or sel.get("registration_id"))
+        if not selection_id or selection_id == issue_selection_id or registration_id == issue_registration_id:
+            continue
+        candidate_name = _safe_text(reg.get("display_name") or " ".join(part for part in [reg.get("first_name"), reg.get("last_name")] if _safe_text(part)))
+        candidate_email = _safe_text(reg.get("email")).lower()
+        score = 0.0
+        reason = ""
+        if legacy_email and candidate_email and legacy_email == candidate_email:
+            score = 1.0
+            reason = "Email exact match"
+        elif legacy_name:
+            score = _legacy_partner_name_match_score(legacy_name, candidate_name)
+            if score >= 0.84:
+                reason = f"Name match ({score:.0%})"
+        if score < 0.84:
+            continue
+        suggestion = {
+            "row": row,
+            "score": score,
+            "reason": reason,
+            "scope": "same_event" if _safe_text(sel.get("event_option_id")) == _safe_text(issue_sel.get("event_option_id")) else "same_tournament",
+        }
+        if suggestion["scope"] == "same_event":
+            same_event.append(suggestion)
+        else:
+            same_tournament.append(suggestion)
+
+    return sorted(same_event, key=lambda item: item["score"], reverse=True)[:max_results] + sorted(
+        same_tournament, key=lambda item: item["score"], reverse=True
+    )[: max(0, max_results - len(same_event))]
 
 
 def _confirm_suggested_profile_state(step2_state: dict[str, Any], *, player_id: str, selection_source: str, search_query: str) -> dict[str, Any]:
@@ -624,6 +829,14 @@ def _partner_details_from_selections(selections: list[dict[str, Any]]) -> dict[s
             "partner_dupr_id": _safe_text(row.get("partner_dupr_id")),
             "partner_skill": row.get("partner_skill"),
             "partner_age": row.get("partner_age"),
+            "selection_id": _safe_text(row.get("id")),
+            "registration_id": _safe_text(row.get("registration_id")),
+            "partner_request_id": _safe_text(row.get("partner_request_id")),
+            "target_selection_id": _safe_text(row.get("target_selection_id")),
+            "target_registration_id": _safe_text(row.get("target_registration_id")),
+            "target_player_id": _safe_text(row.get("target_player_id")),
+            "target_display_name_snapshot": _safe_text(row.get("target_display_name_snapshot")),
+            "partner_request_source": _safe_text(row.get("partner_request_source")),
             "show_on_partner_board": bool(row.get("show_on_partner_board")),
             "partner_note": _safe_text(row.get("partner_note")),
         }
@@ -819,9 +1032,123 @@ def _select_admin_tournament(ctx, supabase, *, page_key: str) -> tuple[dict[str,
     return tournament, settings, days, event_options
 
 
+def _render_legacy_partner_reconciliation_panel(
+    *,
+    supabase,
+    tournament_id: str,
+    admin_rows: list[dict[str, Any]],
+    partner_requests: list[dict[str, Any]],
+    team_members: list[dict[str, Any]],
+    event_lookup: dict[str, dict[str, Any]],
+) -> None:
+    issues = _legacy_partner_reconciliation_issues(admin_rows, partner_requests, team_members)
+    with st.expander(f"Legacy partner reconciliation ({len(issues)})", expanded=bool(issues)):
+        st.caption(
+            "Legacy partner text is visible for audit only. It is not used for public team formation unless an admin explicitly creates a request or confirms a team."
+        )
+        if not issues:
+            st.success("No unresolved legacy partner text currently needs reconciliation.")
+            return
+        for issue in issues:
+            reg = issue.get("registration") or {}
+            sel = issue.get("selection") or {}
+            event = issue.get("event") or event_lookup.get(_safe_text(sel.get("event_option_id"))) or {}
+            issue_selection_id = _safe_text(issue.get("selection_id") or sel.get("id"))
+            issue_registration_id = _safe_text(issue.get("registration_id") or sel.get("registration_id"))
+            event_label = _safe_text(event.get("division_name") or event.get("label") or sel.get("event_option_id"))
+            title = f"{_safe_text(reg.get('display_name') or reg.get('email'))} → {_safe_text(sel.get('partner_name')) or _safe_text(sel.get('partner_email'))}"
+            st.markdown(f"**{title}**")
+            st.caption(
+                f"Division: {event_label} · Legacy partner name: {_safe_text(sel.get('partner_name')) or '—'} · "
+                f"Legacy partner email: {_safe_text(sel.get('partner_email')) or '—'} · "
+                f"Current mode: {_status_badge(sel.get('partner_mode'))}"
+            )
+            suggestions = _legacy_partner_suggestions(issue, admin_rows)
+            if not suggestions:
+                st.info("No conservative same-event or same-tournament match suggestions found.")
+                if st.button("Mark Admin Hold / Ignore", key=f"legacy_hold_{issue_selection_id}_none"):
+                    existing_note = _safe_text(sel.get("partner_note"))
+                    hold_note = "Admin hold: legacy partner text reviewed."
+                    update_admin_registration_selection(
+                        supabase,
+                        tournament_id=tournament_id,
+                        selection_id=issue_selection_id,
+                        payload={
+                            "partner_mode": "HAS_PARTNER",
+                            "partner_name": sel.get("partner_name"),
+                            "partner_email": sel.get("partner_email"),
+                            "partner_note": f"{existing_note}\n{hold_note}".strip() if hold_note not in existing_note else existing_note,
+                        },
+                    )
+                    st.success("Legacy issue marked for admin hold/ignore.")
+                    st.rerun()
+            for suggestion in suggestions:
+                target_row = suggestion.get("row") or {}
+                target_reg = target_row.get("registration") or {}
+                target_sel = target_row.get("selection") or {}
+                target_selection_id = _safe_text(target_row.get("selection_id") or target_sel.get("id"))
+                target_name = _safe_text(target_reg.get("display_name") or target_reg.get("email"))
+                cols = st.columns([3, 1, 1, 1])
+                with cols[0]:
+                    st.caption(
+                        f"Suggested match: {target_name} · {suggestion.get('reason')} · "
+                        f"{str(suggestion.get('scope')).replace('_', ' ')}"
+                    )
+                with cols[1]:
+                    if st.button("Create Partner Request", key=f"legacy_create_request_{issue_selection_id}_{target_selection_id}"):
+                        create_partner_request(
+                            supabase,
+                            tournament_id=tournament_id,
+                            event_option_id=_safe_text(sel.get("event_option_id")),
+                            requester_selection_id=issue_selection_id,
+                            target_selection_id=target_selection_id,
+                            target_player_id=target_reg.get("player_id"),
+                            target_display_name_snapshot=target_name,
+                            source="LEGACY_TEXT_MATCH",
+                        )
+                        st.success("Partner request created for admin reconciliation.")
+                        st.rerun()
+                with cols[2]:
+                    if st.button("Admin Confirm Team", key=f"legacy_admin_confirm_{issue_selection_id}_{target_selection_id}"):
+                        admin_confirm_partner_link(
+                            supabase,
+                            tournament_id=tournament_id,
+                            event_option_id=_safe_text(sel.get("event_option_id")),
+                            selection1_id=issue_selection_id,
+                            selection2_id=target_selection_id,
+                            source="ADMIN_RECONCILIATION",
+                        )
+                        st.success("Admin-confirmed linked team created.")
+                        st.rerun()
+                with cols[3]:
+                    if st.button("Mark Hold / Ignore", key=f"legacy_hold_{issue_selection_id}_{target_selection_id}"):
+                        existing_note = _safe_text(sel.get("partner_note"))
+                        hold_note = "Admin hold: legacy partner text reviewed."
+                        update_admin_registration_selection(
+                            supabase,
+                            tournament_id=tournament_id,
+                            selection_id=issue_selection_id,
+                            payload={
+                                "partner_mode": "HAS_PARTNER",
+                                "partner_name": sel.get("partner_name"),
+                                "partner_email": sel.get("partner_email"),
+                                "partner_note": f"{existing_note}\n{hold_note}".strip() if hold_note not in existing_note else existing_note,
+                            },
+                        )
+                        st.success("Legacy issue marked for admin hold/ignore.")
+                        st.rerun()
+            st.divider()
+
+
 def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], days: list[dict[str, Any]], event_options: list[dict[str, Any]]) -> None:
     tournament_id = str(tournament.get("id"))
     admin_rows = list_registration_admin_rows(supabase, tournament_id)
+    try:
+        partner_requests = list_partner_requests(supabase, tournament_id)
+        team_members = list_partner_team_members(supabase, tournament_id)
+    except Exception:
+        partner_requests = []
+        team_members = []
     day_lookup = {str(row.get("id")): row for row in days}
     event_lookup = {str(row.get("id")): row for row in event_options}
 
@@ -845,6 +1172,15 @@ def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], d
         ("Unpaid", len(unpaid)),
     ]):
         metrics[idx].metric(label, value)
+
+    _render_legacy_partner_reconciliation_panel(
+        supabase=supabase,
+        tournament_id=tournament_id,
+        admin_rows=admin_rows,
+        partner_requests=partner_requests,
+        team_members=team_members,
+        event_lookup=event_lookup,
+    )
 
     filters = st.columns(5)
     status_filter = filters[0].selectbox("Status", ["All"] + ADMIN_REGISTRATION_STATUS_OPTIONS, key=f"reg_status_filter_{tournament_id}")
@@ -917,8 +1253,8 @@ def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], d
                 day_id = st.selectbox("Day", day_ids, index=max(0, day_ids.index(_safe_text(sel.get("registration_day_id"))) if _safe_text(sel.get("registration_day_id")) in day_ids else 0), format_func=lambda did: _safe_text((day_lookup.get(did) or {}).get("label") or did))
                 event_id = st.selectbox("Division", event_ids, index=max(0, event_ids.index(_safe_text(sel.get("event_option_id"))) if _safe_text(sel.get("event_option_id")) in event_ids else 0), format_func=lambda eid: f"{_safe_text((event_lookup.get(eid) or {}).get('event_family_label'))} / {_safe_text((event_lookup.get(eid) or {}).get('division_name') or (event_lookup.get(eid) or {}).get('label'))}")
                 partner_mode = st.selectbox("Partner mode", PARTNER_MODE_OPTIONS, index=max(0, PARTNER_MODE_OPTIONS.index(_safe_text(sel.get("partner_mode")).upper()) if _safe_text(sel.get("partner_mode")).upper() in PARTNER_MODE_OPTIONS else 0))
-                partner_name = st.text_input("Partner name/details", value=_safe_text(sel.get("partner_name")))
-                partner_email = st.text_input("Partner email", value=_safe_text(sel.get("partner_email")))
+                partner_name = st.text_input("Legacy partner text — not used for team formation", value=_safe_text(sel.get("partner_name")))
+                partner_email = st.text_input("Legacy partner email — not used for team formation", value=_safe_text(sel.get("partner_email")))
                 partner_note = st.text_area("Public partner note", value=_safe_text(sel.get("partner_note")))
                 notes = st.text_area("Internal/admin notes", value=_safe_text(reg.get("notes")))
                 save = st.form_submit_button("Save Changes", use_container_width=True)
@@ -1110,8 +1446,8 @@ def render(ctx):
                     day_id = st.selectbox("Day", [str(d.get("id")) for d in days], format_func=lambda did: _safe_text((day_lookup.get(did) or {}).get("label") or did))
                     event_id = st.selectbox("Division", [str(e.get("id")) for e in event_options], format_func=lambda eid: f"{_safe_text((event_lookup.get(eid) or {}).get('event_family_label'))} / {_safe_text((event_lookup.get(eid) or {}).get('division_name') or (event_lookup.get(eid) or {}).get('label'))}")
                     partner_mode = st.selectbox("Partner mode", PARTNER_MODE_OPTIONS)
-                    partner_name = st.text_input("Partner name")
-                    partner_email = st.text_input("Partner email")
+                    partner_name = st.text_input("Legacy partner text — not used for team formation")
+                    partner_email = st.text_input("Legacy partner email — not used for team formation")
                     notes = st.text_area("Notes")
                     save_add = st.form_submit_button("Save registration", use_container_width=True)
                 if save_add:
@@ -1682,6 +2018,11 @@ def render(ctx):
             st.info("JUPR profile: Not connected")
         partner_details: dict[str, Any] = step4.get("partner_details") or {}
         doubles_selected = [event_lookup[eid] for eid in selected_event_ids if bool((event_lookup.get(eid) or {}).get("partner_required"))]
+        try:
+            partner_registration_state = build_registration_state(supabase, tournament, settings, days, event_options)
+        except Exception:
+            partner_registration_state = {}
+        current_player_id = _safe_text(step2.get("selected_player_id")) if using_existing_player else ""
 
         if not doubles_selected:
             st.info("No doubles divisions selected. You can submit now.")
@@ -1689,43 +2030,97 @@ def render(ctx):
             event_id = str(event.get("id"))
             existing = partner_details.get(event_id) or {}
             st.markdown(f"**{_safe_text(event.get('division_name') or event.get('label') or event_id)}**")
+            mode_options = ["NEEDS_PARTNER", "REQUEST_PARTNER"]
+            existing_mode = _safe_text(existing.get("partner_mode")).upper()
+            if existing_mode == "HAS_PARTNER":
+                existing_mode = "REQUEST_PARTNER"
             mode = st.radio(
-                "Partner status",
-                ["HAS_PARTNER", "NEEDS_PARTNER"],
+                "Partner plan",
+                mode_options,
                 horizontal=True,
-                format_func=lambda v: "I already have a partner" if v == "HAS_PARTNER" else "I need a partner",
-                index=0 if _safe_text(existing.get("partner_mode")) == "HAS_PARTNER" else 1,
+                format_func=lambda v: "I need a partner" if v == "NEEDS_PARTNER" else "I want to request a partner",
+                index=mode_options.index(existing_mode) if existing_mode in mode_options else 0,
                 key=f"wizard_partner_mode_{event_id}",
             )
             event_payload: dict[str, Any] = {"partner_mode": mode}
-            if mode == "HAS_PARTNER":
-                c1, c2 = st.columns(2)
-                with c1:
-                    event_payload["partner_name"] = st.text_input(
-                        "Partner name", value=_safe_text(existing.get("partner_name")), key=f"wizard_partner_name_{event_id}"
-                    )
-                    event_payload["partner_email"] = st.text_input(
-                        "Partner email", value=_safe_text(existing.get("partner_email")), key=f"wizard_partner_email_{event_id}"
-                    )
-                    event_payload["partner_phone"] = st.text_input(
-                        "Partner phone", value=_safe_text(existing.get("partner_phone")), key=f"wizard_partner_phone_{event_id}"
-                    )
-                with c2:
-                    event_payload["partner_dupr_id"] = st.text_input(
-                        "Partner DUPR ID", value=_safe_text(existing.get("partner_dupr_id")), key=f"wizard_partner_dupr_{event_id}"
-                    )
-                    event_payload["partner_skill"] = _coerce_float(
-                        st.text_input("Partner skill", value=_safe_text(existing.get("partner_skill")), key=f"wizard_partner_skill_{event_id}")
-                    )
-                    event_payload["partner_age"] = _coerce_int(
-                        st.text_input("Partner age", value=_safe_text(existing.get("partner_age")), key=f"wizard_partner_age_{event_id}")
-                    )
-            else:
+            if mode == "NEEDS_PARTNER":
+                board_enabled = bool(event.get("show_partner_board", event.get("partner_board_enabled", True)))
+                event_payload["show_on_partner_board"] = st.checkbox(
+                    "Show me on the public partner board for this division",
+                    value=bool(existing.get("show_on_partner_board", board_enabled)),
+                    disabled=not board_enabled,
+                    key=f"wizard_partner_board_{event_id}",
+                )
                 event_payload["partner_note"] = st.text_input(
                     "Short note for potential partners (optional)",
                     value=_safe_text(existing.get("partner_note")),
                     key=f"wizard_partner_note_{event_id}",
                 )
+            else:
+                st.caption("Choose a JUPR profile or a registered player looking for a partner. Typed names are legacy admin notes only and will not create a team.")
+                existing_target_name = _safe_text(existing.get("target_display_name_snapshot"))
+                if existing_target_name:
+                    st.success(f"Selected partner request target: {existing_target_name}")
+                search_query = st.text_input("Search JUPR/player profiles", value=_safe_text(existing.get("profile_search_query")), key=f"wizard_partner_search_{event_id}")
+                matches = [row for row in active_players if _partner_search_matches(row, search_query)][:8]
+                confirmed_selection_ids = _selection_ids_in_confirmed_teams(partner_registration_state, event_id)
+                for player in matches:
+                    pid = _safe_text(player.get("id"))
+                    registered_target = _registered_partner_target_for_player(partner_registration_state, event_id, pid)
+                    status = _safe_text((registered_target or {}).get("status")) or "Not registered in this division"
+                    is_self = bool(current_player_id and pid == current_player_id)
+                    target_confirmed = _safe_text((registered_target or {}).get("target_selection_id")) in confirmed_selection_ids
+                    cols = st.columns([3, 2, 1])
+                    with cols[0]:
+                        st.markdown(f"**{_player_display_name(player)}**")
+                        st.caption(f"Player ID: {pid or '—'} · DUPR: {_safe_text(player.get('dupr_id')) or '—'} · Rating: {_player_rating_text(player)}")
+                    with cols[1]:
+                        st.caption(f"Registration status: {status.replace('_', ' ').title()}")
+                    with cols[2]:
+                        disabled = is_self or target_confirmed
+                        if st.button("Select", key=f"wizard_partner_profile_select_{event_id}_{pid}", disabled=disabled):
+                            event_payload.update(
+                                {
+                                    "target_selection_id": _safe_text((registered_target or {}).get("target_selection_id")),
+                                    "target_registration_id": _safe_text((registered_target or {}).get("target_registration_id")),
+                                    "target_player_id": pid,
+                                    "target_display_name_snapshot": _player_display_name(player),
+                                    "partner_request_source": "PROFILE_SEARCH",
+                                    "profile_search_query": search_query,
+                                    "partner_skill": _player_current_overall_jupr(player),
+                                    "partner_age": _coerce_int(player.get("age")),
+                                }
+                            )
+                            partner_details[event_id] = event_payload
+                            wizard["step4"] = {"partner_details": partner_details}
+                            st.rerun()
+                st.markdown("**Players looking for partners in this division**")
+                targets = _partner_board_targets_for_event(partner_registration_state, event_id, exclude_player_id=current_player_id)
+                if not targets:
+                    st.caption("No one is currently listed as needing a partner for this division.")
+                for target in targets[:20]:
+                    cols = st.columns([3, 1])
+                    with cols[0]:
+                        st.markdown(f"**{_safe_text(target.get('display_name')) or 'Registered player'}**")
+                        if _safe_text(target.get("partner_note")):
+                            st.caption(_safe_text(target.get("partner_note")))
+                    with cols[1]:
+                        if st.button("Request as Partner", key=f"wizard_partner_board_request_{event_id}_{target.get('target_selection_id')}"):
+                            event_payload.update(
+                                {
+                                    "target_selection_id": _safe_text(target.get("target_selection_id")),
+                                    "target_registration_id": _safe_text(target.get("target_registration_id")),
+                                    "target_player_id": _safe_text(target.get("target_player_id")),
+                                    "target_display_name_snapshot": _safe_text(target.get("display_name")),
+                                    "partner_request_source": "NEEDS_PARTNER_LIST",
+                                }
+                            )
+                            partner_details[event_id] = event_payload
+                            wizard["step4"] = {"partner_details": partner_details}
+                            st.rerun()
+                for key in ["target_selection_id", "target_registration_id", "target_player_id", "target_display_name_snapshot", "partner_request_source", "profile_search_query", "partner_skill", "partner_age"]:
+                    if _safe_text(existing.get(key)) and key not in event_payload:
+                        event_payload[key] = existing.get(key)
             partner_details[event_id] = event_payload
         wizard["step4"] = {"partner_details": partner_details}
 
@@ -1758,7 +2153,8 @@ def render(ctx):
                 if bool(event.get("partner_required")):
                     saved_partner = (wizard.get("step4") or {}).get("partner_details", {}).get(event_id) or {}
                     selection_row.update(saved_partner)
-                    selection_row["partner_mode"] = _safe_text(saved_partner.get("partner_mode") or "NEEDS_PARTNER")
+                    selected_partner_mode = _safe_text(saved_partner.get("partner_mode") or "NEEDS_PARTNER").upper()
+                    selection_row["partner_mode"] = "HAS_PARTNER" if selected_partner_mode == "REQUEST_PARTNER" else selected_partner_mode
                 selections.append(selection_row)
 
             if not _safe_text(email):
@@ -1771,11 +2167,23 @@ def render(ctx):
                 st.error("Choose at least one division before submitting.")
                 st.stop()
 
+            pending_partner_requests: list[dict[str, Any]] = []
             for selection in selections:
-                if selection.get("partner_mode") == "HAS_PARTNER":
-                    if not _safe_text(selection.get("partner_name")) and not _safe_text(selection.get("partner_email")):
-                        st.error("For doubles events with a named partner, enter at least the partner name or partner email.")
+                event = event_lookup.get(str(selection.get("event_option_id") or "")) or {}
+                if not bool(event.get("partner_required")):
+                    continue
+                raw_details = (wizard.get("step4") or {}).get("partner_details", {}).get(str(selection.get("event_option_id"))) or {}
+                if _safe_text(raw_details.get("partner_mode")).upper() == "REQUEST_PARTNER":
+                    if not _partner_request_ready(raw_details):
+                        st.error("For doubles events where you want to request a partner, select a JUPR profile or a registered player from the needs-partner list.")
                         st.stop()
+                    if current_player_id and _safe_text(raw_details.get("target_player_id")) == current_player_id:
+                        st.error("You cannot request yourself as a partner.")
+                        st.stop()
+                    pending_partner_requests.append({**raw_details, "requester_selection_id": selection.get("id"), "event_option_id": selection.get("event_option_id")})
+                elif _safe_text(selection.get("partner_mode")).upper() != "NEEDS_PARTNER":
+                    st.error("For doubles events, choose either 'I need a partner' or select a partner request target.")
+                    st.stop()
 
             submit_player = dict(player_profile)
             for selection in selections:
@@ -1824,7 +2232,7 @@ def render(ctx):
                 occupied_slots = sum(
                     1
                     for row in entries
-                    if _safe_text(row.get("status")).upper() not in {"NEEDS_PARTNER", "PARTNER_MISSING"}
+                    if _safe_text(row.get("status")).upper() not in {"NEEDS_PARTNER", "PARTNER_MISSING", "PENDING_PARTNER_REQUEST", "LEGACY_PARTNER_UNRESOLVED"}
                 )
                 if occupied_slots >= cap_value:
                     at_capacity_warnings.append(_safe_text(event.get("division_name") or event.get("label") or event_option_id))
@@ -1845,6 +2253,7 @@ def render(ctx):
                         "email": _safe_text(wizard.get("step1", {}).get("email")) if wizard.get("edit_mode") else email,
                         "phone": phone,
                         "dupr_id": dupr_id,
+                        "player_id": _coerce_int(step2.get("selected_player_id")) if using_existing_player else None,
                         "doubles_skill": submit_player.get("doubles_skill"),
                         "singles_skill": submit_player.get("singles_skill"),
                         "age": _coerce_int(age),
@@ -1857,6 +2266,22 @@ def render(ctx):
                     expected_registration_id=_safe_text(wizard.get("edit_registration_id")) if wizard.get("edit_mode") else None,
                 )
                 registration_id = _safe_text(result.get("registration_id"))
+                created_partner_requests: list[dict[str, Any]] = []
+                for request_details in pending_partner_requests:
+                    created_partner_requests.append(
+                        create_partner_request(
+                            supabase,
+                            tournament_id=str(tournament.get("id")),
+                            event_option_id=_safe_text(request_details.get("event_option_id")),
+                            requester_selection_id=_safe_text(request_details.get("requester_selection_id")),
+                            target_selection_id=_safe_text(request_details.get("target_selection_id")) or None,
+                            target_player_id=_safe_text(request_details.get("target_player_id")) or None,
+                            target_display_name_snapshot=_safe_text(request_details.get("target_display_name_snapshot")) or None,
+                            source=_safe_text(request_details.get("partner_request_source")) or "PROFILE_SEARCH",
+                        )
+                    )
+                if created_partner_requests:
+                    st.success(f"Created {len(created_partner_requests)} pending partner request(s). Your team is not confirmed until accepted.")
                 slug = _safe_text(settings.get("registration_slug"))
                 nav_params = {
                     "tournament_id": str(tournament.get("id")),
