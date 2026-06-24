@@ -96,13 +96,14 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
         "Mixed Needs Partner",
     ]
     assert [row["status"] for row in roster_rows] == [
-        "Confirmed",
+        None,
         "Waitlist",
         "Needs Partner",
-        "Pending Review",
-        "Pending Review",
+        None,
+        None,
         "Needs Partner",
     ]
+    assert "Pending Review" not in {row["status"] for row in roster_rows}
 
     needs_partner_row = next(
         row

@@ -1456,10 +1456,10 @@ def build_public_tournament_roster_state(
     event_lookup = {str(row.get("id")): row for row in (state.get("event_options") or [])}
 
     status_map = {
-        "CONFIRMED": "Confirmed",
+        "CONFIRMED": None,
         "WAITLIST": "Waitlist",
-        "REVIEW": "Pending Review",
-        "PARTNER_MISSING": "Pending Review",
+        "REVIEW": None,
+        "PARTNER_MISSING": None,
         "NEEDS_PARTNER": "Needs Partner",
     }
 
