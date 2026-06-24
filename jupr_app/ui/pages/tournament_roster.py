@@ -133,6 +133,8 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
         st.warning("The requested tournament link is unavailable. Showing the selected open tournament instead.")
 
     state = build_public_tournament_roster_state(supabase, tournament, settings, days, event_options)
+    if state.get("partner_link_schema_available") is False and not bool(getattr(ctx, "public_mode", False)):
+        st.warning("Partner request features are unavailable until the partner-link migration is applied.")
     public_urls = build_public_urls(
         base_url=_safe_text(st.session_state.get("base_url")),
         tournament_id=str(tournament.get("id")),

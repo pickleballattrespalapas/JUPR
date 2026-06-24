@@ -23,6 +23,20 @@ REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
     "migrations/20261019_tournament_registration_partner_links.sql",
 ]
 
+CORE_REGISTRATION_SCHEMA_TABLES = [
+    "tournament_registration_settings",
+    "tournament_registration_days",
+    "tournament_event_options",
+    "tournament_registrations",
+    "tournament_registration_selections",
+]
+
+PARTNER_LINK_SCHEMA_TABLES = [
+    "tournament_registration_partner_requests",
+    "tournament_registration_team_links",
+    "tournament_registration_team_members",
+]
+
 REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "tournament_registration_settings": (
         "id",
@@ -56,6 +70,8 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     "tournament_registrations": (
         "id",
         "tournament_id",
+    ),
+    "tournament_registrations.player_id": (
         "player_id",
     ),
     "tournament_registration_partner_requests": (
@@ -209,18 +225,23 @@ def _schema_contract_error_message(missing: list[str]) -> str:
     )
 
 
+def _schema_check_table_name(contract_key: str) -> str:
+    return contract_key.split(".", 1)[0]
+
+
 def assert_registration_schema_contract(supabase, *, required_tables: list[str] | None = None) -> None:
     tables = required_tables or list(REGISTRATION_SCHEMA_REQUIRED_COLUMNS.keys())
     failures: list[str] = []
-    for table_name in tables:
-        required_columns = REGISTRATION_SCHEMA_REQUIRED_COLUMNS.get(table_name, ())
+    for contract_key in tables:
+        required_columns = REGISTRATION_SCHEMA_REQUIRED_COLUMNS.get(contract_key, ())
         if not required_columns:
             continue
+        table_name = _schema_check_table_name(contract_key)
         select_expr = ", ".join(required_columns)
         try:
             supabase.table(table_name).select(select_expr).limit(1).execute()
         except Exception as exc:
-            failures.append(f"{table_name} ({select_expr}): {exc}")
+            failures.append(f"{contract_key} ({select_expr}): {exc}")
     if failures:
         raise ValueError(_schema_contract_error_message(failures))
 
@@ -246,17 +267,7 @@ def _insert_registration_days(supabase, days: list[dict[str, Any]]) -> None:
     supabase.table("tournament_registration_days").insert(days).execute()
 
 
-def registration_feature_available(supabase) -> tuple[bool, str | None]:
-    required_tables = [
-        "tournament_registration_settings",
-        "tournament_registration_days",
-        "tournament_event_options",
-        "tournament_registrations",
-        "tournament_registration_selections",
-        "tournament_registration_partner_requests",
-        "tournament_registration_team_links",
-        "tournament_registration_team_members",
-    ]
+def _tables_available(supabase, required_tables: list[str]) -> tuple[bool, str | None]:
     failures: list[str] = []
     for table_name in required_tables:
         try:
@@ -265,9 +276,31 @@ def registration_feature_available(supabase) -> tuple[bool, str | None]:
             failures.append(f"{table_name}: {exc}")
     if failures:
         return False, "Registration tables unavailable: " + " | ".join(failures)
+    return True, None
+
+
+def registration_feature_available(supabase) -> tuple[bool, str | None]:
+    available, detail = _tables_available(supabase, CORE_REGISTRATION_SCHEMA_TABLES)
+    if not available:
+        return False, detail
 
     try:
-        assert_registration_schema_contract(supabase)
+        assert_registration_schema_contract(supabase, required_tables=CORE_REGISTRATION_SCHEMA_TABLES)
+    except ValueError as exc:
+        return False, str(exc)
+    return True, None
+
+
+def partner_link_schema_available(supabase) -> tuple[bool, str | None]:
+    available, detail = _tables_available(supabase, PARTNER_LINK_SCHEMA_TABLES)
+    if not available:
+        return False, detail
+
+    try:
+        assert_registration_schema_contract(
+            supabase,
+            required_tables=["tournament_registrations.player_id", *PARTNER_LINK_SCHEMA_TABLES],
+        )
     except ValueError as exc:
         return False, str(exc)
     return True, None
@@ -1522,10 +1555,16 @@ def list_open_public_tournaments(supabase, club_id: str) -> list[dict[str, Any]]
 def build_registration_state(supabase, tournament: dict[str, Any], settings: dict[str, Any], days: list[dict[str, Any]], event_options: list[dict[str, Any]]) -> dict[str, Any]:
     registrations = list_registrations(supabase, str(tournament.get("id")))
     selections = list_registration_selections(supabase, str(tournament.get("id")))
-    partner_requests = list_partner_requests(supabase, str(tournament.get("id")))
-    partner_links = list_partner_team_links(supabase, str(tournament.get("id")))
-    team_members = list_partner_team_members(supabase, str(tournament.get("id")))
-    return compile_tournament_registration_state(
+    partner_schema_ok, partner_schema_detail = partner_link_schema_available(supabase)
+    if partner_schema_ok:
+        partner_requests = list_partner_requests(supabase, str(tournament.get("id")))
+        partner_links = list_partner_team_links(supabase, str(tournament.get("id")))
+        team_members = list_partner_team_members(supabase, str(tournament.get("id")))
+    else:
+        partner_requests = []
+        partner_links = []
+        team_members = []
+    state = compile_tournament_registration_state(
         tournament=tournament,
         settings=settings,
         days=days,
@@ -1536,6 +1575,12 @@ def build_registration_state(supabase, tournament: dict[str, Any], settings: dic
         partner_links=partner_links,
         team_members=team_members,
     )
+    if not partner_schema_ok:
+        state["partner_link_schema_available"] = False
+        state["partner_link_schema_detail"] = partner_schema_detail
+    else:
+        state["partner_link_schema_available"] = True
+    return state
 
 
 def build_public_tournament_roster_state(
