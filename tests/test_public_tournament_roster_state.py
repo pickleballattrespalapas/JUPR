@@ -1,7 +1,7 @@
 from jupr_app.domain import tournament_registration_repo as repo
 
 
-def test_public_roster_includes_needs_partner_without_review(monkeypatch):
+def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_list(monkeypatch):
     compiled_state = {
         "event_options": [
             {
@@ -32,6 +32,7 @@ def test_public_roster_includes_needs_partner_without_review(monkeypatch):
                     },
                     {
                         "status": "NEEDS_PARTNER",
+                        "show_on_partner_board": False,
                         "members": [
                             {
                                 "display_name": "Joe Baumann",
@@ -45,6 +46,14 @@ def test_public_roster_includes_needs_partner_without_review(monkeypatch):
                     {
                         "status": "REVIEW",
                         "members": [{"display_name": "Review Player"}],
+                    },
+                    {
+                        "status": "PARTNER_MISSING",
+                        "members": [{"display_name": "Partner Missing Player"}],
+                    },
+                    {
+                        "status": "CONFIRMED",
+                        "members": [],
                     },
                 ],
             },
@@ -61,7 +70,7 @@ def test_public_roster_includes_needs_partner_without_review(monkeypatch):
                 ],
             },
         ],
-        "summary": {"total_registrations": 5, "waitlist_entries": 1},
+        "summary": {"total_registrations": 6, "waitlist_entries": 1},
     }
 
     monkeypatch.setattr(
@@ -72,22 +81,32 @@ def test_public_roster_includes_needs_partner_without_review(monkeypatch):
 
     state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
 
+    roster_rows = state["registrations_by_event"]
     roster_names = [
         member["display_name"]
-        for row in state["registrations_by_event"]
+        for row in roster_rows
         for member in row["members"]
     ]
     assert roster_names == [
         "Confirmed Player",
         "Waitlist Player",
         "Joe Baumann",
+        "Review Player",
+        "Partner Missing Player",
         "Mixed Needs Partner",
     ]
-    assert "Review Player" not in roster_names
+    assert [row["status"] for row in roster_rows] == [
+        "Confirmed",
+        "Waitlist",
+        "Needs Partner",
+        "Pending Review",
+        "Pending Review",
+        "Needs Partner",
+    ]
 
     needs_partner_row = next(
         row
-        for row in state["registrations_by_event"]
+        for row in roster_rows
         if row["members"][0]["display_name"] == "Joe Baumann"
     )
     assert needs_partner_row["event_day_id"] == "day-3"
