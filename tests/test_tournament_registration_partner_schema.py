@@ -16,10 +16,14 @@ def test_partner_link_migration_preserves_existing_selection_entry_model():
     assert "create table if not exists public.tournament_registration_team_links" in sql
     assert "create table if not exists public.tournament_registration_team_members" in sql
     assert "event_entries" not in sql
+    assert sql.count("id text primary key") == 3
     assert "requester_selection_id text not null references public.tournament_registration_selections(id)" in sql
     assert "target_selection_id text null references public.tournament_registration_selections(id)" in sql
     assert "selection1_id text not null references public.tournament_registration_selections(id)" in sql
     assert "selection2_id text not null references public.tournament_registration_selections(id)" in sql
+    assert "accepted_request_id text null references public.tournament_registration_partner_requests(id)" in sql
+    assert "team_link_id text not null references public.tournament_registration_team_links(id)" in sql
+    assert "created_by_user_id text null" in sql
 
 
 def test_partner_link_migration_adds_profile_link_and_active_membership_uniqueness():

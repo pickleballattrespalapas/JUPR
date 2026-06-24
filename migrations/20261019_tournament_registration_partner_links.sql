@@ -12,7 +12,7 @@ create unique index if not exists uq_tournament_registrations_tournament_player
   where player_id is not null;
 
 create table if not exists public.tournament_registration_partner_requests (
-  id uuid primary key default gen_random_uuid(),
+  id text primary key,
   tournament_id uuid not null references public.tournaments(id) on delete cascade,
   event_option_id text not null references public.tournament_event_options(id) on delete cascade,
   requester_selection_id text not null references public.tournament_registration_selections(id) on delete cascade,
@@ -28,7 +28,7 @@ create table if not exists public.tournament_registration_partner_requests (
   updated_at timestamptz not null default now(),
   responded_at timestamptz null,
   created_by_registration_id text null references public.tournament_registrations(id) on delete set null,
-  created_by_user_id uuid null,
+  created_by_user_id text null,
   constraint tournament_registration_partner_requests_status_chk
     check (status in ('PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED', 'ADMIN_CONFIRMED', 'EXPIRED')),
   constraint tournament_registration_partner_requests_source_chk
@@ -62,7 +62,7 @@ create index if not exists idx_tournament_partner_requests_target_player
   where target_player_id is not null;
 
 create table if not exists public.tournament_registration_team_links (
-  id uuid primary key default gen_random_uuid(),
+  id text primary key,
   tournament_id uuid not null references public.tournaments(id) on delete cascade,
   event_option_id text not null references public.tournament_event_options(id) on delete cascade,
   registration1_id text not null references public.tournament_registrations(id) on delete cascade,
@@ -72,10 +72,10 @@ create table if not exists public.tournament_registration_team_links (
   player1_id integer null references public.players(id) on delete set null,
   player2_id integer null references public.players(id) on delete set null,
   status text not null default 'CONFIRMED',
-  accepted_request_id uuid null references public.tournament_registration_partner_requests(id) on delete set null,
+  accepted_request_id text null references public.tournament_registration_partner_requests(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  created_by_user_id uuid null,
+  created_by_user_id text null,
   constraint tournament_registration_team_links_status_chk
     check (status in ('CONFIRMED', 'ADMIN_CONFIRMED', 'CANCELLED')),
   constraint tournament_registration_team_links_distinct_registrations_chk
@@ -95,8 +95,8 @@ create index if not exists idx_tournament_team_links_accepted_request
   where accepted_request_id is not null;
 
 create table if not exists public.tournament_registration_team_members (
-  id uuid primary key default gen_random_uuid(),
-  team_link_id uuid not null references public.tournament_registration_team_links(id) on delete cascade,
+  id text primary key,
+  team_link_id text not null references public.tournament_registration_team_links(id) on delete cascade,
   tournament_id uuid not null references public.tournaments(id) on delete cascade,
   event_option_id text not null references public.tournament_event_options(id) on delete cascade,
   selection_id text not null references public.tournament_registration_selections(id) on delete cascade,
