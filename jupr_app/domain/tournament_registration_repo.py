@@ -20,6 +20,7 @@ ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
     "migrations/20261010_tournament_builder_refactor.sql",
     "migrations/20261018_tournament_registration_schema_contract.sql",
+    "migrations/20261019_tournament_registration_partner_links.sql",
 ]
 
 REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -51,6 +52,58 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "partner_board_enabled",
         "status",
         "enabled",
+    ),
+    "tournament_registrations": (
+        "id",
+        "tournament_id",
+        "player_id",
+    ),
+    "tournament_registration_partner_requests": (
+        "id",
+        "tournament_id",
+        "event_option_id",
+        "requester_selection_id",
+        "requester_registration_id",
+        "requester_player_id",
+        "target_selection_id",
+        "target_registration_id",
+        "target_player_id",
+        "target_display_name_snapshot",
+        "status",
+        "source",
+        "created_at",
+        "updated_at",
+        "responded_at",
+        "created_by_registration_id",
+        "created_by_user_id",
+    ),
+    "tournament_registration_team_links": (
+        "id",
+        "tournament_id",
+        "event_option_id",
+        "registration1_id",
+        "registration2_id",
+        "selection1_id",
+        "selection2_id",
+        "player1_id",
+        "player2_id",
+        "status",
+        "accepted_request_id",
+        "created_at",
+        "updated_at",
+        "created_by_user_id",
+    ),
+    "tournament_registration_team_members": (
+        "id",
+        "team_link_id",
+        "tournament_id",
+        "event_option_id",
+        "selection_id",
+        "registration_id",
+        "player_id",
+        "player_order",
+        "status",
+        "created_at",
     ),
 }
 
@@ -200,6 +253,9 @@ def registration_feature_available(supabase) -> tuple[bool, str | None]:
         "tournament_event_options",
         "tournament_registrations",
         "tournament_registration_selections",
+        "tournament_registration_partner_requests",
+        "tournament_registration_team_links",
+        "tournament_registration_team_members",
     ]
     failures: list[str] = []
     for table_name in required_tables:
@@ -1196,6 +1252,36 @@ def list_registration_selections(supabase, tournament_id: str) -> list[dict[str,
     return _safe_data(resp)
 
 
+def list_partner_requests(supabase, tournament_id: str) -> list[dict[str, Any]]:
+    resp = (
+        supabase.table("tournament_registration_partner_requests")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+def list_partner_team_links(supabase, tournament_id: str) -> list[dict[str, Any]]:
+    resp = (
+        supabase.table("tournament_registration_team_links")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .execute()
+    )
+    return _safe_data(resp)
+
+
+def list_partner_team_members(supabase, tournament_id: str) -> list[dict[str, Any]]:
+    resp = (
+        supabase.table("tournament_registration_team_members")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .execute()
+    )
+    return _safe_data(resp)
+
+
 def _get_existing_registration_by_email(supabase, tournament_id: str, email: str) -> dict[str, Any] | None:
     return _get_registration_by_email(supabase, tournament_id, email)
 
@@ -1267,6 +1353,7 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any], 
         "display_name": display_name,
         "email": email,
         "phone": str(payload.get("phone") or "").strip() or None,
+        "player_id": payload.get("player_id"),
         "dupr_id": str(payload.get("dupr_id") or "").strip() or None,
         "doubles_skill": payload.get("doubles_skill"),
         "singles_skill": payload.get("singles_skill"),
@@ -1435,6 +1522,9 @@ def list_open_public_tournaments(supabase, club_id: str) -> list[dict[str, Any]]
 def build_registration_state(supabase, tournament: dict[str, Any], settings: dict[str, Any], days: list[dict[str, Any]], event_options: list[dict[str, Any]]) -> dict[str, Any]:
     registrations = list_registrations(supabase, str(tournament.get("id")))
     selections = list_registration_selections(supabase, str(tournament.get("id")))
+    partner_requests = list_partner_requests(supabase, str(tournament.get("id")))
+    partner_links = list_partner_team_links(supabase, str(tournament.get("id")))
+    team_members = list_partner_team_members(supabase, str(tournament.get("id")))
     return compile_tournament_registration_state(
         tournament=tournament,
         settings=settings,
@@ -1442,6 +1532,9 @@ def build_registration_state(supabase, tournament: dict[str, Any], settings: dic
         event_options=event_options,
         registrations=registrations,
         selections=selections,
+        partner_requests=partner_requests,
+        partner_links=partner_links,
+        team_members=team_members,
     )
 
 
@@ -1457,14 +1550,20 @@ def build_public_tournament_roster_state(
 
     status_map = {
         "CONFIRMED": None,
+        "ADMIN_CONFIRMED": None,
         "WAITLIST": "Waitlist",
         "REVIEW": None,
         "PARTNER_MISSING": None,
         "NEEDS_PARTNER": "Needs Partner",
+        "PENDING_PARTNER_REQUEST": "Pending Partner Request",
+        "LEGACY_PARTNER_UNRESOLVED": None,
     }
 
     def _public_member(member: dict[str, Any]) -> dict[str, Any]:
         return {
+            "registration_id": member.get("registration_id"),
+            "selection_id": member.get("selection_id"),
+            "player_id": member.get("player_id"),
             "display_name": str(member.get("display_name") or "Player").strip(),
             "skill": member.get("skill"),
             "age": member.get("age"),
@@ -1473,6 +1572,9 @@ def build_public_tournament_roster_state(
         }
 
     registrations_by_event: list[dict[str, Any]] = []
+    confirmed_teams: list[dict[str, Any]] = []
+    pending_partner_requests: list[dict[str, Any]] = []
+    unresolved_partner_entries: list[dict[str, Any]] = []
     players_needing_partners: list[dict[str, Any]] = []
     unique_players: set[str] = set()
 
@@ -1498,16 +1600,32 @@ def build_public_tournament_roster_state(
                 "division": str(event_option.get("division_name") or roster.get("event_label") or "Division").strip(),
                 "event_label": str(roster.get("event_label") or "").strip(),
                 "status": status_map.get(status),
+                "entry_type": str(entry.get("entry_type") or "").strip(),
+                "partner_request_id": entry.get("partner_request_id"),
+                "partner_link_id": entry.get("partner_link_id"),
+                "source_registration_ids": entry.get("source_registration_ids") or [],
+                "source_selection_ids": entry.get("source_selection_ids") or [],
+                "source_player_ids": entry.get("source_player_ids") or [],
                 "members": members,
             }
             registrations_by_event.append(event_row)
             event_rows.append(event_row)
+            if status in {"CONFIRMED", "ADMIN_CONFIRMED", "WAITLIST"}:
+                confirmed_teams.append(event_row)
+            elif status == "PENDING_PARTNER_REQUEST":
+                pending_partner_requests.append(event_row)
+            elif status in {"LEGACY_PARTNER_UNRESOLVED", "PARTNER_MISSING", "REVIEW"}:
+                unresolved_partner_entries.append(event_row)
 
             if status == "NEEDS_PARTNER":
                 primary = members[0] if members else {}
                 players_needing_partners.append(
                     {
                         "player_name": primary.get("display_name"),
+                        "selection_id": primary.get("selection_id") or (entry.get("source_selection_ids") or [None])[0],
+                        "registration_id": primary.get("registration_id") or (entry.get("source_registration_ids") or [None])[0],
+                        "player_id": primary.get("player_id") or (entry.get("source_player_ids") or [None])[0],
+                        "event_option_id": event_option_id,
                         "event_day_label": event_row["event_day_label"],
                         "event_family": event_row["event_family"],
                         "division": event_row["division"],
@@ -1521,6 +1639,9 @@ def build_public_tournament_roster_state(
 
     return {
         "registrations_by_event": registrations_by_event,
+        "confirmed_teams": confirmed_teams,
+        "pending_partner_requests": pending_partner_requests,
+        "unresolved_partner_entries": unresolved_partner_entries,
         "players_needing_partners": players_needing_partners,
         "summary": {
             "total_registrations": int(state.get("summary", {}).get("total_registrations") or 0),

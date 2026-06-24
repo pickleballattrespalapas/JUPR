@@ -149,10 +149,6 @@ def _normalize_email(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def _normalize_name(value: Any) -> str:
-    return " ".join(str(value or "").strip().lower().split())
-
-
 def _parse_dt(value: Any) -> datetime:
     if not value:
         return datetime.min
@@ -207,7 +203,7 @@ def _is_doubles_event(event: dict[str, Any]) -> bool:
     return bool(event.get("partner_required"))
 
 
-def _to_member_from_registration(registration: dict[str, Any]) -> dict[str, Any]:
+def _to_member_from_registration(registration: dict[str, Any], selection: dict[str, Any] | None = None) -> dict[str, Any]:
     display_name = str(registration.get("display_name") or "").strip()
     if not display_name:
         display_name = " ".join(
@@ -216,6 +212,9 @@ def _to_member_from_registration(registration: dict[str, Any]) -> dict[str, Any]
     if not display_name:
         display_name = str(registration.get("email") or "Player")
     return {
+        "registration_id": str(registration.get("id") or "").strip() or None,
+        "selection_id": str((selection or {}).get("id") or "").strip() or None,
+        "player_id": (selection or {}).get("player_id") or registration.get("player_id"),
         "display_name": display_name,
         "email": _normalize_email(registration.get("email")),
         "phone": str(registration.get("phone") or "").strip() or None,
@@ -227,41 +226,24 @@ def _to_member_from_registration(registration: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _to_member_from_partner(selection: dict[str, Any]) -> dict[str, Any] | None:
-    partner_name = str(selection.get("partner_name") or "").strip()
-    partner_email = _normalize_email(selection.get("partner_email"))
-    partner_phone = str(selection.get("partner_phone") or "").strip() or None
-    partner_dupr = str(selection.get("partner_dupr_id") or "").strip() or None
-    partner_skill = selection.get("partner_skill")
-    partner_age = selection.get("partner_age")
-
-    if not any([partner_name, partner_email, partner_phone, partner_dupr, partner_skill, partner_age]):
-        return None
-
+def _entry_identity(selection: dict[str, Any], registration: dict[str, Any]) -> dict[str, Any]:
     return {
-        "display_name": partner_name or "Partner TBD",
-        "email": partner_email or None,
-        "phone": partner_phone,
-        "dupr_id": partner_dupr,
-        "skill": partner_skill,
-        "age": partner_age,
+        "source_registration_ids": [str(registration.get("id"))],
+        "source_selection_ids": [str(selection.get("id"))],
+        "source_player_ids": [selection.get("player_id") or registration.get("player_id")],
     }
 
 
-def _selection_references_registration(selection: dict[str, Any], registration: dict[str, Any]) -> bool:
-    if str(selection.get("partner_mode") or "").upper() != "HAS_PARTNER":
-        return False
-
-    partner_email = _normalize_email(selection.get("partner_email"))
-    partner_name = _normalize_name(selection.get("partner_name"))
-    reg_email = _normalize_email(registration.get("email"))
-    reg_name = _normalize_name(registration.get("display_name"))
-
-    if partner_email and reg_email and partner_email == reg_email:
-        return True
-    if partner_name and reg_name and partner_name == reg_name:
-        return True
-    return False
+def _legacy_partner_metadata(selection: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "partner_name": str(selection.get("partner_name") or "").strip() or None,
+        "partner_email": _normalize_email(selection.get("partner_email")) or None,
+        "partner_phone": str(selection.get("partner_phone") or "").strip() or None,
+        "partner_dupr_id": str(selection.get("partner_dupr_id") or "").strip() or None,
+        "partner_skill": selection.get("partner_skill"),
+        "partner_age": selection.get("partner_age"),
+        "partner_note": selection.get("partner_note"),
+    }
 
 
 def collapse_duplicate_registrations(
@@ -342,8 +324,8 @@ def _compile_singles_roster(
                 "event_option_id": str(event.get("id")),
                 "event_label": str(event.get("label") or ""),
                 "status": "CONFIRMED",
-                "members": [_to_member_from_registration(registration)],
-                "source_registration_ids": [str(registration.get("id"))],
+                "members": [_to_member_from_registration(registration, selection)],
+                **_entry_identity(selection, registration),
                 "submitted_at": registration.get("submitted_at"),
                 "sort_key": _parse_dt(registration.get("submitted_at")),
             }
@@ -357,11 +339,120 @@ def _compile_doubles_roster(
     event: dict[str, Any],
     selections: list[dict[str, Any]],
     reg_lookup: dict[str, dict[str, Any]],
+    *,
+    partner_requests: list[dict[str, Any]] | None = None,
+    partner_links: list[dict[str, Any]] | None = None,
+    team_members: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     partner_board: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
-    processed: set[str] = set()
+    confirmed_selection_ids: set[str] = set()
+    pending_selection_ids: set[str] = set()
+
+    selection_lookup = {str(row.get("id")): row for row in selections}
+    event_id = str(event.get("id"))
+    event_requests = [row for row in (partner_requests or []) if str(row.get("event_option_id")) == event_id]
+    event_links = [row for row in (partner_links or []) if str(row.get("event_option_id")) == event_id]
+    members_by_link: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for member in team_members or []:
+        if str(member.get("event_option_id")) != event_id:
+            continue
+        members_by_link[str(member.get("team_link_id"))].append(member)
+
+    def _member_for_selection_id(selection_id: str) -> dict[str, Any] | None:
+        selection = selection_lookup.get(str(selection_id))
+        if not selection:
+            return None
+        registration = reg_lookup.get(str(selection.get("registration_id")), {})
+        return _to_member_from_registration(registration, selection)
+
+    def _entry_sort_for_selection_ids(selection_ids: list[str]) -> datetime:
+        sort_values = []
+        for selection_id in selection_ids:
+            selection = selection_lookup.get(str(selection_id))
+            if not selection:
+                continue
+            registration = reg_lookup.get(str(selection.get("registration_id")), {})
+            sort_values.append(_parse_dt(registration.get("submitted_at")))
+        return min(sort_values) if sort_values else datetime.min
+
+    for link in event_links:
+        status = str(link.get("status") or "").upper()
+        if status not in {"CONFIRMED", "ADMIN_CONFIRMED"}:
+            continue
+        link_id = str(link.get("id") or "")
+        link_members = sorted(members_by_link.get(link_id, []), key=lambda row: int(row.get("player_order") or 0))
+        selection_ids = [str(row.get("selection_id")) for row in link_members if str(row.get("selection_id") or "")]
+        if not selection_ids:
+            selection_ids = [str(link.get("selection1_id") or ""), str(link.get("selection2_id") or "")]
+        selection_ids = [sid for sid in selection_ids if sid in selection_lookup]
+        if len(selection_ids) < 2:
+            issues.append(
+                _issue(
+                    str(tournament_id),
+                    "CONFIRMED_LINK_MISSING_SELECTION",
+                    "warning",
+                    f"Confirmed partner link {link_id or 'unknown'} references missing selections for {event.get('label')}.",
+                    event_option_id=event_id,
+                )
+            )
+            continue
+        members = [_member_for_selection_id(selection_id) for selection_id in selection_ids]
+        members = [member for member in members if member]
+        registrations = [reg_lookup.get(str(selection_lookup[sid].get("registration_id")), {}) for sid in selection_ids]
+        rows.append(
+            {
+                "id": _uid("roster"),
+                "tournament_id": str(tournament_id),
+                "event_day_id": str(day.get("id")),
+                "event_day_label": str(day.get("label") or ""),
+                "event_option_id": event_id,
+                "event_label": str(event.get("label") or ""),
+                "status": status,
+                "entry_type": "confirmed_team",
+                "partner_link_id": link_id or None,
+                "accepted_request_id": link.get("accepted_request_id"),
+                "members": members,
+                "source_registration_ids": [str(row.get("id")) for row in registrations if row],
+                "source_selection_ids": selection_ids,
+                "source_player_ids": [selection_lookup[sid].get("player_id") or reg_lookup.get(str(selection_lookup[sid].get("registration_id")), {}).get("player_id") for sid in selection_ids],
+                "submitted_at": min((row.get("submitted_at") or "" for row in registrations if row), default=""),
+                "sort_key": _entry_sort_for_selection_ids(selection_ids),
+            }
+        )
+        confirmed_selection_ids.update(selection_ids)
+
+    for request in event_requests:
+        if str(request.get("status") or "").upper() != "PENDING":
+            continue
+        requester_id = str(request.get("requester_selection_id") or "")
+        target_id = str(request.get("target_selection_id") or "")
+        selection_ids = [sid for sid in [requester_id, target_id] if sid and sid in selection_lookup and sid not in confirmed_selection_ids]
+        if not selection_ids:
+            continue
+        pending_selection_ids.update(selection_ids)
+        members = [_member_for_selection_id(selection_id) for selection_id in selection_ids]
+        rows.append(
+            {
+                "id": _uid("roster"),
+                "tournament_id": str(tournament_id),
+                "event_day_id": str(day.get("id")),
+                "event_day_label": str(day.get("label") or ""),
+                "event_option_id": event_id,
+                "event_label": str(event.get("label") or ""),
+                "status": "PENDING_PARTNER_REQUEST",
+                "entry_type": "pending_partner_request",
+                "partner_request_id": str(request.get("id") or "") or None,
+                "members": [member for member in members if member],
+                "source_registration_ids": [str(selection_lookup[sid].get("registration_id")) for sid in selection_ids],
+                "source_selection_ids": selection_ids,
+                "source_player_ids": [selection_lookup[sid].get("player_id") or reg_lookup.get(str(selection_lookup[sid].get("registration_id")), {}).get("player_id") for sid in selection_ids],
+                "target_display_name_snapshot": request.get("target_display_name_snapshot"),
+                "submitted_at": request.get("created_at"),
+                "sort_key": _entry_sort_for_selection_ids(selection_ids),
+            }
+        )
 
     ordered = sorted(
         selections,
@@ -370,7 +461,7 @@ def _compile_doubles_roster(
 
     for selection in ordered:
         selection_id = str(selection.get("id"))
-        if selection_id in processed:
+        if selection_id in confirmed_selection_ids:
             continue
 
         registration = reg_lookup.get(str(selection.get("registration_id")), {})
@@ -381,11 +472,12 @@ def _compile_doubles_roster(
                 "tournament_id": str(tournament_id),
                 "event_day_id": str(day.get("id")),
                 "event_day_label": str(day.get("label") or ""),
-                "event_option_id": str(event.get("id")),
+                "event_option_id": event_id,
                 "event_label": str(event.get("label") or ""),
                 "status": "NEEDS_PARTNER",
-                "members": [_to_member_from_registration(registration)],
-                "source_registration_ids": [str(registration.get("id"))],
+                "entry_type": "needs_partner",
+                "members": [_to_member_from_registration(registration, selection)],
+                **_entry_identity(selection, registration),
                 "submitted_at": registration.get("submitted_at"),
                 "notes": selection.get("partner_note"),
                 "sort_key": _parse_dt(registration.get("submitted_at")),
@@ -398,102 +490,50 @@ def _compile_doubles_roster(
                         "tournament_id": str(tournament_id),
                         "event_day_id": str(day.get("id")),
                         "event_day_label": str(day.get("label") or ""),
-                        "event_option_id": str(event.get("id")),
+                        "event_option_id": event_id,
                         "event_label": str(event.get("label") or ""),
-                        "player": _to_member_from_registration(registration),
+                        "selection_id": selection_id,
+                        "registration_id": str(registration.get("id") or ""),
+                        "player_id": selection.get("player_id") or registration.get("player_id"),
+                        "player": _to_member_from_registration(registration, selection),
                         "note": selection.get("partner_note"),
                         "show_contact_email": True,
                     }
                 )
-            processed.add(selection_id)
+            continue
+
+        if selection_id in pending_selection_ids:
             continue
 
         if partner_mode == "HAS_PARTNER":
-            candidate = None
-            for other in ordered:
-                other_id = str(other.get("id"))
-                if other_id == selection_id or other_id in processed:
-                    continue
-                other_reg = reg_lookup.get(str(other.get("registration_id")), {})
-                if _selection_references_registration(selection, other_reg) or _selection_references_registration(other, registration):
-                    candidate = other
-                    break
-
-            if candidate is None:
-                partner_member = _to_member_from_partner(selection)
-                rows.append(
-                    {
-                        "id": _uid("roster"),
-                        "tournament_id": str(tournament_id),
-                        "event_day_id": str(day.get("id")),
-                        "event_day_label": str(day.get("label") or ""),
-                        "event_option_id": str(event.get("id")),
-                        "event_label": str(event.get("label") or ""),
-                        "status": "PARTNER_MISSING",
-                        "members": [
-                            _to_member_from_registration(registration),
-                            *( [partner_member] if partner_member else [] ),
-                        ],
-                        "source_registration_ids": [str(registration.get("id"))],
-                        "submitted_at": registration.get("submitted_at"),
-                        "sort_key": _parse_dt(registration.get("submitted_at")),
-                    }
-                )
-                issues.append(
-                    _issue(
-                        str(tournament_id),
-                        "PARTNER_NOT_REGISTERED",
-                        "warning",
-                        f"{registration.get('display_name') or registration.get('email')} listed a partner for {event.get('label')}, but the partner is not registered in the same event.",
-                        registration_id=str(registration.get("id")),
-                        selection_id=selection_id,
-                        event_option_id=str(event.get("id")),
-                    )
-                )
-                processed.add(selection_id)
-                continue
-
-            candidate_reg = reg_lookup.get(str(candidate.get("registration_id")), {})
-            is_mutual = _selection_references_registration(selection, candidate_reg) and _selection_references_registration(candidate, registration)
-            status = "CONFIRMED" if is_mutual else "REVIEW"
-            if not is_mutual:
-                issues.append(
-                    _issue(
-                        str(tournament_id),
-                        "ONE_SIDED_PARTNER_MATCH",
-                        "warning",
-                        f"{registration.get('display_name') or registration.get('email')} and {candidate_reg.get('display_name') or candidate_reg.get('email')} appear paired in {event.get('label')}, but only one side declared the partner.",
-                        registration_id=str(registration.get("id")),
-                        selection_id=selection_id,
-                        event_option_id=str(event.get("id")),
-                    )
-                )
             rows.append(
                 {
                     "id": _uid("roster"),
                     "tournament_id": str(tournament_id),
                     "event_day_id": str(day.get("id")),
                     "event_day_label": str(day.get("label") or ""),
-                    "event_option_id": str(event.get("id")),
+                    "event_option_id": event_id,
                     "event_label": str(event.get("label") or ""),
-                    "status": status,
-                    "members": [
-                        _to_member_from_registration(registration),
-                        _to_member_from_registration(candidate_reg),
-                    ],
-                    "source_registration_ids": [str(registration.get("id")), str(candidate_reg.get("id"))],
-                    "submitted_at": min(
-                        registration.get("submitted_at") or "",
-                        candidate_reg.get("submitted_at") or "",
-                    ),
-                    "sort_key": min(
-                        _parse_dt(registration.get("submitted_at")),
-                        _parse_dt(candidate_reg.get("submitted_at")),
-                    ),
+                    "status": "LEGACY_PARTNER_UNRESOLVED",
+                    "entry_type": "unresolved_partner",
+                    "members": [_to_member_from_registration(registration, selection)],
+                    **_entry_identity(selection, registration),
+                    "submitted_at": registration.get("submitted_at"),
+                    "legacy_partner": _legacy_partner_metadata(selection),
+                    "sort_key": _parse_dt(registration.get("submitted_at")),
                 }
             )
-            processed.add(selection_id)
-            processed.add(str(candidate.get("id")))
+            issues.append(
+                _issue(
+                    str(tournament_id),
+                    "LEGACY_PARTNER_UNRESOLVED",
+                    "warning",
+                    f"{registration.get('display_name') or registration.get('email')} listed free-text partner details for {event.get('label')}. Admin review is required before this can become a team.",
+                    registration_id=str(registration.get("id")),
+                    selection_id=selection_id,
+                    event_option_id=event_id,
+                )
+            )
             continue
 
         issues.append(
@@ -504,7 +544,7 @@ def _compile_doubles_roster(
                 f"{registration.get('display_name') or registration.get('email')} selected a doubles event without partner information or a needs-partner request.",
                 registration_id=str(registration.get("id")),
                 selection_id=selection_id,
-                event_option_id=str(event.get("id")),
+                event_option_id=event_id,
             )
         )
         rows.append(
@@ -513,19 +553,18 @@ def _compile_doubles_roster(
                 "tournament_id": str(tournament_id),
                 "event_day_id": str(day.get("id")),
                 "event_day_label": str(day.get("label") or ""),
-                "event_option_id": str(event.get("id")),
+                "event_option_id": event_id,
                 "event_label": str(event.get("label") or ""),
                 "status": "PARTNER_MISSING",
-                "members": [_to_member_from_registration(registration)],
-                "source_registration_ids": [str(registration.get("id"))],
+                "entry_type": "partner_missing",
+                "members": [_to_member_from_registration(registration, selection)],
+                **_entry_identity(selection, registration),
                 "submitted_at": registration.get("submitted_at"),
                 "sort_key": _parse_dt(registration.get("submitted_at")),
             }
         )
-        processed.add(selection_id)
 
     return rows, partner_board, issues
-
 
 def _apply_capacity(
     tournament_id: str,
@@ -543,7 +582,7 @@ def _apply_capacity(
     out: list[dict[str, Any]] = []
     for entry in ordered:
         status = str(entry.get("status") or "")
-        if status in {"NEEDS_PARTNER", "PARTNER_MISSING"}:
+        if status in {"NEEDS_PARTNER", "PARTNER_MISSING", "LEGACY_PARTNER_UNRESOLVED", "PENDING_PARTNER_REQUEST"}:
             out.append(entry)
             continue
         confirmed_slots += 1
@@ -573,6 +612,9 @@ def compile_tournament_registration_state(
     event_options: list[dict[str, Any]],
     registrations: list[dict[str, Any]],
     selections: list[dict[str, Any]],
+    partner_requests: list[dict[str, Any]] | None = None,
+    partner_links: list[dict[str, Any]] | None = None,
+    team_members: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     tournament_id = str(tournament.get("id"))
     settings = settings or {}
@@ -580,6 +622,9 @@ def compile_tournament_registration_state(
     event_options = [deepcopy(row) for row in event_options]
     registrations = [deepcopy(row) for row in registrations]
     selections = [deepcopy(row) for row in selections]
+    partner_requests = [deepcopy(row) for row in (partner_requests or [])]
+    partner_links = [deepcopy(row) for row in (partner_links or [])]
+    team_members = [deepcopy(row) for row in (team_members or [])]
 
     day_lookup = {str(row.get("id")): row for row in days}
     event_lookup = {str(row.get("id")): row for row in event_options}
@@ -627,6 +672,9 @@ def compile_tournament_registration_state(
                 event,
                 event_selections,
                 reg_lookup,
+                partner_requests=partner_requests,
+                partner_links=partner_links,
+                team_members=team_members,
             )
             issues.extend(event_issues)
             partner_board.extend(partner_rows)
@@ -668,10 +716,13 @@ def compile_tournament_registration_state(
             "total_registrations": len(merged_regs),
             "total_selections": len(valid_selections),
             "confirmed_entries": sum(1 for row in summary_entries if row.get("status") == "CONFIRMED"),
+            "admin_confirmed_entries": sum(1 for row in summary_entries if row.get("status") == "ADMIN_CONFIRMED"),
             "review_entries": sum(1 for row in summary_entries if row.get("status") == "REVIEW"),
             "waitlist_entries": sum(1 for row in summary_entries if row.get("status") == "WAITLIST"),
+            "pending_partner_request_entries": sum(1 for row in summary_entries if row.get("status") == "PENDING_PARTNER_REQUEST"),
             "needs_partner_entries": sum(1 for row in summary_entries if row.get("status") == "NEEDS_PARTNER"),
             "partner_missing_entries": sum(1 for row in summary_entries if row.get("status") == "PARTNER_MISSING"),
+            "legacy_partner_unresolved_entries": sum(1 for row in summary_entries if row.get("status") == "LEGACY_PARTNER_UNRESOLVED"),
             "issue_count": len(issues),
             "blocker_count": sum(1 for row in issues if row.get("severity") == "blocker"),
         },

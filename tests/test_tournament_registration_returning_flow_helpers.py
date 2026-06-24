@@ -161,3 +161,112 @@ def test_no_private_get_submission_result_reference():
     from pathlib import Path
 
     assert "_get_submission_result" not in Path("jupr_app/ui/pages/tournament_registration.py").read_text()
+
+
+def test_partner_board_targets_include_durable_ids_and_exclude_current_player():
+    from jupr_app.ui.pages.tournament_registration import _partner_board_targets_for_event
+
+    state = {
+        "event_rosters": [
+            {
+                "event_option_id": "event_1",
+                "entries": [
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "partner_note": "Available Saturday",
+                        "members": [
+                            {
+                                "display_name": "Elizabeth Whelan",
+                                "selection_id": "sel_elizabeth",
+                                "registration_id": "reg_elizabeth",
+                                "player_id": 22,
+                            }
+                        ],
+                    },
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "members": [{"display_name": "Mary Bauman", "selection_id": "sel_mary", "registration_id": "reg_mary", "player_id": 11}],
+                    },
+                ],
+            }
+        ]
+    }
+
+    rows = _partner_board_targets_for_event(state, "event_1", exclude_player_id=11)
+
+    assert rows == [
+        {
+            "target_selection_id": "sel_elizabeth",
+            "target_registration_id": "reg_elizabeth",
+            "target_player_id": "22",
+            "event_option_id": "event_1",
+            "display_name": "Elizabeth Whelan",
+            "partner_note": "Available Saturday",
+        }
+    ]
+
+
+def test_partner_request_ready_requires_durable_target_not_legacy_text():
+    from jupr_app.ui.pages.tournament_registration import _partner_request_ready
+
+    assert _partner_request_ready({"partner_mode": "REQUEST_PARTNER", "partner_name": "Elizabeth whalen", "partner_email": "e@example.com"}) is False
+    assert _partner_request_ready({"partner_mode": "REQUEST_PARTNER", "target_selection_id": "sel_elizabeth"}) is True
+    assert _partner_request_ready({"partner_mode": "REQUEST_PARTNER", "target_player_id": 22}) is True
+
+
+def test_registered_partner_target_for_player_reports_status_and_ids():
+    from jupr_app.ui.pages.tournament_registration import _registered_partner_target_for_player
+
+    state = {
+        "event_rosters": [
+            {"event_option_id": "event_1", "entries": [{"status": "NEEDS_PARTNER", "members": [{"player_id": 22, "selection_id": "sel_22", "registration_id": "reg_22"}]}]}
+        ]
+    }
+
+    assert _registered_partner_target_for_player(state, "event_1", 22) == {
+        "target_selection_id": "sel_22",
+        "target_registration_id": "reg_22",
+        "target_player_id": "22",
+        "status": "NEEDS_PARTNER",
+    }
+
+
+def test_legacy_partner_reconciliation_suggests_same_event_match():
+    from jupr_app.ui.pages.tournament_registration import (
+        _legacy_partner_reconciliation_issues,
+        _legacy_partner_suggestions,
+    )
+
+    mary = {
+        "registration_id": "reg_mary",
+        "selection_id": "sel_mary",
+        "registration": {"display_name": "Mary Bauman", "email": "mary@example.com"},
+        "selection": {"id": "sel_mary", "registration_id": "reg_mary", "event_option_id": "wd35", "partner_mode": "HAS_PARTNER", "partner_name": "Elizabeth whalen"},
+    }
+    elizabeth = {
+        "registration_id": "reg_elizabeth",
+        "selection_id": "sel_elizabeth",
+        "registration": {"display_name": "Elizabeth Whelan", "email": "elizabeth@example.com"},
+        "selection": {"id": "sel_elizabeth", "registration_id": "reg_elizabeth", "event_option_id": "wd35", "partner_mode": "NEEDS_PARTNER"},
+    }
+
+    issues = _legacy_partner_reconciliation_issues([mary, elizabeth], [], [])
+    suggestions = _legacy_partner_suggestions(issues[0], [mary, elizabeth])
+
+    assert issues == [mary]
+    assert suggestions[0]["row"] == elizabeth
+    assert suggestions[0]["scope"] == "same_event"
+
+
+def test_legacy_partner_reconciliation_excludes_confirmed_and_pending_rows():
+    from jupr_app.ui.pages.tournament_registration import _legacy_partner_reconciliation_issues
+
+    row = {
+        "selection_id": "sel_mary",
+        "selection": {"id": "sel_mary", "partner_mode": "HAS_PARTNER", "partner_name": "Elizabeth whalen"},
+        "registration": {"display_name": "Mary Bauman"},
+    }
+
+    assert _legacy_partner_reconciliation_issues([row], [], [{"selection_id": "sel_mary", "status": "ACTIVE"}]) == []
+    assert _legacy_partner_reconciliation_issues([row], [{"requester_selection_id": "sel_mary", "status": "PENDING"}], []) == []
+    assert _legacy_partner_reconciliation_issues([row], [], []) == [row]
