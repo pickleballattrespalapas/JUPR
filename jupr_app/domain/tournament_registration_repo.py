@@ -20,6 +20,7 @@ ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
     "migrations/20261010_tournament_builder_refactor.sql",
     "migrations/20261018_tournament_registration_schema_contract.sql",
+    "migrations/20261019_tournament_registration_partner_links.sql",
 ]
 
 REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -51,6 +52,58 @@ REGISTRATION_SCHEMA_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "partner_board_enabled",
         "status",
         "enabled",
+    ),
+    "tournament_registrations": (
+        "id",
+        "tournament_id",
+        "player_id",
+    ),
+    "tournament_registration_partner_requests": (
+        "id",
+        "tournament_id",
+        "event_option_id",
+        "requester_selection_id",
+        "requester_registration_id",
+        "requester_player_id",
+        "target_selection_id",
+        "target_registration_id",
+        "target_player_id",
+        "target_display_name_snapshot",
+        "status",
+        "source",
+        "created_at",
+        "updated_at",
+        "responded_at",
+        "created_by_registration_id",
+        "created_by_user_id",
+    ),
+    "tournament_registration_team_links": (
+        "id",
+        "tournament_id",
+        "event_option_id",
+        "registration1_id",
+        "registration2_id",
+        "selection1_id",
+        "selection2_id",
+        "player1_id",
+        "player2_id",
+        "status",
+        "accepted_request_id",
+        "created_at",
+        "updated_at",
+        "created_by_user_id",
+    ),
+    "tournament_registration_team_members": (
+        "id",
+        "team_link_id",
+        "tournament_id",
+        "event_option_id",
+        "selection_id",
+        "registration_id",
+        "player_id",
+        "player_order",
+        "status",
+        "created_at",
     ),
 }
 
@@ -200,6 +253,9 @@ def registration_feature_available(supabase) -> tuple[bool, str | None]:
         "tournament_event_options",
         "tournament_registrations",
         "tournament_registration_selections",
+        "tournament_registration_partner_requests",
+        "tournament_registration_team_links",
+        "tournament_registration_team_members",
     ]
     failures: list[str] = []
     for table_name in required_tables:

@@ -13,4 +13,4 @@ Entry format:
 
 Current entries:
 
-- _None yet._
+- `migrations/20261019_tournament_registration_partner_links.sql`: Extends the existing root-level tournament registration schema with linked doubles partner request/team-link tables alongside the prior root registration migrations.
