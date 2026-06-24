@@ -5,6 +5,7 @@ from jupr_app.domain import tournament_registration_repo as repo
 
 MIGRATION = Path("migrations/20261019_tournament_registration_partner_links.sql")
 HOTFIX_MIGRATION = Path("migrations/20261020_tournament_registrations_player_id_postgrest_reload.sql")
+CANONICAL_HOTFIX_MIGRATION = Path("supabase/migrations/20261020000000_tournament_registrations_player_id_postgrest_reload.sql")
 
 
 def _sql() -> str:
@@ -13,6 +14,10 @@ def _sql() -> str:
 
 def _hotfix_sql() -> str:
     return HOTFIX_MIGRATION.read_text(encoding="utf-8").lower()
+
+
+def _canonical_hotfix_sql() -> str:
+    return CANONICAL_HOTFIX_MIGRATION.read_text(encoding="utf-8").lower()
 
 
 def test_partner_link_migration_preserves_existing_selection_entry_model():
@@ -47,6 +52,10 @@ def test_player_id_hotfix_migration_reloads_postgrest_schema_cache():
     assert "idx_tournament_registrations_player_id" in sql
     assert "uq_tournament_registrations_tournament_player" in sql
     assert "notify pgrst, 'reload schema'" in sql
+
+
+def test_canonical_player_id_hotfix_migration_matches_root_hotfix():
+    assert _canonical_hotfix_sql() == _hotfix_sql()
 
 
 def test_registration_schema_contract_includes_partner_link_foundation():
