@@ -1719,16 +1719,8 @@ def render(ctx):
                         st.text_input("Partner age", value=_safe_text(existing.get("partner_age")), key=f"wizard_partner_age_{event_id}")
                     )
             else:
-                event_payload["show_on_partner_board"] = bool(
-                    st.checkbox(
-                        "Show me on the public partner board for this division",
-                        value=bool(existing.get("show_on_partner_board", False)),
-                        disabled=not bool(settings.get("partner_board_enabled", True)),
-                        key=f"wizard_partner_board_optin_{event_id}",
-                    )
-                )
                 event_payload["partner_note"] = st.text_input(
-                    "Short note for partner board (optional)",
+                    "Short note for potential partners (optional)",
                     value=_safe_text(existing.get("partner_note")),
                     key=f"wizard_partner_note_{event_id}",
                 )
