@@ -826,18 +826,20 @@ def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], d
     event_lookup = {str(row.get("id")): row for row in event_options}
 
     registration_forms = len({str(row.get("registration_id")) for row in admin_rows if _safe_text(row.get("registration_id"))})
-    pending = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "pending"]
-    confirmed = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("status")).lower() == "confirmed"]
+    active = [
+        row
+        for row in admin_rows
+        if _safe_text((row.get("registration") or {}).get("status")).lower() in {"confirmed", "pending"}
+    ]
     needs_partner = [row for row in admin_rows if _safe_text((row.get("selection") or {}).get("partner_mode")).upper() == "NEEDS_PARTNER"]
     paid = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("payment_status")).lower() == "paid"]
     unpaid = [row for row in admin_rows if _safe_text((row.get("registration") or {}).get("payment_status")).lower() == "unpaid"]
 
-    metrics = st.columns(7)
+    metrics = st.columns(6)
     for idx, (label, value) in enumerate([
         ("Registration Forms", registration_forms),
         ("Event Entries", len(admin_rows)),
-        ("Confirmed Entries", len(confirmed)),
-        ("Pending Entries", len(pending)),
+        ("Active Registrations", len(active)),
         ("Needs Partner", len(needs_partner)),
         ("Paid", len(paid)),
         ("Unpaid", len(unpaid)),
@@ -855,7 +857,10 @@ def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], d
     for row in admin_rows:
         reg = row.get("registration") or {}
         sel = row.get("selection") or {}
-        if status_filter != "All" and _safe_text(reg.get("status")).lower() != status_filter:
+        effective_status = _safe_text(reg.get("status")).lower()
+        if effective_status == "pending":
+            effective_status = "confirmed"
+        if status_filter != "All" and effective_status != status_filter:
             continue
         if payment_filter != "All" and _safe_text(reg.get("payment_status")).lower() != payment_filter:
             continue
@@ -890,14 +895,11 @@ def _render_registration_admin_roster(*, supabase, tournament: dict[str, Any], d
             if imported:
                 st.warning("Imported into tournament_teams. Event edits and hard delete are blocked until removed from teams.")
 
-            quick_actions = st.columns(3)
-            if quick_actions[0].button("Quick Confirm", key=f"confirm_{sel_id}_{reg_id}"):
-                update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={"status": "confirmed"})
-                st.rerun()
-            if quick_actions[1].button("Move to Waitlist", key=f"waitlist_{sel_id}_{reg_id}"):
+            quick_actions = st.columns(2)
+            if quick_actions[0].button("Move to Waitlist", key=f"waitlist_{sel_id}_{reg_id}"):
                 update_admin_registration(supabase, tournament_id=tournament_id, registration_id=reg_id, payload={"status": "waitlist"})
                 st.rerun()
-            if quick_actions[2].button("Cancel", key=f"cancel_{sel_id}_{reg_id}"):
+            if quick_actions[1].button("Cancel", key=f"cancel_{sel_id}_{reg_id}"):
                 cancel_registration(supabase, tournament_id=tournament_id, registration_id=reg_id)
                 st.rerun()
 
@@ -1103,7 +1105,7 @@ def render(ctx):
                     display_name = st.text_input("Display name")
                     email = st.text_input("Email")
                     phone = st.text_input("Phone")
-                    status = st.selectbox("Admin status", ADMIN_REGISTRATION_STATUS_OPTIONS)
+                    status = st.selectbox("Admin status", ADMIN_REGISTRATION_STATUS_OPTIONS, index=0)
                     payment_status = st.selectbox("Payment status", ADMIN_PAYMENT_STATUS_OPTIONS)
                     day_id = st.selectbox("Day", [str(d.get("id")) for d in days], format_func=lambda did: _safe_text((day_lookup.get(did) or {}).get("label") or did))
                     event_id = st.selectbox("Division", [str(e.get("id")) for e in event_options], format_func=lambda eid: f"{_safe_text((event_lookup.get(eid) or {}).get('event_family_label'))} / {_safe_text((event_lookup.get(eid) or {}).get('division_name') or (event_lookup.get(eid) or {}).get('label'))}")
