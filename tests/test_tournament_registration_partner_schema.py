@@ -4,10 +4,15 @@ from jupr_app.domain import tournament_registration_repo as repo
 
 
 MIGRATION = Path("migrations/20261019_tournament_registration_partner_links.sql")
+HOTFIX_MIGRATION = Path("migrations/20261020_tournament_registrations_player_id_postgrest_reload.sql")
 
 
 def _sql() -> str:
     return MIGRATION.read_text(encoding="utf-8").lower()
+
+
+def _hotfix_sql() -> str:
+    return HOTFIX_MIGRATION.read_text(encoding="utf-8").lower()
 
 
 def test_partner_link_migration_preserves_existing_selection_entry_model():
@@ -36,9 +41,17 @@ def test_partner_link_migration_adds_profile_link_and_active_membership_uniquene
     assert "where status = 'active'" in sql
 
 
+def test_player_id_hotfix_migration_reloads_postgrest_schema_cache():
+    sql = _hotfix_sql()
+    assert "add column if not exists player_id integer null references public.players(id)" in sql
+    assert "idx_tournament_registrations_player_id" in sql
+    assert "uq_tournament_registrations_tournament_player" in sql
+    assert "notify pgrst, 'reload schema'" in sql
+
+
 def test_registration_schema_contract_includes_partner_link_foundation():
     assert "migrations/20261019_tournament_registration_partner_links.sql" in repo.REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS
-    assert "player_id" in repo.REGISTRATION_SCHEMA_REQUIRED_COLUMNS["tournament_registrations"]
+    assert "player_id" in repo.REGISTRATION_SCHEMA_REQUIRED_COLUMNS["tournament_registrations.player_id"]
     assert "requester_selection_id" in repo.REGISTRATION_SCHEMA_REQUIRED_COLUMNS["tournament_registration_partner_requests"]
     assert "accepted_request_id" in repo.REGISTRATION_SCHEMA_REQUIRED_COLUMNS["tournament_registration_team_links"]
     assert "player_order" in repo.REGISTRATION_SCHEMA_REQUIRED_COLUMNS["tournament_registration_team_members"]
