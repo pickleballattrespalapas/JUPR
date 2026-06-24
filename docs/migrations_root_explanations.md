@@ -14,3 +14,4 @@ Entry format:
 Current entries:
 
 - `migrations/20261019_tournament_registration_partner_links.sql`: Extends the existing root-level tournament registration schema with linked doubles partner request/team-link tables alongside the prior root registration migrations.
+- `migrations/20261020_tournament_registrations_player_id_postgrest_reload.sql`: Idempotent production hotfix for tournament registration submissions that need `tournament_registrations.player_id`; also sends `notify pgrst, 'reload schema'` so PostgREST refreshes its schema cache after DDL.
