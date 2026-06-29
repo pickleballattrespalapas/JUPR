@@ -13,6 +13,7 @@ _FLOW_CHOICE_KEY = "registration_flow_choice"
 _FLOW_NEW = "new"
 _FLOW_EDIT = "edit"
 _ACTIVE_TOURNAMENT_ID_KEY = "registration_active_public_tournament_id"
+_PUBLIC_PARTNER_BOARD_OPT_IN_LABEL = "Show me on the public partner board for this division"
 
 
 def _load_legacy_module():
@@ -401,8 +402,27 @@ def _render_public_start_or_edit(ctx) -> bool:
     return True
 
 
+def _hide_public_partner_board_opt_in_checkbox():
+    original_checkbox = st.checkbox
+
+    def checkbox_wrapper(label: str, *args, **kwargs):
+        if str(label) == _PUBLIC_PARTNER_BOARD_OPT_IN_LABEL:
+            return True
+        return original_checkbox(label, *args, **kwargs)
+
+    return original_checkbox, checkbox_wrapper
+
+
 def render(ctx) -> None:
     admin_mode = bool(getattr(ctx, "admin_logged_in", False)) and not bool(getattr(ctx, "public_mode", False))
     if not admin_mode and _render_public_start_or_edit(ctx):
         return
-    _legacy.render(ctx)
+    if admin_mode:
+        _legacy.render(ctx)
+        return
+    original_checkbox, checkbox_wrapper = _hide_public_partner_board_opt_in_checkbox()
+    st.checkbox = checkbox_wrapper
+    try:
+        _legacy.render(ctx)
+    finally:
+        st.checkbox = original_checkbox
