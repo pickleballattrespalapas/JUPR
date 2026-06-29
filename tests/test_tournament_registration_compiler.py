@@ -118,6 +118,27 @@ def test_free_text_partner_does_not_create_pseudo_team_when_needs_partner_exists
     )
 
 
+def test_needs_partner_registration_is_public_even_without_opt_in_flag():
+    state = _state(
+        selections=[
+            {
+                "id": "sel-elizabeth",
+                "registration_id": "reg-elizabeth",
+                "registration_day_id": "day-1",
+                "event_option_id": "wd-35",
+                "partner_mode": "NEEDS_PARTNER",
+                "show_on_partner_board": False,
+                "partner_note": "Available Saturday",
+            }
+        ],
+    )
+
+    assert len(state["partner_board"]) == 1
+    assert state["partner_board"][0]["selection_id"] == "sel-elizabeth"
+    assert state["partner_board"][0]["player"]["display_name"] == "Elizabeth Whelan"
+    assert state["partner_board"][0]["note"] == "Available Saturday"
+
+
 def test_mutual_free_text_partner_data_cannot_create_confirmed_team():
     state = _state(
         selections=[
