@@ -17,6 +17,16 @@ def test_public_registration_entry_choice_labels_are_present():
     assert "Send secure edit link" in source
 
 
+def test_verified_edit_resume_bypasses_public_choice_wrapper_before_selector():
+    source = Path("jupr_app/ui/pages/tournament_registration/__init__.py").read_text(encoding="utf-8")
+
+    edit_bypass_index = source.index("if edit_query:")
+    selector_index = source.index("_legacy._select_public_tournament")
+
+    assert edit_bypass_index < selector_index
+    assert "if edit_query:\n        return False" in source
+
+
 def test_new_registration_with_existing_email_routes_to_edit_flow():
     wizard = {"registration_flow_choice": "new"}
 
