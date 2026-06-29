@@ -318,7 +318,9 @@ def _render_public_start_or_edit(ctx) -> bool:
 
     active_tournament_id, active_wizard, active_flow_choice = _active_registration_wizard()
     edit_query = _safe_text(st.query_params.get("edit")).lower() in {"1", "true", "yes", "y", "on"}
-    if active_tournament_id and (bool(active_wizard.get("edit_mode")) or edit_query or active_flow_choice == _FLOW_NEW):
+    if edit_query:
+        return False
+    if active_tournament_id and (bool(active_wizard.get("edit_mode")) or active_flow_choice == _FLOW_NEW):
         return False
 
     if active_tournament_id and active_flow_choice == _FLOW_EDIT:
@@ -338,7 +340,7 @@ def _render_public_start_or_edit(ctx) -> bool:
     wizard = _legacy._init_wizard_state(tournament_id)
     flow_choice = _safe_text(wizard.get(_FLOW_CHOICE_KEY))
 
-    if bool(wizard.get("edit_mode")) or edit_query:
+    if bool(wizard.get("edit_mode")):
         return False
     if flow_choice == _FLOW_NEW:
         return False
