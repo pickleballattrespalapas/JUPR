@@ -9,6 +9,9 @@ import streamlit as st
 
 _LEGACY_MODULE_NAME = "jupr_app.ui.pages._tournament_registration_legacy"
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "tournament_registration.py"
+_FLOW_CHOICE_KEY = "registration_flow_choice"
+_FLOW_NEW = "new"
+_FLOW_EDIT = "edit"
 
 
 def _load_legacy_module():
@@ -33,9 +36,6 @@ for _name in dir(_legacy):
     globals()[_name] = getattr(_legacy, _name)
 
 _LEGACY_ADVANCE_STEP1 = _legacy._advance_step1_registration_wizard
-_FLOW_CHOICE_KEY = "registration_flow_choice"
-_FLOW_NEW = "new"
-_FLOW_EDIT = "edit"
 
 
 def _reset_public_registration_wizard(tournament_id: str) -> dict[str, Any]:
@@ -89,11 +89,7 @@ def _send_edit_link(
         return False, "We could not send the edit link automatically. Please contact tournament staff."
 
 
-def _render_public_registration_choice(
-    *,
-    tournament_id: str,
-    registration_slug: str,
-) -> None:
+def _render_public_registration_choice(*, tournament_id: str, registration_slug: str) -> None:
     st.markdown("### Registration")
     st.write("Choose how you want to continue.")
     new_col, edit_col = st.columns(2)
@@ -127,7 +123,6 @@ def _render_public_registration_choice(
 
 def _render_existing_registration_link_prompt(
     *,
-    supabase,
     tournament: dict[str, Any],
     settings: dict[str, Any],
     tournament_id: str,
@@ -179,7 +174,6 @@ def _render_edit_lookup(
 ) -> None:
     if _safe_text(wizard.get("returning_registration_id")) and _safe_text(wizard.get("returning_email")):
         _render_existing_registration_link_prompt(
-            supabase=supabase,
             tournament=tournament,
             settings=settings,
             tournament_id=tournament_id,
@@ -313,6 +307,8 @@ def _render_public_start_or_edit(ctx) -> bool:
     wizard = _legacy._init_wizard_state(tournament_id)
     flow_choice = _safe_text(wizard.get(_FLOW_CHOICE_KEY))
 
+    if bool(wizard.get("edit_mode")) or _safe_text(st.query_params.get("edit")).lower() in {"1", "true", "yes", "y", "on"}:
+        return False
     if flow_choice == _FLOW_NEW:
         return False
 
@@ -367,10 +363,7 @@ def _render_public_start_or_edit(ctx) -> bool:
         )
         return True
 
-    _render_public_registration_choice(
-        tournament_id=tournament_id,
-        registration_slug=registration_slug,
-    )
+    _render_public_registration_choice(tournament_id=tournament_id, registration_slug=registration_slug)
     return True
 
 
