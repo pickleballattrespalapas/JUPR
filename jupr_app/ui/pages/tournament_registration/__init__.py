@@ -12,6 +12,7 @@ _LEGACY_PATH = Path(__file__).resolve().parent.parent / "tournament_registration
 _FLOW_CHOICE_KEY = "registration_flow_choice"
 _FLOW_NEW = "new"
 _FLOW_EDIT = "edit"
+_ACTIVE_TOURNAMENT_ID_KEY = "registration_active_public_tournament_id"
 
 
 def _load_legacy_module():
@@ -100,6 +101,7 @@ def _render_public_registration_choice(*, tournament_id: str, registration_slug:
             wizard["current_step"] = 1
             wizard["edit_mode"] = False
             st.session_state[wizard_state_key(tournament_id)] = wizard
+            st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
             navigate_same_tab(
                 page="tournament_registration",
                 params=_registration_nav_params(tournament_id=tournament_id, registration_slug=registration_slug),
@@ -112,6 +114,7 @@ def _render_public_registration_choice(*, tournament_id: str, registration_slug:
             wizard[_FLOW_CHOICE_KEY] = _FLOW_EDIT
             wizard["current_step"] = 0
             st.session_state[wizard_state_key(tournament_id)] = wizard
+            st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
             navigate_same_tab(
                 page="tournament_registration",
                 params=_registration_nav_params(tournament_id=tournament_id, registration_slug=registration_slug),
@@ -156,6 +159,7 @@ def _render_existing_registration_link_prompt(
             wizard["returning_email_error"] = ""
             wizard[_FLOW_CHOICE_KEY] = _FLOW_EDIT
             st.session_state[wizard_state_key(tournament_id)] = wizard
+            st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
             st.rerun()
     if wizard.get("returning_email_sent"):
         st.success(f"We sent an edit link to {masked}. Please check spam/junk.")
@@ -196,6 +200,7 @@ def _render_edit_lookup(
                 wizard["returning_email_error"] = "No registration was found for that email on this tournament. Check the email or start a new registration."
                 wizard["returning_email_sent"] = False
                 st.session_state[wizard_state_key(tournament_id)] = wizard
+                st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
                 st.rerun()
             wizard["returning_registration_id"] = _safe_text(existing_registration.get("id"))
             wizard["returning_email"] = clean_email
@@ -209,11 +214,13 @@ def _render_edit_lookup(
             wizard["returning_email_sent"] = sent
             wizard["returning_email_error"] = error
             st.session_state[wizard_state_key(tournament_id)] = wizard
+            st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
             st.rerun()
     with c2:
         if st.button("Back", use_container_width=True, key=f"registration_edit_lookup_back_{tournament_id}"):
             wizard = _reset_public_registration_wizard(tournament_id)
             st.session_state[wizard_state_key(tournament_id)] = wizard
+            st.session_state.pop(_ACTIVE_TOURNAMENT_ID_KEY, None)
             navigate_same_tab(
                 page="tournament_registration",
                 params=_registration_nav_params(tournament_id=tournament_id, registration_slug=registration_slug),
@@ -274,14 +281,25 @@ def _advance_step1_registration_wizard(
         wizard["returning_email_sent"] = False
         wizard["returning_email_error"] = "That email already has a registration for this tournament. Use the secure edit link flow to make changes."
         wizard["current_step"] = 0
+        st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
         return True, ""
 
     wizard["current_step"] = 2
+    st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
     return True, ""
 
 
 _legacy._advance_step1_registration_wizard = _advance_step1_registration_wizard
 globals()["_advance_step1_registration_wizard"] = _advance_step1_registration_wizard
+
+
+def _active_registration_wizard() -> tuple[str, dict[str, Any], str]:
+    tournament_id = _safe_text(st.session_state.get(_ACTIVE_TOURNAMENT_ID_KEY))
+    if not tournament_id:
+        return "", {}, ""
+    wizard = st.session_state.get(wizard_state_key(tournament_id), {}) or {}
+    flow_choice = _safe_text(wizard.get(_FLOW_CHOICE_KEY))
+    return tournament_id, wizard, flow_choice
 
 
 def _render_public_start_or_edit(ctx) -> bool:
@@ -298,7 +316,20 @@ def _render_public_start_or_edit(ctx) -> bool:
             st.caption(detail)
         st.stop()
 
-    tournament, settings, days, event_options = _legacy._select_public_tournament(ctx, supabase, page_key="tournament_registration")
+    active_tournament_id, active_wizard, active_flow_choice = _active_registration_wizard()
+    edit_query = _safe_text(st.query_params.get("edit")).lower() in {"1", "true", "yes", "y", "on"}
+    if active_tournament_id and (bool(active_wizard.get("edit_mode")) or edit_query or active_flow_choice == _FLOW_NEW):
+        return False
+
+    if active_tournament_id and active_flow_choice == _FLOW_EDIT:
+        tournament, settings, days, event_options = get_public_tournament_bundle(
+            supabase,
+            club_id=club_id,
+            tournament_id=active_tournament_id,
+            registration_slug=_safe_text(st.query_params.get("tournament")) or None,
+        )
+    else:
+        tournament, settings, days, event_options = _legacy._select_public_tournament(ctx, supabase, page_key="tournament_registration")
     if not tournament:
         st.stop()
 
@@ -307,7 +338,7 @@ def _render_public_start_or_edit(ctx) -> bool:
     wizard = _legacy._init_wizard_state(tournament_id)
     flow_choice = _safe_text(wizard.get(_FLOW_CHOICE_KEY))
 
-    if bool(wizard.get("edit_mode")) or _safe_text(st.query_params.get("edit")).lower() in {"1", "true", "yes", "y", "on"}:
+    if bool(wizard.get("edit_mode")) or edit_query:
         return False
     if flow_choice == _FLOW_NEW:
         return False
@@ -353,6 +384,7 @@ def _render_public_start_or_edit(ctx) -> bool:
         st.stop()
 
     if flow_choice == _FLOW_EDIT:
+        st.session_state[_ACTIVE_TOURNAMENT_ID_KEY] = tournament_id
         _render_edit_lookup(
             supabase=supabase,
             tournament=tournament,
