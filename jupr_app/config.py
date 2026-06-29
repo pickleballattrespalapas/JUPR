@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -22,10 +23,36 @@ EMAIL_MODE_STAGING_REDIRECT = "staging_redirect"
 SUPPORTED_EMAIL_MODES = {EMAIL_MODE_LIVE, EMAIL_MODE_DRY_RUN, EMAIL_MODE_STAGING_REDIRECT}
 
 
+def _streamlit_secret_value(*path: str) -> str:
+    try:
+        import streamlit as st
+    except Exception:
+        return ""
+
+    try:
+        current: object = st.secrets
+    except Exception:
+        return ""
+
+    for key in path:
+        if not isinstance(current, Mapping):
+            return ""
+        try:
+            if key not in current:
+                return ""
+            current = current[key]
+        except Exception:
+            return ""
+    return str(current or "").strip()
+
+
 def get_env_or_default(name: str, default: str = "") -> str:
     value = str(os.getenv(name, "")).strip()
     if value:
         return value
+    secret_value = _streamlit_secret_value(name)
+    if secret_value:
+        return secret_value
     return str(default).strip()
 
 
@@ -107,8 +134,30 @@ def get_email_mode() -> str:
     return EMAIL_MODE_LIVE
 
 
+def _registration_edit_secret_fallback() -> str:
+    for candidate in (
+        get_env_or_default("SUPABASE_SERVICE_ROLE_KEY"),
+        _streamlit_secret_value("supabase", "service_role_key"),
+        get_env_or_default("SUPABASE_ANON_KEY"),
+        _streamlit_secret_value("supabase", "anon_key"),
+        _streamlit_secret_value("supabase", "key"),
+    ):
+        if candidate:
+            return f"registration-edit-token:{candidate}"
+    return ""
+
+
 def get_registration_edit_token_secret() -> str:
-    secret = get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET")
-    if not secret:
-        raise ValueError("JUPR_REGISTRATION_EDIT_SECRET is required for registration edit links.")
-    return secret
+    for candidate in (
+        get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),
+        _streamlit_secret_value("registration", "edit_token_secret"),
+        _streamlit_secret_value("registration", "edit_secret"),
+        _streamlit_secret_value("jupr", "registration_edit_secret"),
+        _registration_edit_secret_fallback(),
+    ):
+        if candidate:
+            return candidate
+    raise ValueError(
+        "JUPR_REGISTRATION_EDIT_SECRET is required for registration edit links. "
+        "Set it directly, or configure Supabase credentials so the app can derive a stable signing secret."
+    )
