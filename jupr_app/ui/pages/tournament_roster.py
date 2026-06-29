@@ -3,17 +3,26 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.tournament_registration_repo import (
     build_public_tournament_roster_state,
-    build_public_urls,
     get_public_tournament_bundle,
     list_open_public_tournaments,
     registration_feature_available,
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import navigate_same_tab
+
+
+_STATUS_SORT_ORDER = {
+    "Needs Partner": 0,
+    "Pending Partner Request": 1,
+    "Waitlist": 2,
+    "Review": 3,
+    "Registered": 4,
+}
 
 
 def _safe_text(value: Any) -> str:
@@ -97,11 +106,213 @@ def _select_public_tournament(ctx, supabase, *, page_key: str):
     )
 
 
+def _ordered_unique(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _safe_text(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def _display_status(row: dict[str, Any]) -> str:
+    status = _safe_text(row.get("status"))
+    if status:
+        return status
+    entry_type = _safe_text(row.get("entry_type")).lower()
+    if entry_type == "needs_partner":
+        return "Needs Partner"
+    if entry_type == "pending_partner_request":
+        return "Pending Partner Request"
+    if entry_type in {"unresolved_partner", "partner_missing"}:
+        return "Review"
+    return "Registered"
+
+
+def _format_skill(value: Any) -> str:
+    text = _safe_text(value)
+    if not text:
+        return "—"
+    try:
+        number = float(text)
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+    except Exception:
+        return text
+
+
+def _format_age(member: dict[str, Any]) -> str:
+    age_bracket = _safe_text(member.get("age_bracket"))
+    if age_bracket:
+        return age_bracket
+    age = _safe_text(member.get("age"))
+    return age or "—"
+
+
+def _team_names(members: list[dict[str, Any]]) -> str:
+    names = [_safe_text(member.get("display_name") or "Player") for member in members]
+    return " / ".join(name for name in names if name) or "Player"
+
+
+def _team_skills(members: list[dict[str, Any]]) -> str:
+    skills = [_format_skill(member.get("skill")) for member in members if member.get("skill") not in (None, "")]
+    return " / ".join(skills) if skills else "—"
+
+
+def _team_ages(members: list[dict[str, Any]]) -> str:
+    ages = [_format_age(member) for member in members if _format_age(member) != "—"]
+    return " / ".join(ages) if ages else "—"
+
+
+def _roster_display_row(row: dict[str, Any]) -> dict[str, str]:
+    members = [member or {} for member in (row.get("members") or [])]
+    return {
+        "Player / Team": _team_names(members),
+        "Status": _display_status(row),
+        "Skill": _team_skills(members),
+        "Age": _team_ages(members),
+    }
+
+
+def _partner_display_row(row: dict[str, Any]) -> dict[str, str]:
+    return {
+        "Player": _safe_text(row.get("player_name") or "Player"),
+        "Day": _safe_text(row.get("event_day_label") or "—"),
+        "Event": _safe_text(row.get("event_family") or "—"),
+        "Division": _safe_text(row.get("division") or "—"),
+        "Skill": _format_skill(row.get("skill")),
+        "Age": _safe_text(row.get("age_bracket") or row.get("age") or "—"),
+        "Note": _safe_text(row.get("note") or "—"),
+    }
+
+
+def _filter_options(rows: list[dict[str, Any]], field: str) -> list[str]:
+    return ["All"] + _ordered_unique([row.get(field) for row in rows])
+
+
+def _status_options(rows: list[dict[str, Any]]) -> list[str]:
+    statuses = _ordered_unique([_display_status(row) for row in rows])
+    return ["All"] + sorted(statuses, key=lambda value: _STATUS_SORT_ORDER.get(value, 99))
+
+
+def _apply_roster_filters(rows: list[dict[str, Any]], *, day: str, event: str, division: str, status: str) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if day != "All" and _safe_text(row.get("event_day_label")) != day:
+            continue
+        if event != "All" and _safe_text(row.get("event_family")) != event:
+            continue
+        if division != "All" and _safe_text(row.get("division")) != division:
+            continue
+        if status != "All" and _display_status(row) != status:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _apply_partner_filters(rows: list[dict[str, Any]], *, day: str, event: str, division: str) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if day != "All" and _safe_text(row.get("event_day_label")) != day:
+            continue
+        if event != "All" and _safe_text(row.get("event_family")) != event:
+            continue
+        if division != "All" and _safe_text(row.get("division")) != division:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _render_roster_tab(registrations: list[dict[str, Any]]) -> None:
+    if not registrations:
+        st.info("No players are publicly listed for this tournament yet.")
+        return
+
+    st.markdown("### Tournament Roster")
+    filter_cols = st.columns(4)
+    with filter_cols[0]:
+        selected_day = st.selectbox("Day", _filter_options(registrations, "event_day_label"), key="roster_day_filter")
+    with filter_cols[1]:
+        selected_event = st.selectbox("Event", _filter_options(registrations, "event_family"), key="roster_event_filter")
+    with filter_cols[2]:
+        selected_division = st.selectbox("Division", _filter_options(registrations, "division"), key="roster_division_filter")
+    with filter_cols[3]:
+        selected_status = st.selectbox("Status", _status_options(registrations), key="roster_status_filter")
+
+    filtered = _apply_roster_filters(
+        registrations,
+        day=selected_day,
+        event=selected_event,
+        division=selected_division,
+        status=selected_status,
+    )
+    if not filtered:
+        st.info("No roster entries match the selected filters.")
+        return
+
+    grouped: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for row in filtered:
+        grouped[_safe_text(row.get("event_day_label"))][_safe_text(row.get("event_family"))][_safe_text(row.get("division"))].append(row)
+
+    for day_label, family_rows in grouped.items():
+        with st.expander(day_label or "Day", expanded=True):
+            for family, division_rows in family_rows.items():
+                st.markdown(f"**{family or 'Event'}**")
+                for division, rows in division_rows.items():
+                    st.caption(division or "Division")
+                    table_rows = sorted(
+                        [_roster_display_row(row) for row in rows],
+                        key=lambda row: (_STATUS_SORT_ORDER.get(row.get("Status", ""), 99), row.get("Player / Team", "")),
+                    )
+                    st.dataframe(
+                        pd.DataFrame(table_rows),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+
+def _render_partner_tab(partner_rows: list[dict[str, Any]]) -> None:
+    st.markdown("### Looking for Partners")
+    if not partner_rows:
+        st.info("No players are currently looking for a partner.")
+        return
+
+    filter_cols = st.columns(3)
+    with filter_cols[0]:
+        selected_day = st.selectbox("Day", _filter_options(partner_rows, "event_day_label"), key="partner_day_filter")
+    with filter_cols[1]:
+        selected_event = st.selectbox("Event", _filter_options(partner_rows, "event_family"), key="partner_event_filter")
+    with filter_cols[2]:
+        selected_division = st.selectbox("Division", _filter_options(partner_rows, "division"), key="partner_division_filter")
+
+    filtered = _apply_partner_filters(
+        partner_rows,
+        day=selected_day,
+        event=selected_event,
+        division=selected_division,
+    )
+    if not filtered:
+        st.info("No partner-needed entries match the selected filters.")
+        return
+
+    table_rows = sorted(
+        [_partner_display_row(row) for row in filtered],
+        key=lambda row: (row.get("Day", ""), row.get("Event", ""), row.get("Division", ""), row.get("Player", "")),
+    )
+    st.dataframe(
+        pd.DataFrame(table_rows),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
 def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = False):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
     page_shell(
         "📋 Tournament Roster",
-        "Public roster and partner-seeking players for current open tournaments.",
+        "See registered players, teams, and players looking for partners.",
         mode_label=mode_label,
     )
 
@@ -135,11 +346,6 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
     state = build_public_tournament_roster_state(supabase, tournament, settings, days, event_options)
     if state.get("partner_link_schema_available") is False and not bool(getattr(ctx, "public_mode", False)):
         st.warning("Partner request features are unavailable until the partner-link migration is applied.")
-    public_urls = build_public_urls(
-        base_url=_safe_text(st.session_state.get("base_url")),
-        tournament_id=str(tournament.get("id")),
-        registration_slug=settings.get("registration_slug"),
-    )
 
     top_cols = st.columns([3, 1])
     with top_cols[0]:
@@ -162,83 +368,19 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
     summary = state.get("summary") or {}
     registrations = state.get("registrations_by_event") or []
     partner_rows = state.get("players_needing_partners") or []
+    event_count = len({(_safe_text(r.get("event_day_label")), _safe_text(r.get("event_family")), _safe_text(r.get("division"))) for r in registrations})
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Registered players/teams", int(summary.get("total_registrations") or 0))
-    m2.metric("Public players", int(summary.get("total_players") or 0))
-    m3.metric("Events", len({(_safe_text(r.get('event_day_label')), _safe_text(r.get('event_label'))) for r in registrations}))
-    m4.metric("Looking for partners", int(summary.get("players_needing_partners") or 0))
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("Registered entries", len(registrations))
+    metric_cols[1].metric("Events", event_count or len(event_options or []))
+    metric_cols[2].metric("Looking for partners", int(summary.get("players_needing_partners") or len(partner_rows)))
 
-    st.markdown("### Players Looking for Partners")
-    if not partner_rows:
-        st.info("No players are currently listed as looking for a partner.")
-    else:
-        for row in partner_rows:
-            extras = []
-            if row.get("skill") not in (None, ""):
-                extras.append(f"Skill: {row.get('skill')}")
-            if row.get("age_bracket"):
-                extras.append(f"Age bracket: {row.get('age_bracket')}")
-            elif row.get("age") not in (None, ""):
-                extras.append(f"Age: {row.get('age')}")
-            if row.get("note"):
-                extras.append(f"Note: {row.get('note')}")
-            st.markdown(
-                f"- **{_safe_text(row.get('player_name') or 'Player')}** — "
-                f"{_safe_text(row.get('event_day_label'))} / {_safe_text(row.get('event_family'))} / {_safe_text(row.get('division'))}"
-            )
-            if extras:
-                st.caption(" • ".join(extras))
+    tab_labels = ["Looking for Partners", "Roster"] if focus_partners else ["Roster", "Looking for Partners"]
+    tabs = dict(zip(tab_labels, st.tabs(tab_labels)))
+    with tabs["Roster"]:
+        _render_roster_tab(registrations)
+    with tabs["Looking for Partners"]:
+        _render_partner_tab(partner_rows)
 
     if focus_partners:
-        st.caption("Showing the partner-seeking section first from a legacy Partner Board link.")
-
-    if not registrations:
-        st.info("No players are publicly listed for this tournament yet.")
-        st.stop()
-
-    st.markdown("### Tournament Roster")
-
-    day_filters = ["All"] + sorted({_safe_text(row.get("event_day_label")) for row in registrations if _safe_text(row.get("event_day_label"))})
-    family_filters = ["All"] + sorted({_safe_text(row.get("event_family")) for row in registrations if _safe_text(row.get("event_family"))})
-    division_filters = ["All"] + sorted({_safe_text(row.get("division")) for row in registrations if _safe_text(row.get("division"))})
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        selected_day = st.selectbox("Day", day_filters)
-    with c2:
-        selected_family = st.selectbox("Event", family_filters)
-    with c3:
-        selected_division = st.selectbox("Division", division_filters)
-
-    grouped: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for row in registrations:
-        if selected_day != "All" and _safe_text(row.get("event_day_label")) != selected_day:
-            continue
-        if selected_family != "All" and _safe_text(row.get("event_family")) != selected_family:
-            continue
-        if selected_division != "All" and _safe_text(row.get("division")) != selected_division:
-            continue
-        grouped[_safe_text(row.get("event_day_label"))][_safe_text(row.get("event_family"))][_safe_text(row.get("division"))].append(row)
-
-    if not grouped:
-        st.info("No roster entries match the selected filters.")
-        st.stop()
-
-    for day_label, family_rows in grouped.items():
-        with st.expander(day_label or "Day", expanded=True):
-            for family, division_rows in family_rows.items():
-                st.markdown(f"**{family or 'Event'}**")
-                for division, rows in division_rows.items():
-                    st.markdown(f"_{division or 'Division'}_")
-                    for row in rows:
-                        names = " / ".join(
-                            _safe_text(member.get("display_name") or "Player") for member in (row.get("members") or [])
-                        )
-                        details = []
-                        if row.get("status"):
-                            details.append(str(row.get("status")))
-                        skills = [member.get("skill") for member in (row.get("members") or []) if member.get("skill") not in (None, "")]
-                        if skills:
-                            details.append("Skill " + " / ".join(str(skill) for skill in skills))
-                        st.markdown(f"- {names}" + (f" — {' • '.join(details)}" if details else ""))
+        st.caption("Opened from the legacy Partner Board link; partner-needed entries are now part of the tournament roster.")
