@@ -47,9 +47,6 @@ def _append_missing_public_partner_board_rows(
     rows: list[dict[str, Any]],
     partner_board: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    if not bool(event.get("public_partner_board", True)):
-        return partner_board
-
     existing_selection_ids = {str(row.get("selection_id") or "").strip() for row in partner_board}
     for row in rows:
         if str(row.get("status") or "").upper() != "NEEDS_PARTNER":
