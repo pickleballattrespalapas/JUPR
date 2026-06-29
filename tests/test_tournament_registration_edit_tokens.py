@@ -8,8 +8,17 @@ from jupr_app.domain.tournament_registration_edit_tokens import build_registrati
 SECRET = "test-secret"
 
 
+def _clear_implicit_token_secret_env(monkeypatch):
+    for key in [
+        "JUPR_REGISTRATION_EDIT_SECRET",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_ANON_KEY",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_edit_token_module_imports_without_env_secret(monkeypatch):
-    monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+    _clear_implicit_token_secret_env(monkeypatch)
 
     module = importlib.import_module("jupr_app.domain.tournament_registration_edit_tokens")
 
@@ -33,8 +42,8 @@ def test_verify_token_works_with_explicit_secret():
     assert payload["registration_id"] == "r1"
 
 
-def test_build_token_without_explicit_secret_raises_clear_error_when_env_missing(monkeypatch):
-    monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+def test_build_token_without_explicit_secret_raises_clear_error_when_config_missing(monkeypatch):
+    _clear_implicit_token_secret_env(monkeypatch)
 
     with pytest.raises(ValueError, match="JUPR_REGISTRATION_EDIT_SECRET is required"):
         build_registration_edit_token(tournament_id="t1", registration_id="r1", email="ada@example.com", now=100)
@@ -46,8 +55,25 @@ def test_get_registration_edit_token_secret_reads_env(monkeypatch):
     assert get_registration_edit_token_secret() == "env-secret"
 
 
-def test_get_registration_edit_token_secret_raises_clear_error_when_missing(monkeypatch):
+def test_get_registration_edit_token_secret_can_fall_back_to_supabase_service_role(monkeypatch):
     monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
+
+    assert get_registration_edit_token_secret() == "registration-edit-token:service-role-secret"
+
+
+def test_build_and_verify_token_can_use_supabase_fallback_secret(monkeypatch):
+    monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
+
+    token = build_registration_edit_token(tournament_id="t1", registration_id="r1", email="ada@example.com", now=100)
+    payload = verify_registration_edit_token(token, expected_tournament_id="t1", expected_registration_id="r1", expected_email="ADA@example.com", now=101)
+
+    assert payload["registration_id"] == "r1"
+
+
+def test_get_registration_edit_token_secret_raises_clear_error_when_missing(monkeypatch):
+    _clear_implicit_token_secret_env(monkeypatch)
 
     with pytest.raises(ValueError, match="JUPR_REGISTRATION_EDIT_SECRET is required"):
         get_registration_edit_token_secret()
@@ -78,7 +104,7 @@ def test_token_rejects_tampering():
 
 
 def test_tournament_registration_edit_page_imports_without_env_secret(monkeypatch):
-    monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
+    _clear_implicit_token_secret_env(monkeypatch)
 
     module = importlib.import_module("jupr_app.ui.pages.tournament_registration_edit")
 
