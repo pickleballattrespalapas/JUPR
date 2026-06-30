@@ -7,6 +7,7 @@ from typing import Any
 
 _LEGACY_MODULE_NAME = "jupr_app.domain._tournament_registration_compiler_legacy"
 _LEGACY_PATH = Path(__file__).resolve().parent.parent / "tournament_registration_compiler.py"
+_CANCELLED_REGISTRATION_STATUSES = {"cancelled", "canceled"}
 
 
 def _load_legacy_module():
@@ -28,6 +29,7 @@ for _name in dir(_legacy):
         continue
     globals()[_name] = getattr(_legacy, _name)
 
+_LEGACY_COMPILE_SINGLES_ROSTER = _legacy._compile_singles_roster
 _LEGACY_COMPILE_DOUBLES_ROSTER = _legacy._compile_doubles_roster
 
 
@@ -37,6 +39,34 @@ def _first_text(values: list[Any]) -> str:
         if text:
             return text
     return ""
+
+
+def _registration_is_cancelled(registration: dict[str, Any] | None) -> bool:
+    return str((registration or {}).get("status") or "").strip().lower() in _CANCELLED_REGISTRATION_STATUSES
+
+
+def _active_public_selections(selections: list[dict[str, Any]], reg_lookup: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        selection
+        for selection in selections
+        if not _registration_is_cancelled(reg_lookup.get(str(selection.get("registration_id"))))
+    ]
+
+
+def _compile_singles_roster(
+    tournament_id: str,
+    day: dict[str, Any],
+    event: dict[str, Any],
+    selections: list[dict[str, Any]],
+    reg_lookup: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return _LEGACY_COMPILE_SINGLES_ROSTER(
+        tournament_id,
+        day,
+        event,
+        _active_public_selections(selections, reg_lookup),
+        reg_lookup,
+    )
 
 
 def _append_missing_public_partner_board_rows(
@@ -94,7 +124,7 @@ def _compile_doubles_roster(
         tournament_id,
         day,
         event,
-        selections,
+        _active_public_selections(selections, reg_lookup),
         reg_lookup,
         partner_requests=partner_requests,
         partner_links=partner_links,
@@ -110,6 +140,8 @@ def _compile_doubles_roster(
     return rows, partner_board, issues
 
 
+_legacy._compile_singles_roster = _compile_singles_roster
 _legacy._compile_doubles_roster = _compile_doubles_roster
+globals()["_compile_singles_roster"] = _compile_singles_roster
 globals()["_compile_doubles_roster"] = _compile_doubles_roster
 compile_tournament_registration_state = _legacy.compile_tournament_registration_state
