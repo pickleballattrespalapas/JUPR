@@ -20,6 +20,7 @@ def test_streamlined_registration_admin_bulk_actions_include_core_workflows():
     assert "Move division" in admin_ui.BULK_ACTIONS
     assert "Append admin note" in admin_ui.BULK_ACTIONS
     assert "Cancel registrations" in admin_ui.BULK_ACTIONS
+    assert "Hard delete cancelled registrations" in admin_ui.BULK_ACTIONS
 
 
 def test_needs_partner_selection_payload_stays_public_by_default():
