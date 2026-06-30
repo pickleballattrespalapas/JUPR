@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.tournament_registration_repo import (
@@ -13,7 +12,7 @@ from jupr_app.domain.tournament_registration_repo import (
     registration_feature_available,
 )
 from jupr_app.ui.layout import page_shell
-from jupr_app.ui.public_links import navigate_same_tab
+from jupr_app.ui.public_links import build_public_url, navigate_same_tab
 
 
 _STATUS_SORT_ORDER = {
@@ -27,6 +26,13 @@ _STATUS_SORT_ORDER = {
 
 def _safe_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _md(value: Any) -> str:
+    text = _safe_text(value)
+    for char in ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|"]:
+        text = text.replace(char, f"\\{char}")
+    return text
 
 
 def _public_tournament_label(choice: dict[str, Any]) -> str:
@@ -166,28 +172,6 @@ def _team_ages(members: list[dict[str, Any]]) -> str:
     return " / ".join(ages) if ages else "—"
 
 
-def _roster_display_row(row: dict[str, Any]) -> dict[str, str]:
-    members = [member or {} for member in (row.get("members") or [])]
-    return {
-        "Player / Team": _team_names(members),
-        "Status": _display_status(row),
-        "Skill": _team_skills(members),
-        "Age": _team_ages(members),
-    }
-
-
-def _partner_display_row(row: dict[str, Any]) -> dict[str, str]:
-    return {
-        "Player": _safe_text(row.get("player_name") or "Player"),
-        "Day": _safe_text(row.get("event_day_label") or "—"),
-        "Event": _safe_text(row.get("event_family") or "—"),
-        "Division": _safe_text(row.get("division") or "—"),
-        "Skill": _format_skill(row.get("skill")),
-        "Age": _safe_text(row.get("age_bracket") or row.get("age") or "—"),
-        "Note": _safe_text(row.get("note") or "—"),
-    }
-
-
 def _target_selection_id_from_row(row: dict[str, Any]) -> str:
     direct = _safe_text(row.get("selection_id"))
     if direct:
@@ -217,33 +201,66 @@ def _partner_request_params(*, tournament_id: str, registration_slug: str, targe
     return params
 
 
-def _render_partner_request_buttons(
-    rows: list[dict[str, Any]],
-    *,
-    tournament_id: str,
-    registration_slug: str,
-    key_prefix: str,
-) -> None:
-    request_rows = [row for row in rows if _display_status(row) == "Needs Partner" and _target_selection_id_from_row(row)]
-    if not request_rows:
-        return
-    st.caption("Send a private request. The requested player's email stays hidden; your email or phone is shared so they can reply.")
-    for row in request_rows:
-        target_selection_id = _target_selection_id_from_row(row)
-        player_name = _request_player_name(row)
-        button_label = f"Request {player_name} as partner"
-        button_key = f"{key_prefix}_request_partner_{target_selection_id}"
-        if st.button(button_label, key=button_key, use_container_width=True):
-            navigate_same_tab(
-                page="tournament_partner_board",
-                params=_partner_request_params(
-                    tournament_id=tournament_id,
-                    registration_slug=registration_slug,
-                    target_selection_id=target_selection_id,
-                ),
-                public_mode=True,
-                source=f"tournament_roster:request_partner:{target_selection_id}",
-            )
+def _partner_request_url(*, tournament_id: str, registration_slug: str, target_selection_id: str) -> str:
+    return build_public_url(
+        page="tournament_partner_board",
+        params=_partner_request_params(
+            tournament_id=tournament_id,
+            registration_slug=registration_slug,
+            target_selection_id=target_selection_id,
+        ),
+    )
+
+
+def _status_with_request_link(row: dict[str, Any], *, tournament_id: str, registration_slug: str) -> str:
+    status = _display_status(row)
+    target_selection_id = _target_selection_id_from_row(row)
+    if status != "Needs Partner" or not target_selection_id:
+        return _md(status)
+    url = _partner_request_url(
+        tournament_id=tournament_id,
+        registration_slug=registration_slug,
+        target_selection_id=target_selection_id,
+    )
+    return f"**Needs Partner** · [request partner]({url})"
+
+
+def _compact_roster_line(row: dict[str, Any], *, tournament_id: str, registration_slug: str) -> str:
+    members = [member or {} for member in (row.get("members") or [])]
+    details = []
+    skills = _team_skills(members)
+    ages = _team_ages(members)
+    if skills != "—":
+        details.append(f"Skill {skills}")
+    if ages != "—":
+        details.append(f"Age {ages}")
+    suffix = f" · {_md(' · '.join(details))}" if details else ""
+    return f"- **{_md(_team_names(members))}** — {_status_with_request_link(row, tournament_id=tournament_id, registration_slug=registration_slug)}{suffix}"
+
+
+def _compact_partner_line(row: dict[str, Any], *, tournament_id: str, registration_slug: str) -> str:
+    player_name = _request_player_name(row)
+    target_selection_id = _target_selection_id_from_row(row)
+    details = [
+        _safe_text(row.get("event_day_label")),
+        _safe_text(row.get("event_family")),
+        _safe_text(row.get("division")),
+    ]
+    detail_text = " / ".join(part for part in details if part)
+    extras = []
+    if row.get("skill") not in (None, ""):
+        extras.append(f"Skill {_format_skill(row.get('skill'))}")
+    age = _safe_text(row.get("age_bracket") or row.get("age"))
+    if age:
+        extras.append(f"Age {age}")
+    note = _safe_text(row.get("note"))
+    if note:
+        extras.append(f"Note: {note}")
+    request_link = ""
+    if target_selection_id:
+        request_link = f" · [request partner]({_partner_request_url(tournament_id=tournament_id, registration_slug=registration_slug, target_selection_id=target_selection_id)})"
+    extras_text = f" · {_md(' · '.join(extras))}" if extras else ""
+    return f"- **{_md(player_name)}** — {_md(detail_text)}{extras_text}{request_link}"
 
 
 def _filter_options(rows: list[dict[str, Any]], field: str) -> list[str]:
@@ -317,24 +334,15 @@ def _render_roster_tab(registrations: list[dict[str, Any]], *, tournament_id: st
     for day_label, family_rows in grouped.items():
         with st.expander(day_label or "Day", expanded=True):
             for family, division_rows in family_rows.items():
-                st.markdown(f"**{family or 'Event'}**")
+                st.markdown(f"**{_md(family or 'Event')}**")
                 for division, rows in division_rows.items():
                     st.caption(division or "Division")
-                    table_rows = sorted(
-                        [_roster_display_row(row) for row in rows],
-                        key=lambda row: (_STATUS_SORT_ORDER.get(row.get("Status", ""), 99), row.get("Player / Team", "")),
-                    )
-                    st.dataframe(
-                        pd.DataFrame(table_rows),
-                        hide_index=True,
-                        use_container_width=True,
-                    )
-                    _render_partner_request_buttons(
+                    sorted_rows = sorted(
                         rows,
-                        tournament_id=tournament_id,
-                        registration_slug=registration_slug,
-                        key_prefix=f"roster_{day_label}_{family}_{division}",
+                        key=lambda row: (_STATUS_SORT_ORDER.get(_display_status(row), 99), _team_names(row.get("members") or [])),
                     )
+                    for row in sorted_rows:
+                        st.markdown(_compact_roster_line(row, tournament_id=tournament_id, registration_slug=registration_slug))
 
 
 def _render_partner_tab(partner_rows: list[dict[str, Any]], *, tournament_id: str, registration_slug: str) -> None:
@@ -361,21 +369,8 @@ def _render_partner_tab(partner_rows: list[dict[str, Any]], *, tournament_id: st
         st.info("No partner-needed entries match the selected filters.")
         return
 
-    table_rows = sorted(
-        [_partner_display_row(row) for row in filtered],
-        key=lambda row: (row.get("Day", ""), row.get("Event", ""), row.get("Division", ""), row.get("Player", "")),
-    )
-    st.dataframe(
-        pd.DataFrame(table_rows),
-        hide_index=True,
-        use_container_width=True,
-    )
-    _render_partner_request_buttons(
-        filtered,
-        tournament_id=tournament_id,
-        registration_slug=registration_slug,
-        key_prefix="partner_tab",
-    )
+    for row in sorted(filtered, key=lambda row: (_safe_text(row.get("event_day_label")), _safe_text(row.get("event_family")), _safe_text(row.get("division")), _request_player_name(row))):
+        st.markdown(_compact_partner_line(row, tournament_id=tournament_id, registration_slug=registration_slug))
 
 
 def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = False):
