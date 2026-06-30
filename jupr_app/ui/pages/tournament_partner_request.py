@@ -10,6 +10,9 @@ from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import navigate_same_tab
 
 
+_CANCELLED_REGISTRATION_STATUSES = {"cancelled", "canceled"}
+
+
 def _safe_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -35,6 +38,10 @@ def _valid_email(value: Any) -> bool:
     if not text:
         return False
     return "@" in text and "." in text.rsplit("@", 1)[-1]
+
+
+def _registration_is_cancelled(registration: dict[str, Any]) -> bool:
+    return _safe_text(registration.get("status")).lower() in _CANCELLED_REGISTRATION_STATUSES
 
 
 def _display_name(registration: dict[str, Any]) -> str:
@@ -140,6 +147,11 @@ def render(ctx) -> None:
         st.stop()
 
     registration = _load_registration(supabase, tournament_id=tournament_id, registration_id=_safe_text(selection.get("registration_id"))) or {}
+    if _registration_is_cancelled(registration):
+        st.warning("This player is no longer available for partner requests because their registration was cancelled.")
+        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
+        st.stop()
+
     target_email = _normalize_email(registration.get("email"))
     target_name = _display_name(registration)
     event = _event_lookup(event_options).get(_safe_text(selection.get("event_option_id"))) or {}
