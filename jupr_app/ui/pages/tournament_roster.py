@@ -188,6 +188,64 @@ def _partner_display_row(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _target_selection_id_from_row(row: dict[str, Any]) -> str:
+    direct = _safe_text(row.get("selection_id"))
+    if direct:
+        return direct
+    source_selection_ids = row.get("source_selection_ids") or []
+    if source_selection_ids:
+        return _safe_text(source_selection_ids[0])
+    members = row.get("members") or []
+    if members:
+        return _safe_text((members[0] or {}).get("selection_id"))
+    return ""
+
+
+def _request_player_name(row: dict[str, Any]) -> str:
+    if _safe_text(row.get("player_name")):
+        return _safe_text(row.get("player_name"))
+    members = row.get("members") or []
+    if members:
+        return _safe_text((members[0] or {}).get("display_name") or "Player")
+    return "Player"
+
+
+def _partner_request_params(*, tournament_id: str, registration_slug: str, target_selection_id: str) -> dict[str, str]:
+    params = {"tournament_id": tournament_id, "target_selection_id": target_selection_id}
+    if registration_slug:
+        params["tournament"] = registration_slug
+    return params
+
+
+def _render_partner_request_buttons(
+    rows: list[dict[str, Any]],
+    *,
+    tournament_id: str,
+    registration_slug: str,
+    key_prefix: str,
+) -> None:
+    request_rows = [row for row in rows if _display_status(row) == "Needs Partner" and _target_selection_id_from_row(row)]
+    if not request_rows:
+        return
+    st.caption("Send a private request. The requested player's email stays hidden; your email or phone is shared so they can reply.")
+    for row in request_rows:
+        target_selection_id = _target_selection_id_from_row(row)
+        player_name = _request_player_name(row)
+        button_label = f"Request {player_name} as partner"
+        button_key = f"{key_prefix}_request_partner_{target_selection_id}"
+        if st.button(button_label, key=button_key, use_container_width=True):
+            navigate_same_tab(
+                page="tournament_partner_board",
+                params=_partner_request_params(
+                    tournament_id=tournament_id,
+                    registration_slug=registration_slug,
+                    target_selection_id=target_selection_id,
+                ),
+                public_mode=True,
+                source=f"tournament_roster:request_partner:{target_selection_id}",
+            )
+
+
 def _filter_options(rows: list[dict[str, Any]], field: str) -> list[str]:
     return ["All"] + _ordered_unique([row.get(field) for row in rows])
 
@@ -225,7 +283,7 @@ def _apply_partner_filters(rows: list[dict[str, Any]], *, day: str, event: str, 
     return filtered
 
 
-def _render_roster_tab(registrations: list[dict[str, Any]]) -> None:
+def _render_roster_tab(registrations: list[dict[str, Any]], *, tournament_id: str, registration_slug: str) -> None:
     if not registrations:
         st.info("No players are publicly listed for this tournament yet.")
         return
@@ -271,9 +329,15 @@ def _render_roster_tab(registrations: list[dict[str, Any]]) -> None:
                         hide_index=True,
                         use_container_width=True,
                     )
+                    _render_partner_request_buttons(
+                        rows,
+                        tournament_id=tournament_id,
+                        registration_slug=registration_slug,
+                        key_prefix=f"roster_{day_label}_{family}_{division}",
+                    )
 
 
-def _render_partner_tab(partner_rows: list[dict[str, Any]]) -> None:
+def _render_partner_tab(partner_rows: list[dict[str, Any]], *, tournament_id: str, registration_slug: str) -> None:
     st.markdown("### Looking for Partners")
     if not partner_rows:
         st.info("No players are currently looking for a partner.")
@@ -305,6 +369,12 @@ def _render_partner_tab(partner_rows: list[dict[str, Any]]) -> None:
         pd.DataFrame(table_rows),
         hide_index=True,
         use_container_width=True,
+    )
+    _render_partner_request_buttons(
+        filtered,
+        tournament_id=tournament_id,
+        registration_slug=registration_slug,
+        key_prefix="partner_tab",
     )
 
 
@@ -347,6 +417,8 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
     if state.get("partner_link_schema_available") is False and not bool(getattr(ctx, "public_mode", False)):
         st.warning("Partner request features are unavailable until the partner-link migration is applied.")
 
+    tournament_id = _safe_text(tournament.get("id"))
+    registration_slug = _safe_text((settings or {}).get("registration_slug"))
     top_cols = st.columns([3, 1])
     with top_cols[0]:
         st.subheader(_safe_text(tournament.get("name") or "Tournament"))
@@ -359,10 +431,9 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
             st.caption(" • ".join(window_bits))
     with top_cols[1]:
         if st.button("Register", key=f"register_from_roster_{tournament.get('id')}"):
-            nav_params = {"tournament_id": str(tournament.get("id"))}
-            slug = _safe_text(settings.get("registration_slug"))
-            if slug:
-                nav_params["tournament"] = slug
+            nav_params = {"tournament_id": tournament_id}
+            if registration_slug:
+                nav_params["tournament"] = registration_slug
             navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
 
     summary = state.get("summary") or {}
@@ -378,9 +449,9 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
     tab_labels = ["Looking for Partners", "Roster"] if focus_partners else ["Roster", "Looking for Partners"]
     tabs = dict(zip(tab_labels, st.tabs(tab_labels)))
     with tabs["Roster"]:
-        _render_roster_tab(registrations)
+        _render_roster_tab(registrations, tournament_id=tournament_id, registration_slug=registration_slug)
     with tabs["Looking for Partners"]:
-        _render_partner_tab(partner_rows)
+        _render_partner_tab(partner_rows, tournament_id=tournament_id, registration_slug=registration_slug)
 
     if focus_partners:
         st.caption("Opened from the legacy Partner Board link; partner-needed entries are now part of the tournament roster.")
