@@ -17,3 +17,10 @@ def test_partner_request_page_hides_recipient_email_and_requires_requester_conta
     assert "Your phone / WhatsApp" in source
     assert "Enter your email or phone number" in source
     assert "target_email" in source
+
+
+def test_partner_request_page_blocks_cancelled_registrations():
+    source = Path("jupr_app/ui/pages/tournament_partner_request.py").read_text(encoding="utf-8")
+
+    assert "_registration_is_cancelled" in source
+    assert "registration was cancelled" in source
