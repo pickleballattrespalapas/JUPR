@@ -86,6 +86,11 @@ def _roster_params(*, tournament_id: str, registration_slug: str) -> dict[str, s
     return params
 
 
+def _back_to_roster_button(*, tournament_id: str, registration_slug: str, label: str = "Back to tournament roster", primary: bool = False) -> None:
+    if st.button(label, type="primary" if primary else "secondary"):
+        navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+
+
 def _resolve_tournament(ctx, supabase, *, tournament_id: str, slug: str):
     if not tournament_id and not slug:
         return None, None, [], []
@@ -121,18 +126,18 @@ def render(ctx) -> None:
 
     if not target_selection_id:
         st.error("This partner request link is missing the requested player.")
-        if st.button("Back to tournament roster"):
-            navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
 
     selection = _load_target_selection(supabase, tournament_id=tournament_id, target_selection_id=target_selection_id)
     if not selection:
         st.error("The requested player entry could not be found.")
-        if st.button("Back to tournament roster"):
-            navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
     if _safe_text(selection.get("partner_mode")).upper() != "NEEDS_PARTNER":
         st.warning("This player is no longer marked as looking for a partner in this division.")
+        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
+        st.stop()
 
     registration = _load_registration(supabase, tournament_id=tournament_id, registration_id=_safe_text(selection.get("registration_id"))) or {}
     target_email = _normalize_email(registration.get("email"))
@@ -149,15 +154,13 @@ def render(ctx) -> None:
 
     if not target_email:
         st.error("This player does not have an email address on their registration, so the request cannot be sent automatically.")
-        if st.button("Back to tournament roster"):
-            navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
 
     sent_key = f"partner_request_sent_{tournament_id}_{target_selection_id}"
     if st.session_state.get(sent_key):
         st.success("Your partner request was sent. The requested player can contact you using the information you provided.")
-        if st.button("Back to tournament roster", type="primary"):
-            navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug, primary=True)
         return
 
     with st.form(f"partner_request_form_{tournament_id}_{target_selection_id}"):
@@ -199,10 +202,9 @@ def render(ctx) -> None:
                 st.success("Partner request prepared. Email sending is currently in dry-run mode.")
             else:
                 st.success("Partner request sent. The requested player can contact you using the information you provided.")
-            if st.button("Back to tournament roster", type="primary"):
-                navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+            _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug, primary=True)
+            return
         except Exception as exc:
             st.error(f"Could not send partner request: {exc}")
 
-    if st.button("Cancel / Back to roster"):
-        navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+    _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug, label="Cancel / Back to roster")
