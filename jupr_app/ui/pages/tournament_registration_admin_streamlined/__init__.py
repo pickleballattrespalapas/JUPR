@@ -32,6 +32,7 @@ def _load_legacy_module():
 
 
 _legacy = _load_legacy_module()
+_LEGACY_APPLY_BULK_ACTION = _legacy._apply_bulk_action
 for _name in dir(_legacy):
     if _name.startswith("__") and _name.endswith("__"):
         continue
@@ -129,7 +130,7 @@ def _apply_bulk_action(
             tournament_id=tournament_id,
             selected_rows=selected_rows,
         )
-    return _legacy._apply_bulk_action(
+    return _LEGACY_APPLY_BULK_ACTION(
         supabase=supabase,
         tournament_id=tournament_id,
         selected_rows=selected_rows,
