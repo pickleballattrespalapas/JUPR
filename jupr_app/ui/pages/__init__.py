@@ -1,4 +1,4 @@
-"""Lightweight page package helpers."""
+"""Lazy page proxies for routes that need compatibility guards."""
 from __future__ import annotations
 
 import importlib
@@ -41,8 +41,21 @@ def _is_streamlit_control_exception(exc: BaseException) -> bool:
     return exc.__class__.__name__ in _CONTROL_EXCEPTION_NAMES
 
 
+def _clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
+
 def _status_text(value: object) -> str:
-    return str(value or "").strip().lower()
+    return _clean_text(value).lower()
 
 
 def _is_archived_status(value: object) -> bool:
@@ -83,14 +96,7 @@ def _looks_like_optional_league_schema_error(exc: BaseException) -> bool:
     mentions_optional_column = any(col in text for col in _OPTIONAL_LEAGUE_METADATA_COLUMNS)
     mentions_schema = any(
         marker in text
-        for marker in [
-            "schema cache",
-            "could not find",
-            "does not exist",
-            "column",
-            "42703",
-            "pgrst204",
-        ]
+        for marker in ["schema cache", "could not find", "does not exist", "column", "42703", "pgrst204"]
     )
     return mentions_optional_column and mentions_schema
 
@@ -111,10 +117,7 @@ def _legacy_league_payload(payload: Any) -> dict[str, Any]:
     status = payload.get("status")
     if _is_archived_status(status) or _is_ended_status(status):
         return {"is_active": False}
-    if _is_active_status(status):
-        allowed = {"is_active": True}
-    else:
-        allowed = {}
+    allowed = {"is_active": True} if _is_active_status(status) else {}
     for key in _LEGACY_LEAGUE_METADATA_COLUMNS:
         if key in payload:
             allowed[key] = payload[key]
@@ -142,8 +145,7 @@ class _LeagueMetadataQueryGuard:
 
     def _retry_update(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
         query = self._supabase.table("leagues_metadata").update(payload)
-        query = self._apply_filters(query)
-        return query.execute(*args, **kwargs)
+        return self._apply_filters(query).execute(*args, **kwargs)
 
     def execute(self, *args: Any, **kwargs: Any) -> Any:
         try:
@@ -171,9 +173,8 @@ class _LeagueMetadataQueryGuard:
         def _call(*args: Any, **kwargs: Any) -> Any:
             self._filters.append((name, args, kwargs))
             result = attr(*args, **kwargs)
-            if result is self._inner:
-                return self
-            self._inner = result
+            if result is not self._inner:
+                self._inner = result
             return self
 
         return _call
@@ -186,11 +187,7 @@ class _LeagueMetadataTableGuard:
 
     def update(self, payload: Any, *args: Any, **kwargs: Any) -> _LeagueMetadataQueryGuard:
         _prime_end_league_wizard_state(payload)
-        return _LeagueMetadataQueryGuard(
-            self._supabase,
-            self._inner.update(payload, *args, **kwargs),
-            payload,
-        )
+        return _LeagueMetadataQueryGuard(self._supabase, self._inner.update(payload, *args, **kwargs), payload)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -223,10 +220,9 @@ def _maybe_advance_closed_league_wizard(ctx: Any) -> None:
     if current_step > 1:
         return
 
-    selected_league = str(st.session_state.get("league_editor_select", "") or "").strip()
+    selected_league = _clean_text(st.session_state.get("league_editor_select", ""))
     if not selected_league:
         return
-
     df_meta = getattr(ctx, "df_meta", None)
     if df_meta is None or getattr(df_meta, "empty", True) or "league_name" not in df_meta.columns:
         return
@@ -240,7 +236,7 @@ def _maybe_advance_closed_league_wizard(ctx: Any) -> None:
     row = rows.iloc[0]
     ended_at = row.get("ended_at") if "ended_at" in rows.columns else None
     status = row.get("status") if "status" in rows.columns else ""
-    has_ended_at = ended_at is not None and not pd.isna(ended_at) and str(ended_at).strip() != ""
+    has_ended_at = ended_at is not None and not pd.isna(ended_at) and _clean_text(ended_at) != ""
 
     if _is_archived_status(status):
         st.session_state["end_league_wizard_open"] = False
@@ -278,10 +274,6 @@ def _safe_json_dict(raw: object) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
-
-
-def _clean_text(value: object) -> str:
-    return str(value or "").strip()
 
 
 def _humanize_badge_id(badge_id: object) -> str:
@@ -353,12 +345,10 @@ def _patched_trophy_display_name(row: Any) -> str:
         cleaned = _clean_text(row.get(key))
         if cleaned and cleaned.lower() not in _GENERIC_TROPHY_NAMES:
             return cleaned
-
     for key in ["tape_title", "award_name", "display_name", "title", "label", "category_label", "category"]:
         cleaned = _clean_text(value_json.get(key))
         if cleaned and cleaned.lower() not in _GENERIC_TROPHY_NAMES:
             return cleaned
-
     badge_id = _clean_text(row.get("badge_id"))
     if badge_id and badge_id.lower() not in _GENERIC_TROPHY_NAMES:
         return _humanize_badge_id(badge_id)
@@ -366,8 +356,7 @@ def _patched_trophy_display_name(row: Any) -> str:
 
 
 def _missing_or_generic(value: object) -> bool:
-    cleaned = _clean_text(value).lower()
-    return cleaned in _GENERIC_TROPHY_NAMES
+    return _clean_text(value).lower() in _GENERIC_TROPHY_NAMES
 
 
 def _merge_badge_definitions(df: Any, ctx: Any = None, supabase: Any = None) -> Any:
@@ -411,7 +400,7 @@ def _merge_badge_definitions(df: Any, ctx: Any = None, supabase: Any = None) -> 
         merged_df = joined
 
     if "name" not in merged_df.columns:
-        merged_df["name"] = pd.NA
+        merged_df["name"] = ""
     generic_name_mask = merged_df["name"].map(_missing_or_generic)
     if generic_name_mask.any():
         merged_df.loc[generic_name_mask, "name"] = merged_df.loc[generic_name_mask].apply(_patched_trophy_display_name, axis=1)
@@ -491,8 +480,7 @@ def _patch_players_module(module: Any) -> Any:
             frames.append(direct)
         if not frames:
             return pd.DataFrame()
-        combined = pd.concat(frames, ignore_index=True, sort=False)
-        combined = _dedupe_badges(combined)
+        combined = _dedupe_badges(pd.concat(frames, ignore_index=True, sort=False))
         return _merge_badge_definitions(combined, ctx=ctx, supabase=supabase)
 
     def patched_is_top_performer_badge(badge_id: object) -> bool:
