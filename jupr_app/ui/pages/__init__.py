@@ -34,6 +34,12 @@ _TOP_PERFORMER_BADGE_LABELS = {
     "top_performer_best_win_pct": "Best Win %",
     "top_performer_most_wins": "Most Wins",
 }
+_TOP_PERFORMER_PRESTIGE = {
+    "highest_rating": 130,
+    "most_improved": 125,
+    "best_win_pct": 120,
+    "most_wins": 115,
+}
 _GENERIC_TROPHY_NAMES = {"", "badge", "trophy", "award"}
 
 
@@ -440,15 +446,116 @@ def _fetch_player_badges_resilient(supabase: Any, club_id: str, pid: int) -> Any
     return _merge_badge_definitions(pb_df, supabase=supabase)
 
 
+def _is_closed_league_row(row: Any) -> bool:
+    import pandas as pd
+
+    status = row.get("status") if hasattr(row, "get") else ""
+    if _is_archived_status(status) or _is_ended_status(status):
+        return True
+    ended_at = row.get("ended_at") if hasattr(row, "get") else None
+    if ended_at is not None and not pd.isna(ended_at) and _clean_text(ended_at):
+        return True
+    is_active = row.get("is_active") if hasattr(row, "get") else None
+    if is_active is not None and not pd.isna(is_active) and not bool(is_active):
+        return True
+    return False
+
+
+def _virtual_top_performer_badges(ctx: Any, club_id: str, pid: int) -> Any:
+    import pandas as pd
+
+    df_meta = getattr(ctx, "df_meta", None)
+    df_leagues = getattr(ctx, "df_leagues", None)
+    if df_meta is None or df_leagues is None or getattr(df_meta, "empty", True) or getattr(df_leagues, "empty", True):
+        return pd.DataFrame()
+    if "league_name" not in df_meta.columns:
+        return pd.DataFrame()
+
+    try:
+        from jupr_app.domain.leagues import compute_top_performer_awards_for_config
+    except Exception:
+        return pd.DataFrame()
+
+    rows: list[dict[str, Any]] = []
+    id_to_name = getattr(ctx, "id_to_name", {}) or {}
+    meta = df_meta.copy()
+    meta["league_name"] = meta["league_name"].fillna("").astype(str).str.strip()
+    closed_meta = meta[meta.apply(_is_closed_league_row, axis=1)].copy()
+    if closed_meta.empty:
+        return pd.DataFrame()
+
+    for _, meta_row in closed_meta.iterrows():
+        league_name = _clean_text(meta_row.get("league_name"))
+        if not league_name:
+            continue
+        awards_config = _safe_json_dict(meta_row.get("awards_config"))
+        try:
+            awards = compute_top_performer_awards_for_config(
+                df_leagues,
+                df_meta,
+                id_to_name,
+                league_name,
+                awards_config=awards_config,
+            )
+        except Exception:
+            continue
+        for award in awards or []:
+            try:
+                award_player_id = int(award.get("player_id"))
+            except Exception:
+                continue
+            if award_player_id != int(pid):
+                continue
+            category_key = _clean_text(award.get("category_key"))
+            category_label = _clean_text(award.get("category_label")) or _TOP_PERFORMER_LABELS.get(category_key, _humanize_badge_id(category_key))
+            rank = award.get("rank") or 1
+            badge_id = f"top_performer_{category_key}" if category_key else "top_performer_award"
+            if badge_id not in _TOP_PERFORMER_BADGE_LABELS and category_key in _TOP_PERFORMER_LABELS:
+                badge_id = f"top_performer_{category_key}"
+            context_id = f"{league_name}:top_performer:{category_key}:{rank}"
+            ended_at = meta_row.get("ended_at") if "ended_at" in meta_row.index else None
+            earned_at = ended_at if ended_at is not None and not pd.isna(ended_at) else None
+            name = f"Top Performer: {category_label} #{rank}"
+            value_json = {
+                "league_id": league_name,
+                "category_key": category_key,
+                "category_label": category_label,
+                "rank": rank,
+                "metric_value": award.get("metric_value"),
+                "metric_display": award.get("metric_display"),
+                "ended_at": _clean_text(ended_at),
+            }
+            rows.append(
+                {
+                    "club_id": str(club_id),
+                    "player_id": int(pid),
+                    "badge_id": badge_id,
+                    "earned_at": earned_at,
+                    "context_type": "league",
+                    "context_id": context_id,
+                    "match_id": None,
+                    "value_num": award.get("metric_value"),
+                    "value_json": value_json,
+                    "name": name,
+                    "prestige": _TOP_PERFORMER_PRESTIGE.get(category_key, 120),
+                    "category": "Top Performer Awards",
+                    "rarity": "legendary",
+                    "icon_key": "trophy",
+                    "scope": "league",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _dedupe_badges(df: Any) -> Any:
     import pandas as pd
 
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return pd.DataFrame()
     deduped = df.copy()
-    subset = [col for col in ["id", "player_id", "badge_id", "context_id", "earned_at"] if col in deduped.columns]
+    subset = [col for col in ["player_id", "badge_id", "context_id"] if col in deduped.columns]
     if subset:
-        deduped = deduped.drop_duplicates(subset=subset)
+        deduped = deduped.drop_duplicates(subset=subset, keep="first")
     else:
         deduped = deduped.drop_duplicates()
     return deduped
@@ -468,6 +575,9 @@ def _patch_players_module(module: Any) -> Any:
         import pandas as pd
 
         frames = []
+        virtual = _virtual_top_performer_badges(ctx, club_id, pid)
+        if isinstance(virtual, pd.DataFrame) and not virtual.empty:
+            frames.append(virtual)
         if callable(original_resolve):
             try:
                 existing = original_resolve(ctx, supabase, club_id, pid)
