@@ -1,8 +1,7 @@
-"""Runtime compatibility patch for Streamlit deployment.
+"""Runtime patch for Player Trophy Room rendering in Streamlit.
 
-Python imports this module automatically at interpreter startup when the repo root is
-on sys.path. It patches the player Trophy Room even when Streamlit imports the
-real players page module directly instead of the lazy proxy in jupr_app.ui.pages.
+This module is loaded through ``jupr_app.__init__`` and installs an import hook so
+it can patch ``jupr_app.ui.pages.players`` whenever Streamlit imports/reloads it.
 """
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ import json
 import sys
 from typing import Any
 
-_PATCH_VERSION = "2026-07-01-player-trophies-v4"
+_PATCH_VERSION = "2026-07-01-player-trophies-v5-wrap"
 _ORIGINAL_IMPORT = builtins.__import__
 
 _TOP_PERFORMER_LABELS = {
@@ -77,24 +76,11 @@ def _humanize(value: object) -> str:
     return " ".join(part for part in text.replace("-", "_").split("_") if part).title()
 
 
-def _is_top_performer_row(row: Any) -> bool:
-    badge_id = _clean_text(row.get("badge_id"))
-    value_json = _safe_json_dict(row.get("value_json"))
-    context_id = _clean_text(row.get("context_id"))
-    return (
-        badge_id.startswith("top_performer_")
-        or badge_id in _TOP_PERFORMER_BADGE_LABELS
-        or _clean_text(value_json.get("category_key")) in _TOP_PERFORMER_LABELS
-        or bool(_clean_text(value_json.get("category_label")))
-        or ":top_performer:" in context_id
-    )
-
-
 def _top_performer_category(row: Any) -> str:
     value_json = _safe_json_dict(row.get("value_json"))
     label = _clean_text(value_json.get("category_label") or value_json.get("category"))
     if label:
-        return label
+        return label.removeprefix("Top Performer:").strip()
     key = _clean_text(value_json.get("category_key"))
     if key in _TOP_PERFORMER_LABELS:
         return _TOP_PERFORMER_LABELS[key]
@@ -110,6 +96,19 @@ def _top_performer_category(row: Any) -> str:
         if parts:
             return _TOP_PERFORMER_LABELS.get(parts[0], _humanize(parts[0]))
     return ""
+
+
+def _is_top_performer_row(row: Any) -> bool:
+    badge_id = _clean_text(row.get("badge_id"))
+    value_json = _safe_json_dict(row.get("value_json"))
+    context_id = _clean_text(row.get("context_id"))
+    return (
+        badge_id.startswith("top_performer_")
+        or badge_id in _TOP_PERFORMER_BADGE_LABELS
+        or _clean_text(value_json.get("category_key")) in _TOP_PERFORMER_LABELS
+        or bool(_clean_text(value_json.get("category_label")))
+        or ":top_performer:" in context_id
+    )
 
 
 def _top_performer_rank(row: Any) -> str:
@@ -131,9 +130,8 @@ def _top_performer_rank(row: Any) -> str:
 def _trophy_display_name(row: Any) -> str:
     if _is_top_performer_row(row):
         category = _top_performer_category(row) or "Top Performer"
-        title = category if category.lower().startswith("top performer") else f"Top Performer: {category}"
         rank = _top_performer_rank(row)
-        return f"{title} {rank}".strip()
+        return f"{category} {rank}".strip()
 
     value_json = _safe_json_dict(row.get("value_json"))
     for key in ["badge_name", "name", "title"]:
@@ -148,6 +146,19 @@ def _trophy_display_name(row: Any) -> str:
     if badge_id and badge_id.lower() not in _GENERIC_TROPHY_NAMES:
         return _humanize(badge_id)
     return "Trophy"
+
+
+def _format_top_performer_title(badge_name: str | None, category_label: str | None) -> str:
+    """Use the category as the card title; rank/metric are shown below."""
+    category = _clean_text(category_label).removeprefix("Top Performer:").strip()
+    if category:
+        return category
+    name = _clean_text(badge_name).removeprefix("Top Performer:").strip()
+    if name:
+        # Strip a trailing rank if the patched display name already provided one.
+        parts = name.rsplit(" #", 1)
+        return parts[0].strip() if len(parts) == 2 and parts[1].isdigit() else name
+    return "Top Performer"
 
 
 def _missing_or_generic(value: object) -> bool:
@@ -208,11 +219,10 @@ def _merge_badge_definitions(df: Any, ctx: Any = None, supabase: Any = None) -> 
 def _fetch_player_badges(supabase: Any, club_id: str, pid: int) -> Any:
     import pandas as pd
 
-    selects = [
+    for select_cols in [
         "id,club_id,player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json",
         "player_id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json",
-    ]
-    for select_cols in selects:
+    ]:
         try:
             resp = (
                 supabase.table("player_badges")
@@ -306,7 +316,7 @@ def _virtual_top_performer_badges(ctx: Any, club_id: str, pid: int) -> Any:
                         "metric_display": award.get("metric_display"),
                         "ended_at": _clean_text(ended_at),
                     },
-                    "name": f"Top Performer: {category_label} #{rank}",
+                    "name": f"{category_label} #{rank}",
                     "prestige": _TOP_PERFORMER_PRESTIGE.get(category_key, 120),
                     "category": "Top Performer Awards",
                     "rarity": "legendary",
@@ -333,14 +343,30 @@ def _theme_css() -> str:
         dark = _clean_text(st.get_option("theme.base")).lower() == "dark"
     except Exception:
         dark = False
+    base = """
+    .trophy-case-grid{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))!important;gap:1rem!important;}
+    .trophy-case-card{min-height:132px!important;}
+    .trophy-case-header{align-items:flex-start!important;gap:.55rem!important;}
+    .trophy-case-header .truncate-1,
+    .trophy-case-card .truncate-1{
+      display:block!important;
+      -webkit-line-clamp:unset!important;
+      -webkit-box-orient:initial!important;
+      overflow:visible!important;
+      white-space:normal!important;
+      text-overflow:clip!important;
+      line-height:1.22!important;
+    }
+    .trophy-case-meta.truncate-1{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;}
+    """
     if dark:
-        return """
+        return base + """
         :root{--text-primary:#f8fafc;--text-secondary:#cbd5e1;--text-muted:#cbd5e1;--panel:#111827;--border:#334155;--pill-bg:#1f2937;--shadow:none;}
         html,body{background:transparent!important;color:#f8fafc!important;}
         .trophy-case-card,.trophy-chip,.badge-card,.badge-stat,.trophy-case-header,.trophy-title,.badge-card-header{color:#f8fafc!important;}
         .trophy-case-meta,.trophy-body,.badge-subtext{color:#cbd5e1!important;}
         """
-    return """
+    return base + """
     :root{--text-primary:#111827;--text-secondary:#4b5563;--text-muted:#374151;--panel:#ffffff;--border:#e5e7eb;--pill-bg:#f8fafc;--shadow:none;}
     html,body{background:transparent!important;color:#111827!important;}
     """
@@ -400,6 +426,7 @@ def _patch_players_module() -> None:
     module.fetch_player_badges = _fetch_player_badges
     module.resolve_player_badges_for_profile = patched_resolve
     module._trophy_display_name = _trophy_display_name
+    module._format_top_performer_title = _format_top_performer_title
     module._is_top_performer_badge = patched_is_top
     module.st_html = patched_st_html
     module._JUPR_SITE_PATCHED = _PATCH_VERSION
@@ -408,7 +435,7 @@ def _patch_players_module() -> None:
 def _import_hook(name: str, globals=None, locals=None, fromlist=(), level=0):
     result = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
     try:
-        if name == "jupr_app.ui.pages.players" or name == "jupr_app.ui.pages" or "players" in (fromlist or ()):  # noqa: PLC1901
+        if name == "jupr_app.ui.pages.players" or name == "jupr_app.ui.pages" or "players" in (fromlist or ()):
             _patch_players_module()
     except Exception:
         pass
