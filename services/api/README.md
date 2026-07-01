@@ -1,6 +1,8 @@
-# JUPR API (FastAPI skeleton)
+# JUPR API (FastAPI)
 
-Minimal read-only API scaffold for future service integration.
+FastAPI service for the JUPR SaaS surface.
+
+Current production scope: public, read-only club and leaderboard endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
 
 ## Run locally
 
@@ -10,61 +12,76 @@ pip install -r services/api/requirements.txt
 uvicorn services.api.main:app --reload
 ```
 
+## Fly production deployment
+
+The repo includes Fly-ready files at the repository root:
+
+- `Dockerfile.api`
+- `fly.toml`
+- `.dockerignore`
+- `docs/fly_api_deploy.md`
+
+The Fly service runs from the repo root and starts:
+
+```bash
+uvicorn services.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers
+```
+
+The default Fly app name in `fly.toml` is `juprleagues-api`. If that name is already taken in Fly, change the `app` value before creating the Fly app.
+
 ## Environment variables
 
-- `JUPR_ENV=staging`
-- `SUPABASE_URL` (must be the staging Supabase project URL for staging runtime)
-- `SUPABASE_SERVICE_ROLE_KEY` (preferred for server-side API; use staging credentials in staging)
-- `SUPABASE_ANON_KEY` (read-only local fallback)
-- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (leave disabled by default)
+Production backend runtime:
+
+- `JUPR_ENV=production`
+- `SUPABASE_URL=<production Supabase project URL>`
+- `SUPABASE_SERVICE_ROLE_KEY=<production Supabase service role key>`
+- `SUPABASE_ANON_KEY=<production anon key if needed>`
+- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0`
+- `JUPR_ALLOWED_ORIGINS=https://juprleagues.com,https://www.juprleagues.com`
+
+Staging backend runtime should use `JUPR_ENV=staging` and staging Supabase credentials only.
+
+Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel frontend environment variables.
 
 ## Endpoints
 
 - `GET /health`
 - `GET /clubs/{club_slug}`
 - `GET /clubs/{club_slug}/leaderboards?league_name=...`
+- `GET /clubs/{club_slug}/leaderboards/public?league_name=...` temporary compatibility alias
+- `POST /admin/clubs/{club_id}/matches/batch` guarded/disabled by default
 
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 
 The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
-- `POST /admin/clubs/{club_id}/matches/batch`
 
-## Admin score-entry guard (experimental + temporary)
+## Admin score-entry guard
 
-Admin score-entry is **experimental and disabled by default**. Keep it disabled unless running explicit staging-only experiments.
+Admin score-entry remains disabled by default.
 
-`POST /admin/clubs/{club_id}/matches/batch` is **disabled by default**.
+`POST /admin/clubs/{club_id}/matches/batch` returns 403 unless `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` / `true` / `yes`.
 
-When disabled, the endpoint returns:
+Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` for production public read-only launch. Do not enable production admin score entry until real auth, club-scoped authorization, and audit review are explicitly approved.
 
-`Next admin score entry is disabled. Use Streamlit admin until Supabase JWT role auth is implemented.`
-
-To enable in staging experiments only, set `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` (or `true` / `yes`).
-
-When enabled, this route requires Supabase JWT Bearer auth and role-based authorization for `enter_scores`.
+When enabled in controlled environments, this route requires Supabase JWT Bearer auth and role-based authorization for `enter_scores`.
 
 Auth design reference for future replacement of the temporary guard:
+
 - `docs/next_admin_auth_design.md`
 
+## CORS
 
-## Staging deployment guardrails
+Allowed browser origins are configured by `JUPR_ALLOWED_ORIGINS` as a comma-separated list. If unset, the API allows local Next.js development plus:
 
-This API path is currently **staging-only** for the new SaaS rollout.
+- `https://juprleagues.com`
+- `https://www.juprleagues.com`
 
-- Set `JUPR_ENV=staging` in staging runtime.
-- Use a **staging Supabase project** via `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
-- Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` until explicitly approved.
-- Do **not** point this staging API at production Supabase.
-
-See `docs/saas_staging_deploy.md` for the full checklist and rollout constraints.
-Also see `README.txt` (operator branch/promotion model) and `docs/saas_status.md` (current SaaS phase/status).
-
-When running staging API deployments, credentials must come from the staging Supabase project only.
-
+For Vercel preview testing, add the preview deployment origin to `JUPR_ALLOWED_ORIGINS` in the backend runtime.
 
 ## Admin JWT auth (Supabase)
 
-- `POST /admin/clubs/{club_id}/matches/batch` requires `Authorization: Bearer <access_token>`.
+- `POST /admin/clubs/{club_id}/matches/batch` requires `Authorization: Bearer <access_token>` when the feature flag is enabled.
 - Feature flag `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY` remains disabled by default.
 - When disabled, endpoint returns `403` before auth and writes.
 - JWT verification config (server-side only):
@@ -77,5 +94,5 @@ When running staging API deployments, credentials must come from the staging Sup
 - Successful admin match-batch writes attempt to write `admin_activity_log` records with actor + club attribution.
 - Denied authenticated writes are flagged for review in audit logs when safe to do so.
 - `JUPR_REQUIRE_API_AUDIT_LOG=1` enables strict mode: write requests fail if audit logging cannot be recorded.
-- Default behavior degrades gracefully when audit table migration is missing (staging-safe).
+- Default behavior degrades gracefully when audit table migration is missing.
 - Audit payloads include summary metadata (`source_page`, `source_client`) and do not include raw bearer tokens or secrets.
