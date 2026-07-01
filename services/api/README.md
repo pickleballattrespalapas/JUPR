@@ -19,7 +19,12 @@ The repo includes Fly-ready files at the repository root:
 - `Dockerfile.api`
 - `fly.toml`
 - `.dockerignore`
+- `.github/workflows/fly_api_deploy.yml`
 - `docs/fly_api_deploy.md`
+
+The preferred production deploy path is online-only through GitHub Actions:
+
+`Actions` -> `Deploy FastAPI backend to Fly` -> `Run workflow`
 
 The Fly service runs from the repo root and starts:
 
@@ -27,7 +32,7 @@ The Fly service runs from the repo root and starts:
 uvicorn services.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers
 ```
 
-The default Fly app name in `fly.toml` is `juprleagues-api`. If that name is already taken in Fly, change the `app` value before creating the Fly app.
+The default Fly app name in `fly.toml` is `juprleagues-api`. The GitHub Actions workflow lets the operator override the app name and primary region at run time without editing files locally.
 
 ## Environment variables
 
@@ -39,6 +44,13 @@ Production backend runtime:
 - `SUPABASE_ANON_KEY=<production anon key if needed>`
 - `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0`
 - `JUPR_ALLOWED_ORIGINS=https://juprleagues.com,https://www.juprleagues.com`
+
+For the online-only deploy workflow, set these GitHub Actions repository secrets before running the workflow:
+
+- `FLY_API_TOKEN`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_ANON_KEY`
 
 Staging backend runtime should use `JUPR_ENV=staging` and staging Supabase credentials only.
 
