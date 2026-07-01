@@ -6,7 +6,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-
+_PATCH_VERSION = "2026-07-01-trophy-dark-v3"
 _CONTROL_EXCEPTION_NAMES = {"RerunException", "StopException"}
 _OPTIONAL_LEAGUE_METADATA_COLUMNS = {
     "status",
@@ -21,7 +21,6 @@ _OPTIONAL_LEAGUE_METADATA_COLUMNS = {
     "event_tags",
 }
 _LEGACY_LEAGUE_METADATA_COLUMNS = {"is_active", "min_games", "description", "k_factor"}
-_BADGE_DEFINITION_COLUMNS = ["name", "prestige", "category", "rarity", "tier", "icon_key", "scope"]
 _TOP_PERFORMER_LABELS = {
     "highest_rating": "Highest Rating",
     "most_improved": "Most Improved",
@@ -40,6 +39,7 @@ _TOP_PERFORMER_PRESTIGE = {
     "best_win_pct": 120,
     "most_wins": 115,
 }
+_BADGE_DEFINITION_COLUMNS = ["name", "prestige", "category", "rarity", "tier", "icon_key", "scope"]
 _GENERIC_TROPHY_NAMES = {"", "badge", "trophy", "award"}
 
 
@@ -47,16 +47,23 @@ def _is_streamlit_control_exception(exc: BaseException) -> bool:
     return exc.__class__.__name__ in _CONTROL_EXCEPTION_NAMES
 
 
-def _clean_text(value: object) -> str:
+def _is_missingish(value: object) -> bool:
     if value is None:
-        return ""
+        return True
+    if isinstance(value, (dict, list, tuple, set)):
+        return False
     try:
         import pandas as pd
 
-        if pd.isna(value):
-            return ""
+        result = pd.isna(value)
+        return bool(result) if not hasattr(result, "any") else False
     except Exception:
-        pass
+        return False
+
+
+def _clean_text(value: object) -> str:
+    if _is_missingish(value):
+        return ""
     return str(value).strip()
 
 
@@ -75,6 +82,24 @@ def _is_ended_status(value: object) -> bool:
 def _is_active_status(value: object) -> bool:
     return _status_text(value) in {"active", "running", "live"}
 
+
+def _safe_json_dict(raw: object) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+# -----------------------------------------------------------------------------
+# League Manager compatibility guard
+# -----------------------------------------------------------------------------
 
 def _prime_end_league_wizard_state(payload: Any) -> None:
     if not isinstance(payload, dict):
@@ -110,11 +135,7 @@ def _looks_like_optional_league_schema_error(exc: BaseException) -> bool:
 def _minimal_lifecycle_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
-    allowed: dict[str, Any] = {}
-    for key in ["status", "is_active", "started_at", "ended_at", "ended_by", "end_awards"]:
-        if key in payload:
-            allowed[key] = payload[key]
-    return allowed
+    return {key: payload[key] for key in ["status", "is_active", "started_at", "ended_at", "ended_by", "end_awards"] if key in payload}
 
 
 def _legacy_league_payload(payload: Any) -> dict[str, Any]:
@@ -268,19 +289,9 @@ def _render_league_manager(ctx: Any) -> None:
             ctx.supabase = original_supabase
 
 
-def _safe_json_dict(raw: object) -> dict[str, Any]:
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
+# -----------------------------------------------------------------------------
+# Player Trophy Room patch
+# -----------------------------------------------------------------------------
 
 def _humanize_badge_id(badge_id: object) -> str:
     text = _clean_text(badge_id)
@@ -510,12 +521,9 @@ def _virtual_top_performer_badges(ctx: Any, club_id: str, pid: int) -> Any:
             category_label = _clean_text(award.get("category_label")) or _TOP_PERFORMER_LABELS.get(category_key, _humanize_badge_id(category_key))
             rank = award.get("rank") or 1
             badge_id = f"top_performer_{category_key}" if category_key else "top_performer_award"
-            if badge_id not in _TOP_PERFORMER_BADGE_LABELS and category_key in _TOP_PERFORMER_LABELS:
-                badge_id = f"top_performer_{category_key}"
             context_id = f"{league_name}:top_performer:{category_key}:{rank}"
             ended_at = meta_row.get("ended_at") if "ended_at" in meta_row.index else None
             earned_at = ended_at if ended_at is not None and not pd.isna(ended_at) else None
-            name = f"Top Performer: {category_label} #{rank}"
             value_json = {
                 "league_id": league_name,
                 "category_key": category_key,
@@ -536,7 +544,7 @@ def _virtual_top_performer_badges(ctx: Any, club_id: str, pid: int) -> Any:
                     "match_id": None,
                     "value_num": award.get("metric_value"),
                     "value_json": value_json,
-                    "name": name,
+                    "name": f"Top Performer: {category_label} #{rank}",
                     "prestige": _TOP_PERFORMER_PRESTIGE.get(category_key, 120),
                     "category": "Top Performer Awards",
                     "rarity": "legendary",
@@ -561,12 +569,43 @@ def _dedupe_badges(df: Any) -> Any:
     return deduped
 
 
+def _theme_variables_css() -> str:
+    try:
+        import streamlit as st
+
+        base = _clean_text(st.get_option("theme.base")).lower()
+    except Exception:
+        base = ""
+    if base == "dark":
+        return """
+        :root{
+          --text-primary:#f8fafc; --text-secondary:#cbd5e1; --text-muted:#cbd5e1;
+          --panel:#111827; --border:#334155; --pill-bg:#1f2937;
+          --shadow:none;
+        }
+        html,body{background:transparent;color:#f8fafc;}
+        .trophy-case-card,.trophy-chip,.badge-card,.badge-stat{color:#f8fafc;}
+        .trophy-case-meta,.trophy-body,.badge-subtext{color:#cbd5e1;}
+        .trophy-case-header,.trophy-title,.badge-card-header{color:#f8fafc;}
+        """
+    return """
+    :root{
+      --text-primary:#111827; --text-secondary:#4b5563; --text-muted:#374151;
+      --panel:#ffffff; --border:#e5e7eb; --pill-bg:#f8fafc;
+      --shadow:none;
+    }
+    html,body{background:transparent;color:#111827;}
+    """
+
+
 def _patch_players_module(module: Any) -> Any:
-    if getattr(module, "_JUPR_TROPHY_ROOM_PATCHED", False):
+    if getattr(module, "_JUPR_TROPHY_ROOM_PATCHED", "") == _PATCH_VERSION:
         return module
 
     original_resolve = getattr(module, "resolve_player_badges_for_profile", None)
     original_is_top_performer = getattr(module, "_is_top_performer_badge", None)
+    original_st_html = getattr(module, "_JUPR_ORIGINAL_ST_HTML", None) or getattr(module, "st_html", None)
+    module._JUPR_ORIGINAL_ST_HTML = original_st_html
 
     def patched_fetch_player_badges(supabase: Any, club_id: str, pid: int) -> Any:
         return _fetch_player_badges_resilient(supabase, club_id, pid)
@@ -603,11 +642,23 @@ def _patch_players_module(module: Any) -> Any:
         badge_key = _clean_text(badge_id)
         return badge_key.startswith("top_performer_") or badge_key in _TOP_PERFORMER_BADGE_LABELS
 
+    def patched_st_html(html_block: str, *args: Any, **kwargs: Any) -> Any:
+        if callable(original_st_html):
+            theme_css = f"<style>{_theme_variables_css()}</style>"
+            text = str(html_block or "")
+            if "</head>" in text:
+                text = text.replace("</head>", f"{theme_css}</head>", 1)
+            else:
+                text = f"{theme_css}{text}"
+            return original_st_html(text, *args, **kwargs)
+        return None
+
     module.fetch_player_badges = patched_fetch_player_badges
     module.resolve_player_badges_for_profile = patched_resolve_player_badges_for_profile
     module._trophy_display_name = _patched_trophy_display_name
     module._is_top_performer_badge = patched_is_top_performer_badge
-    module._JUPR_TROPHY_ROOM_PATCHED = True
+    module.st_html = patched_st_html
+    module._JUPR_TROPHY_ROOM_PATCHED = _PATCH_VERSION
     return module
 
 
