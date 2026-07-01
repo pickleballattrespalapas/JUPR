@@ -108,13 +108,13 @@ curl -i https://api.juprleagues.com/clubs/tres-palapas/leaderboards
 
 ## 9. Point Vercel to the API and redeploy
 
-In Vercel, set the frontend API URL env var used by the web app to:
+In Vercel, set this production environment variable for the web app:
 
 ```bash
-https://api.juprleagues.com
+JUPR_API_BASE_URL=https://api.juprleagues.com
 ```
 
-Use the exact variable name expected by `apps/web`. Common repo names are `JUPR_API_BASE_URL` or `NEXT_PUBLIC_JUPR_API_BASE_URL`.
+`NEXT_PUBLIC_JUPR_API_BASE_URL` also works because the web app checks both names, but prefer `JUPR_API_BASE_URL` for the production server-rendered app unless browser-side code explicitly needs the URL.
 
 Then redeploy Vercel production.
 
