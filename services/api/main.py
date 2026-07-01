@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
@@ -15,6 +16,14 @@ from jupr_app.services.leaderboard_service import get_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
+
+
+DEFAULT_CORS_ALLOWED_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://juprleagues.com",
+    "https://www.juprleagues.com",
+)
 
 
 def get_jupr_env() -> str:
@@ -33,20 +42,47 @@ def is_api_audit_log_required() -> bool:
     return os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in {"1", "true", "yes"}
 
 
-def _warn_if_not_staging_configured() -> None:
+def _split_csv_env(name: str) -> list[str]:
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return []
+    return [value.strip().rstrip("/") for value in raw.split(",") if value.strip()]
+
+
+def get_cors_allowed_origins() -> list[str]:
+    return _split_csv_env("JUPR_ALLOWED_ORIGINS") or list(DEFAULT_CORS_ALLOWED_ORIGINS)
+
+
+def _log_runtime_guardrails() -> None:
     env = get_jupr_env()
     if not env:
         print(
-            "[JUPR API] JUPR_ENV is not set. Local development is allowed, but staging deployments must set JUPR_ENV=staging and use staging Supabase credentials."
+            "[JUPR API] JUPR_ENV is not set. Local development is allowed, "
+            "but deployed API runtimes should set JUPR_ENV=staging or JUPR_ENV=production."
         )
         return
-    if env != "staging":
+
+    if env not in {"local", "dev", "development", "staging", "production"}:
         print(
-            f"[JUPR API] WARNING: JUPR_ENV={env!r}. The new FastAPI + Next.js SaaS path is staging-only until a dedicated staging Supabase project rollout is validated."
+            f"[JUPR API] WARNING: unexpected JUPR_ENV={env!r}. Expected staging or production for deployed runtimes."
         )
+
+    if env == "production" and is_next_admin_score_entry_enabled():
+        print(
+            "[JUPR API] WARNING: JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY is enabled in production. "
+            "Leave it disabled until real production admin auth, club-scoped authorization, and audit review are approved."
+        )
+
 
 app = FastAPI(title="JUPR API", version="0.1.0")
 app.add_middleware(StructuredRequestLoggingMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
@@ -134,7 +170,7 @@ def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict
 
 @app.on_event("startup")
 def startup_checks() -> None:
-    _warn_if_not_staging_configured()
+    _log_runtime_guardrails()
 
 
 @app.get("/health")
