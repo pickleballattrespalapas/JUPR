@@ -1,0 +1,139 @@
+name: Deploy FastAPI backend to Fly
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Fly app name"
+        required: true
+        default: "juprleagues-api"
+      primary_region:
+        description: "Fly primary region"
+        required: true
+        default: "dfw"
+      fly_org:
+        description: "Optional Fly organization slug. Leave blank to use the token/default org."
+        required: false
+        default: ""
+      custom_domain:
+        description: "Optional custom API hostname to attach after deploy"
+        required: false
+        default: "api.juprleagues.com"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fly-api-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      FLY_APP_NAME: ${{ inputs.app_name }}
+      FLY_PRIMARY_REGION: ${{ inputs.primary_region }}
+      FLY_ORG: ${{ inputs.fly_org }}
+      FLY_CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate required GitHub secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in FLY_API_TOKEN SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_ANON_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Missing GitHub secret::$name is required for the Fly API deploy workflow."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Apply online deployment inputs to fly.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          app_name = os.environ["FLY_APP_NAME"].strip()
+          primary_region = os.environ["FLY_PRIMARY_REGION"].strip()
+          if not app_name:
+              raise SystemExit("FLY_APP_NAME is required")
+          if not primary_region:
+              raise SystemExit("FLY_PRIMARY_REGION is required")
+
+          path = Path("fly.toml")
+          text = path.read_text()
+          text = re.sub(r'^app\s*=\s*"[^"]+"', f'app = "{app_name}"', text, count=1, flags=re.MULTILINE)
+          text = re.sub(
+              r'^primary_region\s*=\s*"[^"]+"',
+              f'primary_region = "{primary_region}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          path.write_text(text)
+          PY
+          cat fly.toml
+
+      - name: Ensure Fly app exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if flyctl status -a "$FLY_APP_NAME" >/dev/null 2>&1; then
+            echo "Fly app $FLY_APP_NAME already exists."
+          else
+            echo "Creating Fly app $FLY_APP_NAME."
+            if [ -n "${FLY_ORG:-}" ]; then
+              flyctl apps create "$FLY_APP_NAME" --org "$FLY_ORG" --yes
+            else
+              flyctl apps create "$FLY_APP_NAME" --yes
+            fi
+          fi
+
+      - name: Stage Fly runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          flyctl secrets set \
+            --stage \
+            -a "$FLY_APP_NAME" \
+            SUPABASE_URL="$SUPABASE_URL" \
+            SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+
+      - name: Validate Fly config
+        shell: bash
+        run: flyctl config validate -a "$FLY_APP_NAME"
+
+      - name: Deploy API to Fly
+        shell: bash
+        run: flyctl deploy --remote-only -a "$FLY_APP_NAME" --config fly.toml
+
+      - name: Attach custom API domain and show DNS setup
+        if: ${{ inputs.custom_domain != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flyctl certs add "$FLY_CUSTOM_DOMAIN" -a "$FLY_APP_NAME" || true
+          flyctl certs setup "$FLY_CUSTOM_DOMAIN" -a "$FLY_APP_NAME"
+
+      - name: Smoke test Fly hostname
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://${FLY_APP_NAME}.fly.dev/health"
