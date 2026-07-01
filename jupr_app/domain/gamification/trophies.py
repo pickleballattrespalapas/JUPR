@@ -9,6 +9,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _PODIUM_CONTEXT_RE = re.compile(r"^(?P<tournament_id>.+):podium:(?P<placement>\d+)$")
+_FINAL_TOURNAMENT_STATUSES = {"complete", "completed", "archived"}
 
 
 def _parse_value_json(value: Any) -> dict[str, Any]:
@@ -82,6 +83,136 @@ def _join_names(names: list[str]) -> str | None:
     return ", ".join(cleaned)
 
 
+def _status_allows_podium_fallback(status: Any) -> bool:
+    # Legacy tournament rows may not carry a status, but a recorded podium is still
+    # the canonical result. Active/draft statuses are intentionally excluded.
+    cleaned = str(status or "").strip().lower()
+    if not cleaned:
+        return True
+    return cleaned in _FINAL_TOURNAMENT_STATUSES
+
+
+def _fetch_player_tournament_team_rows(supabase: Any, player_id: int) -> dict[str, dict[str, Any]]:
+    teams_by_id: dict[str, dict[str, Any]] = {}
+    for player_column in ("player1_id", "player2_id"):
+        try:
+            resp = (
+                supabase.table("tournament_teams")
+                .select("id,tournament_id,team_number,player1_id,player2_id")
+                .eq(player_column, int(player_id))
+                .execute()
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fetch player tournament teams",
+                extra={"player_id": player_id, "player_column": player_column},
+            )
+            continue
+        for row in resp.data or []:
+            team_id = str(row.get("id") or "").strip()
+            if team_id and team_id not in teams_by_id:
+                teams_by_id[team_id] = row
+    return teams_by_id
+
+
+def _fetch_podium_fallback_trophies(
+    supabase: Any,
+    club_id: str,
+    player_id: int,
+    existing_context_ids: set[str],
+) -> list[dict[str, Any]]:
+    teams_by_id = _fetch_player_tournament_team_rows(supabase, player_id)
+    if not teams_by_id:
+        return []
+
+    tournament_ids = sorted(
+        {
+            str(row.get("tournament_id") or "").strip()
+            for row in teams_by_id.values()
+            if str(row.get("tournament_id") or "").strip()
+        }
+    )
+    if not tournament_ids:
+        return []
+
+    try:
+        tournaments_resp = (
+            supabase.table("tournaments")
+            .select("id,name,status")
+            .eq("club_id", str(club_id))
+            .in_("id", tournament_ids)
+            .execute()
+        )
+    except Exception:
+        logger.exception("Failed to fetch tournament metadata for podium fallback", extra={"player_id": player_id})
+        return []
+
+    tournaments_by_id = {
+        str(row.get("id")): row
+        for row in (tournaments_resp.data or [])
+        if row.get("id") and _status_allows_podium_fallback(row.get("status"))
+    }
+    if not tournaments_by_id:
+        return []
+
+    eligible_team_ids = sorted(
+        team_id
+        for team_id, row in teams_by_id.items()
+        if str(row.get("tournament_id") or "").strip() in tournaments_by_id
+    )
+    if not eligible_team_ids:
+        return []
+
+    try:
+        podium_resp = (
+            supabase.table("tournament_podium")
+            .select("tournament_id,placement,team_id,source")
+            .in_("team_id", eligible_team_ids)
+            .execute()
+        )
+    except Exception:
+        logger.exception("Failed to fetch tournament podium fallback rows", extra={"player_id": player_id})
+        return []
+
+    fallback: list[dict[str, Any]] = []
+    seen_context_ids = set(existing_context_ids)
+    for row in podium_resp.data or []:
+        team_id = str(row.get("team_id") or "").strip()
+        team = teams_by_id.get(team_id)
+        if not team:
+            continue
+        tournament_id = str(row.get("tournament_id") or team.get("tournament_id") or "").strip()
+        tournament = tournaments_by_id.get(tournament_id)
+        if not tournament:
+            continue
+        placement = _coerce_int(row.get("placement"))
+        if placement is None:
+            continue
+        context_id = f"{tournament_id}:podium:{placement}"
+        if context_id in seen_context_ids:
+            continue
+        seen_context_ids.add(context_id)
+        fallback.append(
+            {
+                "placement": placement,
+                "tournament_id": tournament_id,
+                "tournament_name": str(tournament.get("name") or "").strip() or None,
+                "teammate_names": [],
+                "earned_at": None,
+                "team_id": team_id,
+                "context_id": context_id,
+            }
+        )
+
+    fallback.sort(
+        key=lambda item: (
+            str(item.get("tournament_name") or ""),
+            int(item.get("placement") or 999),
+        )
+    )
+    return fallback
+
+
 def get_player_tournament_trophies(
     supabase: Any,
     club_id: str,
@@ -101,12 +232,23 @@ def get_player_tournament_trophies(
             .order("earned_at", desc=True)
             .execute()
         )
+        rows = resp.data or []
     except Exception:
         logger.exception("Failed to fetch tournament podium trophies", extra={"player_id": player_id})
-        return []
+        rows = []
 
-    rows = resp.data or []
-    if not rows:
+    existing_context_ids = {
+        str(row.get("context_id") or "").strip()
+        for row in rows
+        if str(row.get("context_id") or "").strip()
+    }
+    podium_fallbacks = _fetch_podium_fallback_trophies(
+        supabase,
+        str(club_id),
+        int(player_id),
+        existing_context_ids,
+    )
+    if not rows and not podium_fallbacks:
         return []
 
     normalized: list[dict[str, Any]] = []
@@ -142,6 +284,13 @@ def get_player_tournament_trophies(
                 "team_id": str(team_id) if team_id else None,
             }
         )
+
+    for item in podium_fallbacks:
+        if item.get("tournament_id"):
+            tournament_ids.add(str(item["tournament_id"]))
+        if item.get("team_id"):
+            team_ids.add(str(item["team_id"]))
+        normalized.append(item)
 
     tournament_name_map: dict[str, str] = {}
     if tournament_ids:

@@ -6,6 +6,7 @@ from typing import Any
 import streamlit as st
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
+from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium
 from jupr_app.domain.tournament_registration_repo import (
     archive_tournament,
     delete_unused_draft_tournament,
@@ -48,6 +49,17 @@ def _go_to_page(page: str, tournament_id: Any) -> None:
     if current_tournament_id != str(tournament_id):
         st.query_params["tournament_id"] = tournament_id
     st.rerun()
+
+
+def _backfill_tournament_trophies(ctx, tournament: dict[str, Any]) -> int:
+    tournament_id = _safe_text(tournament.get("id"))
+    tournament_name = _safe_text(tournament.get("name")) or "Tournament"
+    created = award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    return len(created or [])
 
 
 def _insert_tournament_shell(supabase, payload: dict) -> None:
@@ -200,31 +212,61 @@ def render(ctx):
             public_mode=True,
         )
 
+    can_delete, usage_summary, delete_reason = tournament_can_be_deleted(supabase, tournament)
+    usage_bits = [f"{k}: {usage_summary.get(k, 0)}" for k in ["registrations", "registration_selections", "event_draws", "teams", "games", "podium"]]
+    podium_count = int(usage_summary.get("podium") or 0)
+    status_key = _safe_text(tournament.get("status")).upper()
+
     st.markdown("#### Admin Actions")
     action_cols = st.columns(2)
-    if _safe_text(tournament.get("status")).upper() == "ARCHIVED":
+    if status_key == "ARCHIVED":
         if action_cols[0].button("Unarchive Tournament", key=f"unarchive_tournament_{tournament_id}"):
             unarchive_tournament(supabase, tournament_id)
             st.success("Tournament unarchived and restored to DRAFT.")
             st.rerun()
+        if podium_count > 0:
+            if action_cols[1].button("Backfill Tournament Trophies", key=f"backfill_tournament_trophies_{tournament_id}"):
+                try:
+                    awarded_count = _backfill_tournament_trophies(ctx, tournament)
+                except Exception as exc:
+                    action_cols[1].error(f"Tournament trophy backfill failed: {exc}")
+                else:
+                    if awarded_count:
+                        action_cols[1].success(f"Backfilled {awarded_count} tournament trophy badge rows.")
+                    else:
+                        action_cols[1].info("No new tournament trophy rows needed; podium badges are already current.")
+                    st.rerun()
+        else:
+            action_cols[1].caption("No podium rows recorded for trophy backfill.")
+        action_cols[1].caption("Usage summary — " + ", ".join(usage_bits))
     else:
         if action_cols[0].button("Archive Tournament", key=f"archive_tournament_{tournament_id}"):
+            awarded_count = 0
+            trophy_error: Exception | None = None
+            if podium_count > 0:
+                try:
+                    awarded_count = _backfill_tournament_trophies(ctx, tournament)
+                except Exception as exc:
+                    trophy_error = exc
             archive_tournament(supabase, tournament_id)
-            st.success("Tournament archived.")
+            if trophy_error is not None:
+                st.warning(f"Tournament archived, but trophy backfill failed: {trophy_error}")
+            elif awarded_count:
+                st.success(f"Tournament archived and {awarded_count} tournament trophy badge rows were created.")
+            else:
+                st.success("Tournament archived.")
             st.rerun()
 
-    can_delete, usage_summary, delete_reason = tournament_can_be_deleted(supabase, tournament)
-    if can_delete:
-        delete_confirm = action_cols[1].text_input("Type DELETE to confirm draft deletion", key=f"delete_draft_confirm_{tournament_id}")
-        if action_cols[1].button("Delete Draft", key=f"delete_draft_tournament_{tournament_id}"):
-            if delete_confirm != "DELETE":
-                st.error("Type DELETE exactly to confirm draft deletion.")
-            else:
-                delete_unused_draft_tournament(supabase, tournament)
-                st.success("Draft tournament shell deleted.")
-                st.query_params.pop("tournament_id", None)
-                st.rerun()
-    else:
-        usage_bits = [f"{k}: {usage_summary.get(k, 0)}" for k in ["registrations", "registration_selections", "event_draws", "teams", "games", "podium"]]
-        action_cols[1].warning(delete_reason or "This tournament has existing records. Archive it instead of deleting.")
-        action_cols[1].caption("Usage summary — " + ", ".join(usage_bits))
+        if can_delete:
+            delete_confirm = action_cols[1].text_input("Type DELETE to confirm draft deletion", key=f"delete_draft_confirm_{tournament_id}")
+            if action_cols[1].button("Delete Draft", key=f"delete_draft_tournament_{tournament_id}"):
+                if delete_confirm != "DELETE":
+                    st.error("Type DELETE exactly to confirm draft deletion.")
+                else:
+                    delete_unused_draft_tournament(supabase, tournament)
+                    st.success("Draft tournament shell deleted.")
+                    st.query_params.pop("tournament_id", None)
+                    st.rerun()
+        else:
+            action_cols[1].warning(delete_reason or "This tournament has existing records. Archive it instead of deleting.")
+            action_cols[1].caption("Usage summary — " + ", ".join(usage_bits))
