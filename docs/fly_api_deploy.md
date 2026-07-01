@@ -2,6 +2,8 @@
 
 This checklist deploys the FastAPI backend as an always-on Fly app at `api.juprleagues.com`.
 
+This project supports an online-only deploy path through GitHub Actions. You do not need to run commands locally.
+
 The frontend remains on Vercel. Do not put server-only Supabase secrets in Vercel.
 
 ## Repo files
@@ -11,23 +13,13 @@ The deployment is defined by these root-level files:
 - `Dockerfile.api`
 - `fly.toml`
 - `.dockerignore`
+- `.github/workflows/fly_api_deploy.yml`
 
 The Docker build context is the repository root, and the container starts:
 
 ```bash
 uvicorn services.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers
 ```
-
-## 1. Install and log in to Fly
-
-```bash
-brew install flyctl
-fly auth login
-```
-
-If you are not on macOS, use Fly's installer instead of Homebrew.
-
-## 2. Check the app name and region
 
 `fly.toml` defaults to:
 
@@ -36,107 +28,143 @@ app = "juprleagues-api"
 primary_region = "dfw"
 ```
 
-Before the first deploy, change `app` if that Fly app name is unavailable. If production Supabase is in another region, set `primary_region` to the closest Fly region to Supabase.
+The GitHub Actions workflow lets you override the app name and primary region at run time.
 
-## 3. Create the Fly app
+## 1. Merge the Fly deploy PR
 
-From the repository root:
+Merge the PR that adds the Fly deployment files into `rollback-feb8`.
 
-```bash
-fly apps create juprleagues-api
+## 2. Create a Fly API token in the Fly dashboard
+
+In the Fly dashboard, create an org-scoped deploy token for the organization that will own the API app.
+
+Use the narrowest token that can create/manage the app and deploy it. If the app already exists, an app-scoped deploy token is enough. If the GitHub workflow needs to create the Fly app for you, use an org-scoped deploy token.
+
+Copy the token value immediately; you will paste it into GitHub as a repository secret.
+
+## 3. Add GitHub Actions secrets
+
+In GitHub, open the repo and go to:
+
+`Settings` -> `Secrets and variables` -> `Actions` -> `New repository secret`
+
+Add these repository secrets:
+
+```text
+FLY_API_TOKEN=<Fly org-scoped deploy token>
+SUPABASE_URL=<production Supabase project URL>
+SUPABASE_SERVICE_ROLE_KEY=<production Supabase service role key>
+SUPABASE_ANON_KEY=<production Supabase anon key>
 ```
 
-If you changed the `app` value in `fly.toml`, use that same name in this command.
+Do not add `SUPABASE_SERVICE_ROLE_KEY` to Vercel.
 
-## 4. Add production backend secrets
+## 4. Run the online Fly deploy workflow
 
-Use production Supabase values here. Do not commit these values and do not paste them into GitHub issues, PR comments, or frontend env vars.
+In GitHub, open:
 
-```bash
-cat <<'EOF' | fly secrets import -a juprleagues-api
-SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=YOUR_PRODUCTION_SERVICE_ROLE_KEY
-SUPABASE_ANON_KEY=YOUR_PRODUCTION_ANON_KEY
-EOF
+`Actions` -> `Deploy FastAPI backend to Fly` -> `Run workflow`
+
+Use these inputs:
+
+```text
+Branch: rollback-feb8
+app_name: juprleagues-api
+primary_region: dfw
+fly_org: <blank unless Fly requires your org slug>
+custom_domain: api.juprleagues.com
 ```
 
-Confirm only the secret names:
+The workflow will:
 
-```bash
-fly secrets list -a juprleagues-api
+1. Validate required GitHub secrets.
+2. Apply the selected app name and region to `fly.toml` inside the workflow run.
+3. Create the Fly app if it does not already exist.
+4. Stage production Supabase runtime secrets in Fly.
+5. Validate the Fly config.
+6. Deploy the API with Fly remote build.
+7. Attach `api.juprleagues.com` and print DNS setup instructions.
+8. Smoke test `https://<app_name>.fly.dev/health`.
+
+## 5. Smoke test the Fly hostname
+
+After the workflow completes, open these in a browser:
+
+```text
+https://juprleagues-api.fly.dev/health
+https://juprleagues-api.fly.dev/clubs/tres-palapas
+https://juprleagues-api.fly.dev/clubs/tres-palapas/leaderboards
 ```
 
-## 5. Deploy
+If you changed `app_name`, replace `juprleagues-api` in the `.fly.dev` hostname.
 
-```bash
-fly config validate -a juprleagues-api
-fly deploy -a juprleagues-api
-fly status -a juprleagues-api
-fly logs -a juprleagues-api
+## 6. Connect `api.juprleagues.com` in GoDaddy
+
+Open the completed GitHub Actions run logs and expand the step:
+
+`Attach custom API domain and show DNS setup`
+
+Use the DNS record Fly prints there, or open the Fly dashboard:
+
+`Apps` -> `juprleagues-api` -> `Certificates` -> `api.juprleagues.com`
+
+For a CNAME record in GoDaddy, the host/name is usually:
+
+```text
+api
 ```
 
-## 6. Smoke test the Fly hostname
+not the full `api.juprleagues.com`.
 
-```bash
-curl -i https://juprleagues-api.fly.dev/health
-curl -i https://juprleagues-api.fly.dev/clubs/tres-palapas
-curl -i https://juprleagues-api.fly.dev/clubs/tres-palapas/leaderboards
+The value/target should be the Fly CNAME target shown in the GitHub Actions logs or Fly dashboard.
+
+## 7. Check the custom API domain
+
+Once DNS propagates and the Fly certificate is issued, open these in a browser:
+
+```text
+https://api.juprleagues.com/health
+https://api.juprleagues.com/clubs/tres-palapas
+https://api.juprleagues.com/clubs/tres-palapas/leaderboards
 ```
 
-## 7. Attach `api.juprleagues.com`
-
-```bash
-fly certs add api.juprleagues.com -a juprleagues-api
-fly certs setup api.juprleagues.com -a juprleagues-api
-```
-
-Add the DNS record Fly shows you in GoDaddy. For a CNAME record, the GoDaddy host/name is usually `api`, not the full domain.
-
-Then check certificate status:
-
-```bash
-fly certs check api.juprleagues.com -a juprleagues-api
-```
-
-## 8. Smoke test the custom API domain
-
-```bash
-curl -i https://api.juprleagues.com/health
-curl -i https://api.juprleagues.com/clubs/tres-palapas
-curl -i https://api.juprleagues.com/clubs/tres-palapas/leaderboards
-```
-
-## 9. Point Vercel to the API and redeploy
+## 8. Point Vercel to the API and redeploy
 
 In Vercel, set this production environment variable for the web app:
 
-```bash
+```text
 JUPR_API_BASE_URL=https://api.juprleagues.com
 ```
 
 `NEXT_PUBLIC_JUPR_API_BASE_URL` also works because the web app checks both names, but prefer `JUPR_API_BASE_URL` for the production server-rendered app unless browser-side code explicitly needs the URL.
 
-Then redeploy Vercel production.
+Do not put `SUPABASE_SERVICE_ROLE_KEY` in Vercel.
 
-## 10. Full live-stack smoke test
+Then redeploy Vercel production from the Vercel dashboard.
 
-```bash
-curl -i https://juprleagues.com/
-curl -i https://juprleagues.com/clubs/tres-palapas
-curl -i https://juprleagues.com/clubs/tres-palapas/leaderboards
+## 9. Full live-stack smoke test
 
-curl -i https://api.juprleagues.com/health
-curl -i https://api.juprleagues.com/clubs/tres-palapas
-curl -i https://api.juprleagues.com/clubs/tres-palapas/leaderboards
+Open these in a browser:
+
+```text
+https://juprleagues.com/
+https://juprleagues.com/clubs/tres-palapas
+https://juprleagues.com/clubs/tres-palapas/leaderboards
+
+https://api.juprleagues.com/health
+https://api.juprleagues.com/clubs/tres-palapas
+https://api.juprleagues.com/clubs/tres-palapas/leaderboards
 ```
 
 ## Troubleshooting
 
-If `fly deploy` succeeds but requests fail, check that the app is listening on `0.0.0.0:$PORT` and that `fly.toml` uses the same `internal_port` as the container.
+If the GitHub Actions deploy fails before creating the app, the Fly token probably does not have enough scope. Use an org-scoped deploy token or create the app manually in the Fly dashboard and retry with an app-scoped deploy token.
 
-If browser requests fail but `curl` works, check CORS. The backend env var is:
+If the deploy succeeds but requests fail, check that the app is listening on `0.0.0.0:$PORT` and that `fly.toml` uses the same `internal_port` as the container.
 
-```bash
+If browser requests fail but direct URL tests work, check CORS. The backend env var is already set in `fly.toml`:
+
+```text
 JUPR_ALLOWED_ORIGINS=https://juprleagues.com,https://www.juprleagues.com
 ```
 
