@@ -1,0 +1,33 @@
+# Fly.io deployment config for the FastAPI backend.
+# If the app name is already taken, change `app` before running `fly apps create`.
+app = "juprleagues-api"
+primary_region = "dfw"
+
+[build]
+  dockerfile = "Dockerfile.api"
+
+[env]
+  PORT = "8080"
+  JUPR_ENV = "production"
+  JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY = "0"
+  JUPR_ALLOWED_ORIGINS = "https://juprleagues.com,https://www.juprleagues.com"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
