@@ -26,18 +26,33 @@ def _is_streamlit_control_exception(exc: BaseException) -> bool:
     return exc.__class__.__name__ in _CONTROL_EXCEPTION_NAMES
 
 
+def _status_text(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_archived_status(value: object) -> bool:
+    return _status_text(value) == "archived"
+
+
 def _is_ended_status(value: object) -> bool:
-    return str(value or "").strip().lower() in {"ended", "archived", "completed", "complete", "done"}
+    return _status_text(value) in {"ended", "completed", "complete", "done"}
 
 
 def _is_active_status(value: object) -> bool:
-    return str(value or "").strip().lower() in {"active", "running", "live"}
+    return _status_text(value) in {"active", "running", "live"}
 
 
 def _prime_end_league_wizard_state(payload: Any) -> None:
     if not isinstance(payload, dict):
         return
-    if _is_ended_status(payload.get("status")) or payload.get("ended_at"):
+    status = payload.get("status")
+    if _is_archived_status(status):
+        import streamlit as st
+
+        st.session_state["end_league_wizard_open"] = False
+        st.session_state["end_league_step"] = 1
+        return
+    if _is_ended_status(status) or payload.get("ended_at"):
         import streamlit as st
 
         if payload.get("ended_at"):
@@ -65,11 +80,21 @@ def _looks_like_optional_league_schema_error(exc: BaseException) -> bool:
     return mentions_optional_column and mentions_schema
 
 
+def _minimal_lifecycle_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    allowed: dict[str, Any] = {}
+    for key in ["status", "is_active", "started_at", "ended_at", "ended_by", "end_awards"]:
+        if key in payload:
+            allowed[key] = payload[key]
+    return allowed
+
+
 def _legacy_league_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     status = payload.get("status")
-    if _is_ended_status(status):
+    if _is_archived_status(status) or _is_ended_status(status):
         return {"is_active": False}
     if _is_active_status(status):
         allowed = {"is_active": True}
@@ -95,19 +120,33 @@ class _LeagueMetadataQueryGuard:
         self._inner = self._inner.eq(*args, **kwargs)
         return self
 
+    def _apply_filters(self, query: Any) -> Any:
+        for method_name, method_args, method_kwargs in self._filters:
+            query = getattr(query, method_name)(*method_args, **method_kwargs)
+        return query
+
+    def _retry_update(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        query = self._supabase.table("leagues_metadata").update(payload)
+        query = self._apply_filters(query)
+        return query.execute(*args, **kwargs)
+
     def execute(self, *args: Any, **kwargs: Any) -> Any:
         try:
             return self._inner.execute(*args, **kwargs)
         except BaseException as exc:
             if _is_streamlit_control_exception(exc) or not _looks_like_optional_league_schema_error(exc):
                 raise
+            lifecycle_payload = _minimal_lifecycle_payload(self._payload)
+            if lifecycle_payload:
+                try:
+                    return self._retry_update(lifecycle_payload, *args, **kwargs)
+                except BaseException as lifecycle_exc:
+                    if _is_streamlit_control_exception(lifecycle_exc) or not _looks_like_optional_league_schema_error(lifecycle_exc):
+                        raise
             legacy_payload = _legacy_league_payload(self._payload)
             if not legacy_payload:
                 raise
-            query = self._supabase.table("leagues_metadata").update(legacy_payload)
-            for method_name, method_args, method_kwargs in self._filters:
-                query = getattr(query, method_name)(*method_args, **method_kwargs)
-            return query.execute(*args, **kwargs)
+            return self._retry_update(legacy_payload, *args, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._inner, name)
@@ -186,23 +225,19 @@ def _maybe_advance_closed_league_wizard(ctx: Any) -> None:
     row = rows.iloc[0]
     ended_at = row.get("ended_at") if "ended_at" in rows.columns else None
     status = row.get("status") if "status" in rows.columns else ""
-    is_active = row.get("is_active") if "is_active" in rows.columns else None
     has_ended_at = ended_at is not None and not pd.isna(ended_at) and str(ended_at).strip() != ""
-    inactive = is_active is not None and not bool(is_active)
 
-    if _is_ended_status(status) or has_ended_at:
+    if _is_archived_status(status):
+        st.session_state["end_league_wizard_open"] = False
+        st.session_state["end_league_step"] = 1
+    elif _is_ended_status(status) or has_ended_at:
         if has_ended_at:
             st.session_state["end_league_frozen_at"] = str(ended_at)
-        st.session_state["end_league_step"] = 2
-        st.session_state["end_league_wizard_open"] = True
-    elif inactive:
         st.session_state["end_league_step"] = 2
         st.session_state["end_league_wizard_open"] = True
 
 
 def _render_league_manager(ctx: Any) -> None:
-    import streamlit as st
-
     _maybe_advance_closed_league_wizard(ctx)
     module = importlib.import_module(f"{__name__}.league_manager")
     globals()["league_manager"] = _LEAGUE_MANAGER_PROXY
@@ -211,19 +246,6 @@ def _render_league_manager(ctx: Any) -> None:
         ctx.supabase = _LeagueManagerSupabaseGuard(original_supabase)
     try:
         module.render(ctx)
-    except BaseException as exc:
-        if _is_streamlit_control_exception(exc):
-            if st.session_state.get("end_league_wizard_open", False):
-                try:
-                    current_step = int(st.session_state.get("end_league_step", 1) or 1)
-                except Exception:
-                    current_step = 1
-                if current_step <= 1:
-                    st.session_state["end_league_step"] = 2
-                    st.session_state["end_league_wizard_open"] = True
-                    st.session_state["force_data_refresh"] = True
-            return
-        raise
     finally:
         if original_supabase is not None:
             ctx.supabase = original_supabase
