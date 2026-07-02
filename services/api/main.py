@@ -120,10 +120,11 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "updated_at",
 }
 
-# Keep this select list limited to fields required for the public projection.
-# In production this avoids hard-failing if an earlier live_sessions table variant
-# exists without newer private/admin metadata columns such as `source`.
 PUBLIC_LIVE_SESSION_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
+LIVE_SESSIONS_SETUP_ERROR = (
+    "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations "
+    "and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
+)
 
 
 class MatchBatchRequest(BaseModel):
@@ -144,6 +145,20 @@ def _get_supabase_credentials() -> tuple[str, str]:
             "(or SUPABASE_ANON_KEY for read-only local development)."
         )
     return url, key
+
+
+
+def _has_supabase_service_role_key() -> bool:
+    return bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip())
+
+
+
+def _require_live_sessions_service_role() -> None:
+    # The public Live API intentionally reads raw durable Streamlit recovery state
+    # server-side, then returns a sanitized DTO. Do not grant anonymous Supabase
+    # clients direct access to `live_sessions.state`; run this API with service role.
+    if not _has_supabase_service_role_key():
+        raise HTTPException(status_code=503, detail=LIVE_SESSIONS_SETUP_ERROR)
 
 
 
@@ -191,7 +206,7 @@ def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
 
 
 
-def _is_live_sessions_unavailable_error(exc: Exception) -> bool:
+def _is_live_sessions_schema_error(exc: Exception) -> bool:
     detail = _error_payload_text(exc)
     if _is_missing_table_error(exc, "live_sessions"):
         return True
@@ -213,6 +228,11 @@ def _is_live_sessions_unavailable_error(exc: Exception) -> bool:
             "relation",
         )
     )
+
+
+
+def _raise_live_sessions_setup_error(exc: Exception) -> None:
+    raise HTTPException(status_code=503, detail=LIVE_SESSIONS_SETUP_ERROR) from exc
 
 
 
@@ -277,6 +297,7 @@ def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict
 
 
 def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
+    _require_live_sessions_service_role()
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     safe_limit = max(1, min(int(limit or 20), 50))
@@ -293,10 +314,9 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
             or []
         )
     except Exception as exc:
-        if _is_live_sessions_unavailable_error(exc):
-            rows = []
-        else:
-            raise
+        if _is_live_sessions_schema_error(exc):
+            _raise_live_sessions_setup_error(exc)
+        raise
     return {
         "club": _public_club_payload(club, club_slug),
         "sessions": public_live_sessions_from_rows(rows, limit=safe_limit),
@@ -305,6 +325,7 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
 
 
 def _build_live_session_detail_response(club_slug: str, session_key: str) -> dict[str, Any]:
+    _require_live_sessions_service_role()
     clean_session_key = str(session_key or "").strip()
     if not clean_session_key:
         raise HTTPException(status_code=400, detail="session_key is required")
@@ -324,8 +345,8 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
             or []
         )
     except Exception as exc:
-        if _is_live_sessions_unavailable_error(exc):
-            raise HTTPException(status_code=404, detail="live session not found") from exc
+        if _is_live_sessions_schema_error(exc):
+            _raise_live_sessions_setup_error(exc)
         raise
 
     if not rows or not is_public_live_session_row(rows[0]):
