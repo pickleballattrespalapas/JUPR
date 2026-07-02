@@ -56,6 +56,30 @@ class FakeSupabase:
         return FakeQuery(str(table_name), self.rows)
 
 
+class FakeUnavailableLiveSessionsQuery:
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        raise Exception("Could not find the 'source' column of 'live_sessions' in the schema cache")
+
+
+class FakeUnavailableLiveSessionsSupabase:
+    def table(self, table_name):
+        if str(table_name) == "live_sessions":
+            return FakeUnavailableLiveSessionsQuery()
+        return FakeQuery(str(table_name), [])
+
+
 def _row() -> dict:
     event = create_round_robin_event(
         name="API Live Test",
@@ -83,9 +107,7 @@ def _row() -> dict:
     }
 
 
-@pytest.fixture
-def client(monkeypatch):
-    rows = [_row(), {**_row(), "session_key": "abandoned", "status": "abandoned"}]
+def _patch_club(monkeypatch):
     monkeypatch.setattr(
         "services.api.main.get_club",
         lambda club_slug: {
@@ -94,6 +116,12 @@ def client(monkeypatch):
             "club_name": "Test Club",
         },
     )
+
+
+@pytest.fixture
+def client(monkeypatch):
+    rows = [_row(), {**_row(), "session_key": "abandoned", "status": "abandoned"}]
+    _patch_club(monkeypatch)
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: FakeSupabase(rows))
     return TestClient(app)
 
@@ -123,5 +151,30 @@ def test_live_session_detail_returns_public_scoreboard_shape(client):
 
 def test_abandoned_live_session_detail_404s(client):
     response = client.get("/clubs/test-club/live-sessions/abandoned")
+
+    assert response.status_code == 404
+
+
+def test_live_sessions_list_degrades_to_empty_when_schema_is_unavailable(monkeypatch):
+    _patch_club(monkeypatch)
+    monkeypatch.setattr(
+        "services.api.main.get_supabase_client",
+        lambda: FakeUnavailableLiveSessionsSupabase(),
+    )
+
+    response = TestClient(app).get("/clubs/test-club/live-sessions")
+
+    assert response.status_code == 200
+    assert response.json()["sessions"] == []
+
+
+def test_live_session_detail_404s_when_schema_is_unavailable(monkeypatch):
+    _patch_club(monkeypatch)
+    monkeypatch.setattr(
+        "services.api.main.get_supabase_client",
+        lambda: FakeUnavailableLiveSessionsSupabase(),
+    )
+
+    response = TestClient(app).get("/clubs/test-club/live-sessions/public-session")
 
     assert response.status_code == 404
