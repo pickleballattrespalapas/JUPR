@@ -20,6 +20,11 @@ from jupr_app.services.public_live_service import (
     public_live_session_detail,
     public_live_sessions_from_rows,
 )
+from jupr_app.services.public_live_write_service import (
+    PublicLiveSessionError,
+    create_public_round_robin_session,
+    update_public_round_robin_scores,
+)
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
 
@@ -114,7 +119,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -149,6 +154,23 @@ LIVE_SESSIONS_SETUP_ERROR = (
 class MatchBatchRequest(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "next_admin_score_entry"
+
+
+class PublicLiveSessionCreateRequest(BaseModel):
+    event_name: str = "JUPR Live Round Robin"
+    event_type: str = "round_robin"
+    participant_names: list[str] = Field(default_factory=list)
+
+
+class PublicLiveScorePayload(BaseModel):
+    match_id: str
+    score_a: int | None = None
+    score_b: int | None = None
+
+
+class PublicLiveScoreUpdateRequest(BaseModel):
+    edit_token: str
+    scores: list[PublicLiveScorePayload] = Field(default_factory=list)
 
 
 
@@ -573,9 +595,58 @@ def get_club_live_sessions(club_slug: str, limit: int = Query(default=20, ge=1, 
     return _build_live_sessions_response(club_slug, limit)
 
 
+@app.post("/clubs/{club_slug}/live-sessions")
+def create_club_live_session(club_slug: str, payload: PublicLiveSessionCreateRequest) -> dict[str, Any]:
+    _require_live_sessions_service_role()
+    if str(payload.event_type or "round_robin") not in {"round_robin", "Round Robin"}:
+        raise HTTPException(status_code=400, detail="The public web version currently supports Round Robin events only.")
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    supabase = get_supabase_client()
+    try:
+        result = create_public_round_robin_session(
+            supabase,
+            club_id=club_id,
+            event_name=payload.event_name,
+            participant_names=payload.participant_names,
+        )
+    except PublicLiveSessionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_live_sessions_backend_error(exc)
+    return {"club": _public_club_payload(club, club_slug), **result}
+
+
 @app.get("/clubs/{club_slug}/live-sessions/{session_key}")
 def get_club_live_session(club_slug: str, session_key: str) -> dict[str, Any]:
     return _build_live_session_detail_response(club_slug, session_key)
+
+
+@app.patch("/clubs/{club_slug}/live-sessions/{session_key}/scores")
+def update_club_live_session_scores(
+    club_slug: str,
+    session_key: str,
+    payload: PublicLiveScoreUpdateRequest,
+) -> dict[str, Any]:
+    _require_live_sessions_service_role()
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    supabase = get_supabase_client()
+    try:
+        result = update_public_round_robin_scores(
+            supabase,
+            club_id=club_id,
+            session_key=session_key,
+            edit_token=payload.edit_token,
+            scores=[score.model_dump() for score in payload.scores],
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except PublicLiveSessionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_live_sessions_backend_error(exc)
+    return {"club": _public_club_payload(club, club_slug), **result}
 
 
 @app.post("/admin/clubs/{club_id}/matches/batch")
