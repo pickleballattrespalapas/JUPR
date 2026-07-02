@@ -120,7 +120,10 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "updated_at",
 }
 
-PUBLIC_LIVE_SESSION_SELECT = "club_id,session_key,title,status,state,source,created_at,updated_at,last_seen_at,expires_at"
+# Keep this select list limited to fields required for the public projection.
+# In production this avoids hard-failing if an earlier live_sessions table variant
+# exists without newer private/admin metadata columns such as `source`.
+PUBLIC_LIVE_SESSION_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
 
 
 class MatchBatchRequest(BaseModel):
@@ -150,8 +153,31 @@ def get_supabase_client() -> Client:
 
 
 
+def _error_payload_text(exc: Exception) -> str:
+    pieces = [str(exc)]
+    for attr in ("code", "message", "details", "hint"):
+        value = getattr(exc, attr, None)
+        if value:
+            pieces.append(str(value))
+    response = getattr(exc, "response", None)
+    if response is not None:
+        text = getattr(response, "text", None)
+        if text:
+            pieces.append(str(text))
+        json_fn = getattr(response, "json", None)
+        if callable(json_fn):
+            try:
+                payload = json_fn()
+            except Exception:
+                payload = None
+            if payload:
+                pieces.append(str(payload))
+    return " | ".join(pieces).lower()
+
+
+
 def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
-    detail = str(exc).lower()
+    detail = _error_payload_text(exc)
     table = table_name.lower()
     return table in detail and (
         "does not exist" in detail
@@ -160,6 +186,32 @@ def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
         or "not found" in detail
         or "could not find" in detail
         or "schema cache" in detail
+        or "pgrst205" in detail
+    )
+
+
+
+def _is_live_sessions_unavailable_error(exc: Exception) -> bool:
+    detail = _error_payload_text(exc)
+    if _is_missing_table_error(exc, "live_sessions"):
+        return True
+    if "live_sessions" not in detail:
+        return False
+    return any(
+        marker in detail
+        for marker in (
+            "pgrst204",
+            "pgrst205",
+            "42p01",
+            "42501",
+            "permission denied",
+            "schema cache",
+            "could not find",
+            "does not exist",
+            "undefined table",
+            "column",
+            "relation",
+        )
     )
 
 
@@ -241,7 +293,7 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
             or []
         )
     except Exception as exc:
-        if _is_missing_table_error(exc, "live_sessions"):
+        if _is_live_sessions_unavailable_error(exc):
             rows = []
         else:
             raise
@@ -272,7 +324,7 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
             or []
         )
     except Exception as exc:
-        if _is_missing_table_error(exc, "live_sessions"):
+        if _is_live_sessions_unavailable_error(exc):
             raise HTTPException(status_code=404, detail="live session not found") from exc
         raise
 
@@ -439,7 +491,19 @@ def submit_admin_match_batch(
         )
         write_admin_activity_log(supabase, denied_payload)
         raise HTTPException(status_code=403, detail="insufficient permission")
-    df_players_all, _, df_leagues, _, df_meta, _, _, _, _, name_to_id = load_data(supabase, club_id)
+    (
+        df_players_all,
+        _df_players_active,
+        df_leagues,
+        _df_matches,
+        df_meta,
+        _df_badges,
+        _df_player_badges,
+        name_to_id,
+        _id_to_name,
+        _schema_degraded,
+        _schema_degraded_reason,
+    ) = load_data(supabase, club_id)
 
     service_ctx = ServiceContext(
         supabase=supabase,
