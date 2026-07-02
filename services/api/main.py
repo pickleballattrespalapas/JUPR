@@ -638,7 +638,7 @@ def update_club_live_session_scores(
             club_id=club_id,
             session_key=session_key,
             edit_token=payload.edit_token,
-            scores=[score.model_dump() for score in payload.scores],
+            scores=[score.dict() for score in payload.scores],
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
