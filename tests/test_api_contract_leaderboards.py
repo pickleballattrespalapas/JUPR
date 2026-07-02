@@ -92,3 +92,42 @@ def test_public_leaderboards_compat_alias_matches_primary_contract(client):
     assert primary.status_code == 200
     assert compat.status_code == 200
     assert compat.json() == primary.json()
+
+
+def test_get_club_falls_back_to_existing_underscore_club_id(monkeypatch):
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = data
+
+    class FakeQuery:
+        def __init__(self, table_name):
+            self.table_name = table_name
+            self.filters = {}
+
+        def select(self, *_args, **_kwargs):
+            return self
+
+        def eq(self, key, value):
+            self.filters[key] = value
+            return self
+
+        def limit(self, *_args, **_kwargs):
+            return self
+
+        def execute(self):
+            if self.table_name == "clubs":
+                raise Exception("Could not find the table 'public.clubs' in the schema cache")
+            if self.table_name == "players" and self.filters.get("club_id") == "tres_palapas":
+                return FakeResponse([{"club_id": "tres_palapas"}])
+            return FakeResponse([])
+
+    class FakeSupabase:
+        def table(self, table_name):
+            return FakeQuery(table_name)
+
+    monkeypatch.setattr("services.api.main.get_supabase_client", lambda: FakeSupabase())
+    response = TestClient(app).get("/clubs/tres-palapas")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "tres_palapas"
+    assert response.json()["slug"] == "tres-palapas"
