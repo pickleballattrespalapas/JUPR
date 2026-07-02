@@ -134,7 +134,11 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "updated_at",
 }
 
-PUBLIC_LIVE_SESSION_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
+# The list endpoint must stay lightweight. Do not select `state` for every row;
+# that JSONB is internal recovery data and can be large. The detail endpoint reads
+# `state` for one session and returns only a sanitized public projection.
+PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,created_at,updated_at,last_seen_at,expires_at"
+PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
 LIVE_SESSIONS_SETUP_ERROR = (
     "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations "
     "and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
@@ -168,9 +172,10 @@ def _has_supabase_service_role_key() -> bool:
 
 
 def _require_live_sessions_service_role() -> None:
-    # The public Live API intentionally reads raw durable Streamlit recovery state
-    # server-side, then returns a sanitized DTO. Do not grant anonymous Supabase
-    # clients direct access to `live_sessions.state`; run this API with service role.
+    # The public Live detail API intentionally reads raw durable Streamlit recovery
+    # state server-side, then returns a sanitized DTO. Do not grant anonymous
+    # Supabase clients direct access to `live_sessions.state`; run this API with
+    # service role.
     if not _has_supabase_service_role_key():
         raise HTTPException(status_code=503, detail=LIVE_SESSIONS_SETUP_ERROR)
 
@@ -326,7 +331,7 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
     try:
         rows = (
             supabase.table("live_sessions")
-            .select(PUBLIC_LIVE_SESSION_SELECT)
+            .select(PUBLIC_LIVE_SESSION_SUMMARY_SELECT)
             .eq("club_id", club_id)
             .order("updated_at", desc=True)
             .limit(safe_limit * 3)
@@ -357,7 +362,7 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
     try:
         rows = (
             supabase.table("live_sessions")
-            .select(PUBLIC_LIVE_SESSION_SELECT)
+            .select(PUBLIC_LIVE_SESSION_DETAIL_SELECT)
             .eq("club_id", club_id)
             .eq("session_key", clean_session_key)
             .limit(1)
