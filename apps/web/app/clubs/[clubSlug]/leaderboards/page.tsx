@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getClubLeaderboard } from "@/lib/api";
 
 type LeaderboardPageProps = {
@@ -25,6 +26,7 @@ export default async function ClubLeaderboardPage({ params }: LeaderboardPagePro
   return (
     <section>
       <h1>{clubName} Leaderboards</h1>
+      <p style={{ color: "#475569" }}><Link href={`/clubs/${clubSlug}/players`}>Browse all player profiles</Link></p>
       {entries.length === 0 ? <p>No leaderboard data is currently available.</p> : null}
       {entries.length > 0 ? (
         <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", background: "white" }}>
@@ -43,10 +45,13 @@ export default async function ClubLeaderboardPage({ params }: LeaderboardPagePro
                 const wins = entry.wins;
                 const losses = entry.losses;
                 const wl = wins == null && losses == null ? "—" : `${wins ?? 0}/${losses ?? 0}`;
+                const playerLabel = entry.player_name || "Player";
                 return (
                   <tr key={`${entry.player_name}-${entry.player_id ?? index}`}>
                     <td style={tdStyle}>{entry.rank ?? entry.rank_position ?? index + 1}</td>
-                    <td style={tdStyle}>{entry.player_name}</td>
+                    <td style={tdStyle}>
+                      {entry.player_id ? <Link href={`/clubs/${clubSlug}/players/${entry.player_id}`}>{playerLabel}</Link> : playerLabel}
+                    </td>
                     <td style={tdStyle}>{entry.rating_jupr ?? entry.rating ?? "—"}</td>
                     <td style={tdStyle}>{entry.matches_played ?? "—"}</td>
                     <td style={tdStyle}>{wl}</td>
