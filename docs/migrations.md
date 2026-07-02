@@ -9,7 +9,7 @@ Use `YYYYMMDDHHMMSS_name.sql` to avoid collisions; avoid date-only prefixes like
 - If a migration changes Supabase schema (tables, columns, constraints, indexes, functions, grants, triggers, policies), the SQL must be captured in `supabase/migrations/`.
 - Do **not** rely on `migrations/` alone for Supabase schema changes.
 
-## Current inventory (as of 2026-06-24)
+## Current inventory (as of 2026-07-02)
 
 Inventory below reflects files currently present in this repository.
 
@@ -20,6 +20,7 @@ Inventory below reflects files currently present in this repository.
 - `20260428090000_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
 - `20260428100000_admin_role_assignments.sql`
 - `20260428101000_admin_activity_log.sql`
+- `20260702080000_live_sessions.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 
