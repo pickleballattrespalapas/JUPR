@@ -110,6 +110,35 @@ function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
+async function apiErrorMessage(response: Response): Promise<string> {
+  const fallback = `API error (${response.status}).`;
+  let bodyText = "";
+  try {
+    bodyText = await response.text();
+  } catch {
+    return fallback;
+  }
+
+  if (!bodyText) {
+    return fallback;
+  }
+
+  try {
+    const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
+    const detail = payload.detail ?? payload.message ?? payload.error;
+    if (Array.isArray(detail)) {
+      return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
+    }
+    if (detail) {
+      return `${fallback} ${String(detail)}`;
+    }
+  } catch {
+    // Fall through to a short text excerpt below.
+  }
+
+  return `${fallback} ${bodyText.slice(0, 240)}`;
+}
+
 async function fetchJson<T>(path: string, options: { noStore?: boolean } = {}): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
   if (!apiBase) {
@@ -124,7 +153,7 @@ async function fetchJson<T>(path: string, options: { noStore?: boolean } = {}): 
       options.noStore ? { cache: "no-store" } : { next: { revalidate: 60 } }
     );
     if (!response.ok) {
-      return { data: null, error: `API error (${response.status}).` };
+      return { data: null, error: await apiErrorMessage(response) };
     }
 
     const data = (await response.json()) as T;
