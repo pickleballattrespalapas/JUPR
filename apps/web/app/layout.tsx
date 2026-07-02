@@ -65,6 +65,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <nav style={navStyle} aria-label="Primary navigation">
               <Link href="/">Home</Link>
               <Link href="/clubs/tres-palapas">Tres Palapas</Link>
+              <Link href="/clubs/tres-palapas/live">Live</Link>
               <Link href="/clubs/tres-palapas/leaderboards">Leaderboards</Link>
               <Link href="/clubs/tres-palapas/players">Players</Link>
               <Link href="/how-ratings-work">How ratings work</Link>
