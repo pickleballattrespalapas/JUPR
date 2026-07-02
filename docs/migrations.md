@@ -21,6 +21,7 @@ Inventory below reflects files currently present in this repository.
 - `20260428100000_admin_role_assignments.sql`
 - `20260428101000_admin_activity_log.sql`
 - `20260702080000_live_sessions.sql`
+- `20260702170000_live_sessions_schema_contract.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 
