@@ -70,7 +70,7 @@ class FakeUnavailableLiveSessionsQuery:
         return self
 
     def execute(self):
-        raise Exception("Could not find the 'source' column of 'live_sessions' in the schema cache")
+        raise Exception("Could not find the 'state' column of 'live_sessions' in the schema cache")
 
 
 class FakeUnavailableLiveSessionsSupabase:
@@ -118,9 +118,14 @@ def _patch_club(monkeypatch):
     )
 
 
+def _patch_service_role(monkeypatch):
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
+
+
 @pytest.fixture
 def client(monkeypatch):
     rows = [_row(), {**_row(), "session_key": "abandoned", "status": "abandoned"}]
+    _patch_service_role(monkeypatch)
     _patch_club(monkeypatch)
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: FakeSupabase(rows))
     return TestClient(app)
@@ -155,7 +160,19 @@ def test_abandoned_live_session_detail_404s(client):
     assert response.status_code == 404
 
 
-def test_live_sessions_list_degrades_to_empty_when_schema_is_unavailable(monkeypatch):
+def test_live_sessions_requires_service_role_for_private_projection(monkeypatch):
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    _patch_club(monkeypatch)
+    monkeypatch.setattr("services.api.main.get_supabase_client", lambda: FakeSupabase([]))
+
+    response = TestClient(app).get("/clubs/test-club/live-sessions")
+
+    assert response.status_code == 503
+    assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]
+
+
+def test_live_sessions_list_reports_schema_unavailable(monkeypatch):
+    _patch_service_role(monkeypatch)
     _patch_club(monkeypatch)
     monkeypatch.setattr(
         "services.api.main.get_supabase_client",
@@ -164,11 +181,12 @@ def test_live_sessions_list_degrades_to_empty_when_schema_is_unavailable(monkeyp
 
     response = TestClient(app).get("/clubs/test-club/live-sessions")
 
-    assert response.status_code == 200
-    assert response.json()["sessions"] == []
+    assert response.status_code == 503
+    assert "live_sessions" in response.json()["detail"]
 
 
-def test_live_session_detail_404s_when_schema_is_unavailable(monkeypatch):
+def test_live_session_detail_reports_schema_unavailable(monkeypatch):
+    _patch_service_role(monkeypatch)
     _patch_club(monkeypatch)
     monkeypatch.setattr(
         "services.api.main.get_supabase_client",
@@ -177,4 +195,4 @@ def test_live_session_detail_404s_when_schema_is_unavailable(monkeypatch):
 
     response = TestClient(app).get("/clubs/test-club/live-sessions/public-session")
 
-    assert response.status_code == 404
+    assert response.status_code == 503
