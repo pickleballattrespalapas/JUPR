@@ -22,8 +22,10 @@ class FakeQuery:
         self.rows = rows
         self.filters: dict[str, object] = {}
         self.row_limit: int | None = None
+        self.select_expr = ""
 
-    def select(self, *_args, **_kwargs):
+    def select(self, expr="*", *_args, **_kwargs):
+        self.select_expr = str(expr or "*")
         return self
 
     def eq(self, key, value):
@@ -45,6 +47,9 @@ class FakeQuery:
             rows = [row for row in rows if row.get(key) == value]
         if self.row_limit is not None:
             rows = rows[: self.row_limit]
+        if self.select_expr and self.select_expr != "*":
+            selected_keys = [key.strip() for key in self.select_expr.split(",") if key.strip()]
+            rows = [{key: row.get(key) for key in selected_keys if key in row} for row in rows]
         return FakeResponse(rows)
 
 
@@ -131,7 +136,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def test_live_sessions_list_returns_public_summaries(client):
+def test_live_sessions_list_returns_public_summaries_without_fetching_state(client):
     response = client.get("/clubs/test-club/live-sessions")
 
     assert response.status_code == 200
@@ -139,6 +144,7 @@ def test_live_sessions_list_returns_public_summaries(client):
     assert payload["club"] == {"id": "club-1", "slug": "test-club", "name": "Test Club"}
     assert [row["session_key"] for row in payload["sessions"]] == ["public-session"]
     assert "state" not in payload["sessions"][0]
+    assert payload["sessions"][0]["has_event"] is False
 
 
 def test_live_session_detail_returns_public_scoreboard_shape(client):
