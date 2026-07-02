@@ -131,3 +131,19 @@ def test_get_club_falls_back_to_existing_underscore_club_id(monkeypatch):
     assert response.status_code == 200
     assert response.json()["id"] == "tres_palapas"
     assert response.json()["slug"] == "tres-palapas"
+
+
+def test_get_known_public_club_survives_supabase_lookup_failure(monkeypatch):
+    class BrokenSupabase:
+        def table(self, _table_name):
+            raise RuntimeError("Supabase unavailable")
+
+    monkeypatch.setattr("services.api.main.get_supabase_client", lambda: BrokenSupabase())
+
+    response = TestClient(app).get("/clubs/tres-palapas")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "tres_palapas"
+    assert payload["slug"] == "tres-palapas"
+    assert payload["name"] == "Tres Palapas"
