@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getClubLiveSessions } from "@/lib/api";
+import PublicLiveCreator from "./PublicLiveCreator";
 
 type LivePageProps = {
   params: { clubSlug: string };
@@ -11,6 +12,10 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
+
+function apiBase(): string | null {
+  return process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || process.env.JUPR_API_BASE_URL || null;
+}
 
 function formatTimestamp(value?: string | null): string {
   if (!value) return "—";
@@ -38,9 +43,11 @@ export default async function ClubLivePage({ params }: LivePageProps) {
         </p>
         <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.2rem", lineHeight: 1.1 }}>{clubName} live sessions</h1>
         <p style={{ color: "#334155", marginTop: 0 }}>
-          Follow active public JUPR Live scoreboards from the website. Admin scoring remains in Streamlit while the new web scoring workflow is built.
+          Start a public JUPR Live round robin, enter scores, and share the live scoreboard. Admin scoring remains separate for official rated events.
         </p>
       </div>
+
+      <PublicLiveCreator apiBase={apiBase()} clubSlug={clubSlug} />
 
       {error ? (
         <p style={{ color: "#b91c1c" }}>Live sessions are temporarily unavailable. {error}</p>
@@ -48,9 +55,9 @@ export default async function ClubLivePage({ params }: LivePageProps) {
 
       {!error && sessions.length === 0 ? (
         <div style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No live sessions right now</h2>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No shared live sessions right now</h2>
           <p style={{ color: "#475569" }}>
-            When an organizer starts a durable JUPR Live session, it will appear here for public viewing.
+            Create a public JUPR Live event above, or open a shared session link from an organizer.
           </p>
           <Link href={`/clubs/${clubSlug}/leaderboards`}>View leaderboards instead</Link>
         </div>
