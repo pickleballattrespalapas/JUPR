@@ -37,6 +37,20 @@ PUBLIC_CLUB_SLUG_TO_ID = {
     "tres-palapas": "tres_palapas",
 }
 
+PUBLIC_CLUB_FALLBACKS: dict[str, dict[str, Any]] = {
+    "tres-palapas": {
+        "id": "tres_palapas",
+        "slug": "tres-palapas",
+        "name": "Tres Palapas",
+        "tagline": None,
+        "support_email": None,
+        "public_base_url": "https://juprleagues.com/clubs/tres-palapas",
+        "logo_url": None,
+        "primary_color": None,
+        "is_active": True,
+    }
+}
+
 
 
 def get_jupr_env() -> str:
@@ -261,6 +275,13 @@ def _display_name_from_slug(club_slug: str) -> str:
 
 
 
+def _known_public_club_fallback(club_slug: str) -> dict[str, Any] | None:
+    slug = str(club_slug or "").strip()
+    fallback = PUBLIC_CLUB_FALLBACKS.get(slug)
+    return dict(fallback) if fallback else None
+
+
+
 def _public_club_payload(club: dict[str, Any], club_slug: str) -> dict[str, str]:
     return {
         "id": str(club.get("id") or club.get("club_id") or club_slug),
@@ -374,11 +395,18 @@ def get_club(club_slug: str) -> dict[str, Any]:
     if not slug:
         raise HTTPException(status_code=400, detail="club_slug is required")
 
-    supabase = get_supabase_client()
+    known_fallback = _known_public_club_fallback(slug)
+    try:
+        supabase = get_supabase_client()
+    except Exception as exc:
+        if known_fallback:
+            return known_fallback
+        raise HTTPException(status_code=503, detail="Club lookup is unavailable because Supabase is not configured.") from exc
+
     club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
     club_minimal_fields = "id,slug,name"
-
     rows: list[dict[str, Any]] = []
+
     try:
         rows = (
             supabase.table("clubs").select(club_fields).eq("slug", slug).limit(1).execute().data or []
@@ -388,28 +416,26 @@ def get_club(club_slug: str) -> dict[str, Any]:
                 rows = supabase.table("clubs").select(club_fields).eq("id", club_id).limit(1).execute().data or []
                 if rows:
                     break
-    except Exception as exc:
-        if not _is_missing_table_error(exc, "clubs"):
-            try:
-                rows = (
-                    supabase.table("clubs").select(club_minimal_fields).eq("slug", slug).limit(1).execute().data or []
-                )
-                if not rows:
-                    for club_id in _club_lookup_candidates(slug):
-                        rows = (
-                            supabase.table("clubs")
-                            .select(club_minimal_fields)
-                            .eq("id", club_id)
-                            .limit(1)
-                            .execute()
-                            .data
-                            or []
-                        )
-                        if rows:
-                            break
-            except Exception as fallback_exc:
-                if not _is_missing_table_error(fallback_exc, "clubs"):
-                    raise
+    except Exception:
+        try:
+            rows = (
+                supabase.table("clubs").select(club_minimal_fields).eq("slug", slug).limit(1).execute().data or []
+            )
+            if not rows:
+                for club_id in _club_lookup_candidates(slug):
+                    rows = (
+                        supabase.table("clubs")
+                        .select(club_minimal_fields)
+                        .eq("id", club_id)
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if rows:
+                        break
+        except Exception:
+            rows = []
 
     if rows:
         row = rows[0] or {}
@@ -426,15 +452,18 @@ def get_club(club_slug: str) -> dict[str, Any]:
         }
 
     for club_id in _club_lookup_candidates(slug):
-        fallback = (
-            supabase.table("players")
-            .select("club_id")
-            .eq("club_id", club_id)
-            .limit(1)
-            .execute()
-            .data
-            or []
-        )
+        try:
+            fallback = (
+                supabase.table("players")
+                .select("club_id")
+                .eq("club_id", club_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            fallback = []
         if fallback:
             resolved_id = str(fallback[0].get("club_id") or club_id)
             return {
@@ -448,6 +477,9 @@ def get_club(club_slug: str) -> dict[str, Any]:
                 "primary_color": None,
                 "is_active": True,
             }
+
+    if known_fallback:
+        return known_fallback
 
     raise HTTPException(status_code=404, detail="club not found")
 
