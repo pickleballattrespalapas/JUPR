@@ -14,6 +14,11 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.leaderboard_service import get_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
+from jupr_app.services.public_live_service import (
+    is_public_live_session_row,
+    public_live_session_detail,
+    public_live_sessions_from_rows,
+)
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
 
@@ -115,6 +120,8 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "updated_at",
 }
 
+PUBLIC_LIVE_SESSION_SELECT = "club_id,session_key,title,status,state,source,created_at,updated_at,last_seen_at,expires_at"
+
 
 class MatchBatchRequest(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
@@ -182,6 +189,15 @@ def _display_name_from_slug(club_slug: str) -> str:
 
 
 
+def _public_club_payload(club: dict[str, Any], club_slug: str) -> dict[str, str]:
+    return {
+        "id": str(club.get("id") or club.get("club_id") or club_slug),
+        "slug": str(club.get("slug") or club.get("club_slug") or club_slug),
+        "name": str(club.get("name") or club.get("club_name") or club.get("display_name") or club_slug),
+    }
+
+
+
 def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
@@ -202,12 +218,70 @@ def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict
     supabase = get_supabase_client()
     rows = get_public_leaderboard(supabase=supabase, club_id=club_id, league_name=league_name)
     return {
-        "club": {
-            "id": str(club.get("id") or club.get("club_id") or club_id),
-            "slug": str(club.get("slug") or club.get("club_slug") or club_slug),
-            "name": str(club.get("name") or club.get("club_name") or club.get("display_name") or club_slug),
-        },
+        "club": _public_club_payload(club, club_slug),
         "leaderboard": _normalize_public_leaderboard_rows(rows),
+    }
+
+
+
+def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    safe_limit = max(1, min(int(limit or 20), 50))
+    supabase = get_supabase_client()
+    try:
+        rows = (
+            supabase.table("live_sessions")
+            .select(PUBLIC_LIVE_SESSION_SELECT)
+            .eq("club_id", club_id)
+            .order("updated_at", desc=True)
+            .limit(safe_limit * 3)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _is_missing_table_error(exc, "live_sessions"):
+            rows = []
+        else:
+            raise
+    return {
+        "club": _public_club_payload(club, club_slug),
+        "sessions": public_live_sessions_from_rows(rows, limit=safe_limit),
+    }
+
+
+
+def _build_live_session_detail_response(club_slug: str, session_key: str) -> dict[str, Any]:
+    clean_session_key = str(session_key or "").strip()
+    if not clean_session_key:
+        raise HTTPException(status_code=400, detail="session_key is required")
+
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    supabase = get_supabase_client()
+    try:
+        rows = (
+            supabase.table("live_sessions")
+            .select(PUBLIC_LIVE_SESSION_SELECT)
+            .eq("club_id", club_id)
+            .eq("session_key", clean_session_key)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _is_missing_table_error(exc, "live_sessions"):
+            raise HTTPException(status_code=404, detail="live session not found") from exc
+        raise
+
+    if not rows or not is_public_live_session_row(rows[0]):
+        raise HTTPException(status_code=404, detail="live session not found")
+
+    return {
+        "club": _public_club_payload(club, club_slug),
+        "session": public_live_session_detail(rows[0]),
     }
 
 
@@ -315,6 +389,16 @@ def get_club_leaderboard_compat(club_slug: str, league_name: str | None = Query(
     # Temporary compatibility alias for Next.js clients still calling /leaderboards/public.
     # Remove this route after the web app fully migrates to /leaderboards.
     return _build_leaderboard_response(club_slug, league_name)
+
+
+@app.get("/clubs/{club_slug}/live-sessions")
+def get_club_live_sessions(club_slug: str, limit: int = Query(default=20, ge=1, le=50)) -> dict[str, Any]:
+    return _build_live_sessions_response(club_slug, limit)
+
+
+@app.get("/clubs/{club_slug}/live-sessions/{session_key}")
+def get_club_live_session(club_slug: str, session_key: str) -> dict[str, Any]:
+    return _build_live_session_detail_response(club_slug, session_key)
 
 
 @app.post("/admin/clubs/{club_id}/matches/batch")

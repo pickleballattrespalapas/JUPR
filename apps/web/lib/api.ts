@@ -35,6 +35,72 @@ export type LeaderboardResponse = {
   leaderboard: LeaderboardEntry[];
 };
 
+export type PublicLiveMatch = {
+  id: string;
+  round_number: number;
+  court_number?: number | null;
+  mini_round_number?: number | null;
+  slot?: number | null;
+  label: string;
+  team_a: string[];
+  team_b: string[];
+  score_a?: number | null;
+  score_b?: number | null;
+  is_scored?: boolean;
+  winner?: string | null;
+};
+
+export type PublicLiveRound = {
+  number: number;
+  matches: PublicLiveMatch[];
+  courts?: Array<{
+    court_number: number;
+    size?: number | null;
+    matches: PublicLiveMatch[];
+  }>;
+};
+
+export type PublicLiveSessionSummary = {
+  session_key: string;
+  title: string;
+  status: string;
+  event_type?: string | null;
+  current_round?: number | null;
+  has_event?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_seen_at?: string | null;
+  expires_at?: string | null;
+};
+
+export type PublicLiveSessionDetail = PublicLiveSessionSummary & {
+  rounds: PublicLiveRound[];
+  standings: Array<Record<string, string | number | boolean | null>>;
+  bracket?: {
+    champion?: string | null;
+    rows: Array<Record<string, string | number | boolean | null>>;
+  } | null;
+  court_standings?: Array<Record<string, unknown>>;
+};
+
+export type LiveSessionsResponse = {
+  club: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  sessions: PublicLiveSessionSummary[];
+};
+
+export type LiveSessionDetailResponse = {
+  club: {
+    id: string;
+    slug: string;
+    name: string;
+  };
+  session: PublicLiveSessionDetail;
+};
+
 type ApiResult<T> = {
   data: T | null;
   error: string | null;
@@ -44,7 +110,7 @@ function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
+async function fetchJson<T>(path: string, options: { noStore?: boolean } = {}): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
   if (!apiBase) {
     return { data: null, error: "Missing JUPR API base URL environment variable." };
@@ -53,7 +119,10 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
 
   try {
-    const response = await fetch(url, { next: { revalidate: 60 } });
+    const response = await fetch(
+      url,
+      options.noStore ? { cache: "no-store" } : { next: { revalidate: 60 } }
+    );
     if (!response.ok) {
       return { data: null, error: `API error (${response.status}).` };
     }
@@ -74,4 +143,15 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
 
 export async function getClubLeaderboard(clubSlug: string): Promise<ApiResult<LeaderboardResponse>> {
   return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards`);
+}
+
+export async function getClubLiveSessions(clubSlug: string): Promise<ApiResult<LiveSessionsResponse>> {
+  return fetchJson<LiveSessionsResponse>(`/clubs/${clubSlug}/live-sessions`, { noStore: true });
+}
+
+export async function getClubLiveSession(
+  clubSlug: string,
+  sessionKey: string
+): Promise<ApiResult<LiveSessionDetailResponse>> {
+  return fetchJson<LiveSessionDetailResponse>(`/clubs/${clubSlug}/live-sessions/${sessionKey}`, { noStore: true });
 }
