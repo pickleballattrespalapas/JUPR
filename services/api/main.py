@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -166,6 +167,15 @@ def _get_supabase_credentials() -> tuple[str, str]:
 
 
 
+def _supabase_host_for_diagnostics() -> str:
+    raw = os.getenv("SUPABASE_URL", "").strip()
+    if not raw:
+        return "<missing>"
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    return parsed.netloc or parsed.path or "<unparseable>"
+
+
+
 def _has_supabase_service_role_key() -> bool:
     return bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip())
 
@@ -250,8 +260,24 @@ def _is_live_sessions_schema_error(exc: Exception) -> bool:
 
 
 
+def _live_sessions_backend_error_detail(exc: Exception) -> str:
+    raw_detail = _error_payload_text(exc) or exc.__class__.__name__
+    if len(raw_detail) > 500:
+        raw_detail = raw_detail[:500] + "..."
+    return (
+        f"{LIVE_SESSIONS_SETUP_ERROR} Supabase host: {_supabase_host_for_diagnostics()}. "
+        f"Backend error: {raw_detail}"
+    )
+
+
+
 def _raise_live_sessions_setup_error(exc: Exception) -> None:
-    raise HTTPException(status_code=503, detail=LIVE_SESSIONS_SETUP_ERROR) from exc
+    raise HTTPException(status_code=503, detail=_live_sessions_backend_error_detail(exc)) from exc
+
+
+
+def _raise_live_sessions_backend_error(exc: Exception) -> None:
+    raise HTTPException(status_code=503, detail=_live_sessions_backend_error_detail(exc)) from exc
 
 
 
@@ -342,7 +368,7 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
     except Exception as exc:
         if _is_live_sessions_schema_error(exc):
             _raise_live_sessions_setup_error(exc)
-        raise
+        _raise_live_sessions_backend_error(exc)
     return {
         "club": _public_club_payload(club, club_slug),
         "sessions": public_live_sessions_from_rows(rows, limit=safe_limit),
@@ -373,7 +399,7 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
     except Exception as exc:
         if _is_live_sessions_schema_error(exc):
             _raise_live_sessions_setup_error(exc)
-        raise
+        _raise_live_sessions_backend_error(exc)
 
     if not rows or not is_public_live_session_row(rows[0]):
         raise HTTPException(status_code=404, detail="live session not found")
@@ -392,6 +418,47 @@ def startup_checks() -> None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "service": "jupr-api"}
+
+
+@app.get("/health/live-sessions")
+def health_live_sessions() -> dict[str, Any]:
+    service_role_configured = _has_supabase_service_role_key()
+    host = _supabase_host_for_diagnostics()
+    if not service_role_configured:
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": False,
+            "detail": LIVE_SESSIONS_SETUP_ERROR,
+        }
+    try:
+        supabase = get_supabase_client()
+        rows = (
+            supabase.table("live_sessions")
+            .select("club_id,session_key,status,updated_at")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return {
+            "ok": True,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": True,
+            "live_sessions_query_ok": True,
+            "sample_count": len(rows),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": True,
+            "live_sessions_query_ok": False,
+            "detail": _error_payload_text(exc) or exc.__class__.__name__,
+        }
 
 
 @app.get("/clubs/{club_slug}")
