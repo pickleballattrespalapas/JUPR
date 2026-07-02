@@ -25,21 +25,33 @@ DEFAULT_CORS_ALLOWED_ORIGINS = (
     "https://www.juprleagues.com",
 )
 
+# Production data historically uses underscore-style club IDs while public SaaS URLs
+# use hyphenated slugs. Keep this explicit until every club has a durable `clubs`
+# table row that maps slug -> club_id.
+PUBLIC_CLUB_SLUG_TO_ID = {
+    "tres-palapas": "tres_palapas",
+}
+
+
 
 def get_jupr_env() -> str:
     return os.getenv("JUPR_ENV", "").strip().lower()
+
 
 
 def is_staging_env() -> bool:
     return get_jupr_env() == "staging"
 
 
+
 def is_next_admin_score_entry_enabled() -> bool:
     return os.getenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "").strip().lower() in {"1", "true", "yes"}
 
 
+
 def is_api_audit_log_required() -> bool:
     return os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in {"1", "true", "yes"}
+
 
 
 def _split_csv_env(name: str) -> list[str]:
@@ -49,8 +61,10 @@ def _split_csv_env(name: str) -> list[str]:
     return [value.strip().rstrip("/") for value in raw.split(",") if value.strip()]
 
 
+
 def get_cors_allowed_origins() -> list[str]:
     return _split_csv_env("JUPR_ALLOWED_ORIGINS") or list(DEFAULT_CORS_ALLOWED_ORIGINS)
+
 
 
 def _log_runtime_guardrails() -> None:
@@ -107,6 +121,7 @@ class MatchBatchRequest(BaseModel):
     source: str = "next_admin_score_entry"
 
 
+
 def _get_supabase_credentials() -> tuple[str, str]:
     url = os.getenv("SUPABASE_URL", "").strip()
     service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -121,23 +136,50 @@ def _get_supabase_credentials() -> tuple[str, str]:
     return url, key
 
 
+
 def get_supabase_client() -> Client:
     url, key = _get_supabase_credentials()
     return create_client(url, key)
 
 
+
 def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
     detail = str(exc).lower()
     table = table_name.lower()
-    return (
-        table in detail
-        and (
-            "does not exist" in detail
-            or "undefined table" in detail
-            or "relation" in detail
-            or "not found" in detail
-        )
+    return table in detail and (
+        "does not exist" in detail
+        or "undefined table" in detail
+        or "relation" in detail
+        or "not found" in detail
+        or "could not find" in detail
+        or "schema cache" in detail
     )
+
+
+
+def _club_lookup_candidates(club_slug: str) -> list[str]:
+    slug = str(club_slug).strip()
+    candidates = [slug]
+
+    explicit_id = PUBLIC_CLUB_SLUG_TO_ID.get(slug)
+    if explicit_id:
+        candidates.append(explicit_id)
+
+    normalized_id = slug.replace("-", "_")
+    if normalized_id != slug:
+        candidates.append(normalized_id)
+
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+
+def _display_name_from_slug(club_slug: str) -> str:
+    return str(club_slug).replace("-", " ").replace("_", " ").title()
+
 
 
 def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -151,6 +193,7 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
                 clean["rank"] = idx
         normalized.append(clean)
     return normalized
+
 
 
 def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict[str, Any]:
@@ -186,6 +229,7 @@ def get_club(club_slug: str) -> dict[str, Any]:
 
     supabase = get_supabase_client()
     club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
+    club_minimal_fields = "id,slug,name"
 
     rows: list[dict[str, Any]] = []
     try:
@@ -193,49 +237,72 @@ def get_club(club_slug: str) -> dict[str, Any]:
             supabase.table("clubs").select(club_fields).eq("slug", slug).limit(1).execute().data or []
         )
         if not rows:
-            rows = supabase.table("clubs").select(club_fields).eq("id", slug).limit(1).execute().data or []
+            for club_id in _club_lookup_candidates(slug):
+                rows = supabase.table("clubs").select(club_fields).eq("id", club_id).limit(1).execute().data or []
+                if rows:
+                    break
     except Exception as exc:
-        if _is_missing_table_error(exc, "clubs"):
-            rows = []
-        else:
-            raise
+        if not _is_missing_table_error(exc, "clubs"):
+            try:
+                rows = (
+                    supabase.table("clubs").select(club_minimal_fields).eq("slug", slug).limit(1).execute().data or []
+                )
+                if not rows:
+                    for club_id in _club_lookup_candidates(slug):
+                        rows = (
+                            supabase.table("clubs")
+                            .select(club_minimal_fields)
+                            .eq("id", club_id)
+                            .limit(1)
+                            .execute()
+                            .data
+                            or []
+                        )
+                        if rows:
+                            break
+            except Exception as fallback_exc:
+                if not _is_missing_table_error(fallback_exc, "clubs"):
+                    raise
 
     if rows:
         row = rows[0] or {}
         return {
             "id": row.get("id"),
-            "slug": row.get("slug"),
-            "name": row.get("name"),
+            "slug": row.get("slug") or slug,
+            "name": row.get("name") or _display_name_from_slug(slug),
             "tagline": row.get("tagline"),
             "support_email": row.get("support_email"),
             "public_base_url": row.get("public_base_url"),
             "logo_url": row.get("logo_url"),
             "primary_color": row.get("primary_color"),
-            "is_active": row.get("is_active"),
+            "is_active": row.get("is_active", True),
         }
 
-    fallback = (
-        supabase.table("players")
-        .select("club_id")
-        .eq("club_id", slug)
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not fallback:
-        raise HTTPException(status_code=404, detail="club not found")
-    return {
-        "id": slug,
-        "slug": slug,
-        "name": slug,
-        "tagline": None,
-        "support_email": None,
-        "public_base_url": None,
-        "logo_url": None,
-        "primary_color": None,
-        "is_active": True,
-    }
+    for club_id in _club_lookup_candidates(slug):
+        fallback = (
+            supabase.table("players")
+            .select("club_id")
+            .eq("club_id", club_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if fallback:
+            resolved_id = str(fallback[0].get("club_id") or club_id)
+            return {
+                "id": resolved_id,
+                "slug": slug,
+                "name": _display_name_from_slug(slug),
+                "tagline": None,
+                "support_email": None,
+                "public_base_url": None,
+                "logo_url": None,
+                "primary_color": None,
+                "is_active": True,
+            }
+
+    raise HTTPException(status_code=404, detail="club not found")
 
 
 @app.get("/clubs/{club_slug}/leaderboards")
