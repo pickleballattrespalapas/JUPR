@@ -39,7 +39,7 @@ jobs:
       STAGING_WEB_BASE_URL: ${{ inputs.web_base_url != '' && inputs.web_base_url || secrets.STAGING_WEB_BASE_URL }}
       JUPR_SMOKE_CLUB_SLUG: ${{ inputs.club_slug || 'tres-palapas' }}
       JUPR_SMOKE_CLUB_ID: ${{ inputs.club_id || 'tres_palapas' }}
-      JUPR_SMOKE_EXTRA_ARGS: ${{ inputs.allow_live_unconfigured && '--allow-live-unconfigured' || '' }}
+      JUPR_SMOKE_ARGS: ${{ inputs.allow_live_unconfigured && '--allow-live-unconfigured' || '' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
