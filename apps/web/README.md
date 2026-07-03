@@ -4,17 +4,17 @@ This is the Next.js app for the public JUPR Leagues web surface. It is intended 
 
 ## Current deployment posture
 
-The web app is **staging/read-only first**.
+The web app is **staging/read-only first**, with the admin migration now entering a controlled closed-club pilot posture.
 
-- Production Streamlit remains the trusted production runtime.
-- FastAPI supplies public read APIs and guarded admin endpoints.
-- Next.js renders public pages against FastAPI.
-- Next admin score entry remains disabled unless explicitly enabled for controlled staging experiments.
+- Production Streamlit remains the trusted fallback runtime.
+- FastAPI supplies public read APIs, guarded public intake APIs, status-only admin migration APIs, and guarded admin endpoints.
+- Next.js renders public pages and the admin operations cockpit against FastAPI.
+- Next admin score entry remains disabled unless explicitly enabled for controlled staging or closed-club production-write pilot experiments.
 - Never put Supabase service-role keys, JWT secrets, or database credentials in Vercel/frontend environment variables.
 
 ## Routes
 
-Current public routes include:
+Current public and staff-facing routes include:
 
 - `/` public JUPR landing page with SaaS pilot shell navigation.
 - `/clubs/[clubSlug]` club landing page.
@@ -38,8 +38,8 @@ Current public routes include:
 - `/terms` first-party terms placeholder pending legal review.
 - `/support` and `/contact` support/contact shell.
 - `/data-corrections` public correction intake instructions with no direct mutation.
-- `/admin` admin entry/fallback page.
-- `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active.
+- `/admin` staff operations cockpit for the Streamlit-to-Next migration.
+- `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
 
 ## Environment variables
 
@@ -49,6 +49,8 @@ Use one of the following API base URL variables:
 - `NEXT_PUBLIC_JUPR_API_BASE_URL` (fallback and browser-visible runtime value)
 - `NEXT_PUBLIC_JUPR_ENV` (optional; set to `staging` to show a staging badge)
 - `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
+
+The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel.
 
 Example:
 
@@ -118,4 +120,4 @@ The same check is available through the manual GitHub Actions workflow `Staging 
 
 The score-entry page at `/clubs/[clubSlug]/admin/score-entry` is an MVP surface only. Rated admin writes remain blocked unless the backend feature flag is explicitly enabled and Supabase JWT role authorization succeeds.
 
-Keep production public launch read-only until the auth, club-scoped authorization, audit, and E2E safety criteria in `docs/next_admin_auth_design.md` are complete.
+Closed-club production-write pilot work may enable one workflow at a time through FastAPI-side flags. Keep the permanent safety boundaries from `docs/next_admin_operations_migration.md` in place: no browser secrets, no direct browser writes to rating tables, and no JavaScript rating logic.
