@@ -28,7 +28,7 @@ export default async function ScoreEntryPage({ params }: ScoreEntryPageProps) {
       </p>
       {error ? <p style={{ color: "#b91c1c" }}>Player lookup is unavailable. {error}</p> : null}
       {!error && players.length === 0 ? <p>No players are available for score entry yet.</p> : null}
-      {players.length > 0 ? <ScoreEntryForm apiBase={apiBase()} clubId={clubId} players={players} /> : null}
+      {players.length > 0 ? <ScoreEntryForm apiBase={apiBase()} clubId={clubId} clubSlug={clubSlug} players={players} /> : null}
       <p style={{ marginTop: "1rem" }}>
         <Link href={`/clubs/${clubSlug}/matches`}>View match history</Link>
       </p>
