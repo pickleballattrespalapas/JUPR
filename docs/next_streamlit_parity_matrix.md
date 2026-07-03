@@ -57,7 +57,7 @@ Any admin workflow may move off Streamlit only when:
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
 | `badge_audit` | 🧾 Badge Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Define admin badge audit API after badge public read model is stable. |
 | `match_canonical_audit` | 🧩 Match Canonical Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Keep Streamlit-only until replay/correction APIs exist. |
-| `challenge_ladder` | 🪜 Challenge Ladder | Public | `API needed` — no dedicated Next route yet. | No | Public ladder read model | Port public ladder standings, active challenge buckets, and quick rules. |
+| `challenge_ladder` | 🪜 Challenge Ladder | Public | `Partial` — public FastAPI ladder API and Next `/clubs/[clubSlug]/challenge-ladder` route exist. | No | Public smoke + contract tests | Validate staging, then close deep-link and public challenge-rule parity gaps. |
 | `faqs` | ❓ FAQs | Public | `Partial` — related ratings explainer exists, but FAQ page parity is missing. | No | Static content review | Add `/faq` or fold into ratings explainer with full JUPR FAQ content. |
 | `privacy_policy` | Privacy Policy | Public hidden | `Not started` in Next app. | No | Static/legal review | Add first-party legal route or route to approved policy. |
 | `terms_of_use` | Terms of Use | Public hidden | `Not started` in Next app. | No | Static/legal review | Add first-party legal route or route to approved terms. |
@@ -100,7 +100,7 @@ Any admin workflow may move off Streamlit only when:
 2. Validate public Match Explorer in staging and close chart/deep-link parity gaps.
 3. Validate public League Results in staging and close chart/deep-link/printout parity gaps.
 4. Validate public Badge Codex in staging and close load-more/deep-link/trophy-room parity gaps.
-5. Port public Challenge Ladder.
+5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
 6. Port public Weekly Recap and static/legal/support pages.
 7. Implement real Next admin login/session.
 8. Harden FastAPI admin authorization/audit contracts.
