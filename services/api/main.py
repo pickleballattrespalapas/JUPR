@@ -26,6 +26,7 @@ from jupr_app.services.public_live_write_service import (
     update_public_round_robin_scores,
 )
 from jupr_app.services.public_player_service import (
+    get_public_match_detail,
     get_public_matches,
     get_public_player_profile,
     get_public_players,
@@ -459,6 +460,17 @@ def get_club_matches(club_slug: str, limit: int = Query(default=100, ge=1, le=50
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     return {"club": _public_club_payload(club, club_slug), "matches": get_public_matches(supabase, club_id=club_id, limit=limit)}
+
+
+@app.get("/clubs/{club_slug}/matches/{match_id}")
+def get_club_match_detail(club_slug: str, match_id: str) -> dict[str, Any]:
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    supabase = get_supabase_client()
+    match = get_public_match_detail(supabase, club_id=club_id, match_id=match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    return {"club": _public_club_payload(club, club_slug), "match": match}
 
 
 @app.get("/clubs/{club_slug}/players/{player_id}/matches")
