@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { getAdminMatchLog } from "@/lib/adminMatchLogApi";
+import { getAdminApiBaseUrl, getAdminMatchLog } from "@/lib/adminMatchLogApi";
 import type { AdminDuplicateGroup, AdminMatchLogMatch } from "@/lib/adminMatchLogApi";
+import MatchLogApplyPanel from "./MatchLogApplyPanel";
 
 type MatchLogPageProps = {
   searchParams?: {
@@ -26,10 +27,6 @@ function dateLabel(value?: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 19);
   return date.toISOString().replace("T", " ").slice(0, 16);
-}
-
-function statusLabel(value?: string | null): string {
-  return String(value || "").replace(/_/g, " ") || "—";
 }
 
 function MatchRow({ match }: { match: AdminMatchLogMatch }) {
@@ -61,7 +58,7 @@ function DuplicateGroupCard({ group }: { group: AdminDuplicateGroup }) {
         <div style={{ textAlign: "right" }}>
           <div><strong>{group.dup_count}</strong> copies</div>
           <div style={{ color: "#166534" }}>Keep #{group.keep_id}</div>
-          <div style={{ color: "#b91c1c" }}>Plan delete: {group.delete_ids.map((id) => `#${id}`).join(", ") || "—"}</div>
+          <div style={{ color: "#b91c1c" }}>Cleanup candidates: {group.delete_ids.map((id) => `#${id}`).join(", ") || "—"}</div>
         </div>
       </div>
     </article>
@@ -69,7 +66,9 @@ function DuplicateGroupCard({ group }: { group: AdminDuplicateGroup }) {
 }
 
 export default async function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
+  const clubId = "tres_palapas";
   const { data, error } = await getAdminMatchLog({
+    clubId,
     filter: searchParams?.filter || "All",
     matchId: searchParams?.match_id || null,
     league: searchParams?.league || null,
@@ -86,9 +85,9 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Admin Match Log
       </p>
-      <h1 style={{ marginTop: 0 }}>Match Log planning</h1>
+      <h1 style={{ marginTop: 0 }}>Match Log correction cockpit</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Read-only operational view for duplicate scanning, correction planning, and replay-scope review. This page does not edit or delete matches yet.
+        Operational view for duplicate scanning, correction planning, and guarded audited apply flows. Writes stay behind FastAPI feature flags, Supabase JWT role checks, and Python domain services.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Match Log is temporarily unavailable. {error}</p> : null}
@@ -127,7 +126,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             <article style={cardStyle}><strong>Filtered</strong><br />{data.summary.filtered_matches ?? data.summary.returned_matches}</article>
             <article style={cardStyle}><strong>Shown</strong><br />{data.summary.returned_matches}</article>
             <article style={cardStyle}><strong>Duplicate groups</strong><br />{data.summary.duplicate_groups}</article>
-            <article style={cardStyle}><strong>Planned deletes</strong><br />{data.summary.duplicate_delete_count}</article>
+            <article style={cardStyle}><strong>Cleanup candidates</strong><br />{data.summary.duplicate_delete_count}</article>
           </div>
 
           {data.warnings?.length ? (
@@ -148,21 +147,29 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
 
           {data.duplicate_delete_preview ? (
             <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-              <h3 style={{ marginTop: 0 }}>Duplicate delete preview</h3>
-              <p style={muted}>Planning only. Future deletion would keep the oldest row in each duplicate group, delete {data.duplicate_delete_preview.delete_count} row(s), then replay scope <strong>{data.duplicate_delete_preview.recommended_replay_scope}</strong>.</p>
-              <p style={{ marginBottom: 0 }}><strong>Delete IDs:</strong> {data.duplicate_delete_preview.delete_ids.join(", ")}</p>
+              <h3 style={{ marginTop: 0 }}>Duplicate cleanup preview</h3>
+              <p style={muted}>Future cleanup will keep the oldest row in each duplicate group, remove {data.duplicate_delete_preview.delete_count} row(s), then replay scope <strong>{data.duplicate_delete_preview.recommended_replay_scope}</strong>.</p>
+              <p style={{ marginBottom: 0 }}><strong>Candidate IDs:</strong> {data.duplicate_delete_preview.delete_ids.join(", ")}</p>
             </article>
           ) : null}
 
           <h2>Correction and replay planning</h2>
           <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-            <p style={muted}>Apply endpoint: {data.correction_plan.apply_endpoint || "not enabled in this slice"}</p>
-            <p><strong>Future editable fields:</strong> {data.correction_plan.editable_fields_planned.join(", ")}</p>
+            <p style={muted}>Apply endpoint: {data.correction_plan.apply_endpoint || "not enabled"}</p>
+            <p style={muted}>Duplicate cleanup endpoint: {data.correction_plan.duplicate_cleanup_endpoint || "not enabled"}</p>
+            <p><strong>Editable fields:</strong> {data.correction_plan.editable_fields_planned.join(", ")}</p>
             <p><strong>Sample recompute scope:</strong> standings={String(data.correction_plan.recompute_scope_for_sample_edit.standings)}, ratings={String(data.correction_plan.recompute_scope_for_sample_edit.ratings)}</p>
             <ul style={{ paddingLeft: "1.25rem", marginBottom: 0 }}>
               {data.correction_plan.safety_rules.map((rule) => <li key={rule}>{rule}</li>)}
             </ul>
           </article>
+
+          <MatchLogApplyPanel
+            apiBase={getAdminApiBaseUrl()}
+            clubId={clubId}
+            applyEnabled={Boolean(data.apply_enabled)}
+            duplicatePreview={data.duplicate_delete_preview}
+          />
 
           <h2>Matches</h2>
           {data.matches.length ? (
