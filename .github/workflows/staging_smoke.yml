@@ -1,0 +1,51 @@
+name: Staging Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Optional staging FastAPI base URL. Uses STAGING_JUPR_API_BASE_URL secret when blank."
+        required: false
+        type: string
+      web_base_url:
+        description: "Optional staging/Vercel web base URL. Uses STAGING_WEB_BASE_URL secret when blank."
+        required: false
+        type: string
+      club_slug:
+        description: "Public club slug to smoke-test."
+        required: false
+        default: "tres-palapas"
+        type: string
+      club_id:
+        description: "Club ID for disabled-admin guard check."
+        required: false
+        default: "tres_palapas"
+        type: string
+      allow_live_unconfigured:
+        description: "Allow 503 from /live-sessions while staging live_sessions setup is incomplete."
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  public-smoke:
+    name: Public API + web smoke
+    runs-on: ubuntu-latest
+    env:
+      STAGING_JUPR_API_BASE_URL: ${{ inputs.api_base_url != '' && inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
+      STAGING_WEB_BASE_URL: ${{ inputs.web_base_url != '' && inputs.web_base_url || secrets.STAGING_WEB_BASE_URL }}
+      JUPR_SMOKE_CLUB_SLUG: ${{ inputs.club_slug || 'tres-palapas' }}
+      JUPR_SMOKE_CLUB_ID: ${{ inputs.club_id || 'tres_palapas' }}
+      JUPR_SMOKE_EXTRA_ARGS: ${{ inputs.allow_live_unconfigured && '--allow-live-unconfigured' || '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Run public smoke checks
+        run: make public-web-smoke
