@@ -21,6 +21,7 @@ from jupr_app.services.public_player_service import get_public_match_detail, get
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
 from services.api.public_badge_codex_routes import install_public_badge_codex_routes
+from services.api.public_challenge_ladder_routes import install_public_challenge_ladder_routes
 from services.api.public_league_results_routes import install_public_league_results_routes
 from services.api.public_match_explorer_routes import install_public_match_explorer_routes
 
@@ -419,6 +420,7 @@ def get_club(club_slug: str) -> dict[str, Any]:
 install_public_match_explorer_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_league_results_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 install_public_badge_codex_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
+install_public_challenge_ladder_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
 
 
 @app.get("/clubs/{club_slug}/leaderboards")
