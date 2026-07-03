@@ -4,7 +4,7 @@ import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } fro
 
 type WeeklyRecapPageProps = {
   params: { clubSlug: string };
-  searchParams?: { week?: string };
+  searchParams?: { week?: string; print?: string };
 };
 
 const cardStyle = {
@@ -156,24 +156,29 @@ function RecapBody({ recap }: { recap: WeeklyRecapJson }) {
 export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRecapPageProps) {
   const { clubSlug } = params;
   const selectedWeek = searchParams?.week ? decodeURIComponent(searchParams.week) : null;
+  const printMode = ["1", "true", "yes"].includes(String(searchParams?.print ?? "").toLowerCase());
   const { data, error } = await getClubWeeklyRecaps(clubSlug, selectedWeek);
   const selected = data?.selected_recap ?? null;
   const pdfUrl = selected?.week_start ? getWeeklyRecapPdfUrl(clubSlug, selected.week_start) : null;
 
   return (
     <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Weekly Recap
-      </p>
-      <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} weekly recap</h1>
-      <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Published club-wide highlights, weekly numbers, spotlight reels, tournament podiums, and looking-ahead notes. Draft generation and publishing remain in Streamlit admin.
-      </p>
+      {!printMode ? (
+        <>
+          <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
+            Weekly Recap
+          </p>
+          <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} weekly recap</h1>
+          <p style={{ color: "#334155", maxWidth: "820px" }}>
+            Published club-wide highlights, weekly numbers, spotlight reels, tournament podiums, and looking-ahead notes. Draft generation and publishing remain in Streamlit admin.
+          </p>
+        </>
+      ) : null}
 
       {error ? <p style={{ color: "#b91c1c" }}>Weekly Recap is temporarily unavailable. {error}</p> : null}
       {!error && !data?.recaps?.length ? <p>No published weekly recaps yet.</p> : null}
 
-      {data?.recaps?.length ? (
+      {!printMode && data?.recaps?.length ? (
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
           {data.recaps.map((recap) => {
             const active = recap.week_start === selected?.week_start;
@@ -188,18 +193,20 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
 
       {selected ? (
         <>
-          <div style={{ ...cardStyle, marginBottom: "1rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
-              <div>
-                <strong>{dateRangeLabel(selected.recap)}</strong>
-                {selected.summary.headline ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>{selected.summary.headline}</p> : null}
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                {pdfUrl ? <a href={pdfUrl}>Download PDF</a> : null}
-                <a href={`/clubs/${clubSlug}/weekly-recap?week=${encodeURIComponent(selected.week_start)}`} onClick={undefined}>Print-friendly view</a>
+          {!printMode ? (
+            <div style={{ ...cardStyle, marginBottom: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+                <div>
+                  <strong>{dateRangeLabel(selected.recap)}</strong>
+                  {selected.summary.headline ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>{selected.summary.headline}</p> : null}
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  {pdfUrl ? <a href={pdfUrl}>Download PDF</a> : null}
+                  <a href={`/clubs/${clubSlug}/weekly-recap?week=${encodeURIComponent(selected.week_start)}&print=1`}>Print-friendly view</a>
+                </div>
               </div>
             </div>
-          </div>
+          ) : <h1>{data?.club.name ?? "JUPR"} Weekly Recap — {dateRangeLabel(selected.recap)}</h1>}
           <RecapBody recap={selected.recap} />
         </>
       ) : null}
