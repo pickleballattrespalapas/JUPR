@@ -51,7 +51,7 @@ Any admin workflow may move off Streamlit only when:
 | `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile copy with Streamlit Rating Rules/FAQs and make route naming canonical. |
 | `league_results` | 📊 League Results | Public | `API needed` — no dedicated Next route yet. | No | Public read model | Port league standings, weekly results, player summaries, and public-safe rating deltas. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
-| `match_explorer` | 🎯 Match Explorer | Public | `API needed` — no dedicated Next route yet. | No | Public read model | Build public matchup/rating-preview API and Next route without JavaScript rating duplication. |
+| `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist. | No | Public smoke + contract tests | Validate staging, then close Streamlit parity gaps for deep links and rating-impact chart. |
 | `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist. | No | Public smoke + contract tests | Add trophy room/badge/profile parity and improve search/deep links. |
 | `badge_codex` | 📼 Badge Codex | Public | `API needed` — no dedicated Next route yet. | No | Public badge read model | Expose badge definitions/earners with public-safe pagination. |
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
@@ -97,7 +97,7 @@ Any admin workflow may move off Streamlit only when:
 ## Recommended implementation sequence
 
 1. Keep public read-only staging smoke and Vercel guardrails green.
-2. Port public Match Explorer.
+2. Validate public Match Explorer in staging and close chart/deep-link parity gaps.
 3. Port public League Results.
 4. Port public Badge Codex.
 5. Port public Challenge Ladder.

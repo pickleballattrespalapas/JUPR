@@ -157,6 +157,56 @@ export type LiveSessionDetailResponse = {
   session: PublicLiveSessionDetail;
 };
 
+export type MatchExplorerContextResponse = {
+  club: { id: string; slug: string; name: string };
+  contexts: string[];
+};
+
+export type MatchExplorerPlayer = {
+  id: string | number;
+  name: string;
+  overall_rating: number;
+  overall_jupr?: number | null;
+  context_rating: number;
+  context_jupr?: number | null;
+};
+
+export type MatchExplorerPreview = {
+  context: { name: string; k_factor: number };
+  teams: {
+    you: {
+      average_rating: number;
+      average_jupr?: number | null;
+      players: MatchExplorerPlayer[];
+    };
+    opponents: {
+      average_rating: number;
+      average_jupr?: number | null;
+      players: MatchExplorerPlayer[];
+    };
+  };
+  expected: {
+    you: number;
+    opponents: number;
+    label: string;
+  };
+  score: {
+    you: number;
+    opponents: number;
+  };
+  rating_delta: {
+    you_team_elo: number;
+    opponent_team_elo: number;
+    you_team_jupr?: number | null;
+    opponent_team_jupr?: number | null;
+  };
+};
+
+export type MatchExplorerPreviewResponse = {
+  club: { id: string; slug: string; name: string };
+  preview: MatchExplorerPreview;
+};
+
 type ApiResult<T> = { data: T | null; error: string | null };
 
 function baseUrl(): string | null {
@@ -230,4 +280,8 @@ export async function getClubLiveSessions(clubSlug: string): Promise<ApiResult<L
 
 export async function getClubLiveSession(clubSlug: string, sessionKey: string): Promise<ApiResult<LiveSessionDetailResponse>> {
   return fetchJson<LiveSessionDetailResponse>(`/clubs/${clubSlug}/live-sessions/${sessionKey}`, { noStore: true });
+}
+
+export async function getClubMatchExplorerContext(clubSlug: string): Promise<ApiResult<MatchExplorerContextResponse>> {
+  return fetchJson<MatchExplorerContextResponse>(`/clubs/${clubSlug}/match-explorer`);
 }

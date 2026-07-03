@@ -190,6 +190,12 @@ def _build_checks(
                     require_json=True,
                 ),
                 SmokeCheck(
+                    "api: match explorer",
+                    _join_url(api_base_url, f"/clubs/{club_slug}/match-explorer"),
+                    (200,),
+                    require_json=True,
+                ),
+                SmokeCheck(
                     "api: live sessions",
                     _join_url(api_base_url, f"/clubs/{club_slug}/live-sessions"),
                     live_statuses,
@@ -211,6 +217,7 @@ def _build_checks(
             ("web: home", "/"),
             ("web: club home", f"/clubs/{club_slug}"),
             ("web: leaderboards", f"/clubs/{club_slug}/leaderboards"),
+            ("web: match explorer", f"/clubs/{club_slug}/match-explorer"),
             ("web: players", f"/clubs/{club_slug}/players"),
             ("web: matches", f"/clubs/{club_slug}/matches"),
             ("web: live", f"/clubs/{club_slug}/live"),
