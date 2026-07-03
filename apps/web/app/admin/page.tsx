@@ -6,7 +6,7 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const mutedStyle = { color: "#475569" };
 
 function statusLabel(status: string): string {
-  return status.replaceAll("_", " ");
+  return status.replace(/_/g, " ");
 }
 
 function riskStyle(risk: string) {
@@ -51,7 +51,7 @@ export default async function AdminEntryPage() {
   const workflows = data?.workflows ?? [];
   const enabledCount = workflows.filter((workflow) => workflow.enabled).length;
   const statusByKey = new Map(workflows.map((workflow) => [workflow.key, workflow]));
-  const sequence = data?.recommended_sequence?.map((key) => statusByKey.get(key)).filter(Boolean) as AdminWorkflowStatus[] | undefined;
+  const sequence = data?.recommended_sequence?.map((key) => statusByKey.get(key)).filter((workflow): workflow is AdminWorkflowStatus => Boolean(workflow));
 
   return (
     <section>
