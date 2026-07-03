@@ -49,15 +49,18 @@ export type AdminDuplicateDeletePreview = {
 export type AdminCorrectionPlan = {
   mode: string;
   apply_endpoint?: string | null;
+  duplicate_cleanup_endpoint?: string | null;
   future_apply_endpoint?: string | null;
   editable_fields_planned: string[];
   required_confirmation_text: string;
+  duplicate_cleanup_confirmation_text?: string | null;
   recompute_scope_for_sample_edit: { standings: boolean; ratings: boolean };
   safety_rules: string[];
 };
 
 export type AdminMatchLogResponse = {
   enabled: boolean;
+  apply_enabled?: boolean | null;
   status: string;
   filters: {
     filter: string;
@@ -83,10 +86,29 @@ export type AdminMatchLogResponse = {
   warnings: string[];
 };
 
+export type AdminMatchLogWriteResult = {
+  ok: boolean;
+  mode?: string;
+  updated_count?: number;
+  updated_ids?: number[];
+  deleted_count?: number;
+  deleted_ids?: number[];
+  affected_leagues?: string[];
+  affected_player_ids?: number[];
+  recompute_scope?: { standings: boolean; ratings: boolean };
+  recommended_replay_scope?: string;
+  warnings?: string[];
+  badge_summary?: Record<string, unknown>;
+};
+
 type ApiResult<T> = { data: T | null; error: string | null };
 
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
+}
+
+export function getAdminApiBaseUrl(): string | null {
+  return baseUrl();
 }
 
 async function apiErrorMessage(response: Response): Promise<string> {
