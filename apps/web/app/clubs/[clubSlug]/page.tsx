@@ -62,6 +62,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <Link href={`/clubs/${clubSlug}/league-results`}>Open league results</Link>
         </article>
         <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Badge Codex</h2>
+          <p style={{ color: "#475569" }}>Browse JUPR badges, unlock paths, prestige, and recent badge earners.</p>
+          <Link href={`/clubs/${clubSlug}/badge-codex`}>Open badge codex</Link>
+        </article>
+        <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
           <p style={{ color: "#475569" }}>Browse the public player directory and open profiles with ratings, records, and recent matches.</p>
           <Link href={`/clubs/${clubSlug}/players`}>Open players</Link>
