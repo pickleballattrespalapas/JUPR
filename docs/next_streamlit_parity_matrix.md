@@ -49,7 +49,7 @@ Any admin workflow may move off Streamlit only when:
 | `home` | Home | Public | `Done` — Next `/` product shell exists. | No | Public smoke | Keep aligned with product positioning and club-aware routing. |
 | `leaderboards` | 🏆 Leaderboards | Public | `Partial` — Next `/clubs/[clubSlug]/leaderboards` and FastAPI leaderboard API exist. | No | Public smoke + contract tests | Close display parity gaps: league filters, top performers, badge chips, inactive rules. |
 | `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile copy with Streamlit Rating Rules/FAQs and make route naming canonical. |
-| `league_results` | 📊 League Results | Public | `API needed` — no dedicated Next route yet. | No | Public read model | Port league standings, weekly results, player summaries, and public-safe rating deltas. |
+| `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist. | No | Public smoke + contract tests | Validate staging, then close chart/deep-link/printout parity gaps. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
 | `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist. | No | Public smoke + contract tests | Validate staging, then close Streamlit parity gaps for deep links and rating-impact chart. |
 | `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist. | No | Public smoke + contract tests | Add trophy room/badge/profile parity and improve search/deep links. |
@@ -98,7 +98,7 @@ Any admin workflow may move off Streamlit only when:
 
 1. Keep public read-only staging smoke and Vercel guardrails green.
 2. Validate public Match Explorer in staging and close chart/deep-link parity gaps.
-3. Port public League Results.
+3. Validate public League Results in staging and close chart/deep-link/printout parity gaps.
 4. Port public Badge Codex.
 5. Port public Challenge Ladder.
 6. Port public Weekly Recap and static/legal/support pages.

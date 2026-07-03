@@ -2,7 +2,7 @@
 
 FastAPI service for the JUPR SaaS surface.
 
-Current production scope: public, read-only club/leaderboard/player/match/live/Match Explorer endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
+Current production scope: public, read-only club/leaderboard/league-results/player/match/live/Match Explorer endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
 
 ## Run locally
 
@@ -62,6 +62,7 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 - `GET /clubs/{club_slug}`
 - `GET /clubs/{club_slug}/leaderboards?league_name=...`
 - `GET /clubs/{club_slug}/leaderboards/public?league_name=...` temporary compatibility alias
+- `GET /clubs/{club_slug}/league-results?league_name=...`
 - `GET /clubs/{club_slug}/players`
 - `GET /clubs/{club_slug}/players/{player_id}`
 - `GET /clubs/{club_slug}/matches`
@@ -76,6 +77,8 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 
 The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
+
+The League Results endpoint delegates to `jupr_app.services.public_league_results_service` and returns public-safe league options, standings, weekly summaries, cumulative player results, and highlights. It does not write matches.
 
 The Match Explorer endpoints delegate to `jupr_app.services.public_match_explorer_service` and return public-safe player names/ratings plus projected matchup odds and rating movement. They do not write matches and do not move rating logic to JavaScript.
 
