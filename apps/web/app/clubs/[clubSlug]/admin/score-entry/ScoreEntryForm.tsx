@@ -1,12 +1,30 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
 
 type ScoreEntryFormProps = {
   apiBase: string | null;
   clubId: string;
+  clubSlug?: string;
   players: PublicPlayer[];
+};
+
+type ScoreFeedbackPlayer = {
+  id: number;
+  name: string;
+  rating_before?: number | null;
+  rating_after?: number | null;
+  rating_delta?: number | null;
+  matches_played_before?: number | null;
+  matches_played_after?: number | null;
+};
+
+type ScoreFeedback = {
+  ratings_updated?: boolean;
+  affected_players?: ScoreFeedbackPlayer[];
+  latest_match_id?: string | number | null;
 };
 
 function todayIsoDate(): string {
@@ -17,7 +35,17 @@ function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
-export default function ScoreEntryForm({ apiBase, clubId, players }: ScoreEntryFormProps) {
+function ratingLabel(value?: number | null): string {
+  return value == null ? "—" : Math.round(Number(value)).toString();
+}
+
+function deltaLabel(value?: number | null): string {
+  if (value == null) return "—";
+  const rounded = Math.round(Number(value));
+  return `${rounded >= 0 ? "+" : ""}${rounded}`;
+}
+
+export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palapas", players }: ScoreEntryFormProps) {
   const [token, setToken] = useState("");
   const [league, setLeague] = useState("Open");
   const [date, setDate] = useState(todayIsoDate());
@@ -29,6 +57,7 @@ export default function ScoreEntryForm({ apiBase, clubId, players }: ScoreEntryF
   const [scoreT2, setScoreT2] = useState("0");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<ScoreFeedback | null>(null);
 
   async function submitMatch() {
     if (!apiBase) {
@@ -43,8 +72,14 @@ export default function ScoreEntryForm({ apiBase, clubId, players }: ScoreEntryF
       setMessage("Select four players.");
       return;
     }
+    const uniquePlayers = new Set([t1p1, t1p2, t2p1, t2p2]);
+    if (uniquePlayers.size !== 4) {
+      setMessage("Select four different players.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
+    setFeedback(null);
     try {
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${clubId}/matches/batch`), {
         method: "POST",
@@ -74,7 +109,8 @@ export default function ScoreEntryForm({ apiBase, clubId, players }: ScoreEntryF
       if (!response.ok) {
         throw new Error(String(payload?.detail || `API error (${response.status})`));
       }
-      setMessage(`Match saved. ${JSON.stringify(payload?.result ?? {})}`);
+      setFeedback(payload?.feedback ?? null);
+      setMessage(`Match saved. Inserted ${payload?.result?.inserted ?? 0} match${payload?.result?.inserted === 1 ? "" : "es"}.`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Unable to save match.");
     } finally {
@@ -118,6 +154,31 @@ export default function ScoreEntryForm({ apiBase, clubId, players }: ScoreEntryF
         </div>
         {message ? <p style={{ color: message.startsWith("Match saved") ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       </div>
+
+      {feedback ? (
+        <div style={{ borderTop: "1px solid #e2e8f0", marginTop: "1rem", paddingTop: "1rem" }}>
+          <h3 style={{ marginTop: 0 }}>Rating update</h3>
+          <p style={{ color: "#475569" }}>{feedback.ratings_updated ? "Ratings changed for this match." : "The match saved; no rating movement was detected."}</p>
+          {feedback.latest_match_id ? <p><Link href={`/clubs/${clubSlug}/matches/${feedback.latest_match_id}`}>Open match detail</Link></p> : null}
+          {feedback.affected_players?.length ? (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>Player</th><th style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>Before</th><th style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>After</th><th style={{ textAlign: "left", borderBottom: "1px solid #cbd5e1", padding: "0.5rem" }}>Change</th></tr></thead>
+                <tbody>
+                  {feedback.affected_players.map((player) => (
+                    <tr key={player.id}>
+                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}><Link href={`/clubs/${clubSlug}/players/${player.id}`}>{player.name}</Link></td>
+                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{ratingLabel(player.rating_before)}</td>
+                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{ratingLabel(player.rating_after)}</td>
+                      <td style={{ borderBottom: "1px solid #e2e8f0", padding: "0.5rem" }}>{deltaLabel(player.rating_delta)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
