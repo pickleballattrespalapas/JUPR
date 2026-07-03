@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-WEEKLY_RECAP_SELECT = "club_id,week_start,week_end,status,final_json,created_at,updated_at,published_at"
+WEEKLY_RECAP_SELECT = "club_id,week_start,week_end,status,final_json"
 PUBLIC_RECAP_KEYS = {
     "week_start",
     "week_end",
@@ -169,7 +169,8 @@ def sanitize_public_recap_json(raw: Any, *, week_start: str | None = None, week_
     recap["numbers"] = {str(key): value for key, value in numbers.items() if isinstance(value, (int, float, str, type(None)))}
 
     cards = []
-    for card in (recap.get("numbers_cards") or [])[:12] if isinstance(recap.get("numbers_cards"), list) else []:
+    recap_cards = recap.get("numbers_cards") if isinstance(recap.get("numbers_cards"), list) else []
+    for card in recap_cards[:12]:
         if not isinstance(card, dict):
             continue
         cards.append({"key": _clean_text(card.get("key")), "label": _clean_text(card.get("label")), "value": card.get("value", 0)})
