@@ -86,7 +86,7 @@ Any admin workflow may move off Streamlit only when:
 | `tournament_registration_edit` | ✏️ Edit Registration | Public hidden | `Not started`. | Yes/intake | Tokenized edit/auth gate | Add secure edit links before porting. |
 | `tournament_roster` | 📋 Tournament Roster | Public hidden | `Not started`. | No | Public tournament read model | Add after tournament registration data model is API-backed. |
 | `tournament_partner_board` | 🤝 Partner Board | Public | `Not started`. | Possibly yes | Public/organizer moderation gate | Define safe public interaction rules before porting. |
-| `weekly_recap` | 🗞️ Weekly Recap | Public | `API needed` — no dedicated Next route yet. | No | Public recap read model + PDF/print gate | Port published recap list/detail and print/PDF download. |
+| `weekly_recap` | 🗞️ Weekly Recap | Public | `Partial` — public FastAPI published-recap/PDF APIs and Next `/clubs/[clubSlug]/weekly-recap` route exist. | No | Public smoke + contract tests | Validate staging, then close final styling/print-view parity gaps. |
 | `top_players_printable` | 🧾 Top Active Players PDF | Admin | `Not started`. | Export only | Admin/PDF export gate | Defer until PDF/export strategy is standardized. |
 | `weekly_recap_admin` | 🗞️ Weekly Recap Admin | Admin | `Not started`. | Yes | Admin auth + recap write/audit gate | Port after public weekly recap read side. |
 | `player_updates_admin` | 📬 Player Updates Admin | Admin | `Not started`. | Yes/email | Admin auth + email safety gate | Keep blocked until staging email safety is proven. |
@@ -101,14 +101,15 @@ Any admin workflow may move off Streamlit only when:
 3. Validate public League Results in staging and close chart/deep-link/printout parity gaps.
 4. Validate public Badge Codex in staging and close load-more/deep-link/trophy-room parity gaps.
 5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
-6. Port public Weekly Recap and static/legal/support pages.
-7. Implement real Next admin login/session.
-8. Harden FastAPI admin authorization/audit contracts.
-9. Replace the score-entry MVP with real Match Uploader parity.
-10. Port Match Log/replay/corrections.
-11. Port Player Editor.
-12. Port League Manager.
-13. Port tournament/challenge/admin tools after the write foundation is proven.
+6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
+7. Port static/legal/support pages.
+8. Implement real Next admin login/session.
+9. Harden FastAPI admin authorization/audit contracts.
+10. Replace the score-entry MVP with real Match Uploader parity.
+11. Port Match Log/replay/corrections.
+12. Port Player Editor.
+13. Port League Manager.
+14. Port tournament/challenge/admin tools after the write foundation is proven.
 
 ## Maintenance rule
 
