@@ -57,6 +57,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <Link href={`/clubs/${clubSlug}/leaderboards`}>View leaderboards</Link>
         </article>
         <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>League results</h2>
+          <p style={{ color: "#475569" }}>Review league standings, weekly results, player summaries, and public-safe rating movement.</p>
+          <Link href={`/clubs/${clubSlug}/league-results`}>Open league results</Link>
+        </article>
+        <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
           <p style={{ color: "#475569" }}>Browse the public player directory and open profiles with ratings, records, and recent matches.</p>
           <Link href={`/clubs/${clubSlug}/players`}>Open players</Link>
