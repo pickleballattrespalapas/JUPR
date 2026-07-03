@@ -13,6 +13,13 @@ function ratingLabel(value?: number | null): string {
   return value == null ? "—" : Math.round(Number(value)).toString();
 }
 
+function formatMatchDate(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function teamLabel(players: Array<{ name: string }>): string {
   return players.map((p) => p.name).filter(Boolean).join(" / ") || "—";
 }
@@ -87,15 +94,18 @@ export default async function PlayerProfilePage({ params }: PlayerProfilePagePro
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>League</th></tr></thead>
               <tbody>
-                {matches.map((match, index) => (
-                  <tr key={`${match.id ?? index}`}>
-                    <td style={tdStyle}>{match.date ?? "—"}</td>
-                    <td style={tdStyle}>{teamLabel(match.team_1)}</td>
-                    <td style={tdStyle}>{matchLabel(match)}</td>
-                    <td style={tdStyle}>{teamLabel(match.team_2)}</td>
-                    <td style={tdStyle}>{match.league ?? "—"}</td>
-                  </tr>
-                ))}
+                {matches.map((match, index) => {
+                  const detailHref = match.id ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`;
+                  return (
+                    <tr key={`${match.id ?? index}`}>
+                      <td style={tdStyle}>{match.id ? <Link href={detailHref}>{formatMatchDate(match.date)}</Link> : formatMatchDate(match.date)}</td>
+                      <td style={tdStyle}>{teamLabel(match.team_1)}</td>
+                      <td style={tdStyle}>{match.id ? <Link href={detailHref}>{matchLabel(match)}</Link> : matchLabel(match)}</td>
+                      <td style={tdStyle}>{teamLabel(match.team_2)}</td>
+                      <td style={tdStyle}>{match.league ?? "—"}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
