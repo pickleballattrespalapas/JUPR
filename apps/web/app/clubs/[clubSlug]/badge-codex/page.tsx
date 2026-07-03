@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { getClubBadgeCodex } from "@/lib/api";
-import type { PublicBadge } from "@/lib/api";
+import { getClubBadgeCodex } from "@/lib/badgeApi";
+import type { PublicBadge } from "@/lib/badgeApi";
 
 type BadgeCodexPageProps = {
   params: { clubSlug: string };
