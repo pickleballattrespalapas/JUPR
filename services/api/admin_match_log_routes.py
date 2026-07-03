@@ -3,13 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Query
-from supabase import Client
 
-from jupr_app.services.admin_match_log_service import build_admin_match_log
+from jupr_app.services.admin_match_log_service import build_admin_match_log, is_admin_match_log_enabled
 
 
 def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
-    """Register non-mutating Match Log planning routes for the Next admin pilot."""
+    """Register read-only Match Log planning routes for the Next admin pilot."""
 
     @app.get("/admin/clubs/{club_id}/match-log")
     def get_admin_match_log(
@@ -22,7 +21,7 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
         end_date: str | None = Query(default=None),
         limit: int = Query(default=500, ge=1, le=1000),
     ) -> dict[str, Any]:
-        supabase: Client = get_supabase_client()
+        supabase = get_supabase_client() if is_admin_match_log_enabled() else None
         return build_admin_match_log(
             supabase,
             club_id=str(club_id),
