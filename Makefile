@@ -11,7 +11,7 @@ check-next-parity-matrix: ## Guard: every Streamlit page is represented in the N
 
 
 api-test: ## Run API contract tests
-	@python -m pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py tests/test_api_contract_match_explorer.py tests/test_api_contract_league_results.py tests/test_api_contract_badge_codex.py tests/test_api_contract_challenge_ladder.py tests/test_api_contract_weekly_recaps.py tests/test_api_admin_score_entry_disabled.py
+	@python -m pytest tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py tests/test_api_contract_match_explorer.py tests/test_api_contract_league_results.py tests/test_api_contract_badge_codex.py tests/test_api_contract_challenge_ladder.py tests/test_api_contract_weekly_recaps.py tests/test_api_contract_tournament_registration.py tests/test_api_admin_score_entry_disabled.py
 
 public-web-smoke: ## Smoke-test staging FastAPI + Next.js public routes
 	@python scripts/smoke_public_web.py $(JUPR_SMOKE_ARGS)
