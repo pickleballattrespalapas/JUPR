@@ -163,16 +163,59 @@ def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> l
             return []
 
 
+def _fetch_match(supabase: Any, club_id: str, match_id: int | str) -> dict[str, Any] | None:
+    try:
+        return _safe_first(
+            supabase.table("matches")
+            .select(MATCH_SELECT)
+            .eq("club_id", club_id)
+            .eq("id", match_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return None
+
+
 def _match_includes_player(row: dict[str, Any], player_id: int | str) -> bool:
     pid = str(player_id)
     return any(str(row.get(col)) == pid for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"))
 
 
-def _match_player_ids(row: dict[str, Any]) -> list[Any]:
-    return [row.get(col) for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if row.get(col) is not None]
+def _player_ref(pid: Any, name_by_id: dict[str, str]) -> dict[str, Any]:
+    return {"id": pid, "name": name_by_id.get(str(pid), "Player")}
 
 
-def _public_match(row: dict[str, Any], name_by_id: dict[str, str]) -> dict[str, Any]:
+def _rating_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "team_1": [
+            {
+                "player_id": row.get("t1_p1"),
+                "start_rating": _float_or_none(row.get("t1_p1_r")),
+                "end_rating": _float_or_none(row.get("t1_p1_r_end")),
+            },
+            {
+                "player_id": row.get("t1_p2"),
+                "start_rating": _float_or_none(row.get("t1_p2_r")),
+                "end_rating": _float_or_none(row.get("t1_p2_r_end")),
+            },
+        ],
+        "team_2": [
+            {
+                "player_id": row.get("t2_p1"),
+                "start_rating": _float_or_none(row.get("t2_p1_r")),
+                "end_rating": _float_or_none(row.get("t2_p1_r_end")),
+            },
+            {
+                "player_id": row.get("t2_p2"),
+                "start_rating": _float_or_none(row.get("t2_p2_r")),
+                "end_rating": _float_or_none(row.get("t2_p2_r_end")),
+            },
+        ],
+    }
+
+
+def _public_match(row: dict[str, Any], name_by_id: dict[str, str], *, include_rating_snapshot: bool = False) -> dict[str, Any]:
     t1_ids = [row.get("t1_p1"), row.get("t1_p2")]
     t2_ids = [row.get("t2_p1"), row.get("t2_p2")]
     score_t1 = _int_or_none(row.get("score_t1"))
@@ -180,7 +223,7 @@ def _public_match(row: dict[str, Any], name_by_id: dict[str, str]) -> dict[str, 
     winner = None
     if score_t1 is not None and score_t2 is not None and score_t1 != score_t2:
         winner = "team_1" if score_t1 > score_t2 else "team_2"
-    return {
+    payload: dict[str, Any] = {
         "id": row.get("id"),
         "club_id": row.get("club_id"),
         "date": _json_safe(row.get("date")),
@@ -190,17 +233,16 @@ def _public_match(row: dict[str, Any], name_by_id: dict[str, str]) -> dict[str, 
         "rating_scope": row.get("rating_scope"),
         "context_type": row.get("context_type"),
         "context_id": row.get("context_id"),
-        "team_1": [
-            {"id": pid, "name": name_by_id.get(str(pid), "Player")} for pid in t1_ids if pid is not None
-        ],
-        "team_2": [
-            {"id": pid, "name": name_by_id.get(str(pid), "Player")} for pid in t2_ids if pid is not None
-        ],
+        "team_1": [_player_ref(pid, name_by_id) for pid in t1_ids if pid is not None],
+        "team_2": [_player_ref(pid, name_by_id) for pid in t2_ids if pid is not None],
         "score_t1": score_t1,
         "score_t2": score_t2,
         "winner": winner,
         "elo_delta": _float_or_none(row.get("elo_delta")),
     }
+    if include_rating_snapshot:
+        payload["rating_snapshot"] = _rating_snapshot(row)
+    return payload
 
 
 def get_public_players(
@@ -238,11 +280,7 @@ def get_public_player_profile(
     name_by_id = {str(p.get("id")): str(p.get("name") or "Player") for p in players}
     matches = [m for m in _fetch_recent_matches(supabase, cid, limit=400) if _match_includes_player(m, player_id)]
     public_matches = [_public_match(m, name_by_id) for m in matches[: max(1, min(int(recent_match_limit), 50))]]
-    return {
-        "player": player,
-        "league_ratings": league_ratings,
-        "recent_matches": public_matches,
-    }
+    return {"player": player, "league_ratings": league_ratings, "recent_matches": public_matches}
 
 
 def get_public_matches(
@@ -260,3 +298,18 @@ def get_public_matches(
         rows = [row for row in rows if _match_includes_player(row, player_id)]
     public_rows = [_public_match(row, name_by_id) for row in rows]
     return public_rows[: max(1, min(int(limit or 100), 500))]
+
+
+def get_public_match_detail(
+    supabase: Any,
+    *,
+    club_id: str,
+    match_id: int | str,
+) -> dict[str, Any] | None:
+    cid = str(club_id).strip()
+    row = _fetch_match(supabase, cid, match_id)
+    if not row:
+        return None
+    players = _fetch_players(supabase, cid)
+    name_by_id = {str(p.get("id")): str(p.get("name") or "Player") for p in players}
+    return _public_match(row, name_by_id, include_rating_snapshot=True)

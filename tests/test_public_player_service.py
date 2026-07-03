@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from jupr_app.services.public_player_service import (
+    get_public_match_detail,
     get_public_matches,
     get_public_player_profile,
     get_public_players,
@@ -55,7 +56,27 @@ class FakeSupabase:
                 {"id": 11, "club_id": "club-1", "player_id": 1, "league_name": "Open", "rating": 1600, "wins": 3, "losses": 1, "matches_played": 4, "is_active": True}
             ],
             "matches": [
-                {"id": 99, "club_id": "club-1", "date": "2026-07-02", "league": "Open", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 8, "elo_delta": 4.5}
+                {
+                    "id": 99,
+                    "club_id": "club-1",
+                    "date": "2026-07-02",
+                    "league": "Open",
+                    "t1_p1": 1,
+                    "t1_p2": 2,
+                    "t2_p1": 3,
+                    "t2_p2": 4,
+                    "score_t1": 11,
+                    "score_t2": 8,
+                    "elo_delta": 4.5,
+                    "t1_p1_r": 1595,
+                    "t1_p1_r_end": 1600,
+                    "t1_p2_r": 1495,
+                    "t1_p2_r_end": 1500,
+                    "t2_p1_r": 1495,
+                    "t2_p1_r_end": 1490,
+                    "t2_p2_r": 1485,
+                    "t2_p2_r_end": 1480,
+                }
             ],
         }
 
@@ -89,3 +110,13 @@ def test_public_matches_include_linkable_public_players():
     assert matches[0]["team_1"][0] == {"id": 1, "name": "Alex"}
     assert matches[0]["team_2"][1] == {"id": 4, "name": "Devon"}
     assert "t1_p1_r" not in matches[0]
+
+
+def test_public_match_detail_includes_rating_snapshot_without_raw_columns():
+    detail = get_public_match_detail(FakeSupabase(), club_id="club-1", match_id=99)
+
+    assert detail is not None
+    assert detail["id"] == 99
+    assert detail["rating_snapshot"]["team_1"][0]["start_rating"] == 1595.0
+    assert detail["rating_snapshot"]["team_1"][0]["end_rating"] == 1600.0
+    assert "t1_p1_r" not in detail
