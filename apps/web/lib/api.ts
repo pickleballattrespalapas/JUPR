@@ -174,26 +174,11 @@ export type MatchExplorerPlayer = {
 export type MatchExplorerPreview = {
   context: { name: string; k_factor: number };
   teams: {
-    you: {
-      average_rating: number;
-      average_jupr?: number | null;
-      players: MatchExplorerPlayer[];
-    };
-    opponents: {
-      average_rating: number;
-      average_jupr?: number | null;
-      players: MatchExplorerPlayer[];
-    };
+    you: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
+    opponents: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
   };
-  expected: {
-    you: number;
-    opponents: number;
-    label: string;
-  };
-  score: {
-    you: number;
-    opponents: number;
-  };
+  expected: { you: number; opponents: number; label: string };
+  score: { you: number; opponents: number };
   rating_delta: {
     you_team_elo: number;
     opponent_team_elo: number;
@@ -205,6 +190,52 @@ export type MatchExplorerPreview = {
 export type MatchExplorerPreviewResponse = {
   club: { id: string; slug: string; name: string };
   preview: MatchExplorerPreview;
+};
+
+export type LeagueResultsLeague = {
+  name: string;
+  min_games?: number | null;
+  k_factor?: number | null;
+};
+
+export type LeagueResultsStanding = {
+  rank?: number | null;
+  player_id: string | number;
+  player_name: string;
+  rating?: number | null;
+  rating_jupr?: number | null;
+  wins?: number | null;
+  losses?: number | null;
+  matches_played?: number | null;
+  win_pct?: number | null;
+  rating_delta_jupr?: number | null;
+};
+
+export type LeagueResultsStatRow = {
+  week_num?: number | null;
+  player_id: string | number;
+  player_name: string;
+  games?: number | null;
+  wins?: number | null;
+  losses?: number | null;
+  win_pct?: number | null;
+  rating_delta_jupr?: number | null;
+};
+
+export type LeagueResultsResponse = {
+  club: { id: string; slug: string; name: string };
+  leagues: LeagueResultsLeague[];
+  selected_league?: string | null;
+  league?: LeagueResultsLeague | null;
+  standings: LeagueResultsStanding[];
+  weeks: Array<{ week_num: number; week_label: string }>;
+  weekly_results: LeagueResultsStatRow[];
+  cumulative: LeagueResultsStatRow[];
+  highlights: {
+    biggest_climbers: LeagueResultsStatRow[];
+    best_win_pct: LeagueResultsStatRow[];
+    most_active: LeagueResultsStatRow[];
+  };
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -284,4 +315,9 @@ export async function getClubLiveSession(clubSlug: string, sessionKey: string): 
 
 export async function getClubMatchExplorerContext(clubSlug: string): Promise<ApiResult<MatchExplorerContextResponse>> {
   return fetchJson<MatchExplorerContextResponse>(`/clubs/${clubSlug}/match-explorer`);
+}
+
+export async function getClubLeagueResults(clubSlug: string, leagueName?: string | null): Promise<ApiResult<LeagueResultsResponse>> {
+  const query = leagueName ? `?league_name=${encodeURIComponent(leagueName)}` : "";
+  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query}`);
 }
