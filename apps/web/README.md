@@ -39,6 +39,7 @@ Current public and staff-facing routes include:
 - `/support` and `/contact` support/contact shell.
 - `/data-corrections` public correction intake instructions with no direct mutation.
 - `/admin` staff operations cockpit for the Streamlit-to-Next migration.
+- `/admin/match-log` staff Match Log planning page with read filters, duplicate scan, and replay guidance.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
 
 ## Environment variables
@@ -50,7 +51,7 @@ Use one of the following API base URL variables:
 - `NEXT_PUBLIC_JUPR_ENV` (optional; set to `staging` to show a staging badge)
 - `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
 
-The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel.
+The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI.
 
 Example:
 

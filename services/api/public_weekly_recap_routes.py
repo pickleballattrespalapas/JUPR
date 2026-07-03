@@ -70,4 +70,4 @@ def install_public_weekly_recap_routes(
         get_supabase_client=get_supabase_client,
         public_club_payload=public_club_payload,
     )
-    install_admin_operations_routes(app)
+    install_admin_operations_routes(app, get_supabase_client=get_supabase_client)
