@@ -9,6 +9,7 @@ from jupr_app.services.public_weekly_recap_service import (
     build_public_weekly_recaps,
     build_weekly_recap_pdf_bytes,
 )
+from services.api.admin_operations_routes import install_admin_operations_routes
 from services.api.public_tournament_registration_routes import install_public_tournament_registration_routes
 
 
@@ -19,7 +20,7 @@ def install_public_weekly_recap_routes(
     get_supabase_client,
     public_club_payload,
 ) -> None:
-    """Register public Weekly Recap and late public intake routes on the main FastAPI app."""
+    """Register public Weekly Recap plus late public/admin status routes on the main FastAPI app."""
 
     @app.get("/clubs/{club_slug}/weekly-recaps")
     def get_club_weekly_recaps(
@@ -69,3 +70,4 @@ def install_public_weekly_recap_routes(
         get_supabase_client=get_supabase_client,
         public_club_payload=public_club_payload,
     )
+    install_admin_operations_routes(app)
