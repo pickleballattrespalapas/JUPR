@@ -195,6 +195,11 @@ def _build_checks(
             ("web: matches", f"/clubs/{club_slug}/matches"),
             ("web: live", f"/clubs/{club_slug}/live"),
             ("web: ratings explainer", "/how-ratings-work"),
+            ("web: faq", "/faq"),
+            ("web: privacy", "/privacy"),
+            ("web: terms", "/terms"),
+            ("web: support", "/support"),
+            ("web: data corrections", "/data-corrections"),
         ]:
             checks.append(SmokeCheck(label, _join_url(web_base_url, path), (200,)))
 

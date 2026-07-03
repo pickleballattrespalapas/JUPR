@@ -8,7 +8,7 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 - `Test` branch is staging by policy, while recent SaaS PRs have been landing on `rollback-feb8`; reconcile branch promotion before any public cutover.
 - Staging Supabase exists and is the non-production data environment for staging validation.
 - FastAPI + Next.js are staging-first.
-- Next.js public routes now cover the read-only product spine: club home, leaderboards, league results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, players, player profiles, matches, match detail, JUPR Live, and ratings explainer.
+- Next.js public routes now cover the read-only product spine: club home, leaderboards, league results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, players, player profiles, matches, match detail, JUPR Live, ratings explainer, FAQ, privacy, terms, support/contact, and data-correction instructions.
 - `docs/next_streamlit_parity_matrix.md` is the control board for reaching 100% Streamlit workflow parity on Next/Vercel/FastAPI.
 - Public smoke tooling exists for staging FastAPI + Vercel validation.
 - Next admin score entry remains disabled.
@@ -20,14 +20,14 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 |---|---|---|---|---|
 | Staging Supabase | Done | Staging Supabase project exists and is used for SaaS validation. | Keep environment guards in place and apply schema changes staging-first. | Medium |
 | Streamlit production | Done | Streamlit remains the active production admin/runtime surface. | Keep production stable while SaaS surfaces are proven in staging. | Medium |
-| Streamlit-to-Next parity control | In progress | `docs/next_streamlit_parity_matrix.md` inventories every `page_registry.py` page and tracks Next/FastAPI parity gates. | Keep the matrix current with `make check-next-parity-matrix`; validate public Match Explorer, League Results, Badge Codex, Challenge Ladder, and Weekly Recap in staging, then start static/legal/support pages. | Medium |
+| Streamlit-to-Next parity control | In progress | `docs/next_streamlit_parity_matrix.md` inventories every `page_registry.py` page and tracks Next/FastAPI parity gates. | Keep the matrix current with `make check-next-parity-matrix`; validate public Match Explorer, League Results, Badge Codex, Challenge Ladder, Weekly Recap, and static/support routes in staging. | Medium |
 | FastAPI public API | In progress | FastAPI exists under `services/api` with public club, leaderboard, league-results, badge-codex, challenge-ladder, weekly-recap, player, match, match-explorer, and live-session endpoints. | Deploy/verify staging API against staging Supabase and keep public contracts sanitized. | Medium |
-| Next.js public web | In progress | Next.js app exists under `apps/web` with the read-only public product spine. | Deploy Vercel staging and run `make public-web-smoke` before any public/custom-domain move. | Medium |
+| Next.js public web | In progress | Next.js app exists under `apps/web` with the read-only public product spine plus FAQ/legal/support/static routes. | Deploy Vercel staging and run `make public-web-smoke` before any public/custom-domain move; replace legal placeholders with approved copy. | Medium |
 | Vercel staging | In progress | `apps/web/.env.example`, deployment docs, and public smoke harness define the staging path. | Configure Vercel staging env vars and wire the deployed URL into the manual smoke workflow. | Medium |
 | Next.js admin score entry | Blocked (intended) | Admin rated score entry path is disabled by feature flag and guardrails. | Keep disabled until auth, authorization, audit, and E2E safety criteria are complete. | High |
 | Admin auth/JWT | In progress | JWT scaffolding exists for staged admin routes, but end-to-end production-grade auth/session hardening is not complete. | Complete validation hardening, session strategy, and staging E2E auth failure coverage. | High |
 | Club-scoped roles | In progress | Role assignment checks exist for the FastAPI score-entry endpoint, but broader club-scoped authorization still needs end-to-end coverage. | Enforce and test club-scoped role checks on every write path before enabling admin writes. | High |
-| Public leaderboard/read models | In progress | Public leaderboard, League Results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, player, match, and live read surfaces are being exposed as sanitized FastAPI contracts. | Continue public parity with static/legal/support pages. | Medium |
+| Public leaderboard/read models | In progress | Public leaderboard, League Results, Badge Codex, Challenge Ladder, Weekly Recap, Match Explorer, player, match, live, and static/support surfaces are exposed as sanitized public routes. | Continue public parity with tournament registration only after legal/contact/static pages are approved. | Medium |
 | Workers | In progress | Worker CLIs exist and are part of moving jobs out of Streamlit. | Validate worker reliability and club-scoped safety in staging. | Medium |
 | Email safety | Blocked (safety gate) | Email worker usage is intentionally constrained pending safe staging email configuration. | Confirm safe non-production email routing before broader worker runs. | High |
 | CI/API contract tests | In progress | `make api-test` covers API contracts; `scripts/smoke_public_web.py` covers staged public API/web smoke checks; `make check-next-parity-matrix` guards parity drift. | Wire public smoke into GitHub Actions secrets/inputs and require parity matrix coverage before public/admin migration PRs. | Medium |
@@ -54,6 +54,7 @@ This document is the durable source of truth for JUPR SaaS migration status so J
 - No JavaScript rating logic.
 - No direct browser writes to rating tables.
 - No production custom-domain cutover until the staging public smoke checklist passes.
+- No browser-side data-correction writes; correction requests remain staff-reviewed.
 
 ## Related docs
 
