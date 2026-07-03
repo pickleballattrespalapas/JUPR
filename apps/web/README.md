@@ -21,6 +21,7 @@ Current public routes include:
 - `/clubs/[clubSlug]/leaderboards` public leaderboard page.
 - `/clubs/[clubSlug]/league-results` public league standings, weekly results, and season summaries.
 - `/clubs/[clubSlug]/badge-codex` public badge definitions, unlock paths, prestige, and recent badge earners.
+- `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.
 - `/clubs/[clubSlug]/match-explorer` public matchup odds and projected rating movement preview.
 - `/clubs/[clubSlug]/players` public player directory.
 - `/clubs/[clubSlug]/players/[playerId]` public player profile.
