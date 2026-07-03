@@ -159,48 +159,14 @@ def _build_checks(
         live_statuses = (200, 503) if allow_live_unconfigured else (200,)
         checks.extend(
             [
-                SmokeCheck(
-                    "api: health",
-                    _join_url(api_base_url, "/health"),
-                    (200,),
-                    require_json=True,
-                ),
-                SmokeCheck(
-                    "api: club",
-                    _join_url(api_base_url, f"/clubs/{club_slug}"),
-                    (200,),
-                    require_json=True,
-                ),
-                SmokeCheck(
-                    "api: leaderboards",
-                    _join_url(api_base_url, f"/clubs/{club_slug}/leaderboards"),
-                    (200,),
-                    require_json=True,
-                ),
-                SmokeCheck(
-                    "api: players",
-                    _join_url(api_base_url, f"/clubs/{club_slug}/players"),
-                    (200,),
-                    require_json=True,
-                ),
-                SmokeCheck(
-                    "api: matches",
-                    _join_url(api_base_url, f"/clubs/{club_slug}/matches"),
-                    (200,),
-                    require_json=True,
-                ),
-                SmokeCheck(
-                    "api: match explorer",
-                    _join_url(api_base_url, f"/clubs/{club_slug}/match-explorer"),
-                    (200,),
-                    require_json=True,
-                ),
-                SmokeCheck(
-                    "api: live sessions",
-                    _join_url(api_base_url, f"/clubs/{club_slug}/live-sessions"),
-                    live_statuses,
-                    require_json=True,
-                ),
+                SmokeCheck("api: health", _join_url(api_base_url, "/health"), (200,), require_json=True),
+                SmokeCheck("api: club", _join_url(api_base_url, f"/clubs/{club_slug}"), (200,), require_json=True),
+                SmokeCheck("api: leaderboards", _join_url(api_base_url, f"/clubs/{club_slug}/leaderboards"), (200,), require_json=True),
+                SmokeCheck("api: league results", _join_url(api_base_url, f"/clubs/{club_slug}/league-results"), (200,), require_json=True),
+                SmokeCheck("api: players", _join_url(api_base_url, f"/clubs/{club_slug}/players"), (200,), require_json=True),
+                SmokeCheck("api: matches", _join_url(api_base_url, f"/clubs/{club_slug}/matches"), (200,), require_json=True),
+                SmokeCheck("api: match explorer", _join_url(api_base_url, f"/clubs/{club_slug}/match-explorer"), (200,), require_json=True),
+                SmokeCheck("api: live sessions", _join_url(api_base_url, f"/clubs/{club_slug}/live-sessions"), live_statuses, require_json=True),
                 SmokeCheck(
                     "api: admin score entry disabled",
                     _join_url(api_base_url, f"/admin/clubs/{club_id}/matches/batch"),
@@ -217,6 +183,7 @@ def _build_checks(
             ("web: home", "/"),
             ("web: club home", f"/clubs/{club_slug}"),
             ("web: leaderboards", f"/clubs/{club_slug}/leaderboards"),
+            ("web: league results", f"/clubs/{club_slug}/league-results"),
             ("web: match explorer", f"/clubs/{club_slug}/match-explorer"),
             ("web: players", f"/clubs/{club_slug}/players"),
             ("web: matches", f"/clubs/{club_slug}/matches"),
