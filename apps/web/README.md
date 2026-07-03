@@ -1,26 +1,51 @@
 # JUPR Web (Next.js public shell)
 
-This is a minimal, read-only-first Next.js app for public pages that can eventually serve `juprleagues.com` and club pages.
+This is the Next.js app for the public JUPR Leagues web surface. It is intended to serve `juprleagues.com` and club pages after the read-only FastAPI + Next.js path is proven in staging.
+
+## Current deployment posture
+
+The web app is **staging/read-only first**.
+
+- Production Streamlit remains the trusted production runtime.
+- FastAPI supplies public read APIs and guarded admin endpoints.
+- Next.js renders public pages against FastAPI.
+- Next admin score entry remains disabled unless explicitly enabled for controlled staging experiments.
+- Never put Supabase service-role keys, JWT secrets, or database credentials in Vercel/frontend environment variables.
 
 ## Routes
+
+Current public routes include:
 
 - `/` public JUPR landing page with SaaS pilot shell navigation.
 - `/clubs/[clubSlug]` club landing page.
 - `/clubs/[clubSlug]/leaderboards` public leaderboard page.
+- `/clubs/[clubSlug]/players` public player directory.
+- `/clubs/[clubSlug]/players/[playerId]` public player profile.
+- `/clubs/[clubSlug]/matches` public match history.
+- `/clubs/[clubSlug]/matches/[matchId]` public match detail.
+- `/clubs/[clubSlug]/live` public JUPR Live session list.
+- `/clubs/[clubSlug]/live/[sessionKey]` public JUPR Live detail.
+- `/how-ratings-work` public ratings explainer.
+- `/admin` admin entry/fallback page.
+- `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active.
 
 ## Environment variables
 
-Use one of the following:
+Use one of the following API base URL variables:
 
 - `JUPR_API_BASE_URL` (preferred for server-side runtime)
-- `NEXT_PUBLIC_JUPR_API_BASE_URL` (fallback for browser-visible configuration)
+- `NEXT_PUBLIC_JUPR_API_BASE_URL` (fallback and browser-visible runtime value)
 - `NEXT_PUBLIC_JUPR_ENV` (optional; set to `staging` to show a staging badge)
+- `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
 
 Example:
 
 ```bash
 export JUPR_API_BASE_URL=http://localhost:8000
+export NEXT_PUBLIC_JUPR_API_BASE_URL=http://localhost:8000
 ```
+
+See `.env.example` for the local/staging template.
 
 ## Local development
 
@@ -32,18 +57,51 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
-If the API is unavailable, pages render graceful empty/error states instead of crashing.
+If the API is unavailable, pages should render graceful empty/error states instead of crashing.
 
+## Vercel staging deployment
 
-## Staging deployment guardrails
+Use a separate Vercel project or staging environment before any custom-domain cutover.
 
-This Next.js path is currently **staging-only** for the SaaS migration.
+Recommended Vercel settings:
 
-- Point `JUPR_API_BASE_URL` / `NEXT_PUBLIC_JUPR_API_BASE_URL` to the staging API.
-- Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` and `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0`.
-- Next admin score-entry UI remains disabled unless explicitly enabled for staging experiments.
-- Do **not** migrate production traffic to Next.js yet.
-- Never expose `SUPABASE_SERVICE_ROLE_KEY` (or any service-role key) in browser/client env vars.
+- **Root Directory:** `apps/web`
+- **Install Command:** `npm install`
+- **Build Command:** `npm run build`
+- **Output Directory:** leave unset for Next.js defaults
+- **Framework Preset:** Next.js
 
-See `docs/saas_staging_deploy.md` for required environment variables and warnings.
-Also see `README.txt` (operator branch/promotion model) and `docs/saas_status.md` (current SaaS phase/status).
+Required staging web environment variables:
+
+```bash
+JUPR_API_BASE_URL=<staging FastAPI URL>
+NEXT_PUBLIC_JUPR_API_BASE_URL=<staging FastAPI URL>
+NEXT_PUBLIC_JUPR_ENV=staging
+NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
+```
+
+Do **not** configure `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel.
+
+## Public smoke checks
+
+From the repository root:
+
+```bash
+export STAGING_JUPR_API_BASE_URL=<staging FastAPI URL>
+export STAGING_WEB_BASE_URL=<Vercel staging URL>
+make public-web-smoke
+```
+
+While live-session migrations or grants are still being applied in staging, allow the live-session endpoint to report its setup error without failing the whole smoke run:
+
+```bash
+JUPR_SMOKE_ARGS=--allow-live-unconfigured make public-web-smoke
+```
+
+The same check is available through the manual GitHub Actions workflow `Staging Smoke`.
+
+## Admin score-entry guard
+
+The score-entry page at `/clubs/[clubSlug]/admin/score-entry` is an MVP surface only. Rated admin writes remain blocked unless the backend feature flag is explicitly enabled and Supabase JWT role authorization succeeds.
+
+Keep production public launch read-only until the auth, club-scoped authorization, audit, and E2E safety criteria in `docs/next_admin_auth_design.md` are complete.
