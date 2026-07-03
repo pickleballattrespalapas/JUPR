@@ -3,8 +3,8 @@
 
 The script is intentionally dependency-free so it can run from a laptop,
 GitHub Actions, or a deployment shell before a Vercel/custom-domain cutover.
-It checks only public/read-only routes plus the guard that Next admin score
-entry remains disabled by default.
+It checks public/read-only routes, status-only admin migration routes, and the guard
+that Next admin score entry remains disabled by default.
 """
 
 from __future__ import annotations
@@ -160,6 +160,7 @@ def _build_checks(
         checks.extend(
             [
                 SmokeCheck("api: health", _join_url(api_base_url, "/health"), (200,), require_json=True),
+                SmokeCheck("api: admin operations status", _join_url(api_base_url, "/admin/operations/status"), (200,), require_json=True),
                 SmokeCheck("api: club", _join_url(api_base_url, f"/clubs/{club_slug}"), (200,), require_json=True),
                 SmokeCheck("api: leaderboards", _join_url(api_base_url, f"/clubs/{club_slug}/leaderboards"), (200,), require_json=True),
                 SmokeCheck("api: league results", _join_url(api_base_url, f"/clubs/{club_slug}/league-results"), (200,), require_json=True),
@@ -185,6 +186,7 @@ def _build_checks(
     if web_base_url:
         for label, path in [
             ("web: home", "/"),
+            ("web: admin operations", "/admin"),
             ("web: club home", f"/clubs/{club_slug}"),
             ("web: leaderboards", f"/clubs/{club_slug}/leaderboards"),
             ("web: league results", f"/clubs/{club_slug}/league-results"),
