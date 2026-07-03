@@ -80,11 +80,11 @@ Any admin workflow may move off Streamlit only when:
 | `tournament_manager` | 🛠️ Tournament Setup | Admin | `Not started`. | Yes | Admin auth + tournament write/audit gate | Merge with tournament admin product plan; avoid duplicate tournament managers. |
 | `tournament_ops` | 📋 Tournament Operations | Admin | `Not started`. | Yes | Admin auth + tournament ops/audit gate | Port after tournament setup APIs. |
 | `tournament_live` | 🔴 Tournament Live | Admin | `Not started`. | Yes | Admin auth + live/tournament gate | Define relation to public Live before porting. |
-| `tournament_registration` | 📝 Tournament Registration | Public | `API needed` — no current Next route listed. | Yes/intake | Public form + validation + anti-abuse gate | Port public registration after legal/contact/static pages are approved. |
-| `tournament_registration_admin` | 🧾 Registration Management | Admin | `Not started`. | Yes | Admin auth + registration audit gate | Port after public registration write path exists. |
-| `tournament_registration_confirmation` | ✅ Registration Confirmation | Public hidden | `Not started`. | No | Public form flow | Add as part of tournament registration port. |
+| `tournament_registration` | 📝 Tournament Registration | Public | `Partial` — public FastAPI registration page/submit APIs and Next `/clubs/[clubSlug]/tournament-registration` route exist. | Yes/intake | Public form + validation + anti-abuse + staging smoke gate | Validate staging, then close partner-board/edit-link/email-confirmation parity gaps. |
+| `tournament_registration_admin` | 🧾 Registration Management | Admin | `Not started`. | Yes | Admin auth + registration audit gate | Port after public registration write path is proven in staging. |
+| `tournament_registration_confirmation` | ✅ Registration Confirmation | Public hidden | `Partial` — public FastAPI confirmation API and Next confirmation route exist. | No | Public form flow | Validate staging and add secure email/edit-link handoff. |
 | `tournament_registration_edit` | ✏️ Edit Registration | Public hidden | `Not started`. | Yes/intake | Tokenized edit/auth gate | Add secure edit links before porting. |
-| `tournament_roster` | 📋 Tournament Roster | Public hidden | `Not started`. | No | Public tournament read model | Add after tournament registration data model is API-backed. |
+| `tournament_roster` | 📋 Tournament Roster | Public hidden | `Not started`. | No | Public tournament read model | Add Next roster route using public tournament roster state. |
 | `tournament_partner_board` | 🤝 Partner Board | Public | `Not started`. | Possibly yes | Public/organizer moderation gate | Define safe public interaction rules before porting. |
 | `weekly_recap` | 🗞️ Weekly Recap | Public | `Partial` — public FastAPI published-recap/PDF APIs and Next `/clubs/[clubSlug]/weekly-recap` route exist. | No | Public smoke + contract tests | Validate staging, then close final styling/print-view parity gaps. |
 | `top_players_printable` | 🧾 Top Active Players PDF | Admin | `Not started`. | Export only | Admin/PDF export gate | Defer until PDF/export strategy is standardized. |
@@ -103,14 +103,15 @@ Any admin workflow may move off Streamlit only when:
 5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
 6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
 7. Review/approve static FAQ/legal/support copy and smoke the static routes.
-8. Port public tournament registration after legal/contact/static pages are approved.
-9. Implement real Next admin login/session.
-10. Harden FastAPI admin authorization/audit contracts.
-11. Replace the score-entry MVP with real Match Uploader parity.
-12. Port Match Log/replay/corrections.
-13. Port Player Editor.
-14. Port League Manager.
-15. Port tournament/challenge/admin tools after the write foundation is proven.
+8. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
+9. Port public tournament roster and partner board.
+10. Implement real Next admin login/session.
+11. Harden FastAPI admin authorization/audit contracts.
+12. Replace the score-entry MVP with real Match Uploader parity.
+13. Port Match Log/replay/corrections.
+14. Port Player Editor.
+15. Port League Manager.
+16. Port tournament/challenge/admin tools after the write foundation is proven.
 
 ## Maintenance rule
 

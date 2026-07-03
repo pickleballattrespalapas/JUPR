@@ -23,6 +23,8 @@ Current public routes include:
 - `/clubs/[clubSlug]/badge-codex` public badge definitions, unlock paths, prestige, and recent badge earners.
 - `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.
 - `/clubs/[clubSlug]/weekly-recap` public published weekly recap with spotlight reel, around-the-club highlights, tournament podiums, print view, and PDF download.
+- `/clubs/[clubSlug]/tournament-registration` public tournament registration intake for published events.
+- `/clubs/[clubSlug]/tournament-registration/confirmation?registration_id=...` public registration confirmation page.
 - `/clubs/[clubSlug]/match-explorer` public matchup odds and projected rating movement preview.
 - `/clubs/[clubSlug]/players` public player directory.
 - `/clubs/[clubSlug]/players/[playerId]` public player profile.
@@ -91,6 +93,8 @@ NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
 ```
 
 Do **not** configure `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel.
+
+If a Vercel preview build is rate-limited, rerun the preview after quota resets and wait for a fresh green Vercel status before merging frontend PRs.
 
 ## Public smoke checks
 
