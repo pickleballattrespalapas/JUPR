@@ -48,7 +48,7 @@ Any admin workflow may move off Streamlit only when:
 |---|---|---|---|---|---|---|
 | `home` | Home | Public | `Done` — Next `/` product shell exists. | No | Public smoke | Keep aligned with product positioning and club-aware routing. |
 | `leaderboards` | 🏆 Leaderboards | Public | `Partial` — Next `/clubs/[clubSlug]/leaderboards` and FastAPI leaderboard API exist. | No | Public smoke + contract tests | Close display parity gaps: league filters, top performers, badge chips, inactive rules. |
-| `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile copy with Streamlit Rating Rules/FAQs and make route naming canonical. |
+| `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile route naming with `/faq` and final product copy. |
 | `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist. | No | Public smoke + contract tests | Validate staging, then close chart/deep-link/printout parity gaps. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
 | `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist. | No | Public smoke + contract tests | Validate staging, then close Streamlit parity gaps for deep links and rating-impact chart. |
@@ -58,11 +58,11 @@ Any admin workflow may move off Streamlit only when:
 | `badge_audit` | 🧾 Badge Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Define admin badge audit API after badge public read model is stable. |
 | `match_canonical_audit` | 🧩 Match Canonical Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Keep Streamlit-only until replay/correction APIs exist. |
 | `challenge_ladder` | 🪜 Challenge Ladder | Public | `Partial` — public FastAPI ladder API and Next `/clubs/[clubSlug]/challenge-ladder` route exist. | No | Public smoke + contract tests | Validate staging, then close deep-link and public challenge-rule parity gaps. |
-| `faqs` | ❓ FAQs | Public | `Partial` — related ratings explainer exists, but FAQ page parity is missing. | No | Static content review | Add `/faq` or fold into ratings explainer with full JUPR FAQ content. |
-| `privacy_policy` | Privacy Policy | Public hidden | `Not started` in Next app. | No | Static/legal review | Add first-party legal route or route to approved policy. |
-| `terms_of_use` | Terms of Use | Public hidden | `Not started` in Next app. | No | Static/legal review | Add first-party legal route or route to approved terms. |
-| `contact_support` | Contact Support | Public hidden | `Not started` in Next app. | No | Static/support review | Add support/contact route using `juprleagues.com` identity. |
-| `data_corrections` | Data Corrections | Public hidden | `Not started` in Next app. | Request intake TBD | Support/intake gate | Define safe correction request intake; no direct data mutation. |
+| `faqs` | ❓ FAQs | Public | `Partial` — Next `/faq` exists with public JUPR FAQ content. | No | Static content review | Validate copy against Streamlit FAQ and decide whether `/faq` or `/how-ratings-work` is canonical. |
+| `privacy_policy` | Privacy Policy | Public hidden | `Partial` — first-party Next `/privacy` placeholder exists. | No | Static/legal review | Replace placeholder with approved legal policy before broad production launch. |
+| `terms_of_use` | Terms of Use | Public hidden | `Partial` — first-party Next `/terms` placeholder exists. | No | Static/legal review | Replace placeholder with approved legal terms before broad production launch. |
+| `contact_support` | Contact Support | Public hidden | `Partial` — Next `/support` and `/contact` support shell exists. | No | Static/support review | Confirm support address/routing and add real intake workflow if needed. |
+| `data_corrections` | Data Corrections | Public hidden | `Partial` — Next `/data-corrections` intake instructions exist with no direct data mutation. | Request intake shell only | Support/intake gate | Define durable ticket/intake backend; keep rating corrections staff-reviewed. |
 | `email_preferences` | Email Preferences | Public hidden | `Not started` in Next app. | Preference write | Auth/tokenized preference gate | Port only after safe email preference tokens and unsubscribe rules are defined. |
 | `profile_privacy` | Profile Privacy | Public hidden | `Not started` in Next app. | Preference/request write TBD | Privacy workflow gate | Define privacy request flow before porting. |
 | `league_manager` | 🏟️ League Manager | Admin | `Not started` for full parity. | Yes | Admin auth + match-write + audit gate | Port after score entry/corrections foundation; this is a major workflow. |
@@ -80,7 +80,7 @@ Any admin workflow may move off Streamlit only when:
 | `tournament_manager` | 🛠️ Tournament Setup | Admin | `Not started`. | Yes | Admin auth + tournament write/audit gate | Merge with tournament admin product plan; avoid duplicate tournament managers. |
 | `tournament_ops` | 📋 Tournament Operations | Admin | `Not started`. | Yes | Admin auth + tournament ops/audit gate | Port after tournament setup APIs. |
 | `tournament_live` | 🔴 Tournament Live | Admin | `Not started`. | Yes | Admin auth + live/tournament gate | Define relation to public Live before porting. |
-| `tournament_registration` | 📝 Tournament Registration | Public | `API needed` — no current Next route listed. | Yes/intake | Public form + validation + anti-abuse gate | Port public registration after legal/contact/static pages. |
+| `tournament_registration` | 📝 Tournament Registration | Public | `API needed` — no current Next route listed. | Yes/intake | Public form + validation + anti-abuse gate | Port public registration after legal/contact/static pages are approved. |
 | `tournament_registration_admin` | 🧾 Registration Management | Admin | `Not started`. | Yes | Admin auth + registration audit gate | Port after public registration write path exists. |
 | `tournament_registration_confirmation` | ✅ Registration Confirmation | Public hidden | `Not started`. | No | Public form flow | Add as part of tournament registration port. |
 | `tournament_registration_edit` | ✏️ Edit Registration | Public hidden | `Not started`. | Yes/intake | Tokenized edit/auth gate | Add secure edit links before porting. |
@@ -102,14 +102,15 @@ Any admin workflow may move off Streamlit only when:
 4. Validate public Badge Codex in staging and close load-more/deep-link/trophy-room parity gaps.
 5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
 6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
-7. Port static/legal/support pages.
-8. Implement real Next admin login/session.
-9. Harden FastAPI admin authorization/audit contracts.
-10. Replace the score-entry MVP with real Match Uploader parity.
-11. Port Match Log/replay/corrections.
-12. Port Player Editor.
-13. Port League Manager.
-14. Port tournament/challenge/admin tools after the write foundation is proven.
+7. Review/approve static FAQ/legal/support copy and smoke the static routes.
+8. Port public tournament registration after legal/contact/static pages are approved.
+9. Implement real Next admin login/session.
+10. Harden FastAPI admin authorization/audit contracts.
+11. Replace the score-entry MVP with real Match Uploader parity.
+12. Port Match Log/replay/corrections.
+13. Port Player Editor.
+14. Port League Manager.
+15. Port tournament/challenge/admin tools after the write foundation is proven.
 
 ## Maintenance rule
 
