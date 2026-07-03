@@ -31,6 +31,11 @@ Current public routes include:
 - `/clubs/[clubSlug]/live` public JUPR Live session list.
 - `/clubs/[clubSlug]/live/[sessionKey]` public JUPR Live detail.
 - `/how-ratings-work` public ratings explainer.
+- `/faq` public JUPR rating FAQ.
+- `/privacy` first-party privacy notice placeholder pending legal review.
+- `/terms` first-party terms placeholder pending legal review.
+- `/support` and `/contact` support/contact shell.
+- `/data-corrections` public correction intake instructions with no direct mutation.
 - `/admin` admin entry/fallback page.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active.
 
