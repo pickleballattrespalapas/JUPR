@@ -8,6 +8,13 @@ type MatchesPageProps = {
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.5rem", whiteSpace: "nowrap" as const };
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.5rem", whiteSpace: "nowrap" as const };
 
+function formatMatchDate(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function teamLabel(clubSlug: string, players: PublicMatch["team_1"]): JSX.Element {
   return (
     <>
@@ -57,15 +64,18 @@ export default async function MatchesPage({ params }: MatchesPageProps) {
               </tr>
             </thead>
             <tbody>
-              {matches.map((match, index) => (
-                <tr key={`${match.id ?? index}`}>
-                  <td style={tdStyle}>{match.date ?? "—"}</td>
-                  <td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td>
-                  <td style={tdStyle}>{scoreLabel(match)}</td>
-                  <td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td>
-                  <td style={tdStyle}>{match.league ?? "—"}</td>
-                </tr>
-              ))}
+              {matches.map((match, index) => {
+                const detailHref = match.id ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`;
+                return (
+                  <tr key={`${match.id ?? index}`}>
+                    <td style={tdStyle}>{match.id ? <Link href={detailHref}>{formatMatchDate(match.date)}</Link> : formatMatchDate(match.date)}</td>
+                    <td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td>
+                    <td style={tdStyle}>{match.id ? <Link href={detailHref}>{scoreLabel(match)}</Link> : scoreLabel(match)}</td>
+                    <td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td>
+                    <td style={tdStyle}>{match.league ?? "—"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
