@@ -72,6 +72,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <Link href={`/clubs/${clubSlug}/challenge-ladder`}>Open challenge ladder</Link>
         </article>
         <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Weekly Recap</h2>
+          <p style={{ color: "#475569" }}>Read published club highlights, spotlight reels, tournament podiums, and looking-ahead notes.</p>
+          <Link href={`/clubs/${clubSlug}/weekly-recap`}>Open weekly recap</Link>
+        </article>
+        <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
           <p style={{ color: "#475569" }}>Browse the public player directory and open profiles with ratings, records, and recent matches.</p>
           <Link href={`/clubs/${clubSlug}/players`}>Open players</Link>

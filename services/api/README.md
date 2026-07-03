@@ -2,7 +2,7 @@
 
 FastAPI service for the JUPR SaaS surface.
 
-Current production scope: public, read-only club/leaderboard/league-results/badge-codex/challenge-ladder/player/match/live/Match Explorer endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
+Current production scope: public, read-only club/leaderboard/league-results/badge-codex/challenge-ladder/weekly-recap/player/match/live/Match Explorer endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
 
 ## Run locally
 
@@ -66,6 +66,9 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 - `GET /clubs/{club_slug}/badges`
 - `GET /clubs/{club_slug}/badges/{badge_id}/earners?offset=...&limit=...`
 - `GET /clubs/{club_slug}/challenge-ladder`
+- `GET /clubs/{club_slug}/weekly-recaps?week_start=...`
+- `GET /clubs/{club_slug}/weekly-recaps/{week_start}`
+- `GET /clubs/{club_slug}/weekly-recaps/{week_start}/pdf`
 - `GET /clubs/{club_slug}/players`
 - `GET /clubs/{club_slug}/players/{player_id}`
 - `GET /clubs/{club_slug}/matches`
@@ -86,6 +89,8 @@ The League Results endpoint delegates to `jupr_app.services.public_league_result
 The Badge Codex endpoints delegate to `jupr_app.services.public_badge_codex_service` and return public-safe badge definitions, unlock paths, prestige, grouped sections, recent earners, and paginated earner rows. They do not expose badge evaluator internals or private player fields.
 
 The Challenge Ladder endpoint delegates to `jupr_app.services.public_challenge_ladder_service` and returns public-safe ladder tiers, player statuses, active challenge buckets, quick rules, and summarized challenge rows. It does not create challenges, write scores, expose ledger contacts, or mutate ranks.
+
+The Weekly Recap endpoints delegate to `jupr_app.services.public_weekly_recap_service` and return published-only recap summaries, sanitized `final_json` detail, and dependency-free PDF bytes. They do not expose drafts, generated/edit JSON, private notes, or admin publishing controls.
 
 The Match Explorer endpoints delegate to `jupr_app.services.public_match_explorer_service` and return public-safe player names/ratings plus projected matchup odds and rating movement. They do not write matches and do not move rating logic to JavaScript.
 
