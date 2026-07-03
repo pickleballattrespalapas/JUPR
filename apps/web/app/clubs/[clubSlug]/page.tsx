@@ -48,7 +48,7 @@ export default async function ClubPage({ params }: ClubPageProps) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem" }}>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Live events</h2>
-          <p style={{ color: "#475569" }}>Public JUPR Live scoreboards are the next web milestone.</p>
+          <p style={{ color: "#475569" }}>Open public JUPR Live sessions with rounds, scores, standings, and brackets when durable sessions are available.</p>
           <Link href={`/clubs/${clubSlug}/live`}>Open JUPR Live</Link>
         </article>
         <article style={cardStyle}>
@@ -58,8 +58,13 @@ export default async function ClubPage({ params }: ClubPageProps) {
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
-          <p style={{ color: "#475569" }}>Player directory and profiles are planned for the public web experience.</p>
+          <p style={{ color: "#475569" }}>Browse the public player directory and open profiles with ratings, records, and recent matches.</p>
           <Link href={`/clubs/${clubSlug}/players`}>Open players</Link>
+        </article>
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Match history</h2>
+          <p style={{ color: "#475569" }}>Review recorded matches and drill into match detail pages with public-safe rating snapshots.</p>
+          <Link href={`/clubs/${clubSlug}/matches`}>View matches</Link>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Ratings</h2>
