@@ -20,10 +20,28 @@ from jupr_app.services.public_live_write_service import PublicLiveSessionError, 
 from jupr_app.services.public_player_service import get_public_match_detail, get_public_matches, get_public_player_profile, get_public_players
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
+from services.api.public_match_explorer_routes import install_public_match_explorer_routes
 
-DEFAULT_CORS_ALLOWED_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000", "https://juprleagues.com", "https://www.juprleagues.com")
+DEFAULT_CORS_ALLOWED_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://juprleagues.com",
+    "https://www.juprleagues.com",
+)
 PUBLIC_CLUB_SLUG_TO_ID = {"tres-palapas": "tres_palapas"}
-PUBLIC_CLUB_FALLBACKS: dict[str, dict[str, Any]] = {"tres-palapas": {"id": "tres_palapas", "slug": "tres-palapas", "name": "Tres Palapas", "tagline": None, "support_email": None, "public_base_url": "https://juprleagues.com/clubs/tres-palapas", "logo_url": None, "primary_color": None, "is_active": True}}
+PUBLIC_CLUB_FALLBACKS: dict[str, dict[str, Any]] = {
+    "tres-palapas": {
+        "id": "tres_palapas",
+        "slug": "tres-palapas",
+        "name": "Tres Palapas",
+        "tagline": None,
+        "support_email": None,
+        "public_base_url": "https://juprleagues.com/clubs/tres-palapas",
+        "logo_url": None,
+        "primary_color": None,
+        "is_active": True,
+    }
+}
 
 
 def get_jupr_env() -> str:
@@ -65,12 +83,35 @@ def _log_runtime_guardrails() -> None:
 
 app = FastAPI(title="JUPR API", version="0.1.0")
 app.add_middleware(StructuredRequestLoggingMiddleware)
-app.add_middleware(CORSMiddleware, allow_origins=get_cors_allowed_origins(), allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["*"],
+)
 
-PUBLIC_LEADERBOARD_ENTRY_FIELDS = {"rank", "rank_position", "club_id", "league_name", "player_id", "player_name", "rating", "rating_jupr", "wins", "losses", "matches_played", "is_active", "updated_at"}
+PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
+    "rank",
+    "rank_position",
+    "club_id",
+    "league_name",
+    "player_id",
+    "player_name",
+    "rating",
+    "rating_jupr",
+    "wins",
+    "losses",
+    "matches_played",
+    "is_active",
+    "updated_at",
+}
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,created_at,updated_at,last_seen_at,expires_at"
 PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
-LIVE_SESSIONS_SETUP_ERROR = "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
+LIVE_SESSIONS_SETUP_ERROR = (
+    "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations "
+    "and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
+)
 
 
 class MatchBatchRequest(BaseModel):
@@ -152,7 +193,18 @@ def _error_payload_text(exc: Exception) -> str:
 def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
     detail = _error_payload_text(exc)
     table = table_name.lower()
-    return table in detail and any(marker in detail for marker in ("does not exist", "undefined table", "relation", "not found", "could not find", "schema cache", "pgrst205"))
+    return table in detail and any(
+        marker in detail
+        for marker in (
+            "does not exist",
+            "undefined table",
+            "relation",
+            "not found",
+            "could not find",
+            "schema cache",
+            "pgrst205",
+        )
+    )
 
 
 def _is_live_sessions_schema_error(exc: Exception) -> bool:
@@ -161,7 +213,22 @@ def _is_live_sessions_schema_error(exc: Exception) -> bool:
         return True
     if "live_sessions" not in detail:
         return False
-    return any(marker in detail for marker in ("pgrst204", "pgrst205", "42p01", "42501", "permission denied", "schema cache", "could not find", "does not exist", "undefined table", "column", "relation"))
+    return any(
+        marker in detail
+        for marker in (
+            "pgrst204",
+            "pgrst205",
+            "42p01",
+            "42501",
+            "permission denied",
+            "schema cache",
+            "could not find",
+            "does not exist",
+            "undefined table",
+            "column",
+            "relation",
+        )
+    )
 
 
 def _live_sessions_backend_error_detail(exc: Exception) -> str:
@@ -205,13 +272,17 @@ def _known_public_club_fallback(club_slug: str) -> dict[str, Any] | None:
 
 
 def _public_club_payload(club: dict[str, Any], club_slug: str) -> dict[str, str]:
-    return {"id": str(club.get("id") or club.get("club_id") or club_slug), "slug": str(club.get("slug") or club.get("club_slug") or club_slug), "name": str(club.get("name") or club.get("club_name") or club.get("display_name") or club_slug)}
+    return {
+        "id": str(club.get("id") or club.get("club_id") or club_slug),
+        "slug": str(club.get("slug") or club.get("club_slug") or club_slug),
+        "name": str(club.get("name") or club.get("club_name") or club.get("display_name") or club_slug),
+    }
 
 
 def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
-        clean = {k: row.get(k) for k in PUBLIC_LEADERBOARD_ENTRY_FIELDS if k in row}
+        clean = {key: row.get(key) for key in PUBLIC_LEADERBOARD_ENTRY_FIELDS if key in row}
         if clean.get("rank") is None:
             clean["rank"] = clean.get("rank_position") if clean.get("rank_position") is not None else idx
         normalized.append(clean)
@@ -233,7 +304,16 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit or 20), 50))
     supabase = get_supabase_client()
     try:
-        rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_SUMMARY_SELECT).eq("club_id", club_id).order("updated_at", desc=True).limit(safe_limit * 3).execute().data or []
+        rows = (
+            supabase.table("live_sessions")
+            .select(PUBLIC_LIVE_SESSION_SUMMARY_SELECT)
+            .eq("club_id", club_id)
+            .order("updated_at", desc=True)
+            .limit(safe_limit * 3)
+            .execute()
+            .data
+            or []
+        )
     except Exception as exc:
         if _is_live_sessions_schema_error(exc):
             _raise_live_sessions_setup_error(exc)
@@ -250,7 +330,16 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     try:
-        rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_DETAIL_SELECT).eq("club_id", club_id).eq("session_key", clean_session_key).limit(1).execute().data or []
+        rows = (
+            supabase.table("live_sessions")
+            .select(PUBLIC_LIVE_SESSION_DETAIL_SELECT)
+            .eq("club_id", club_id)
+            .eq("session_key", clean_session_key)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
     except Exception as exc:
         if _is_live_sessions_schema_error(exc):
             _raise_live_sessions_setup_error(exc)
@@ -292,7 +381,13 @@ def _fetch_score_entry_players(supabase, *, club_id: str, player_ids: list[int])
     return result
 
 
-def _score_entry_feedback(*, before: dict[int, dict[str, Any]], after: dict[int, dict[str, Any]], player_ids: list[int], latest_match_id: Any = None) -> dict[str, Any]:
+def _score_entry_feedback(
+    *,
+    before: dict[int, dict[str, Any]],
+    after: dict[int, dict[str, Any]],
+    player_ids: list[int],
+    latest_match_id: Any = None,
+) -> dict[str, Any]:
     affected = []
     ratings_updated = False
     for pid in player_ids:
@@ -306,15 +401,17 @@ def _score_entry_feedback(*, before: dict[int, dict[str, Any]], after: dict[int,
             delta = None
         if delta not in (None, 0):
             ratings_updated = True
-        affected.append({
-            "id": pid,
-            "name": a.get("name") or b.get("name") or f"Player {pid}",
-            "rating_before": rb,
-            "rating_after": ra,
-            "rating_delta": delta,
-            "matches_played_before": b.get("matches_played"),
-            "matches_played_after": a.get("matches_played"),
-        })
+        affected.append(
+            {
+                "id": pid,
+                "name": a.get("name") or b.get("name") or f"Player {pid}",
+                "rating_before": rb,
+                "rating_after": ra,
+                "rating_delta": delta,
+                "matches_played_before": b.get("matches_played"),
+                "matches_played_after": a.get("matches_played"),
+            }
+        )
     return {"ratings_updated": ratings_updated, "affected_players": affected, "latest_match_id": latest_match_id}
 
 
@@ -340,13 +437,33 @@ def health() -> dict[str, Any]:
 def health_live_sessions() -> dict[str, Any]:
     host = _supabase_host_for_diagnostics()
     if not _has_supabase_service_role_key():
-        return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": False, "detail": LIVE_SESSIONS_SETUP_ERROR}
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": False,
+            "detail": LIVE_SESSIONS_SETUP_ERROR,
+        }
     try:
         supabase = get_supabase_client()
         rows = supabase.table("live_sessions").select("club_id,session_key,status,updated_at").limit(1).execute().data or []
-        return {"ok": True, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": True, "sample_count": len(rows)}
+        return {
+            "ok": True,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": True,
+            "live_sessions_query_ok": True,
+            "sample_count": len(rows),
+        }
     except Exception as exc:
-        return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": False, "detail": _error_payload_text(exc) or exc.__class__.__name__}
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": True,
+            "live_sessions_query_ok": False,
+            "detail": _error_payload_text(exc) or exc.__class__.__name__,
+        }
 
 
 @app.get("/clubs/{club_slug}")
@@ -361,6 +478,7 @@ def get_club(club_slug: str) -> dict[str, Any]:
         if known_fallback:
             return known_fallback
         raise HTTPException(status_code=503, detail="Club lookup is unavailable because Supabase is not configured.") from exc
+
     club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
     club_minimal_fields = "id,slug,name"
     rows: list[dict[str, Any]] = []
@@ -381,19 +499,50 @@ def get_club(club_slug: str) -> dict[str, Any]:
                         break
         except Exception:
             rows = []
+
     if rows:
         row = rows[0] or {}
-        return {"id": row.get("id"), "slug": row.get("slug") or slug, "name": row.get("name") or _display_name_from_slug(slug), "tagline": row.get("tagline"), "support_email": row.get("support_email"), "public_base_url": row.get("public_base_url"), "logo_url": row.get("logo_url"), "primary_color": row.get("primary_color"), "is_active": row.get("is_active", True)}
+        return {
+            "id": row.get("id"),
+            "slug": row.get("slug") or slug,
+            "name": row.get("name") or _display_name_from_slug(slug),
+            "tagline": row.get("tagline"),
+            "support_email": row.get("support_email"),
+            "public_base_url": row.get("public_base_url"),
+            "logo_url": row.get("logo_url"),
+            "primary_color": row.get("primary_color"),
+            "is_active": row.get("is_active", True),
+        }
+
     for club_id in _club_lookup_candidates(slug):
         try:
             fallback = supabase.table("players").select("club_id").eq("club_id", club_id).limit(1).execute().data or []
         except Exception:
             fallback = []
         if fallback:
-            return {"id": str(fallback[0].get("club_id") or club_id), "slug": slug, "name": _display_name_from_slug(slug), "tagline": None, "support_email": None, "public_base_url": None, "logo_url": None, "primary_color": None, "is_active": True}
+            return {
+                "id": str(fallback[0].get("club_id") or club_id),
+                "slug": slug,
+                "name": _display_name_from_slug(slug),
+                "tagline": None,
+                "support_email": None,
+                "public_base_url": None,
+                "logo_url": None,
+                "primary_color": None,
+                "is_active": True,
+            }
+
     if known_fallback:
         return known_fallback
     raise HTTPException(status_code=404, detail="club not found")
+
+
+install_public_match_explorer_routes(
+    app,
+    get_club=get_club,
+    get_supabase_client=get_supabase_client,
+    public_club_payload=_public_club_payload,
+)
 
 
 @app.get("/clubs/{club_slug}/leaderboards")
@@ -466,7 +615,12 @@ def create_club_live_session(club_slug: str, payload: PublicLiveSessionCreateReq
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     try:
-        result = create_public_round_robin_session(supabase, club_id=club_id, event_name=payload.event_name, participant_names=payload.participant_names)
+        result = create_public_round_robin_session(
+            supabase,
+            club_id=club_id,
+            event_name=payload.event_name,
+            participant_names=payload.participant_names,
+        )
     except PublicLiveSessionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -486,7 +640,13 @@ def update_club_live_session_scores(club_slug: str, session_key: str, payload: P
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     try:
-        result = update_public_round_robin_scores(supabase, club_id=club_id, session_key=session_key, edit_token=payload.edit_token, scores=[score.dict() for score in payload.scores])
+        result = update_public_round_robin_scores(
+            supabase,
+            club_id=club_id,
+            session_key=session_key,
+            edit_token=payload.edit_token,
+            scores=[score.dict() for score in payload.scores],
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except PublicLiveSessionError as exc:
@@ -504,9 +664,20 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
     supabase = get_supabase_client()
     role_resolution = resolve_admin_role(supabase=supabase, club_id=str(club_id), email=user.email, user_id=user.user_id, allowlist=set())
     if not has_permission(role_resolution.role, PERMISSION_ENTER_SCORES):
-        denied_payload = build_activity_payload(club_id=str(club_id), actor_email=user.email, actor_role=role_resolution.role, action_type="submit_match_batch_denied", entity_type="matches", entity_id="batch", after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission"}, source_page=payload.source, flagged_for_review=True)
+        denied_payload = build_activity_payload(
+            club_id=str(club_id),
+            actor_email=user.email,
+            actor_role=role_resolution.role,
+            action_type="submit_match_batch_denied",
+            entity_type="matches",
+            entity_id="batch",
+            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission"},
+            source_page=payload.source,
+            flagged_for_review=True,
+        )
         write_admin_activity_log(supabase, denied_payload)
         raise HTTPException(status_code=403, detail="insufficient permission")
+
     player_ids = _score_entry_player_ids(payload.matches)
     before_players = _fetch_score_entry_players(supabase, club_id=str(club_id), player_ids=player_ids)
     (
@@ -523,13 +694,36 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
         _schema_degraded_reason,
     ) = load_data(supabase, club_id)
     service_ctx = ServiceContext(supabase=supabase, club_id=str(club_id), source=payload.source, actor_email=user.email, actor_role=role_resolution.role)
-    result = submit_match_batch(service_ctx, payload.matches, name_to_id=name_to_id, df_players_all=df_players_all, df_leagues=df_leagues, df_meta=df_meta)
+    result = submit_match_batch(
+        service_ctx,
+        payload.matches,
+        name_to_id=name_to_id,
+        df_players_all=df_players_all,
+        df_leagues=df_leagues,
+        df_meta=df_meta,
+    )
     if not result.ok:
         raise HTTPException(status_code=400, detail="; ".join(result.errors) or "Unable to submit match batch")
+
     after_players = _fetch_score_entry_players(supabase, club_id=str(club_id), player_ids=player_ids)
     latest_match_id = _latest_score_entry_match_id(supabase, club_id=str(club_id), matches=payload.matches)
     feedback = _score_entry_feedback(before=before_players, after=after_players, player_ids=player_ids, latest_match_id=latest_match_id)
-    audit_payload = build_activity_payload(club_id=str(club_id), actor_email=user.email, actor_role=role_resolution.role, action_type="submit_match_batch", entity_type="matches", entity_id="batch", after_json={"source_client": "fastapi/nextjs", "source_page": payload.source, "match_count": len(payload.matches), "result_summary": result.data if isinstance(result.data, dict) else {"ok": True}, "feedback": feedback}, source_page=payload.source)
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=user.email,
+        actor_role=role_resolution.role,
+        action_type="submit_match_batch",
+        entity_type="matches",
+        entity_id="batch",
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": payload.source,
+            "match_count": len(payload.matches),
+            "result_summary": result.data if isinstance(result.data, dict) else {"ok": True},
+            "feedback": feedback,
+        },
+        source_page=payload.source,
+    )
     audit_write = write_admin_activity_log(supabase, audit_payload)
     if not audit_write.ok and is_api_audit_log_required():
         raise HTTPException(status_code=500, detail="audit log write required but unavailable")
