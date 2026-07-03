@@ -75,6 +75,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/clubs/tres-palapas/players">Players</Link>
               <Link href="/clubs/tres-palapas/matches">Matches</Link>
               <Link href="/how-ratings-work">How ratings work</Link>
+              <Link href="/faq">FAQ</Link>
+              <Link href="/support">Support</Link>
               <Link href="/admin">Admin</Link>
             </nav>
           </header>
@@ -82,9 +84,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <footer style={footerStyle}>
             <span style={{ color: "#475569" }}>JUPR is the live ratings and event layer for pickleball clubs.</span>
             <nav style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }} aria-label="Footer navigation">
-              <Link href="https://trespalapasresort.com/privacy-policy" target="_blank" rel="noreferrer">Privacy</Link>
-              <Link href="https://trespalapasresort.com/terms-conditions" target="_blank" rel="noreferrer">Terms</Link>
-              <Link href="mailto:hello@jupr.app">Contact</Link>
+              <Link href="/privacy">Privacy</Link>
+              <Link href="/terms">Terms</Link>
+              <Link href="/support">Contact</Link>
+              <Link href="/data-corrections">Data corrections</Link>
             </nav>
           </footer>
         </div>
