@@ -1,10 +1,13 @@
-.PHONY: db-migrate check-migration-sources api-test public-web-smoke
+.PHONY: db-migrate check-migration-sources check-next-parity-matrix api-test public-web-smoke
 
 db-migrate: ## Apply pending SQL migrations (requires DATABASE_URL)
 	@bash scripts/db_migrate.sh
 
 check-migration-sources: ## Guard: block undocumented new root migrations
 	@python scripts/check_migration_sources.py
+
+check-next-parity-matrix: ## Guard: every Streamlit page is represented in the Next parity matrix
+	@python scripts/check_next_parity_matrix.py
 
 
 api-test: ## Run API contract tests
