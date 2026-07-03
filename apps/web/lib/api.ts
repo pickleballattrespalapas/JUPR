@@ -56,6 +56,12 @@ export type PublicLeagueRating = {
 
 export type PublicMatchPlayer = { id: string | number; name: string };
 
+export type PublicRatingSnapshotEntry = {
+  player_id?: string | number | null;
+  start_rating?: number | null;
+  end_rating?: number | null;
+};
+
 export type PublicMatch = {
   id?: string | number | null;
   club_id?: string | null;
@@ -72,6 +78,10 @@ export type PublicMatch = {
   score_t2?: number | null;
   winner?: string | null;
   elo_delta?: number | null;
+  rating_snapshot?: {
+    team_1: PublicRatingSnapshotEntry[];
+    team_2: PublicRatingSnapshotEntry[];
+  };
 };
 
 export type PlayersResponse = {
@@ -89,6 +99,11 @@ export type PlayerProfileResponse = {
 export type MatchesResponse = {
   club: { id: string; slug: string; name: string };
   matches: PublicMatch[];
+};
+
+export type MatchDetailResponse = {
+  club: { id: string; slug: string; name: string };
+  match: PublicMatch;
 };
 
 export type PublicLiveMatch = {
@@ -199,6 +214,10 @@ export async function getClubPlayerProfile(clubSlug: string, playerId: string): 
 
 export async function getClubMatches(clubSlug: string): Promise<ApiResult<MatchesResponse>> {
   return fetchJson<MatchesResponse>(`/clubs/${clubSlug}/matches`);
+}
+
+export async function getClubMatch(clubSlug: string, matchId: string): Promise<ApiResult<MatchDetailResponse>> {
+  return fetchJson<MatchDetailResponse>(`/clubs/${clubSlug}/matches/${matchId}`);
 }
 
 export async function getClubPlayerMatches(clubSlug: string, playerId: string): Promise<ApiResult<MatchesResponse>> {
