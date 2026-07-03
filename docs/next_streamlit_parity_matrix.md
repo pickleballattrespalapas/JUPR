@@ -53,7 +53,7 @@ Any admin workflow may move off Streamlit only when:
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
 | `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist. | No | Public smoke + contract tests | Validate staging, then close Streamlit parity gaps for deep links and rating-impact chart. |
 | `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist. | No | Public smoke + contract tests | Add trophy room/badge/profile parity and improve search/deep links. |
-| `badge_codex` | 📼 Badge Codex | Public | `API needed` — no dedicated Next route yet. | No | Public badge read model | Expose badge definitions/earners with public-safe pagination. |
+| `badge_codex` | 📼 Badge Codex | Public | `Partial` — public FastAPI badge/earner APIs and Next `/clubs/[clubSlug]/badge-codex` route exist. | No | Public smoke + contract tests | Validate staging, then close load-more/deep-link/trophy-room parity gaps. |
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
 | `badge_audit` | 🧾 Badge Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Define admin badge audit API after badge public read model is stable. |
 | `match_canonical_audit` | 🧩 Match Canonical Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Keep Streamlit-only until replay/correction APIs exist. |
@@ -99,7 +99,7 @@ Any admin workflow may move off Streamlit only when:
 1. Keep public read-only staging smoke and Vercel guardrails green.
 2. Validate public Match Explorer in staging and close chart/deep-link parity gaps.
 3. Validate public League Results in staging and close chart/deep-link/printout parity gaps.
-4. Port public Badge Codex.
+4. Validate public Badge Codex in staging and close load-more/deep-link/trophy-room parity gaps.
 5. Port public Challenge Ladder.
 6. Port public Weekly Recap and static/legal/support pages.
 7. Implement real Next admin login/session.
