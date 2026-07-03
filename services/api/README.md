@@ -2,7 +2,7 @@
 
 FastAPI service for the JUPR SaaS surface.
 
-Current production scope: public, read-only club/leaderboard/league-results/badge-codex/player/match/live/Match Explorer endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
+Current production scope: public, read-only club/leaderboard/league-results/badge-codex/challenge-ladder/player/match/live/Match Explorer endpoints plus the guarded admin score-entry endpoint that remains disabled by default.
 
 ## Run locally
 
@@ -65,6 +65,7 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 - `GET /clubs/{club_slug}/league-results?league_name=...`
 - `GET /clubs/{club_slug}/badges`
 - `GET /clubs/{club_slug}/badges/{badge_id}/earners?offset=...&limit=...`
+- `GET /clubs/{club_slug}/challenge-ladder`
 - `GET /clubs/{club_slug}/players`
 - `GET /clubs/{club_slug}/players/{player_id}`
 - `GET /clubs/{club_slug}/matches`
@@ -83,6 +84,8 @@ The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get
 The League Results endpoint delegates to `jupr_app.services.public_league_results_service` and returns public-safe league options, standings, weekly summaries, cumulative player results, and highlights. It does not write matches.
 
 The Badge Codex endpoints delegate to `jupr_app.services.public_badge_codex_service` and return public-safe badge definitions, unlock paths, prestige, grouped sections, recent earners, and paginated earner rows. They do not expose badge evaluator internals or private player fields.
+
+The Challenge Ladder endpoint delegates to `jupr_app.services.public_challenge_ladder_service` and returns public-safe ladder tiers, player statuses, active challenge buckets, quick rules, and summarized challenge rows. It does not create challenges, write scores, expose ledger contacts, or mutate ranks.
 
 The Match Explorer endpoints delegate to `jupr_app.services.public_match_explorer_service` and return public-safe player names/ratings plus projected matchup odds and rating movement. They do not write matches and do not move rating logic to JavaScript.
 

@@ -67,6 +67,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <Link href={`/clubs/${clubSlug}/badge-codex`}>Open badge codex</Link>
         </article>
         <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Challenge Ladder</h2>
+          <p style={{ color: "#475569" }}>View public ladder tiers, player status, active challenge buckets, and quick rules.</p>
+          <Link href={`/clubs/${clubSlug}/challenge-ladder`}>Open challenge ladder</Link>
+        </article>
+        <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
           <p style={{ color: "#475569" }}>Browse the public player directory and open profiles with ratings, records, and recent matches.</p>
           <Link href={`/clubs/${clubSlug}/players`}>Open players</Link>
