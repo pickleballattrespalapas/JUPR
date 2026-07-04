@@ -155,7 +155,7 @@ def request_public_tournament_registration_edit_link(
         registration_id=str(registration.get("id") or ""),
         email=clean_email,
     )
-    result = send_tournament_registration_edit_email(
+    send_tournament_registration_edit_email(
         tournament_name=_clean_text(tournament.get("name") or "Tournament"),
         registered_email=clean_email,
         edit_url=_edit_url(
@@ -166,10 +166,7 @@ def request_public_tournament_registration_edit_link(
             public_base_url=public_base_url,
         ),
     )
-    response = _generic_edit_link_response()
-    response["email_status"] = result.get("status")
-    response["provider_message_id"] = result.get("provider_message_id")
-    return response
+    return _generic_edit_link_response()
 
 
 def build_public_tournament_registration_edit_page(
