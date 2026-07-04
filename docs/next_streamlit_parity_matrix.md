@@ -62,7 +62,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile route naming with `/faq` and final product copy. |
 | `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist. | No | Public smoke + contract tests | Validate staging, then close chart/deep-link/printout parity gaps. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
-| `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist. | No | Public smoke + contract tests | Validate staging, then close Streamlit parity gaps for deep links and rating-impact chart. |
+| `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist. | No | Public smoke + contract tests | Validate staging, then close deep links and rating-impact chart parity. |
 | `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist. | No | Public smoke + contract tests | Add trophy room/badge/profile parity and improve search/deep links. |
 | `badge_codex` | 📼 Badge Codex | Public | `Partial` — public FastAPI badge/earner APIs and Next `/clubs/[clubSlug]/badge-codex` route exist. | No | Public smoke + contract tests | Validate staging, then close load-more/deep-link/trophy-room parity gaps. |
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
@@ -77,7 +77,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `email_preferences` | Email Preferences | Public hidden | `Not started` in Next app. | Preference write | Auth/tokenized preference gate | Port only after safe email preference tokens and unsubscribe rules are defined. |
 | `profile_privacy` | Profile Privacy | Public hidden | `Not started` in Next app. | Preference/request write TBD | Privacy workflow gate | Define privacy request flow before porting. |
 | `league_manager` | 🏟️ League Manager | Admin | `Not started` for full parity; listed in `/admin` operations cockpit. | Yes | Admin auth + match-write + audit gate | Port after score entry/corrections foundation; this is a major workflow. |
-| `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next Score Entry MVP and `/admin/match-uploader` manual/batch submit route exist; RR/new-player parity still pending. | Yes | Admin auth + club scope + audit + E2E | Validate manual/batch pilot, then add round-robin scheduling and new-player creation parity. |
+| `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next Score Entry MVP and `/admin/match-uploader` manual/batch, single round-robin preview, and new-player create-and-continue routes exist; auth-shell and quick-entry polish still pending. | Yes | Admin auth + club scope + audit + E2E | Validate manual/batch plus round-robin pilot, then add court quick-entry helpers and real admin session auth. |
 | `match_log` | 📝 Match Log | Admin | `Partial` — Next Match Log read, duplicate scan, guarded apply, duplicate cleanup, and Replay History foundation exist. | Yes | Admin auth + replay/correction audit gate | Validate closed-club pilot; add replay job history/approval if needed. |
 | `player_editor` | 👥 Player Editor | Admin | `Not started`; listed in `/admin` operations cockpit. | Yes | Admin auth + club scope + audit gate | Add player CRUD/merge APIs after match correction safety exists. |
 | `admin_tools` | ⚙️ Admin Tools | Admin | `Partial` — Replay History moved to `/admin/replay-history`; worker/backfill tooling still Streamlit-only. | Yes/high-risk | Super-admin-only + worker/backfill gate | Keep remaining worker/backfill operations Streamlit-only until hardened. |
@@ -118,7 +118,7 @@ Any admin workflow may fully move off Streamlit only when:
 9. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
 10. Validate Match Log apply + Replay History in the closed-club pilot.
 11. Validate Match Uploader manual/batch entry.
-12. Add Match Uploader round-robin scheduling and new-player creation parity.
+12. Validate Match Uploader round-robin scheduling and new-player creation parity in staging.
 13. Port Player Editor.
 14. Port League Manager.
 15. Port public tournament roster and partner board.
