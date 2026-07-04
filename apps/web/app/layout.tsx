@@ -64,20 +64,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </div>
             <nav style={navStyle} aria-label="Primary navigation">
               <Link href="/">Home</Link>
-              <Link href="/clubs/tres-palapas">Tres Palapas</Link>
+              <Link href="/clubs/tres-palapas">Club</Link>
               <Link href="/clubs/tres-palapas/live">Live</Link>
               <Link href="/clubs/tres-palapas/leaderboards">Leaderboards</Link>
-              <Link href="/clubs/tres-palapas/league-results">League Results</Link>
               <Link href="/clubs/tres-palapas/match-explorer">Match Explorer</Link>
-              <Link href="/clubs/tres-palapas/badge-codex">Badge Codex</Link>
-              <Link href="/clubs/tres-palapas/challenge-ladder">Challenge Ladder</Link>
               <Link href="/clubs/tres-palapas/weekly-recap">Weekly Recap</Link>
-              <Link href="/clubs/tres-palapas/tournament-registration">Tournament Registration</Link>
+              <Link href="/clubs/tres-palapas/tournament-registration">Register</Link>
+              <Link href="/clubs/tres-palapas/tournament-roster">Roster</Link>
+              <Link href="/clubs/tres-palapas/tournament-partner-board">Partner Board</Link>
               <Link href="/clubs/tres-palapas/players">Players</Link>
-              <Link href="/clubs/tres-palapas/matches">Matches</Link>
-              <Link href="/how-ratings-work">How ratings work</Link>
-              <Link href="/faq">FAQ</Link>
-              <Link href="/support">Support</Link>
               <Link href="/admin">Admin</Link>
             </nav>
           </header>
@@ -85,6 +80,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <footer style={footerStyle}>
             <span style={{ color: "#475569" }}>JUPR is the live ratings and event layer for pickleball clubs.</span>
             <nav style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }} aria-label="Footer navigation">
+              <Link href="/clubs/tres-palapas/league-results">League Results</Link>
+              <Link href="/clubs/tres-palapas/badge-codex">Badge Codex</Link>
+              <Link href="/clubs/tres-palapas/challenge-ladder">Challenge Ladder</Link>
+              <Link href="/clubs/tres-palapas/matches">Matches</Link>
+              <Link href="/how-ratings-work">How ratings work</Link>
+              <Link href="/faq">FAQ</Link>
               <Link href="/privacy">Privacy</Link>
               <Link href="/terms">Terms</Link>
               <Link href="/support">Contact</Link>

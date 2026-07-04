@@ -57,6 +57,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <Link href={`/clubs/${clubSlug}/leaderboards`}>View leaderboards</Link>
         </article>
         <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Match Explorer</h2>
+          <p style={{ color: "#475569" }}>Preview rating impact for potential doubles combinations using public-safe FastAPI projections.</p>
+          <Link href={`/clubs/${clubSlug}/match-explorer`}>Open match explorer</Link>
+        </article>
+        <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>League results</h2>
           <p style={{ color: "#475569" }}>Review league standings, weekly results, player summaries, and public-safe rating movement.</p>
           <Link href={`/clubs/${clubSlug}/league-results`}>Open league results</Link>
@@ -80,6 +85,16 @@ export default async function ClubPage({ params }: ClubPageProps) {
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Registration</h2>
           <p style={{ color: "#475569" }}>Register for published tournament divisions without exposing draw seeding, score entry, or admin tools.</p>
           <Link href={`/clubs/${clubSlug}/tournament-registration`}>Open tournament registration</Link>
+        </article>
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Roster</h2>
+          <p style={{ color: "#475569" }}>Browse public-safe tournament roster entries, summary cards, and open players-looking sections.</p>
+          <Link href={`/clubs/${clubSlug}/tournament-roster`}>Open tournament roster</Link>
+        </article>
+        <article style={cardStyle}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament Partner Board</h2>
+          <p style={{ color: "#475569" }}>View public-safe players looking for tournament pairings and use edit-token gated pairing interest when available.</p>
+          <Link href={`/clubs/${clubSlug}/tournament-partner-board`}>Open partner board</Link>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Players</h2>
