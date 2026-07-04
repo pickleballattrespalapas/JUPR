@@ -1,45 +1,50 @@
-# JUPR Web (Next.js public shell)
+# Pickleball Club Sandwich Web (Next.js public shell)
 
-This is the Next.js app for the public JUPR Leagues web surface. It is intended to serve `juprleagues.com` and club pages after the read-only FastAPI + Next.js path is proven in staging.
+This is the Next.js app for the public Pickleball Club Sandwich web surface. It is intended to serve `pickleballclubsandwich.com` as the primary domain, with `juprleagues.com` kept as a transitional alias while public naming is migrated.
 
 ## Current deployment posture
 
-The web app is **staging/read-only first**, with the admin migration now entering a controlled closed-club pilot posture.
+The web app is **public-first with guarded admin migration surfaces**.
 
-- Production Streamlit remains the trusted fallback runtime.
+- Production Streamlit remains the trusted admin fallback runtime during migration.
 - FastAPI supplies public read APIs, guarded public intake APIs, status-only admin migration APIs, and guarded admin endpoints.
 - Next.js renders public pages and the admin operations cockpit against FastAPI.
-- Next admin score entry remains disabled unless explicitly enabled for controlled staging or closed-club production-write pilot experiments.
+- Next admin write workflows remain disabled unless explicitly enabled for controlled staging or closed-club production-write pilot experiments.
 - Never put Supabase service-role keys, JWT secrets, or database credentials in Vercel/frontend environment variables.
 
 ## Routes
 
 Current public and staff-facing routes include:
 
-- `/` public JUPR landing page with SaaS pilot shell navigation.
+- `/` public product home.
+- `/site-map` public click-through route map.
 - `/clubs/[clubSlug]` club landing page.
 - `/clubs/[clubSlug]/leaderboards` public leaderboard page.
 - `/clubs/[clubSlug]/league-results` public league standings, weekly results, and season summaries.
 - `/clubs/[clubSlug]/badge-codex` public badge definitions, unlock paths, prestige, and recent badge earners.
 - `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.
 - `/clubs/[clubSlug]/weekly-recap` public published weekly recap with spotlight reel, around-the-club highlights, tournament podiums, print view, and PDF download.
-- `/clubs/[clubSlug]/tournament-registration` public tournament registration intake for published events.
+- `/clubs/[clubSlug]/tournament-registration` public tournament registration intake, including secure edit-link request.
 - `/clubs/[clubSlug]/tournament-registration/confirmation?registration_id=...` public registration confirmation page.
+- `/clubs/[clubSlug]/tournament-registration/edit?edit_token=...` tokenized registration edit page.
+- `/clubs/[clubSlug]/tournament-roster` public-safe tournament roster.
+- `/clubs/[clubSlug]/tournament-partner-board` public-safe tournament board with token-gated interest flow.
 - `/clubs/[clubSlug]/match-explorer` public matchup odds and projected rating movement preview.
 - `/clubs/[clubSlug]/players` public player directory.
 - `/clubs/[clubSlug]/players/[playerId]` public player profile.
+- `/clubs/[clubSlug]/players/[playerId]/matches` public player match history.
 - `/clubs/[clubSlug]/matches` public match history.
 - `/clubs/[clubSlug]/matches/[matchId]` public match detail.
-- `/clubs/[clubSlug]/live` public JUPR Live session list.
-- `/clubs/[clubSlug]/live/[sessionKey]` public JUPR Live detail.
+- `/clubs/[clubSlug]/live` public live-session list.
+- `/clubs/[clubSlug]/live/[sessionKey]` public live-session detail.
 - `/how-ratings-work` public ratings explainer.
-- `/faq` public JUPR rating FAQ.
-- `/privacy` first-party privacy notice placeholder pending legal review.
-- `/terms` first-party terms placeholder pending legal review.
-- `/support` and `/contact` support/contact shell.
+- `/faq` public rating FAQ.
+- `/privacy` first-party privacy policy copy.
+- `/terms` first-party terms copy.
+- `/support` and `/contact` support/contact shell routed to `joe@juprleagues.com`.
 - `/data-corrections` public correction intake instructions with no direct mutation.
 - `/admin` staff operations cockpit for the Streamlit-to-Next migration.
-- `/admin/match-log` staff Match Log planning page with read filters, duplicate scan, and replay guidance.
+- `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, and `/admin/league-manager` guarded staff migration surfaces.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
 
 ## Environment variables
@@ -51,6 +56,10 @@ Use one of the following API base URL variables:
 - `NEXT_PUBLIC_JUPR_ENV` (optional; set to `staging` to show a staging badge)
 - `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
 
+Use this public web URL variable for metadata and sitemap generation:
+
+- `NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com`
+
 The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI.
 
 Example:
@@ -58,6 +67,7 @@ Example:
 ```bash
 export JUPR_API_BASE_URL=http://localhost:8000
 export NEXT_PUBLIC_JUPR_API_BASE_URL=http://localhost:8000
+export NEXT_PUBLIC_JUPR_WEB_BASE_URL=http://localhost:3000
 ```
 
 See `.env.example` for the local/staging template.
@@ -74,9 +84,9 @@ Then open `http://localhost:3000`.
 
 If the API is unavailable, pages should render graceful empty/error states instead of crashing.
 
-## Vercel staging deployment
+## Vercel staging and production deployment
 
-Use a separate Vercel project or staging environment before any custom-domain cutover.
+Use a separate Vercel project or staging environment before custom-domain cutover.
 
 Recommended Vercel settings:
 
@@ -91,8 +101,15 @@ Required staging web environment variables:
 ```bash
 JUPR_API_BASE_URL=<staging FastAPI URL>
 NEXT_PUBLIC_JUPR_API_BASE_URL=<staging FastAPI URL>
+NEXT_PUBLIC_JUPR_WEB_BASE_URL=<staging Vercel URL>
 NEXT_PUBLIC_JUPR_ENV=staging
 NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
+```
+
+Production web environment variables should use the primary domain after Vercel verification:
+
+```bash
+NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com
 ```
 
 Do **not** configure `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel.
