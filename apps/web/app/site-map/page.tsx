@@ -35,7 +35,6 @@ const sections = [
     routes: [
       ["Registration", "/clubs/tres-palapas/tournament-registration", "Public tournament intake and edit-link request."],
       ["Roster", "/clubs/tres-palapas/tournament-roster", "Public-safe tournament roster."],
-      ["Board", "/clubs/tres-palapas/tournament-partner-board", "Public-safe tournament board for players looking for doubles pairings."],
       ["Registration confirmation", "/clubs/tres-palapas/tournament-registration/confirmation", "Confirmation route after registration submit."],
       ["Registration edit", "/clubs/tres-palapas/tournament-registration/edit", "Secure edit-link route; requires token query parameter."],
       ["Support", "/support", "Support and help handoff."]
