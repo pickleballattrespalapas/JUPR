@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { getClubTournamentRoster } from "@/lib/tournamentRegistrationApi";
+import { getClubTournamentRegistrationEdit, getClubTournamentRoster } from "@/lib/tournamentRegistrationApi";
+import PairingInterestPanel from "./PairingInterestPanel";
 
 type TournamentPartnerBoardPageProps = {
   params: { clubSlug: string };
-  searchParams?: { tournament?: string; tournament_id?: string };
+  searchParams?: { tournament?: string; tournament_id?: string; edit_token?: string };
 };
 
 const cardStyle = {
@@ -13,25 +14,38 @@ const cardStyle = {
   background: "white"
 };
 
-function queryFor(tournamentId?: string | null, registrationSlug?: string | null): string {
+function queryFor(tournamentId?: string | null, registrationSlug?: string | null, editToken?: string | null): string {
   const query = new URLSearchParams();
   if (registrationSlug) query.set("tournament", registrationSlug);
   else if (tournamentId) query.set("tournament_id", tournamentId);
+  if (editToken) query.set("edit_token", editToken);
   const text = query.toString();
   return text ? `?${text}` : "";
 }
 
 export default async function TournamentPartnerBoardPage({ params, searchParams }: TournamentPartnerBoardPageProps) {
   const { clubSlug } = params;
-  const { data, error } = await getClubTournamentRoster(clubSlug, {
-    registrationSlug: searchParams?.tournament ?? null,
-    tournamentId: searchParams?.tournament_id ?? null
-  });
+  const editToken = searchParams?.edit_token || "";
+  const [{ data, error }, editResponse] = await Promise.all([
+    getClubTournamentRoster(clubSlug, {
+      registrationSlug: searchParams?.tournament ?? null,
+      tournamentId: searchParams?.tournament_id ?? null
+    }),
+    editToken
+      ? getClubTournamentRegistrationEdit(clubSlug, {
+          editToken,
+          registrationSlug: searchParams?.tournament ?? null,
+          tournamentId: searchParams?.tournament_id ?? null
+        })
+      : Promise.resolve({ data: null, error: null })
+  ]);
 
   const tournament = data?.tournament;
   const settings = data?.settings;
   const partnerEntries = data?.roster?.players_needing_partners ?? [];
   const query = queryFor(tournament?.id, settings?.registration_slug);
+  const queryWithEdit = queryFor(tournament?.id, settings?.registration_slug, editToken || null);
+  const apiBase = process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 
   return (
     <section>
@@ -40,10 +54,11 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
       </p>
       <h1 style={{ marginTop: 0 }}>{tournament?.name ?? "Partner board"}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Public read-only partner board for players who registered as needing a partner. Contact details and request/accept actions are intentionally not exposed in this slice.
+        Public partner board for players who registered as needing a partner. Contact details are not exposed; sending pairing interest requires your secure registration edit link.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Partner board is temporarily unavailable. {error}</p> : null}
+      {editResponse.error ? <p style={{ color: "#b91c1c" }}>Your edit link could not be verified for pairing actions. {editResponse.error}</p> : null}
       {data?.setup_error ? <p style={{ color: "#b91c1c" }}>{data.setup_error}</p> : null}
       {!error && data && !tournament ? <p>{data.empty_reason || "No tournament partner board is currently published."}</p> : null}
 
@@ -75,6 +90,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
         <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Open registration</Link>
           <Link href={`/clubs/${clubSlug}/tournament-roster${query}`}>Open roster</Link>
+          {!editToken ? <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Request edit link to send interest</Link> : null}
         </p>
       ) : null}
 
@@ -96,6 +112,17 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
                 {entry.age_bracket ? <><dt style={{ fontWeight: 800 }}>Age bracket</dt><dd style={{ margin: 0 }}>{entry.age_bracket}</dd></> : null}
                 {entry.note ? <><dt style={{ fontWeight: 800 }}>Note</dt><dd style={{ margin: 0 }}>{entry.note}</dd></> : null}
               </dl>
+              {editToken && editResponse.data && tournament ? (
+                <PairingInterestPanel
+                  apiBase={apiBase}
+                  clubSlug={clubSlug}
+                  tournamentId={tournament.id}
+                  registrationSlug={settings?.registration_slug ?? null}
+                  editToken={editToken}
+                  requesterSelections={editResponse.data.selections ?? []}
+                  boardEntries={[entry]}
+                />
+              ) : null}
             </article>
           ))}
         </div>
@@ -103,6 +130,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>No open partner requests</h2>
           <p style={{ color: "#475569" }}>There are no public partner-board entries for this tournament yet.</p>
+          {editToken ? <Link href={`/clubs/${clubSlug}/tournament-partner-board${queryWithEdit}`}>Refresh board</Link> : null}
         </article>
       ) : null}
     </section>
