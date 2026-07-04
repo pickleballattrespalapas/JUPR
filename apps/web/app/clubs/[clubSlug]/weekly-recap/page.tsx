@@ -170,7 +170,7 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
           </p>
           <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} weekly recap</h1>
           <p style={{ color: "#334155", maxWidth: "820px" }}>
-            Published club-wide highlights, weekly numbers, spotlight reels, tournament podiums, and looking-ahead notes. Draft generation and publishing remain in Streamlit admin.
+            Published club-wide highlights, weekly numbers, spotlight reels, tournament podiums, and looking-ahead notes.
           </p>
         </>
       ) : null}
@@ -206,7 +206,7 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
                 </div>
               </div>
             </div>
-          ) : <h1>{data?.club.name ?? "JUPR"} Weekly Recap — {dateRangeLabel(selected.recap)}</h1>}
+          ) : <h1>{data?.club.name ?? "Club"} Weekly Recap — {dateRangeLabel(selected.recap)}</h1>}
           <RecapBody recap={selected.recap} />
         </>
       ) : null}
