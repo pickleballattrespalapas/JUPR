@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test the read-only JUPR public SaaS surface.
+"""Smoke-test the read-only Pickleball Club Sandwich public SaaS surface.
 
 The script is intentionally dependency-free so it can run from a laptop,
 GitHub Actions, or a deployment shell before a Vercel/custom-domain cutover.
@@ -80,8 +80,8 @@ def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
     started = time.perf_counter()
     data = check.body.encode("utf-8") if check.body is not None else None
     headers = {
-        "User-Agent": "jupr-public-smoke/1.0",
-        "Accept": "application/json,text/html;q=0.9,*/*;q=0.8",
+        "User-Agent": "public-web-smoke/1.0",
+        "Accept": "application/json,text/html,application/xml,text/xml;q=0.9,*/*;q=0.8",
     }
     if data is not None:
         headers["Content-Type"] = "application/json"
@@ -192,6 +192,8 @@ def _build_checks(
     if web_base_url:
         for label, path in [
             ("web: home", "/"),
+            ("web: sitemap xml", "/sitemap.xml"),
+            ("web: site map", "/site-map"),
             ("web: admin operations", "/admin"),
             ("web: admin match log", "/admin/match-log"),
             ("web: admin replay", "/admin/replay-history"),
@@ -216,6 +218,7 @@ def _build_checks(
             ("web: privacy", "/privacy"),
             ("web: terms", "/terms"),
             ("web: support", "/support"),
+            ("web: contact", "/contact"),
             ("web: data corrections", "/data-corrections"),
         ]:
             checks.append(SmokeCheck(label, _join_url(web_base_url, path), (200,)))
