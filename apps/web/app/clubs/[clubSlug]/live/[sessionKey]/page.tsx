@@ -26,7 +26,7 @@ export default async function ClubLiveSessionPage({ params, searchParams }: Live
     return (
       <section style={{ maxWidth: "760px" }}>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          JUPR Live
+          Live Events
         </p>
         <h1>Live session unavailable</h1>
         <p style={{ color: "#b91c1c" }}>We could not load this live session. {error}</p>
@@ -38,7 +38,7 @@ export default async function ClubLiveSessionPage({ params, searchParams }: Live
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        {clubName} · JUPR Live
+        {clubName} · Live Events
       </p>
       <LiveSessionRunner
         apiBase={apiBase()}

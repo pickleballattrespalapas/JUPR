@@ -26,7 +26,7 @@ function formatTimestamp(value?: string | null): string {
 
 function eventTypeLabel(value?: string | null): string {
   const normalized = String(value || "").replace(/_/g, " ").trim();
-  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "JUPR Live";
+  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Live Event";
 }
 
 export default async function ClubLivePage({ params }: LivePageProps) {
@@ -39,11 +39,11 @@ export default async function ClubLivePage({ params }: LivePageProps) {
     <section>
       <div style={{ marginBottom: "1.25rem" }}>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          JUPR Live
+          Live Events
         </p>
         <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.2rem", lineHeight: 1.1 }}>{clubName} live sessions</h1>
         <p style={{ color: "#334155", marginTop: 0 }}>
-          Start a public JUPR Live round robin, enter scores, and share the live scoreboard. Admin scoring remains separate for official rated events.
+          Start a public live round robin, enter scores, and share the live scoreboard. Admin scoring remains separate for official rated events.
         </p>
       </div>
 
@@ -57,7 +57,7 @@ export default async function ClubLivePage({ params }: LivePageProps) {
         <div style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No shared live sessions right now</h2>
           <p style={{ color: "#475569" }}>
-            Create a public JUPR Live event above, or open a shared session link from an organizer.
+            Create a public live event above, or open a shared session link from an organizer.
           </p>
           <Link href={`/clubs/${clubSlug}/leaderboards`}>View leaderboards instead</Link>
         </div>

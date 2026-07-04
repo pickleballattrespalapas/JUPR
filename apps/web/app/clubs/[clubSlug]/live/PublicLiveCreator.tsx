@@ -14,7 +14,7 @@ function apiUrl(apiBase: string, path: string): string {
 }
 
 export default function PublicLiveCreator({ apiBase, clubSlug }: PublicLiveCreatorProps) {
-  const [eventName, setEventName] = useState("JUPR Live Round Robin");
+  const [eventName, setEventName] = useState("Live Round Robin");
   const [participantText, setParticipantText] = useState(defaultNames);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +60,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug }: PublicLiveCreat
 
   return (
     <section style={{ border: "1px solid #bfdbfe", borderRadius: "14px", padding: "1rem", background: "#eff6ff", marginBottom: "1rem" }}>
-      <h2 style={{ marginTop: 0, fontSize: "1.2rem" }}>Start your own JUPR Live event</h2>
+      <h2 style={{ marginTop: 0, fontSize: "1.2rem" }}>Start your own live event</h2>
       <p style={{ color: "#334155" }}>
         Create a public round robin, enter scores from this browser, and share the scoreboard link with players.
       </p>
