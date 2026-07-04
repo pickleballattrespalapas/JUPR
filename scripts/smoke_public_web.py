@@ -206,6 +206,7 @@ def _build_checks(
             ("web: weekly recap", f"/clubs/{club_slug}/weekly-recap"),
             ("web: tournament registration", f"/clubs/{club_slug}/tournament-registration"),
             ("web: tournament roster", f"/clubs/{club_slug}/tournament-roster"),
+            ("web: tournament partner board", f"/clubs/{club_slug}/tournament-partner-board"),
             ("web: match explorer", f"/clubs/{club_slug}/match-explorer"),
             ("web: players", f"/clubs/{club_slug}/players"),
             ("web: matches", f"/clubs/{club_slug}/matches"),
