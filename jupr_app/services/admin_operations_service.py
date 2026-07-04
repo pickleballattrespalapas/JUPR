@@ -80,6 +80,23 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         ),
     ),
     AdminWorkflowDefinition(
+        key="replay_history",
+        label="Replay History",
+        streamlit_page_key="admin_tools",
+        next_route="/admin/replay-history",
+        api_scope="replay_snapshots_league_ratings_overall_reset",
+        access="super_admin",
+        risk="critical",
+        env_flag="JUPR_ENABLE_NEXT_ADMIN_REPLAY",
+        status_when_disabled="streamlit_fallback",
+        next_action="Use after Match Log edits/cleanup to rebuild snapshots and ratings through Python replay_history.",
+        safety_notes=(
+            "Requires Supabase JWT auth with run_replay permission.",
+            "League replay rebuilds snapshots and league_ratings for selected league.",
+            "Full reset updates overall player stats and should stay tightly controlled.",
+        ),
+    ),
+    AdminWorkflowDefinition(
         key="score_entry",
         label="Score Entry MVP",
         streamlit_page_key="match_uploader",
@@ -172,16 +189,16 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
     ),
     AdminWorkflowDefinition(
         key="admin_tools",
-        label="Admin Tools / Replay / Workers",
+        label="Admin Tools / Workers / Backfills",
         streamlit_page_key="admin_tools",
         next_route="/admin/tools",
-        api_scope="diagnostics_replay_badge_workers_backfills",
+        api_scope="diagnostics_badge_workers_backfills",
         access="super_admin",
         risk="critical",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_TOOLS",
         status_when_disabled="streamlit_only",
-        next_action="Keep Streamlit-only until job, replay, and super-admin authorization contracts are hardened.",
-        safety_notes=("Includes replay, backfill, and worker operations that can affect large data ranges.",),
+        next_action="Keep Streamlit-only until job and super-admin authorization contracts are hardened.",
+        safety_notes=("Includes backfill and worker operations that can affect large data ranges.",),
     ),
 )
 
@@ -222,6 +239,7 @@ def build_admin_operations_status() -> dict[str, Any]:
         "recommended_sequence": [
             "admin_shell",
             "match_log",
+            "replay_history",
             "score_entry",
             "match_uploader",
             "player_editor",
