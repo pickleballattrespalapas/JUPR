@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
+from jupr_app.domain.notifications.tournament_pairing_interest_email import send_pairing_interest_emails
 from jupr_app.domain.tournament_partner_service import create_partner_request
-from jupr_app.services.public_tournament_registration_edit_service import _verified_bundle
+from jupr_app.services.public_tournament_registration_edit_service import _public_web_base_url, _verified_bundle
 from jupr_app.services.public_tournament_registration_service import _clean_text, _safe_bool
 
 
@@ -39,10 +41,20 @@ def _event_by_id(supabase: Any, event_option_id: str) -> dict[str, Any] | None:
     )
 
 
+def _tournament_by_id(supabase: Any, tournament_id: str) -> dict[str, Any] | None:
+    return _safe_first(
+        supabase.table("tournaments")
+        .select("id,name")
+        .eq("id", str(tournament_id))
+        .limit(1)
+        .execute()
+    )
+
+
 def _registration_by_id(supabase: Any, registration_id: str) -> dict[str, Any] | None:
     return _safe_first(
         supabase.table("tournament_registrations")
-        .select("id,display_name,first_name,last_name,player_id")
+        .select("id,display_name,first_name,last_name,player_id,email")
         .eq("id", str(registration_id))
         .limit(1)
         .execute()
@@ -73,6 +85,16 @@ def _is_public_partner_board_target(selection: dict[str, Any], event: dict[str, 
     return True
 
 
+def _board_url(*, club_slug: str, tournament_id: str, registration_slug: str | None = None) -> str:
+    query: dict[str, str] = {}
+    if _clean_text(registration_slug, limit=120):
+        query["tournament"] = _clean_text(registration_slug, limit=120)
+    else:
+        query["tournament_id"] = str(tournament_id)
+    suffix = f"?{urlencode(query)}" if query else ""
+    return f"{_public_web_base_url()}/clubs/{_clean_text(club_slug, limit=120) or 'tres-palapas'}/tournament-partner-board{suffix}"
+
+
 def _generic_honeypot_response() -> dict[str, Any]:
     return {
         "ok": True,
@@ -91,6 +113,7 @@ def create_public_tournament_partner_request(
     target_selection_id: str,
     tournament_id: str | None = None,
     website: str | None = None,
+    club_slug: str = "tres-palapas",
 ) -> dict[str, Any]:
     """Create a pending partner request from a token-verified requester.
 
@@ -109,6 +132,7 @@ def create_public_tournament_partner_request(
     )
     tid = str(verified.get("tournament_id") or "").strip()
     registration = bundle.get("registration") or {}
+    settings = bundle.get("settings") or {}
     selections = bundle.get("selections") or []
     requester_selection_id = _clean_text(requester_selection_id, limit=160)
     target_selection_id = _clean_text(target_selection_id, limit=160)
@@ -136,6 +160,8 @@ def create_public_tournament_partner_request(
         raise ValueError("Target partner-board entry is no longer available.")
 
     target_registration = _registration_by_id(supabase, str(target_selection.get("registration_id") or ""))
+    target_name = _display_name(target_registration)
+    requester_name = _display_name(registration)
     created = create_partner_request(
         supabase,
         tournament_id=tid,
@@ -143,8 +169,17 @@ def create_public_tournament_partner_request(
         requester_selection_id=requester_selection_id,
         target_selection_id=target_selection_id,
         target_player_id=target_selection.get("player_id"),
-        target_display_name_snapshot=_display_name(target_registration),
+        target_display_name_snapshot=target_name,
         source="PUBLIC_PARTNER_BOARD",
+    )
+    tournament = _tournament_by_id(supabase, tid) or {}
+    notifications = send_pairing_interest_emails(
+        tournament_name=_clean_text(tournament.get("name") or "Tournament"),
+        division_name=_clean_text((event or {}).get("label") or (event or {}).get("division_name") or "Division"),
+        requester_name=requester_name,
+        target_name=target_name,
+        target_email=_clean_text((target_registration or {}).get("email")),
+        board_url=_board_url(club_slug=club_slug, tournament_id=tid, registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or None),
     )
     return {
         "ok": True,
@@ -154,5 +189,6 @@ def create_public_tournament_partner_request(
         "event_option_id": str(created.get("event_option_id") or ""),
         "requester_selection_id": str(created.get("requester_selection_id") or ""),
         "target_selection_id": str(created.get("target_selection_id") or ""),
+        "notification_status": {key: value.get("status") for key, value in notifications.items()},
         "message": "Partner request submitted.",
     }

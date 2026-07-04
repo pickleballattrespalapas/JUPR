@@ -45,6 +45,7 @@ def install_public_tournament_pairing_routes(
             result = _submit_pairing_interest(
                 supabase,
                 club_id=club_id,
+                club_slug=club_slug,
                 edit_token=payload.edit_token,
                 tournament_id=payload.tournament_id,
                 requester_selection_id=payload.requester_selection_id,
