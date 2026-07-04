@@ -29,4 +29,4 @@ jobs:
 
       - name: Run API contract tests
         run: |
-          python -m pytest -q tests/test_api_health.py tests/test_api_contract_clubs.py tests/test_api_contract_leaderboards.py tests/test_api_admin_score_entry_disabled.py
+          python -m pytest -q tests/test_api_health.py tests/test_api_contract_*.py tests/test_api_admin_score_entry_disabled.py
