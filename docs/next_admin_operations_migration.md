@@ -60,13 +60,14 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 3. Guarded Match Log apply and duplicate cleanup.
 4. Replay History.
 5. Score Entry MVP.
-6. Full Match Uploader parity.
-7. Player Editor.
-8. League Manager.
-9. Challenge Ladder Admin.
-10. Tournament Admin/Ops.
-11. Weekly Recap Admin.
-12. Admin Tools, workers, and backfills.
+6. Match Uploader manual/batch score entry.
+7. Match Uploader round-robin scheduling and new-player creation.
+8. Player Editor.
+9. League Manager.
+10. Challenge Ladder Admin.
+11. Tournament Admin/Ops.
+12. Weekly Recap Admin.
+13. Admin Tools, workers, and backfills.
 
 ## Enablement checklist
 
@@ -81,7 +82,7 @@ Before enabling a write workflow for staff use:
 - Confirm Streamlit fallback remains available.
 - Run API contract tests and the public/staff smoke checks against staging or the pilot deployment.
 
-## Match Log and replay foundation
+## Match Log, replay, and uploader foundation
 
 The first serious admin migration target is Match Log, not broad score entry. Once Next can enter or mutate operational data, it must also be able to inspect, correct, and replay mistakes.
 
@@ -92,7 +93,8 @@ Current migrated slices include:
 - audited match edit apply,
 - audited duplicate cleanup,
 - server-side Replay History endpoint and page,
-- role-gated replay execution through the Python replay domain function.
+- role-gated replay execution through the Python replay domain function,
+- Match Uploader manual/batch entry through FastAPI and the Python match-processing path.
 
 ## Notes
 
