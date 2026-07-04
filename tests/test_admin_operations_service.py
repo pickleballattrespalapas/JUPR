@@ -7,6 +7,8 @@ def test_admin_operations_status_defaults_to_guarded_mode(monkeypatch) -> None:
     for name in [
         "JUPR_ENV",
         "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
         "JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY",
         "JUPR_REQUIRE_API_AUDIT_LOG",
         "SUPABASE_SERVICE_ROLE_KEY",
@@ -22,7 +24,8 @@ def test_admin_operations_status_defaults_to_guarded_mode(monkeypatch) -> None:
     assert payload["strict_audit_required"] is False
     assert payload["service_role_configured"] is False
     assert payload["workflows"]
-    assert any(workflow["key"] == "match_log" for workflow in payload["workflows"])
+    workflows = {workflow["key"]: workflow for workflow in payload["workflows"]}
+    assert workflows["match_log"]["apply_enabled"] is False
     assert any("No Supabase service-role" in item for item in payload["permanent_guardrails"])
 
 
@@ -30,6 +33,7 @@ def test_admin_operations_status_exposes_enabled_pilot_flags(monkeypatch) -> Non
     monkeypatch.setenv("JUPR_ENV", "production")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT", "1")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "true")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "true")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "yes")
     monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "configured")
@@ -47,6 +51,8 @@ def test_admin_operations_status_exposes_enabled_pilot_flags(monkeypatch) -> Non
 
     workflows = {workflow["key"]: workflow for workflow in payload["workflows"]}
     assert workflows["match_log"]["enabled"] is True
+    assert workflows["match_log"]["apply_env_flag"] == "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY"
+    assert workflows["match_log"]["apply_enabled"] is True
     assert workflows["match_log"]["effective_status"] == "enabled_for_pilot"
     assert workflows["score_entry"]["enabled"] is True
     assert workflows["admin_tools"]["requires_review_before_enablement"] is True
