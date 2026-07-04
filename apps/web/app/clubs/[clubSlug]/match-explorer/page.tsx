@@ -28,7 +28,7 @@ export default async function MatchExplorerPage({ params }: MatchExplorerPagePro
       </p>
       <h1 style={{ marginTop: 0 }}>{club?.name ?? clubSlug} matchup preview</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Preview doubles win odds and projected JUPR movement before anything is saved. This page calls the public FastAPI preview service and keeps the rating formula in Python.
+        Preview doubles win odds and projected rating movement before anything is saved. This page calls the public FastAPI preview service and keeps the rating formula in Python.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Match Explorer data is temporarily unavailable. {error}</p> : null}

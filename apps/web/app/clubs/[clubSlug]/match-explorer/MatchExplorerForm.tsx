@@ -26,8 +26,8 @@ function percentLabel(value?: number | null): string {
 
 function deltaLabel(value?: number | null): string {
   if (value == null || Number.isNaN(Number(value))) return "—";
-  const jupr = Number(value) / 400;
-  return `${jupr >= 0 ? "+" : ""}${jupr.toFixed(4)}`;
+  const delta = Number(value) / 400;
+  return `${delta >= 0 ? "+" : ""}${delta.toFixed(4)}`;
 }
 
 function playerName(players: PublicPlayer[], id: string): string {
@@ -39,7 +39,7 @@ function TeamSummary({ title, team }: { title: string; team: MatchExplorerPrevie
     <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" }}>
       <h3 style={{ marginTop: 0 }}>{title}</h3>
       <p style={{ margin: "0 0 0.5rem", color: "#475569" }}>
-        Average JUPR: <strong>{ratingLabel(team.average_rating)}</strong>
+        Average rating: <strong>{ratingLabel(team.average_rating)}</strong>
       </p>
       <ul style={{ marginBottom: 0 }}>
         {team.players.map((player) => (
