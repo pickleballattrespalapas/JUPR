@@ -35,7 +35,7 @@ export default async function ClubLeaderboardPage({ params }: LeaderboardPagePro
               <tr>
                 <th style={thStyle}>Rank</th>
                 <th style={thStyle}>Player</th>
-                <th style={thStyle}>JUPR</th>
+                <th style={thStyle}>Rating</th>
                 <th style={thStyle}>Matches</th>
                 <th style={thStyle}>W/L</th>
               </tr>
