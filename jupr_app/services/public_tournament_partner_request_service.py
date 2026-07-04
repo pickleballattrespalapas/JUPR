@@ -85,14 +85,14 @@ def _is_public_partner_board_target(selection: dict[str, Any], event: dict[str, 
     return True
 
 
-def _board_url(*, tournament_id: str, registration_slug: str | None = None) -> str:
+def _board_url(*, club_slug: str, tournament_id: str, registration_slug: str | None = None) -> str:
     query: dict[str, str] = {}
     if _clean_text(registration_slug, limit=120):
         query["tournament"] = _clean_text(registration_slug, limit=120)
     else:
         query["tournament_id"] = str(tournament_id)
     suffix = f"?{urlencode(query)}" if query else ""
-    return f"{_public_web_base_url()}/clubs/tres-palapas/tournament-partner-board{suffix}"
+    return f"{_public_web_base_url()}/clubs/{_clean_text(club_slug, limit=120) or 'tres-palapas'}/tournament-partner-board{suffix}"
 
 
 def _generic_honeypot_response() -> dict[str, Any]:
@@ -113,6 +113,7 @@ def create_public_tournament_partner_request(
     target_selection_id: str,
     tournament_id: str | None = None,
     website: str | None = None,
+    club_slug: str = "tres-palapas",
 ) -> dict[str, Any]:
     """Create a pending partner request from a token-verified requester.
 
@@ -178,7 +179,7 @@ def create_public_tournament_partner_request(
         requester_name=requester_name,
         target_name=target_name,
         target_email=_clean_text((target_registration or {}).get("email")),
-        board_url=_board_url(tournament_id=tid, registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or None),
+        board_url=_board_url(club_slug=club_slug, tournament_id=tid, registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or None),
     )
     return {
         "ok": True,
