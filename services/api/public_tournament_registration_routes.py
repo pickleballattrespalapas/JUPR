@@ -11,6 +11,7 @@ from jupr_app.services.public_tournament_registration_service import (
     build_public_tournament_registration_page,
     submit_public_tournament_registration,
 )
+from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
 
 
 class PublicTournamentRegistrationRequest(BaseModel):
@@ -53,6 +54,23 @@ def install_public_tournament_registration_routes(
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         page = build_public_tournament_registration_page(
+            supabase,
+            club_id=club_id,
+            tournament_id=tournament_id,
+            registration_slug=registration_slug,
+        )
+        return {"club": public_club_payload(club, club_slug), **page}
+
+    @app.get("/clubs/{club_slug}/tournament-roster")
+    def get_club_tournament_roster(
+        club_slug: str,
+        tournament_id: str | None = Query(default=None),
+        registration_slug: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        page = build_public_tournament_roster_page(
             supabase,
             club_id=club_id,
             tournament_id=tournament_id,

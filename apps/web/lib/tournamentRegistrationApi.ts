@@ -75,6 +75,77 @@ export type TournamentRegistrationResponse = {
   } | null;
 };
 
+export type PublicTournamentRosterMember = {
+  registration_id?: string | null;
+  selection_id?: string | null;
+  player_id?: string | number | null;
+  display_name: string;
+  skill?: string | number | null;
+  age?: number | null;
+  age_bracket?: string | null;
+  dupr_id?: string | null;
+};
+
+export type PublicTournamentRosterEntry = {
+  event_day_id?: string | null;
+  event_day_label?: string | null;
+  event_family: string;
+  division: string;
+  event_label: string;
+  status?: string | null;
+  entry_type?: string | null;
+  partner_request_id?: string | null;
+  partner_link_id?: string | null;
+  source_registration_ids?: string[];
+  source_selection_ids?: string[];
+  source_player_ids?: Array<string | number>;
+  members: PublicTournamentRosterMember[];
+};
+
+export type PublicTournamentNeedsPartnerEntry = {
+  player_name?: string | null;
+  selection_id?: string | null;
+  registration_id?: string | null;
+  player_id?: string | number | null;
+  event_option_id?: string | null;
+  event_day_label?: string | null;
+  event_family?: string | null;
+  division?: string | null;
+  event_label?: string | null;
+  skill?: string | number | null;
+  age?: number | null;
+  age_bracket?: string | null;
+  note?: string | null;
+};
+
+export type PublicTournamentRosterState = {
+  registrations_by_event: PublicTournamentRosterEntry[];
+  confirmed_teams: PublicTournamentRosterEntry[];
+  pending_partner_requests: PublicTournamentRosterEntry[];
+  unresolved_partner_entries: PublicTournamentRosterEntry[];
+  players_needing_partners: PublicTournamentNeedsPartnerEntry[];
+  summary: {
+    total_registrations?: number | null;
+    total_players?: number | null;
+    players_needing_partners?: number | null;
+    waitlist?: number | null;
+  };
+};
+
+export type TournamentRosterResponse = {
+  club: { id: string; slug: string; name: string };
+  available: boolean;
+  setup_error?: string | null;
+  tournaments: PublicTournamentChoice[];
+  tournament?: PublicTournamentSummary | null;
+  settings?: PublicTournamentSettings | null;
+  days: PublicRegistrationDay[];
+  events: PublicRegistrationEvent[];
+  roster?: PublicTournamentRosterState | null;
+  summary?: PublicTournamentRosterState["summary"] | null;
+  empty_reason?: string | null;
+};
+
 export type PublicRegistrationSelectionPayload = {
   event_option_id: string;
   registration_day_id?: string | null;
@@ -192,6 +263,17 @@ export async function getClubTournamentRegistration(
   if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return fetchJson<TournamentRegistrationResponse>(`/clubs/${clubSlug}/tournament-registration${suffix}`);
+}
+
+export async function getClubTournamentRoster(
+  clubSlug: string,
+  params?: { tournamentId?: string | null; registrationSlug?: string | null }
+): Promise<ApiResult<TournamentRosterResponse>> {
+  const query = new URLSearchParams();
+  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
+  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return fetchJson<TournamentRosterResponse>(`/clubs/${clubSlug}/tournament-roster${suffix}`);
 }
 
 export async function submitClubTournamentRegistration(
