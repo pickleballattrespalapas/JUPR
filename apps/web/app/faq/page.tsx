@@ -9,16 +9,16 @@ const cardStyle = {
 
 const faqItems = [
   {
-    question: "What is a JUPR rating?",
-    answer: "JUPR is Tres Palapas’ in-house pickleball rating used to create better matchups, seed events, and keep leveled play fair. It is displayed on a 1.000–7.000 scale."
+    question: "What is a club rating?",
+    answer: "Pickleball Club Sandwich supports club-specific pickleball ratings used to create better matchups, seed events, and keep leveled play fair. Ratings are displayed on a 1.000–7.000 scale."
   },
   {
-    question: "How do I get a JUPR rating?",
-    answer: "You get a rating after recorded matches in JUPR-eligible play. Your first recorded results may move your rating more quickly while the system learns your level."
+    question: "How do I get a rating?",
+    answer: "You get a rating after recorded eligible matches. Your first recorded results may move your rating more quickly while the system learns your level."
   },
   {
-    question: "What matches count toward JUPR?",
-    answer: "Official JUPR ladders, JUPR round robins, league matches, and tournaments with official score entry can count. Open play, drills, clinics, and social play do not count unless explicitly recorded as JUPR-eligible."
+    question: "What matches count?",
+    answer: "Official ladders, round robins, league matches, and tournaments with official score entry can count. Open play, drills, clinics, and social play do not count unless explicitly recorded as eligible."
   },
   {
     question: "What affects rating movement?",
@@ -33,12 +33,12 @@ const faqItems = [
     answer: "No. A win is rewarded, though a win that is far below expectation may result in only minimal movement."
   },
   {
-    question: "How does JUPR work for doubles?",
+    question: "How does the system work for doubles?",
     answer: "Doubles results update each individual player. The system evaluates the strength of both teams, then adjusts each player based on the outcome and score."
   },
   {
-    question: "What is the difference between Overall and League JUPR?",
-    answer: "Overall JUPR reflects recorded eligible play across the club. League JUPR reflects a specific league or series when that context is shown."
+    question: "What is the difference between overall and league ratings?",
+    answer: "Overall rating reflects recorded eligible play across the club. League rating reflects a specific league or series when that context is shown."
   },
   {
     question: "What if a score was entered wrong?",
@@ -52,9 +52,9 @@ export default function FaqPage() {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         FAQ
       </p>
-      <h1 style={{ marginTop: 0 }}>JUPR rating FAQs</h1>
+      <h1 style={{ marginTop: 0 }}>Rating FAQs</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Answers about JUPR ratings, recorded play, player movement, and how to request a correction.
+        Answers about ratings, recorded play, player movement, and how to request a correction.
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
