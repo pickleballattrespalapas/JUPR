@@ -21,7 +21,7 @@ export default async function AdminMatchUploaderPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Match Uploader</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Next/FastAPI manual and batch score entry for the closed-club admin pilot. This replaces the Streamlit manual batch path first; round-robin schedule generation and new-player creation remain follow-up slices.
+        Next/FastAPI score entry for the closed-club admin pilot, including manual batches, single round-robin schedule generation, and the new-player create-and-continue flow from Streamlit.
       </p>
 
       {playersError ? <p style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
@@ -31,7 +31,7 @@ export default async function AdminMatchUploaderPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
           <article style={cardStyle}><strong>Status</strong><br />{status.status.replace(/_/g, " ")}</article>
           <article style={cardStyle}><strong>Max batch rows</strong><br />{status.max_batch_rows}</article>
-          <article style={cardStyle}><strong>Leagues</strong><br />{status.league_options.length}</article>
+          <article style={cardStyle}><strong>RR formats</strong><br />{status.round_robin_format_options?.length ?? 0}</article>
           <article style={cardStyle}><strong>Players loaded</strong><br />{players.length}</article>
         </div>
       ) : null}
