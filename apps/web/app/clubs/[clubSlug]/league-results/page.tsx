@@ -14,7 +14,7 @@ const cardStyle = {
   background: "white"
 };
 
-function juprLabel(value?: number | null): string {
+function ratingLabel(value?: number | null): string {
   if (value == null || Number.isNaN(Number(value))) return "—";
   return Number(value).toFixed(3);
 }
@@ -62,7 +62,7 @@ function StandingsTable({ standings, clubSlug }: { standings: LeagueResultsStand
             {[
               "Rank",
               "Player",
-              "JUPR",
+              "Rating",
               "Games",
               "Wins",
               "Losses",
@@ -78,7 +78,7 @@ function StandingsTable({ standings, clubSlug }: { standings: LeagueResultsStand
             <tr key={String(row.player_id)}>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank ?? "—"}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}><Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link></td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{juprLabel(row.rating_jupr)}</td>
+              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(row.rating_jupr)}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.matches_played ?? 0}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.losses ?? 0}</td>
