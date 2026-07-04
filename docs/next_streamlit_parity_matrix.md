@@ -79,7 +79,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `league_manager` | 🏟️ League Manager | Admin | `Not started` for full parity; listed in `/admin` operations cockpit. | Yes | Admin auth + match-write + audit gate | Port after score entry/corrections foundation; this is a major workflow. |
 | `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next Score Entry MVP and `/admin/match-uploader` manual/batch, single round-robin preview, and new-player create-and-continue routes exist; auth-shell and quick-entry polish still pending. | Yes | Admin auth + club scope + audit + E2E | Validate manual/batch plus round-robin pilot, then add court quick-entry helpers and real admin session auth. |
 | `match_log` | 📝 Match Log | Admin | `Partial` — Next Match Log read, duplicate scan, guarded apply, duplicate cleanup, and Replay History foundation exist. | Yes | Admin auth + replay/correction audit gate | Validate closed-club pilot; add replay job history/approval if needed. |
-| `player_editor` | 👥 Player Editor | Admin | `Not started`; listed in `/admin` operations cockpit. | Yes | Admin auth + club scope + audit gate | Add player CRUD/merge APIs after match correction safety exists. |
+| `player_editor` | 👥 Player Editor | Admin | `Partial` — Next `/admin/players` and guarded FastAPI player-editor status/list/detail/create/basic-update APIs exist; merge, league-rating edits, and social identity linking remain Streamlit-only. | Yes | Admin auth + club scope + audit gate | Validate create/update foundation, then add league-rating edit and merge dry-run APIs only after replay recovery is proven. |
 | `admin_tools` | ⚙️ Admin Tools | Admin | `Partial` — Replay History moved to `/admin/replay-history`; worker/backfill tooling still Streamlit-only. | Yes/high-risk | Super-admin-only + worker/backfill gate | Keep remaining worker/backfill operations Streamlit-only until hardened. |
 | `admin_guide` | 📘 Admin Guide | Admin | `Partial` — `/admin` operations cockpit now provides migration guidance; full guide not ported. | No | Admin shell | Port detailed operational playbook once admin shell exists. |
 | `challenge_ladder_admin` | 🛠️ Challenge Ladder Admin | Admin | `Not started`; listed in `/admin` operations cockpit. | Yes | Admin auth + ladder write/audit gate | Port after core score entry, match log, and player editor unless scoped as a closed-club pilot. |
@@ -119,7 +119,7 @@ Any admin workflow may fully move off Streamlit only when:
 10. Validate Match Log apply + Replay History in the closed-club pilot.
 11. Validate Match Uploader manual/batch entry.
 12. Validate Match Uploader round-robin scheduling and new-player creation parity in staging.
-13. Port Player Editor.
+13. Validate Player Editor create/update foundation in staging.
 14. Port League Manager.
 15. Port public tournament roster and partner board.
 16. Port tournament/challenge/admin tools after the write foundation is proven.

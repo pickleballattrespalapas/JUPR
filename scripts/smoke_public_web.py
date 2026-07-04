@@ -164,6 +164,7 @@ def _build_checks(
                 SmokeCheck("api: admin match log", _join_url(api_base_url, f"/admin/clubs/{club_id}/match-log"), (200,), require_json=True),
                 SmokeCheck("api: admin replay", _join_url(api_base_url, f"/admin/clubs/{club_id}/replay-history"), (200,), require_json=True),
                 SmokeCheck("api: admin match uploader", _join_url(api_base_url, f"/admin/clubs/{club_id}/match-uploader/status"), (200,), require_json=True),
+                SmokeCheck("api: admin player editor", _join_url(api_base_url, f"/admin/clubs/{club_id}/players/editor/status"), (200,), require_json=True),
                 SmokeCheck("api: club", _join_url(api_base_url, f"/clubs/{club_slug}"), (200,), require_json=True),
                 SmokeCheck("api: leaderboards", _join_url(api_base_url, f"/clubs/{club_slug}/leaderboards"), (200,), require_json=True),
                 SmokeCheck("api: league results", _join_url(api_base_url, f"/clubs/{club_slug}/league-results"), (200,), require_json=True),
@@ -193,6 +194,7 @@ def _build_checks(
             ("web: admin match log", "/admin/match-log"),
             ("web: admin replay", "/admin/replay-history"),
             ("web: admin match uploader", "/admin/match-uploader"),
+            ("web: admin players", "/admin/players"),
             ("web: club home", f"/clubs/{club_slug}"),
             ("web: leaderboards", f"/clubs/{club_slug}/leaderboards"),
             ("web: league results", f"/clubs/{club_slug}/league-results"),
@@ -269,13 +271,7 @@ def main(argv: list[str]) -> int:
     else:
         _print_text(results)
 
-    failed = [result for result in results if not result.ok]
-    if failed:
-        print(f"\n{len(failed)} public smoke check(s) failed.", file=sys.stderr)
-        return 1
-
-    print(f"\nAll {len(results)} public smoke checks passed.")
-    return 0
+    return 0 if all(result.ok for result in results) else 1
 
 
 if __name__ == "__main__":
