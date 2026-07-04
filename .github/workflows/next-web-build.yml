@@ -16,7 +16,7 @@ jobs:
     env:
       NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
       JUPR_API_BASE_URL: http://localhost:8000
-      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://juprleagues.com
+      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://pickleballclubsandwich.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
