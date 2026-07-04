@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token
+from jupr_app.services import public_tournament_registration_edit_service as edit_service
 from jupr_app.services.public_tournament_registration_edit_service import (
     build_public_tournament_registration_edit_page,
+    request_public_tournament_registration_edit_link,
     submit_public_tournament_registration_edit,
 )
 from jupr_app.services.public_tournament_registration_service import submit_public_tournament_registration
@@ -111,3 +113,76 @@ def test_registration_edit_rejects_wrong_club(monkeypatch) -> None:
         assert "different club" in str(exc)
     else:
         raise AssertionError("Expected wrong-club edit link rejection")
+
+
+def test_registration_edit_link_request_sends_email_without_exposing_match(monkeypatch) -> None:
+    supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://next.example.com")
+    captured: dict[str, str] = {}
+
+    def fake_send(**kwargs):
+        captured.update({key: str(value) for key, value in kwargs.items()})
+        return {"status": "dry_run", "provider_message_id": "dry_run", "to_email": kwargs["registered_email"]}
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", fake_send)
+
+    payload = request_public_tournament_registration_edit_link(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        registration_slug="tres-open",
+        email="alex@example.com",
+    )
+
+    assert payload == {
+        "ok": True,
+        "mode": "registration_edit_link_request",
+        "accepted": True,
+        "message": "If a matching registration exists, an edit link will be sent to that email address.",
+    }
+    assert captured["registered_email"] == "alex@example.com"
+    assert captured["tournament_name"] == "Tres Palapas Open"
+    assert captured["edit_url"].startswith("https://next.example.com/clubs/tres-palapas/tournament-registration/edit?")
+    assert "edit_token=" in captured["edit_url"]
+    assert "edit_token" not in str(payload)
+
+
+def test_registration_edit_link_request_missing_email_does_not_enumerate(monkeypatch) -> None:
+    supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
+    calls = {"send": 0}
+
+    def fake_send(**_kwargs):
+        calls["send"] += 1
+        return {}
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", fake_send)
+
+    payload = request_public_tournament_registration_edit_link(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        registration_slug="tres-open",
+        email="missing@example.com",
+    )
+
+    assert payload["ok"] is True
+    assert payload["accepted"] is True
+    assert calls["send"] == 0
+
+
+def test_registration_edit_link_request_honeypot_is_silent(monkeypatch) -> None:
+    supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
+    calls = {"send": 0}
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", lambda **_kwargs: calls.__setitem__("send", calls["send"] + 1))
+
+    payload = request_public_tournament_registration_edit_link(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        registration_slug="tres-open",
+        email="alex@example.com",
+        website="bot field",
+    )
+
+    assert payload["ok"] is True
+    assert calls["send"] == 0
