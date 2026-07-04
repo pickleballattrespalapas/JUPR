@@ -76,7 +76,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `data_corrections` | Data Corrections | Public hidden | `Partial` — Next `/data-corrections` intake instructions exist with no direct data mutation. | Request intake shell only | Support/intake gate | Define durable ticket/intake backend; keep rating corrections staff-reviewed. |
 | `email_preferences` | Email Preferences | Public hidden | `Not started` in Next app. | Preference write | Auth/tokenized preference gate | Port only after safe email preference tokens and unsubscribe rules are defined. |
 | `profile_privacy` | Profile Privacy | Public hidden | `Not started` in Next app. | Preference/request write TBD | Privacy workflow gate | Define privacy request flow before porting. |
-| `league_manager` | 🏟️ League Manager | Admin | `Not started` for full parity; listed in `/admin` operations cockpit. | Yes | Admin auth + match-write + audit gate | Port after score entry/corrections foundation; this is a major workflow. |
+| `league_manager` | 🏟️ League Manager | Admin | `Partial` — Next `/admin/league-manager` and guarded FastAPI league-manager status/list/detail read APIs exist with schedule-preview, config, and standings visibility; setup, roster movement, scoring, and awards remain Streamlit-only. | Read-only in this slice | Admin auth + match-write + audit gate before writes | Validate read foundation in staging, then add setup/edit and roster dry-run APIs before any League Manager writes. |
 | `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next Score Entry MVP and `/admin/match-uploader` manual/batch, single round-robin preview, and new-player create-and-continue routes exist; auth-shell and quick-entry polish still pending. | Yes | Admin auth + club scope + audit + E2E | Validate manual/batch plus round-robin pilot, then add court quick-entry helpers and real admin session auth. |
 | `match_log` | 📝 Match Log | Admin | `Partial` — Next Match Log read, duplicate scan, guarded apply, duplicate cleanup, and Replay History foundation exist. | Yes | Admin auth + replay/correction audit gate | Validate closed-club pilot; add replay job history/approval if needed. |
 | `player_editor` | 👥 Player Editor | Admin | `Partial` — Next `/admin/players` and guarded FastAPI player-editor status/list/detail/create/basic-update APIs exist; merge, league-rating edits, and social identity linking remain Streamlit-only. | Yes | Admin auth + club scope + audit gate | Validate create/update foundation, then add league-rating edit and merge dry-run APIs only after replay recovery is proven. |
@@ -120,7 +120,7 @@ Any admin workflow may fully move off Streamlit only when:
 11. Validate Match Uploader manual/batch entry.
 12. Validate Match Uploader round-robin scheduling and new-player creation parity in staging.
 13. Validate Player Editor create/update foundation in staging.
-14. Port League Manager.
+14. Validate League Manager read foundation in staging.
 15. Port public tournament roster and partner board.
 16. Port tournament/challenge/admin tools after the write foundation is proven.
 
