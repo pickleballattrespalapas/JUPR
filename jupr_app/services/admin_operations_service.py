@@ -72,8 +72,12 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
         status_when_disabled="streamlit_fallback",
-        next_action="Port match log read, duplicate scan, correction preview, and replay-planning before broad score-entry writes.",
-        safety_notes=("Correction path should exist before new rated write workflows move to Next.", "Deletes/edits require audit and replay guidance."),
+        next_action="Use read/duplicate-scan visibility first; enable apply only with JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY after operator review.",
+        safety_notes=(
+            "Read/scan visibility uses JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG.",
+            "Edits and duplicate cleanup require JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY plus Supabase JWT role authorization.",
+            "Writes use Python bulk match editor services and audit attribution.",
+        ),
     ),
     AdminWorkflowDefinition(
         key="score_entry",
@@ -184,7 +188,7 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
 
 def _workflow_payload(workflow: AdminWorkflowDefinition, *, pilot_enabled: bool) -> dict[str, Any]:
     flag_enabled = _truthy_env(workflow.env_flag)
-    return {
+    payload = {
         **asdict(workflow),
         "enabled": bool(flag_enabled),
         "pilot_enabled": bool(pilot_enabled),
@@ -193,6 +197,10 @@ def _workflow_payload(workflow: AdminWorkflowDefinition, *, pilot_enabled: bool)
         "requires_review_before_enablement": workflow.risk in {"high", "critical"},
         "safety_notes": list(workflow.safety_notes),
     }
+    if workflow.key == "match_log":
+        payload["apply_env_flag"] = "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY"
+        payload["apply_enabled"] = _truthy_env("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY")
+    return payload
 
 
 def build_admin_operations_status() -> dict[str, Any]:

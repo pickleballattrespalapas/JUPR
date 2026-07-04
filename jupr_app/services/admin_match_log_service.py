@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, datetime
 from typing import Any
 
-from jupr_app.domain.bulk_match_editor import compute_recompute_scope
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
 from jupr_app.domain.dupes import canonical_dup_key
 
 MATCH_LOG_SELECT = (
@@ -15,6 +16,8 @@ MATCH_LOG_SELECT = (
 MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2"
 MAX_FETCH_ROWS = 5000
 MAX_RETURN_ROWS = 1000
+MAX_PATCHES = 100
+MAX_CLEANUP_IDS = 500
 
 
 def _truthy_env(name: str) -> bool:
@@ -23,6 +26,10 @@ def _truthy_env(name: str) -> bool:
 
 def is_admin_match_log_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG")
+
+
+def is_admin_match_log_apply_enabled() -> bool:
+    return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY")
 
 
 def _json_safe(value: Any) -> Any:
@@ -240,9 +247,11 @@ def _correction_plan() -> dict[str, Any]:
             {"id": 0, "score_t1": 11, "score_t2": 8},
         ]
     )
+    apply_enabled = is_admin_match_log_apply_enabled()
     return {
-        "mode": "planning_only",
-        "apply_endpoint": None,
+        "mode": "apply_enabled" if apply_enabled else "planning_only",
+        "apply_endpoint": "/admin/clubs/{club_id}/match-log/edits" if apply_enabled else None,
+        "duplicate_cleanup_endpoint": "/admin/clubs/{club_id}/match-log/duplicates/cleanup" if apply_enabled else None,
         "future_apply_endpoint": "/admin/clubs/{club_id}/match-log/edits",
         "editable_fields_planned": [
             "league",
@@ -259,13 +268,14 @@ def _correction_plan() -> dict[str, Any]:
             "notes",
         ],
         "required_confirmation_text": "APPLY",
+        "duplicate_cleanup_confirmation_text": "DELETE",
         "recompute_scope_for_sample_edit": example_patch_scope,
         "safety_rules": [
-            "This slice does not apply edits or deletes.",
-            "League/date changes should auto-clear week_tag unless explicitly set.",
+            "Writes require Supabase JWT auth plus manage/delete match permissions.",
+            "League/date changes auto-clear week_tag unless explicitly set.",
             "Player and score changes require rating replay review before broad use.",
-            "Duplicate deletion should keep the oldest row and replay history after deletion.",
-            "Future writes must use FastAPI audit attribution and the Python bulk_match_editor domain service.",
+            "Duplicate cleanup keeps the oldest row and recommends replay history afterward.",
+            "Writes use FastAPI audit attribution and Python domain services.",
         ],
     }
 
@@ -295,6 +305,7 @@ def build_admin_match_log(
     if not is_admin_match_log_enabled():
         return {
             "enabled": False,
+            "apply_enabled": is_admin_match_log_apply_enabled(),
             "status": "streamlit_fallback",
             "filters": filters,
             "summary": {"scanned_matches": 0, "returned_matches": 0, "duplicate_groups": 0, "duplicate_delete_count": 0},
@@ -330,7 +341,8 @@ def build_admin_match_log(
     duplicate_delete_count = len((duplicate_payload.get("delete_preview") or {}).get("delete_ids") or [])
     return {
         "enabled": True,
-        "status": "planning_only",
+        "apply_enabled": is_admin_match_log_apply_enabled(),
+        "status": "apply_enabled" if is_admin_match_log_apply_enabled() else "planning_only",
         "filters": filters,
         "summary": {
             "scanned_matches": len(raw_rows),
@@ -344,5 +356,147 @@ def build_admin_match_log(
         "duplicate_rows": duplicate_payload["duplicate_rows"],
         "duplicate_delete_preview": duplicate_payload["delete_preview"],
         "correction_plan": _correction_plan(),
+        "warnings": warnings,
+    }
+
+
+def apply_admin_match_log_edits(
+    supabase: Any,
+    *,
+    club_id: str,
+    patches: list[dict[str, Any]],
+    actor_email: str,
+    actor_role: str,
+    correction_note: str | None = None,
+    source: str = "next_match_log",
+    confirmation_text: str = "",
+) -> dict[str, Any]:
+    if not is_admin_match_log_apply_enabled():
+        raise PermissionError("Next Match Log apply is disabled.")
+    if str(confirmation_text or "").strip().upper() != "APPLY":
+        raise ValueError("Type APPLY to confirm match edits.")
+    clean_patches = [dict(patch) for patch in (patches or []) if isinstance(patch, dict)]
+    if not clean_patches:
+        raise ValueError("No patches provided.")
+    if len(clean_patches) > MAX_PATCHES:
+        raise ValueError(f"No more than {MAX_PATCHES} patches can be applied at once.")
+
+    result = apply_bulk_match_edits(
+        supabase,
+        club_id=str(club_id),
+        patches=clean_patches,
+        actor=str(actor_email or "admin"),
+        source=source,
+        correction_note=correction_note,
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+    )
+    return {"ok": True, "mode": "applied", "source": source, **result}
+
+
+def _cleanup_candidate_payload(supabase: Any, *, club_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rows, _warnings = _fetch_match_rows(supabase, club_id=str(club_id), fetch_limit=MAX_FETCH_ROWS)
+    player_ids: set[int] = set()
+    for row in rows:
+        for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            pid = _safe_int(row.get(col))
+            if pid is not None:
+                player_ids.add(int(pid))
+    names = _player_names(supabase, club_id=str(club_id), player_ids=player_ids)
+    return _duplicate_scan(rows, club_id=str(club_id), names=names), rows
+
+
+def apply_admin_match_log_duplicate_cleanup(
+    supabase: Any,
+    *,
+    club_id: str,
+    delete_ids: list[int],
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_match_log_duplicate_cleanup",
+    confirmation_text: str = "",
+) -> dict[str, Any]:
+    if not is_admin_match_log_apply_enabled():
+        raise PermissionError("Next Match Log apply is disabled.")
+    if str(confirmation_text or "").strip().upper() != "DELETE":
+        raise ValueError("Type DELETE to confirm duplicate cleanup.")
+    requested_ids = sorted({int(match_id) for match_id in (delete_ids or []) if _safe_int(match_id) is not None})
+    if not requested_ids:
+        raise ValueError("No duplicate IDs were provided.")
+    if len(requested_ids) > MAX_CLEANUP_IDS:
+        raise ValueError(f"No more than {MAX_CLEANUP_IDS} duplicate IDs can be cleaned up at once.")
+
+    duplicate_payload, all_rows = _cleanup_candidate_payload(supabase, club_id=str(club_id))
+    preview = duplicate_payload.get("delete_preview") or {}
+    allowed_ids = {int(match_id) for match_id in (preview.get("delete_ids") or [])}
+    invalid_ids = [match_id for match_id in requested_ids if match_id not in allowed_ids]
+    if invalid_ids:
+        raise ValueError(f"Some requested IDs are not currently duplicate cleanup candidates: {invalid_ids[:10]}")
+
+    rows_by_id = {int(_safe_int(row.get("id")) or 0): dict(row) for row in all_rows if _safe_int(row.get("id")) is not None}
+    rows_to_remove = [rows_by_id[match_id] for match_id in requested_ids if match_id in rows_by_id]
+    if len(rows_to_remove) != len(requested_ids):
+        missing = [match_id for match_id in requested_ids if match_id not in rows_by_id]
+        raise ValueError(f"Some requested IDs could not be loaded for this club: {missing[:10]}")
+
+    affected_players: set[int] = set()
+    affected_leagues: set[str] = set()
+    for row in rows_to_remove:
+        if row.get("league"):
+            affected_leagues.add(str(row.get("league")))
+        for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            pid = _safe_int(row.get(col))
+            if pid is not None:
+                affected_players.add(int(pid))
+
+    supabase.table("matches").delete().eq("club_id", str(club_id)).in_("id", requested_ids).execute()
+    warnings: list[str] = []
+    try:
+        from jupr_app.domain.player_activity import recompute_last_game_at_for_players
+
+        if affected_players:
+            recompute_last_game_at_for_players(
+                supabase=supabase,
+                club_id=str(club_id),
+                player_ids=affected_players,
+            )
+    except Exception:
+        warnings.append("Unable to recompute last_game_at for affected players automatically. Run replay/history maintenance if needed.")
+
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="match_duplicate_cleanup",
+        entity_type="match",
+        entity_id="bulk",
+        before_json=rows_to_remove,
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "deleted_ids": requested_ids,
+            "affected_leagues": sorted(affected_leagues),
+            "affected_player_ids": sorted(affected_players),
+            "recommended_replay_scope": "ALL",
+        },
+        note="Duplicate cleanup from Next Match Log",
+        source_page=source,
+        flagged_for_review=True,
+    )
+    audit_result = write_admin_activity_log(supabase, audit_payload)
+    if audit_result.warning:
+        warnings.append(audit_result.warning)
+    if not audit_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+        raise RuntimeError("audit log write required but unavailable")
+
+    return {
+        "ok": True,
+        "mode": "duplicates_cleaned",
+        "deleted_count": len(requested_ids),
+        "deleted_ids": requested_ids,
+        "affected_leagues": sorted(affected_leagues),
+        "affected_player_ids": sorted(affected_players),
+        "recompute_scope": {"standings": True, "ratings": True},
+        "recommended_replay_scope": "ALL",
         "warnings": warnings,
     }
