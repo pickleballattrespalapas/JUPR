@@ -77,10 +77,10 @@ Any admin workflow may fully move off Streamlit only when:
 | `email_preferences` | Email Preferences | Public hidden | `Not started` in Next app. | Preference write | Auth/tokenized preference gate | Port only after safe email preference tokens and unsubscribe rules are defined. |
 | `profile_privacy` | Profile Privacy | Public hidden | `Not started` in Next app. | Preference/request write TBD | Privacy workflow gate | Define privacy request flow before porting. |
 | `league_manager` | 🏟️ League Manager | Admin | `Not started` for full parity; listed in `/admin` operations cockpit. | Yes | Admin auth + match-write + audit gate | Port after score entry/corrections foundation; this is a major workflow. |
-| `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next score-entry MVP exists for one-match submission only and is listed in `/admin` operations cockpit. | Yes | Admin auth + club scope + audit + E2E | Replace token-paste MVP with real admin score entry, then add batch/RR/new-player parity. |
-| `match_log` | 📝 Match Log | Admin | `Not started` for UI/API; listed as first operational target in `/admin` operations cockpit. | Yes | Admin auth + replay/correction audit gate | Port read, duplicate scan, correction preview, and replay-planning before broad score-entry writes. |
+| `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next Score Entry MVP and `/admin/match-uploader` manual/batch submit route exist; RR/new-player parity still pending. | Yes | Admin auth + club scope + audit + E2E | Validate manual/batch pilot, then add round-robin scheduling and new-player creation parity. |
+| `match_log` | 📝 Match Log | Admin | `Partial` — Next Match Log read, duplicate scan, guarded apply, duplicate cleanup, and Replay History foundation exist. | Yes | Admin auth + replay/correction audit gate | Validate closed-club pilot; add replay job history/approval if needed. |
 | `player_editor` | 👥 Player Editor | Admin | `Not started`; listed in `/admin` operations cockpit. | Yes | Admin auth + club scope + audit gate | Add player CRUD/merge APIs after match correction safety exists. |
-| `admin_tools` | ⚙️ Admin Tools | Admin | `Not started`; listed as critical-risk in `/admin` operations cockpit. | Yes/high-risk | Super-admin-only + worker/replay gate | Keep Streamlit-only until jobs, replay, and diagnostics have hardened APIs. |
+| `admin_tools` | ⚙️ Admin Tools | Admin | `Partial` — Replay History moved to `/admin/replay-history`; worker/backfill tooling still Streamlit-only. | Yes/high-risk | Super-admin-only + worker/backfill gate | Keep remaining worker/backfill operations Streamlit-only until hardened. |
 | `admin_guide` | 📘 Admin Guide | Admin | `Partial` — `/admin` operations cockpit now provides migration guidance; full guide not ported. | No | Admin shell | Port detailed operational playbook once admin shell exists. |
 | `challenge_ladder_admin` | 🛠️ Challenge Ladder Admin | Admin | `Not started`; listed in `/admin` operations cockpit. | Yes | Admin auth + ladder write/audit gate | Port after core score entry, match log, and player editor unless scoped as a closed-club pilot. |
 | `moneyball` | 💰 Moneyball | Admin | `Not started`. | Yes | Admin auth + event/match-write gate | Port after score entry and event submission APIs are stable. |
@@ -116,9 +116,9 @@ Any admin workflow may fully move off Streamlit only when:
 7. Review/approve static FAQ/legal/support copy and smoke the static routes.
 8. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
 9. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
-10. Port Match Log read, duplicate scan, correction preview, and replay planning.
-11. Re-evaluate the guarded Score Entry MVP after Match Log correction visibility exists.
-12. Replace the score-entry MVP with real Match Uploader parity.
+10. Validate Match Log apply + Replay History in the closed-club pilot.
+11. Validate Match Uploader manual/batch entry.
+12. Add Match Uploader round-robin scheduling and new-player creation parity.
 13. Port Player Editor.
 14. Port League Manager.
 15. Port public tournament roster and partner board.
