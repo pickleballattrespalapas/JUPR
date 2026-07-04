@@ -1,15 +1,16 @@
 # Public Website First Draft
 
-This is the current public-facing Next/Vercel route map for the first full JUPR website draft.
+This is the current public-facing Next/Vercel route map for the first full Pickleball Club Sandwich website draft.
 
 ## Primary public routes
 
 | Route | Purpose | Current status |
 |---|---|---|
 | `/` | Product home and public website entry point. | Draft |
+| `/site-map` | Click-through route map for staging review. | Draft |
 | `/clubs/tres-palapas` | Club home for Tres Palapas. | Draft |
-| `/clubs/tres-palapas/live` | Public JUPR Live session list. | Draft |
-| `/clubs/tres-palapas/live/[sessionKey]` | Public JUPR Live session detail. | Draft |
+| `/clubs/tres-palapas/live` | Public live-session list. | Draft |
+| `/clubs/tres-palapas/live/[sessionKey]` | Public live-session detail and edit-token score entry. | Draft |
 | `/clubs/tres-palapas/leaderboards` | Public club leaderboards. | Draft |
 | `/clubs/tres-palapas/match-explorer` | Public match impact explorer. | Draft |
 | `/clubs/tres-palapas/league-results` | Public league results. | Draft |
@@ -20,7 +21,7 @@ This is the current public-facing Next/Vercel route map for the first full JUPR 
 | `/clubs/tres-palapas/tournament-registration/confirmation` | Public registration confirmation. | Draft |
 | `/clubs/tres-palapas/tournament-registration/edit` | Secure tokenized registration edit. | Draft |
 | `/clubs/tres-palapas/tournament-roster` | Public-safe tournament roster. | Draft |
-| `/clubs/tres-palapas/tournament-partner-board` | Public-safe tournament partner board. | Draft |
+| `/clubs/tres-palapas/tournament-partner-board` | Public-safe tournament partner board with token-gated interest flow. | Draft |
 | `/clubs/tres-palapas/players` | Public player directory. | Draft |
 | `/clubs/tres-palapas/players/[playerId]` | Public player profile. | Draft |
 | `/clubs/tres-palapas/players/[playerId]/matches` | Public player match history. | Draft |
@@ -28,10 +29,11 @@ This is the current public-facing Next/Vercel route map for the first full JUPR 
 | `/clubs/tres-palapas/matches/[matchId]` | Public match detail. | Draft |
 | `/how-ratings-work` | Public rating explainer. | Draft |
 | `/faq` | Public FAQ. | Draft |
-| `/privacy` | Privacy page placeholder. | Needs final legal copy |
-| `/terms` | Terms page placeholder. | Needs final legal copy |
-| `/support` | Support page. | Draft |
-| `/data-corrections` | Public data correction instructions. | Draft |
+| `/privacy` | Formal first-party privacy policy copy. | Draft/legal review |
+| `/terms` | Formal first-party terms copy. | Draft/legal review |
+| `/support` | Support route using `joe@juprleagues.com`. | Draft |
+| `/contact` | Alias to support route. | Draft |
+| `/data-corrections` | Public data correction instructions using `joe@juprleagues.com`. | Draft |
 
 ## Public API routes used by the website
 
@@ -67,8 +69,9 @@ This is the current public-facing Next/Vercel route map for the first full JUPR 
 - Rating, match-processing, registration persistence, roster projection, replay, and pairing-interest writes stay in Python/FastAPI.
 - Public tournament roster and board views omit private contact fields.
 - Public edit links are tokenized and verified server-side.
+- Public board interest creates a pending record and notifies the selected player plus organizer without auto-confirming a team.
 - Admin write surfaces remain guarded behind FastAPI feature flags and role checks.
 
 ## Review notes
 
-The first draft is broad enough for route-by-route staging review. Remaining public-launch items are legal copy, final support copy, staging smoke, custom-domain rollback documentation, and review of any public tournament board moderation/notification policy before expanding that flow further.
+The first draft is broad enough for route-by-route staging review. Remaining public-launch tasks are staging smoke on the configured domains, final review of legal/support copy, and continued public naming cleanup toward Pickleball Club Sandwich while preserving internal technical names until a separate rename plan is reviewed.
