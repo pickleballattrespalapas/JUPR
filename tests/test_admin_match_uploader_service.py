@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import pandas as pd
 
 from jupr_app.services.admin_match_uploader_service import (
+    build_admin_match_uploader_round_robin_preview,
     build_admin_match_uploader_status,
+    create_admin_match_uploader_players,
     submit_admin_match_uploader_batch,
 )
 from jupr_app.services.result_types import ServiceResult
@@ -45,9 +47,20 @@ class FakeQuery:
         table = self.storage.setdefault(self.table_name, [])
         if self.insert_payload is not None:
             rows = self.insert_payload if isinstance(self.insert_payload, list) else [self.insert_payload]
+            inserted = []
             for row in rows:
-                table.append(dict(row))
-            return SimpleNamespace(data=rows)
+                stored = dict(row)
+                if stored.get("id") is None:
+                    ids = []
+                    for existing in table:
+                        try:
+                            ids.append(int(existing.get("id")))
+                        except Exception:
+                            pass
+                    stored["id"] = max(ids or [0]) + 1
+                table.append(stored)
+                inserted.append(stored)
+            return SimpleNamespace(data=inserted)
         rows = list(table)
         for key, expected in self.filters:
             rows = [row for row in rows if str(row.get(key)) == str(expected)]
@@ -69,12 +82,13 @@ class FakeSupabase:
 def fake_storage():
     return {
         "players": [
-            {"club_id": "club", "id": 1, "name": "Alex", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
-            {"club_id": "club", "id": 2, "name": "Blair", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
-            {"club_id": "club", "id": 3, "name": "Casey", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
-            {"club_id": "club", "id": 4, "name": "Devon", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+            {"club_id": "club", "id": 1, "name": "Alex", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0, "active": True},
+            {"club_id": "club", "id": 2, "name": "Blair", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0, "active": True},
+            {"club_id": "club", "id": 3, "name": "Casey", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0, "active": True},
+            {"club_id": "club", "id": 4, "name": "Devon", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0, "active": True},
         ],
         "matches": [{"club_id": "club", "id": 99, "date": "2026-03-01T00:00:00Z"}],
+        "events": [],
         "leagues_metadata": [
             {"club_id": "club", "league_name": "Open", "is_active": True},
             {"club_id": "club", "league_name": "Advanced", "is_active": True},
@@ -108,16 +122,67 @@ def test_match_uploader_status_disabled_is_db_free(monkeypatch) -> None:
     assert payload["enabled"] is False
     assert payload["submit_endpoint"] is None
     assert payload["max_batch_rows"] >= 1
+    assert "4-Player" in payload["round_robin_format_options"]
 
 
-def test_match_uploader_status_enabled_lists_leagues(monkeypatch) -> None:
+def test_match_uploader_status_enabled_lists_leagues_and_round_robin(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
 
     payload = build_admin_match_uploader_status(FakeSupabase(fake_storage()), club_id="club")
 
     assert payload["enabled"] is True
+    assert payload["status"] == "ready_for_manual_batch_and_round_robin"
     assert payload["submit_endpoint"] == "/admin/clubs/{club_id}/match-uploader/batch"
+    assert payload["round_robin_preview_endpoint"] == "/admin/clubs/{club_id}/match-uploader/round-robin/preview"
+    assert payload["player_create_endpoint"] == "/admin/clubs/{club_id}/match-uploader/players"
     assert "Open" in payload["league_options"]
+    assert payload["round_robin_expected_games"]["4-Player"] == 3
+
+
+def test_round_robin_preview_reports_missing_players(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+
+    payload = build_admin_match_uploader_round_robin_preview(
+        FakeSupabase(fake_storage()),
+        club_id="club",
+        courts=[{"format_type": "4-Player", "player_names": ["Alex", "Blair", "Casey", "New Person"]}],
+    )
+
+    assert payload["ok"] is True
+    assert payload["missing_players"] == ["New Person"]
+    assert payload["match_count"] == 0
+    assert payload["courts"] == []
+
+
+def test_create_players_then_continue_round_robin_preview(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+
+    created = create_admin_match_uploader_players(
+        supabase,
+        club_id="club",
+        actor_email="admin@example.com",
+        actor_role="scorekeeper",
+        players=[{"name": "New Person", "starting_jupr": 3.5}],
+        source="test",
+    )
+
+    assert created["ok"] is True
+    assert created["accepted_count"] == 1
+    assert created["players"][0]["name"] == "New Person"
+    assert storage["players"][-1]["rating"] == 1400.0
+    assert storage["admin_activity_log"][0]["action_type"] == "create_match_uploader_players"
+
+    preview = build_admin_match_uploader_round_robin_preview(
+        supabase,
+        club_id="club",
+        courts=[{"format_type": "4-Player", "player_names": ["Alex", "Blair", "Casey", "New Person"]}],
+    )
+
+    assert preview["missing_players"] == []
+    assert preview["match_count"] == 3
+    assert preview["courts"][0]["matches"][0]["t1_p1"] in {1, 2, 3, 5}
 
 
 def test_submit_match_uploader_batch(monkeypatch) -> None:
@@ -159,6 +224,50 @@ def test_submit_match_uploader_batch(monkeypatch) -> None:
     assert result["result"]["inserted"] == 1
     assert calls[0]["matches"][0]["league"] == "Open"
     assert storage["admin_activity_log"][0]["action_type"] == "submit_match_uploader_batch"
+
+
+def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    calls = []
+
+    def fake_submit_match_batch(ctx, matches, **kwargs):
+        calls.append({"ctx": ctx, "matches": matches, "kwargs": kwargs})
+        return ServiceResult.success(data={"inserted": len(matches), "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0})
+
+    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
+    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
+    storage = fake_storage()
+
+    result = submit_admin_match_uploader_batch(
+        FakeSupabase(storage),
+        club_id="club",
+        actor_email="admin@example.com",
+        actor_role="scorekeeper",
+        matches=[
+            {
+                "date": "2026-03-01",
+                "league": "POPUP",
+                "week_tag": "Event",
+                "match_type": "PopUp",
+                "is_popup": True,
+                "context_type": "event",
+                "context_name": "Saturday Social",
+                "t1_p1": 1,
+                "t1_p2": 2,
+                "t2_p1": 3,
+                "t2_p2": 4,
+                "score_t1": 11,
+                "score_t2": 7,
+            }
+        ],
+        source="test",
+    )
+
+    assert result["ok"] is True
+    assert storage["events"][0]["name"] == "Saturday Social"
+    assert calls[0]["matches"][0]["context_type"] == "event"
+    assert calls[0]["matches"][0]["context_id"] == storage["events"][0]["id"]
+    assert "context_name" not in calls[0]["matches"][0]
 
 
 def test_submit_match_uploader_rejects_empty(monkeypatch) -> None:
