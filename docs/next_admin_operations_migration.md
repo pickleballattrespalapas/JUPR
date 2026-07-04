@@ -41,6 +41,8 @@ Enable only one workflow at a time unless a prior workflow is already proven.
 
 ```text
 JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1
+JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=1
+JUPR_ENABLE_NEXT_ADMIN_REPLAY=1
 JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
 JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER=1
 JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR=1
@@ -55,14 +57,16 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 
 1. Admin operations shell.
 2. Match Log read, duplicate scan, correction preview, and replay planning.
-3. Score Entry MVP.
-4. Full Match Uploader parity.
-5. Player Editor.
-6. League Manager.
-7. Challenge Ladder Admin.
-8. Tournament Admin/Ops.
-9. Weekly Recap Admin.
-10. Admin Tools, replay, workers, and backfills.
+3. Guarded Match Log apply and duplicate cleanup.
+4. Replay History.
+5. Score Entry MVP.
+6. Full Match Uploader parity.
+7. Player Editor.
+8. League Manager.
+9. Challenge Ladder Admin.
+10. Tournament Admin/Ops.
+11. Weekly Recap Admin.
+12. Admin Tools, workers, and backfills.
 
 ## Enablement checklist
 
@@ -77,17 +81,18 @@ Before enabling a write workflow for staff use:
 - Confirm Streamlit fallback remains available.
 - Run API contract tests and the public/staff smoke checks against staging or the pilot deployment.
 
-## First operational target
+## Match Log and replay foundation
 
-The first serious admin migration target should be Match Log, not broad score entry. Once Next can enter or mutate operational data, it must also be able to inspect and correct mistakes.
+The first serious admin migration target is Match Log, not broad score entry. Once Next can enter or mutate operational data, it must also be able to inspect, correct, and replay mistakes.
 
-The first Match Log slice should include:
+Current migrated slices include:
 
 - match list/read endpoint with filters,
 - duplicate scan using the existing duplicate-key logic,
-- correction planning without immediate mutation,
-- replay-scope preview,
-- audit contract for future writes.
+- audited match edit apply,
+- audited duplicate cleanup,
+- server-side Replay History endpoint and page,
+- role-gated replay execution through the Python replay domain function.
 
 ## Notes
 
