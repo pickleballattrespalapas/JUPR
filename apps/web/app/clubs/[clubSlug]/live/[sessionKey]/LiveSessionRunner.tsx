@@ -28,7 +28,7 @@ function formatTimestamp(value?: string | null): string {
 
 function eventTypeLabel(value?: string | null): string {
   const normalized = String(value || "").replace(/_/g, " ").trim();
-  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "JUPR Live";
+  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Live Event";
 }
 
 function teamLabel(names: string[]): string {
@@ -259,8 +259,6 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession, e
           </section>
         </aside>
       </div>
-
-      <p style={{ marginTop: "1rem" }}><Link href={`/clubs/${clubSlug}/live`}>Back to live sessions</Link></p>
     </>
   );
 }
