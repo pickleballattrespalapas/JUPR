@@ -21,6 +21,7 @@ const routes = [
   ["Ratings explainer", "/how-ratings-work"],
   ["FAQ", "/faq"],
   ["Support", "/support"],
+  ["Contact", "/contact"],
   ["Privacy", "/privacy"],
   ["Terms", "/terms"],
   ["Data corrections", "/data-corrections"],
@@ -33,7 +34,7 @@ export default function SiteMapPage() {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Public site map
       </p>
-      <h1 style={{ marginTop: 0 }}>JUPR website route map</h1>
+      <h1 style={{ marginTop: 0 }}>Pickleball Club Sandwich route map</h1>
       <p style={{ color: "#334155", maxWidth: "780px" }}>
         A simple click-through map for the current Next/Vercel draft.
       </p>
