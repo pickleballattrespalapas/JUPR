@@ -14,6 +14,17 @@ from fastapi.testclient import TestClient
 from services.api.main import app
 
 
+def _install_auth(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "services.api.admin_match_uploader_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_uploader_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="scorekeeper"),
+    )
+
+
 def test_match_uploader_status_disabled_contract(monkeypatch):
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", raising=False)
     monkeypatch.delenv("SUPABASE_URL", raising=False)
@@ -26,6 +37,7 @@ def test_match_uploader_status_disabled_contract(monkeypatch):
     payload = response.json()
     assert payload["enabled"] is False
     assert payload["submit_endpoint"] is None
+    assert "4-Player" in payload["round_robin_format_options"]
 
 
 def test_match_uploader_submit_disabled_before_auth(monkeypatch):
@@ -56,7 +68,55 @@ def test_match_uploader_status_enabled_contract(monkeypatch):
     payload = response.json()
     assert payload["enabled"] is True
     assert payload["submit_endpoint"] == "/admin/clubs/{club_id}/match-uploader/batch"
+    assert payload["round_robin_preview_endpoint"] == "/admin/clubs/{club_id}/match-uploader/round-robin/preview"
+    assert payload["player_create_endpoint"] == "/admin/clubs/{club_id}/match-uploader/players"
     assert "Open" in payload["league_options"]
+
+
+def test_match_uploader_round_robin_preview_contract(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(fake_storage()))
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-uploader/round-robin/preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "source": "test",
+            "courts": [{"court": 1, "format_type": "4-Player", "player_names": ["Alex", "Blair", "Casey", "Devon"]}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["missing_players"] == []
+    assert payload["match_count"] == 3
+    assert payload["courts"][0]["matches"][0]["t1_p1"]
+
+
+def test_match_uploader_create_players_contract(monkeypatch):
+    storage = fake_storage()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-uploader/players",
+        headers={"Authorization": "Bearer local"},
+        json={"source": "test", "players": [{"name": "New Person", "starting_jupr": 3.5}]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["accepted_count"] == 1
+    assert payload["players"][0]["name"] == "New Person"
+    assert storage["admin_activity_log"][0]["action_type"] == "create_match_uploader_players"
 
 
 def test_match_uploader_submit_contract(monkeypatch):
@@ -73,14 +133,7 @@ def test_match_uploader_submit_contract(monkeypatch):
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
     monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
-    monkeypatch.setattr(
-        "services.api.admin_match_uploader_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_match_uploader_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="scorekeeper"),
-    )
+    _install_auth(monkeypatch)
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-uploader/batch",
