@@ -24,7 +24,7 @@ const routes = [
 ];
 
 function baseUrl(): string {
-  return (process.env.NEXT_PUBLIC_JUPR_WEB_BASE_URL || process.env.JUPR_WEB_BASE_URL || "https://juprleagues.com").replace(/\/$/, "");
+  return (process.env.NEXT_PUBLIC_JUPR_WEB_BASE_URL || process.env.JUPR_WEB_BASE_URL || "https://pickleballclubsandwich.com").replace(/\/$/, "");
 }
 
 export default function sitemap(): MetadataRoute.Sitemap {
