@@ -8,6 +8,7 @@ from supabase import Client
 
 from jupr_app.services.public_tournament_registration_edit_service import (
     build_public_tournament_registration_edit_page,
+    request_public_tournament_registration_edit_link,
     submit_public_tournament_registration_edit,
 )
 from jupr_app.services.public_tournament_registration_service import (
@@ -43,6 +44,13 @@ class PublicTournamentRegistrationEditRequest(PublicTournamentRegistrationReques
     edit_token: str
 
 
+class PublicTournamentRegistrationEditLinkRequest(BaseModel):
+    tournament_id: str | None = None
+    registration_slug: str | None = None
+    email: str
+    website: str | None = None
+
+
 def _dump_model(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
@@ -74,6 +82,28 @@ def install_public_tournament_registration_routes(
             registration_slug=registration_slug,
         )
         return {"club": public_club_payload(club, club_slug), **page}
+
+    @app.post("/clubs/{club_slug}/tournament-registration/edit-link/request")
+    def request_club_tournament_registration_edit_link(
+        club_slug: str,
+        payload: PublicTournamentRegistrationEditLinkRequest,
+    ) -> dict[str, Any]:
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        try:
+            result = request_public_tournament_registration_edit_link(
+                supabase,
+                club_id=club_id,
+                club_slug=club_slug,
+                email=payload.email,
+                tournament_id=payload.tournament_id,
+                registration_slug=payload.registration_slug,
+                website=payload.website,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"club": public_club_payload(club, club_slug), **result}
 
     @app.get("/clubs/{club_slug}/tournament-registration/edit")
     def get_club_tournament_registration_edit(

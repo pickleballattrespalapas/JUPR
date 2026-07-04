@@ -216,6 +216,23 @@ export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitP
   email?: string | null;
 };
 
+export type PublicRegistrationEditLinkRequestPayload = {
+  tournament_id?: string | null;
+  registration_slug?: string | null;
+  email: string;
+  website?: string | null;
+};
+
+export type PublicRegistrationEditLinkRequestResponse = {
+  club: { id: string; slug: string; name: string };
+  ok: boolean;
+  mode?: string | null;
+  accepted?: boolean | null;
+  message?: string | null;
+  email_status?: string | null;
+  provider_message_id?: string | null;
+};
+
 export type PublicRegistrationSubmitResponse = {
   club: { id: string; slug: string; name: string };
   ok: boolean;
@@ -308,6 +325,17 @@ export async function getClubTournamentRegistrationEdit(
   if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
   if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
   return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`);
+}
+
+export async function requestClubTournamentRegistrationEditLink(
+  clubSlug: string,
+  payload: PublicRegistrationEditLinkRequestPayload
+): Promise<ApiResult<PublicRegistrationEditLinkRequestResponse>> {
+  return fetchJson<PublicRegistrationEditLinkRequestResponse>(`/clubs/${clubSlug}/tournament-registration/edit-link/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function getClubTournamentRoster(

@@ -17,6 +17,8 @@ from services.api.main import app
 @pytest.fixture
 def client_and_storage(monkeypatch):
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-secret")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://next.example.com")
     storage = fake_storage()
     storage["clubs"] = [{"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas", "admin_notes": "private"}]
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
@@ -50,6 +52,42 @@ def _edit_token(registration_id: str) -> str:
         email="alex@example.com",
         secret="test-secret",
     )
+
+
+def test_public_registration_edit_link_request_contract(client_and_storage):
+    client, _storage = client_and_storage
+    _submit_registration(client)
+
+    response = client.post(
+        "/clubs/tres-palapas/tournament-registration/edit-link/request",
+        json={"registration_slug": "tres-open", "email": "alex@example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["club"] == {"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas"}
+    assert payload["ok"] is True
+    assert payload["accepted"] is True
+    assert "edit_token" not in str(payload)
+    assert "email_status" not in payload
+    assert "provider_message_id" not in payload
+
+
+def test_public_registration_edit_link_request_does_not_enumerate_missing_email(client_and_storage):
+    client, _storage = client_and_storage
+    _submit_registration(client)
+
+    response = client.post(
+        "/clubs/tres-palapas/tournament-registration/edit-link/request",
+        json={"registration_slug": "tres-open", "email": "missing@example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["accepted"] is True
+    assert "edit_token" not in str(payload)
+    assert "email_status" not in payload
 
 
 def test_public_registration_edit_page_contract(client_and_storage):

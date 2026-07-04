@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
+import EditLinkRequestForm from "./EditLinkRequestForm";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";
 
 type TournamentRegistrationPageProps = {
@@ -73,6 +74,14 @@ export default async function TournamentRegistrationPage({ params, searchParams 
           <article style={cardStyle}><strong>Open divisions</strong><br />{selectableCount}</article>
           <article style={cardStyle}><strong>Registrations</strong><br />{data?.roster_summary?.total_registrations ?? 0}</article>
         </div>
+      ) : null}
+
+      {tournament ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>Already registered?</h2>
+          <p style={{ color: "#475569" }}>Enter the email address used for your registration and we will send a secure edit link if a matching registration exists.</p>
+          <EditLinkRequestForm clubSlug={clubSlug} tournamentId={tournament.id} registrationSlug={settings?.registration_slug ?? null} />
+        </article>
       ) : null}
 
       {tournament && !data?.registration_open ? (

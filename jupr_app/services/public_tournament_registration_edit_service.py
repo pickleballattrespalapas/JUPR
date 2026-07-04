@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
-from jupr_app.domain.tournament_registration_edit_tokens import verify_registration_edit_token
-from jupr_app.domain.tournament_registration_repo import get_registration_confirmation_bundle, save_registration
+from jupr_app.config import get_env_or_default, get_public_base_url
+from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
+from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token, verify_registration_edit_token
+from jupr_app.domain.tournament_registration_repo import get_registration_by_email, get_registration_confirmation_bundle, save_registration
 from jupr_app.services.public_tournament_registration_service import (
     _clean_email,
     _clean_selection,
@@ -80,6 +83,90 @@ def _verified_bundle(
         expected_email=_clean_email(registration.get("email")),
     )
     return verified, bundle
+
+
+def _public_web_base_url(public_base_url: str | None = None) -> str:
+    for candidate in (
+        public_base_url,
+        get_env_or_default("JUPR_WEB_BASE_URL"),
+        get_env_or_default("STAGING_WEB_BASE_URL"),
+        get_env_or_default("NEXT_PUBLIC_JUPR_WEB_BASE_URL"),
+        get_env_or_default("JUPR_PUBLIC_BASE_URL"),
+        get_public_base_url(),
+    ):
+        value = str(candidate or "").strip().rstrip("/")
+        if value:
+            return value
+    return ""
+
+
+def _edit_url(*, club_slug: str, edit_token: str, tournament_id: str, registration_slug: str | None, public_base_url: str | None = None) -> str:
+    query: dict[str, str] = {"edit_token": str(edit_token)}
+    if _clean_text(registration_slug, limit=120):
+        query["tournament"] = _clean_text(registration_slug, limit=120)
+    else:
+        query["tournament_id"] = str(tournament_id)
+    return f"{_public_web_base_url(public_base_url)}/clubs/{club_slug}/tournament-registration/edit?{urlencode(query)}"
+
+
+def _generic_edit_link_response() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "mode": "registration_edit_link_request",
+        "accepted": True,
+        "message": "If a matching registration exists, an edit link will be sent to that email address.",
+    }
+
+
+def request_public_tournament_registration_edit_link(
+    supabase: Any,
+    *,
+    club_id: str,
+    club_slug: str,
+    email: str,
+    tournament_id: str | None = None,
+    registration_slug: str | None = None,
+    website: str | None = None,
+    public_base_url: str | None = None,
+) -> dict[str, Any]:
+    if _clean_text(website, limit=200):
+        return _generic_edit_link_response()
+    clean_email = _clean_email(email)
+    if not clean_email or "@" not in clean_email:
+        raise ValueError("A valid email is required.")
+    page = build_public_tournament_registration_page(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=_clean_text(tournament_id, limit=120) or None,
+        registration_slug=_clean_text(registration_slug, limit=120) or None,
+    )
+    if not page.get("available"):
+        raise ValueError(str(page.get("setup_error") or "Tournament registration is not configured."))
+    tournament = page.get("tournament") or {}
+    settings = page.get("settings") or {}
+    tid = str(tournament.get("id") or "").strip()
+    if not tid:
+        raise ValueError("Tournament registration was not found.")
+    registration = get_registration_by_email(supabase, tid, clean_email)
+    if not registration:
+        return _generic_edit_link_response()
+    token = build_registration_edit_token(
+        tournament_id=tid,
+        registration_id=str(registration.get("id") or ""),
+        email=clean_email,
+    )
+    send_tournament_registration_edit_email(
+        tournament_name=_clean_text(tournament.get("name") or "Tournament"),
+        registered_email=clean_email,
+        edit_url=_edit_url(
+            club_slug=str(club_slug),
+            edit_token=token,
+            tournament_id=tid,
+            registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or _clean_text(registration_slug, limit=120) or None,
+            public_base_url=public_base_url,
+        ),
+    )
+    return _generic_edit_link_response()
 
 
 def build_public_tournament_registration_edit_page(
