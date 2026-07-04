@@ -97,7 +97,7 @@ export default async function BadgeCodexPage({ params }: BadgeCodexPageProps) {
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} badge codex</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        A public ledger of JUPR badges, reels, trophies, and unlock paths. This page is read-only and shows public-safe badge metadata and recent earners.
+        A public ledger of club badges, reels, trophies, and unlock paths. This page is read-only and shows public-safe badge metadata and recent earners.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Badge Codex is temporarily unavailable. {error}</p> : null}
