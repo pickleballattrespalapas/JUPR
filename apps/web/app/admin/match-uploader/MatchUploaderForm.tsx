@@ -71,8 +71,7 @@ function apiUrl(apiBase: string, path: string): string {
 function splitNames(value: string): string[] {
   const seen = new Set<string>();
   const names: string[] = [];
-  for (const raw of value.replace(/
-/g, ',').split(',')) {
+  for (const raw of value.replaceAll(String.fromCharCode(10), ',').split(',')) {
     const name = raw.replace(/\s+/g, ' ').trim();
     if (name && !seen.has(name)) {
       seen.add(name);
