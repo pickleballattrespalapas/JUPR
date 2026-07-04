@@ -5,10 +5,10 @@ const cardStyle = {
   background: "white"
 };
 
-const supportEmail = "hello@jupr.app";
+const supportEmail = "joe@juprleagues.com";
 
 export default function DataCorrectionsPage() {
-  const subject = encodeURIComponent("JUPR data correction request");
+  const subject = encodeURIComponent("Pickleball Club Sandwich data correction request");
   const body = encodeURIComponent(
     "Name:\nClub:\nPlayer profile link or player name:\nMatch/date/league if known:\nWhat looks wrong:\nWhat should it be:\nAny screenshots or context:\n"
   );
@@ -18,7 +18,7 @@ export default function DataCorrectionsPage() {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Data corrections
       </p>
-      <h1 style={{ marginTop: 0 }}>Request a JUPR data correction</h1>
+      <h1 style={{ marginTop: 0 }}>Request a data correction</h1>
       <p style={{ color: "#334155" }}>
         This public page is an intake shell only. It helps players send complete correction details to staff; it does not directly edit scores, ratings, badges, or player records.
       </p>
