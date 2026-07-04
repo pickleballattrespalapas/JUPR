@@ -1,0 +1,30 @@
+name: Next Web Build
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/next-web-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    env:
+      NEXT_PUBLIC_JUPR_API_BASE_URL: http://localhost:8000
+      JUPR_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_JUPR_WEB_BASE_URL: https://juprleagues.com
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build Next app
+        run: npm run build
