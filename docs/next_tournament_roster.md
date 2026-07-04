@@ -11,6 +11,7 @@ This document tracks the public Tournament Roster migration from Streamlit to Ne
 - Public-safe summary cards for registrations, players, waitlist, and players needing partners.
 - Grouped roster entries by day/event/division.
 - Public-safe “players looking for partners” visibility.
+- Read-only partner-board page at `/clubs/[clubSlug]/tournament-partner-board`, backed by the same public-safe projection.
 
 ## Data safety
 
@@ -29,6 +30,6 @@ Those remain follow-up slices so moderation, abuse prevention, and audit semanti
 
 ## Follow-up slices
 
-- Add public partner-board route and read model.
+- Add safe public partner request flow with anti-abuse controls.
 - Add tokenized registration edit route.
 - Add admin registration management after public intake and roster visibility are proven.
