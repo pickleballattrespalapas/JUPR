@@ -3,9 +3,11 @@ import type { CSSProperties } from "react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+const productName = "Pickleball Club Sandwich";
+
 export const metadata: Metadata = {
-  title: "JUPR Leagues",
-  description: "Live pickleball ratings, leaderboards, player profiles, and event scoring for clubs."
+  title: productName,
+  description: "Club websites, live scoring, ratings, leaderboards, player profiles, and event scoring for pickleball clubs."
 };
 
 const shellStyle: CSSProperties = {
@@ -54,7 +56,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <header style={headerStyle}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <Link href="/" style={{ fontWeight: 800, color: "inherit", textDecoration: "none", letterSpacing: "-0.02em" }}>
-                JUPR Leagues
+                {productName}
               </Link>
               {isStaging ? (
                 <span style={{ fontSize: "0.75rem", padding: "0.15rem 0.4rem", background: "#fef3c7", borderRadius: "4px" }}>
@@ -79,7 +81,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </header>
           <main>{children}</main>
           <footer style={footerStyle}>
-            <span style={{ color: "#475569" }}>JUPR is the live ratings and event layer for pickleball clubs.</span>
+            <span style={{ color: "#475569" }}>{productName} is the live ratings and event layer for pickleball clubs.</span>
             <nav style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }} aria-label="Footer navigation">
               <Link href="/site-map">Site Map</Link>
               <Link href="/clubs/tres-palapas/league-results">League Results</Link>
