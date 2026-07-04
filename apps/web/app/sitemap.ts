@@ -13,6 +13,7 @@ const routes = [
   "/clubs/tres-palapas/weekly-recap",
   "/clubs/tres-palapas/tournament-registration",
   "/clubs/tres-palapas/tournament-roster",
+  "/clubs/tres-palapas/tournament-partner-board",
   "/clubs/tres-palapas/players",
   "/clubs/tres-palapas/matches",
   "/how-ratings-work",
@@ -20,6 +21,7 @@ const routes = [
   "/privacy",
   "/terms",
   "/support",
+  "/contact",
   "/data-corrections"
 ];
 
