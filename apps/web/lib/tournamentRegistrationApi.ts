@@ -181,6 +181,41 @@ export type PublicRegistrationSubmitPayload = {
   selections: PublicRegistrationSelectionPayload[];
 };
 
+export type PublicRegistrationEditRegistration = {
+  id: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  display_name: string;
+  email: string;
+  phone?: string | null;
+  dupr_id?: string | null;
+  doubles_skill?: number | null;
+  singles_skill?: number | null;
+  age?: number | null;
+  gender?: string | null;
+  notes?: string | null;
+  wants_partner_board_contact?: boolean | null;
+  status?: string | null;
+  payment_status?: string | null;
+  submitted_at?: string | null;
+};
+
+export type PublicRegistrationEditSelection = PublicRegistrationSelectionPayload & { id: string };
+
+export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
+  edit_mode: boolean;
+  edit_token_valid: boolean;
+  edit_token_expires_at?: string | null;
+  registration: PublicRegistrationEditRegistration;
+  selections: PublicRegistrationEditSelection[];
+  total_price_usd: number;
+};
+
+export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email"> & {
+  edit_token: string;
+  email?: string | null;
+};
+
 export type PublicRegistrationSubmitResponse = {
   club: { id: string; slug: string; name: string };
   ok: boolean;
@@ -265,6 +300,16 @@ export async function getClubTournamentRegistration(
   return fetchJson<TournamentRegistrationResponse>(`/clubs/${clubSlug}/tournament-registration${suffix}`);
 }
 
+export async function getClubTournamentRegistrationEdit(
+  clubSlug: string,
+  params: { editToken: string; tournamentId?: string | null; registrationSlug?: string | null }
+): Promise<ApiResult<PublicRegistrationEditResponse>> {
+  const query = new URLSearchParams({ edit_token: params.editToken });
+  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
+  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
+  return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`);
+}
+
 export async function getClubTournamentRoster(
   clubSlug: string,
   params?: { tournamentId?: string | null; registrationSlug?: string | null }
@@ -281,6 +326,17 @@ export async function submitClubTournamentRegistration(
   payload: PublicRegistrationSubmitPayload
 ): Promise<ApiResult<PublicRegistrationSubmitResponse>> {
   return fetchJson<PublicRegistrationSubmitResponse>(`/clubs/${clubSlug}/tournament-registration`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function submitClubTournamentRegistrationEdit(
+  clubSlug: string,
+  payload: PublicRegistrationEditSubmitPayload
+): Promise<ApiResult<PublicRegistrationSubmitResponse>> {
+  return fetchJson<PublicRegistrationSubmitResponse>(`/clubs/${clubSlug}/tournament-registration/edit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
