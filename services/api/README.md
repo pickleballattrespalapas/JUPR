@@ -2,7 +2,7 @@
 
 FastAPI service for the JUPR SaaS surface.
 
-Current production scope: public club/leaderboard/league-results/badge-codex/challenge-ladder/weekly-recap/tournament-registration/player/match/live/Match Explorer endpoints, status/admin planning endpoints, and guarded admin write endpoints that remain disabled by default.
+Current production scope: public club/leaderboard/league-results/badge-codex/challenge-ladder/weekly-recap/tournament-registration/tournament-roster/player/match/live/Match Explorer endpoints, status/admin planning endpoints, and guarded admin write endpoints that remain disabled by default.
 
 ## Run locally
 
@@ -103,7 +103,12 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `GET /clubs/{club_slug}/weekly-recaps/{week_start}/pdf`
 - `GET /clubs/{club_slug}/tournament-registration?registration_slug=...&tournament_id=...`
 - `POST /clubs/{club_slug}/tournament-registration`
+- `POST /clubs/{club_slug}/tournament-registration/edit-link/request`
+- `GET /clubs/{club_slug}/tournament-registration/edit?edit_token=...`
+- `POST /clubs/{club_slug}/tournament-registration/edit`
 - `GET /clubs/{club_slug}/tournament-registration/confirmations/{registration_id}`
+- `GET /clubs/{club_slug}/tournament-roster?registration_slug=...&tournament_id=...`
+- `POST /clubs/{club_slug}/tournament-registration/pairing-interest`
 - `GET /clubs/{club_slug}/players`
 - `GET /clubs/{club_slug}/players/{player_id}`
 - `GET /clubs/{club_slug}/matches`
@@ -118,62 +123,3 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 
 The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
-
-The League Results endpoint delegates to `jupr_app.services.public_league_results_service` and returns public-safe league options, standings, weekly summaries, cumulative player results, and highlights. It does not write matches.
-
-The Badge Codex endpoints delegate to `jupr_app.services.public_badge_codex_service` and return public-safe badge definitions, unlock paths, prestige, grouped sections, recent earners, and paginated earner rows. They do not expose badge evaluator internals or private player fields.
-
-The Challenge Ladder endpoint delegates to `jupr_app.services.public_challenge_ladder_service` and returns public-safe ladder tiers, player statuses, active challenge buckets, quick rules, and summarized challenge rows. It does not create challenges, write scores, expose ledger contacts, or mutate ranks.
-
-The Weekly Recap endpoints delegate to `jupr_app.services.public_weekly_recap_service` and return published-only recap summaries, sanitized `final_json` detail, and dependency-free PDF bytes. They do not expose drafts, generated/edit JSON, private notes, or admin publishing controls.
-
-The Tournament Registration endpoints delegate to `jupr_app.services.public_tournament_registration_service` and expose published tournament registration settings, selectable divisions, public confirmation summaries, and guarded registration intake. They do not create draws, seed brackets, enter scores, update ratings, expose admin notes, or expose service-role credentials to Vercel/browser code.
-
-The admin operations status endpoint delegates to `jupr_app.services.admin_operations_service` and returns workflow readiness plus pilot guardrails for the Next admin operations cockpit. It is status-only and does not mutate data.
-
-The admin Match Log endpoints delegate to `jupr_app.services.admin_match_log_service`. Read/scan visibility is enabled by `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG`. Edits and duplicate cleanup require `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY`, Supabase JWT auth, club-scoped role authorization, and Python domain services.
-
-The Match Explorer endpoints delegate to `jupr_app.services.public_match_explorer_service` and return public-safe player names/ratings plus projected matchup odds and rating movement. They do not write matches and do not move rating logic to JavaScript.
-
-## Admin score-entry guard
-
-Admin score-entry remains disabled by default.
-
-`POST /admin/clubs/{club_id}/matches/batch` returns 403 unless `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` / `true` / `yes`.
-
-Keep `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` unless the specific staff pilot has auth, club-scoped authorization, audit review, and a correction path.
-
-When enabled in controlled environments, this route requires Supabase JWT Bearer auth and role-based authorization for `enter_scores`.
-
-Auth design reference for future replacement of the temporary guard:
-
-- `docs/next_admin_auth_design.md`
-
-## CORS
-
-Allowed browser origins are configured by `JUPR_ALLOWED_ORIGINS` as a comma-separated list. If unset, the API allows local Next.js development plus:
-
-- `https://juprleagues.com`
-- `https://www.juprleagues.com`
-
-For Vercel preview testing, add the preview deployment origin to `JUPR_ALLOWED_ORIGINS` in the backend runtime.
-
-## Admin JWT auth (Supabase)
-
-- `PATCH /admin/clubs/{club_id}/match-log/edits` requires `Authorization: Bearer <access_token>` when the apply flag is enabled and requires `manage_matches` permission.
-- `POST /admin/clubs/{club_id}/match-log/duplicates/cleanup` requires `Authorization: Bearer <access_token>` when the apply flag is enabled and requires `delete_matches` permission.
-- `POST /admin/clubs/{club_id}/matches/batch` requires `Authorization: Bearer <access_token>` when the feature flag is enabled.
-- Feature flags remain disabled by default.
-- Disabled write endpoints return `403` before auth and writes.
-- JWT verification config (server-side only):
-  - Secret mode (default): `SUPABASE_JWT_SECRET` (+ optional `SUPABASE_JWT_AUDIENCE`, default `authenticated`).
-  - JWKS mode: `JUPR_SUPABASE_JWT_MODE=jwks` + `SUPABASE_JWKS_URL` (+ optional audience).
-- Do not use service-role or JWT secrets in browser/client code.
-
-## Admin audit logging
-
-- Successful admin match-batch and Match Log writes attempt to write `admin_activity_log` records with actor + club attribution.
-- Denied authenticated writes are flagged for review in audit logs when safe to do so.
-- `JUPR_REQUIRE_API_AUDIT_LOG=1` enables strict mode: write requests fail if audit logging cannot be recorded where strict mode is supported.
-- Default behavior degrades gracefully when audit table migration is missing.
-- Audit payloads include summary metadata (`source_page`, `source_client`) and do not include raw bearer tokens or secrets.
