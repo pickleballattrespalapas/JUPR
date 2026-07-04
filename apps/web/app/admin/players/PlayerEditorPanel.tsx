@@ -60,14 +60,10 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
-    const response = await fetch(apiUrl(apiBase, path), {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token.trim()}`,
-        ...(options?.headers || {})
-      }
-    });
+    const headers = new Headers(options?.headers);
+    headers.set("Content-Type", "application/json");
+    headers.set("Authorization", `Bearer ${token.trim()}`);
+    const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
     return payload as T;
