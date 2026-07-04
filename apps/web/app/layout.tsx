@@ -64,6 +64,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </div>
             <nav style={navStyle} aria-label="Primary navigation">
               <Link href="/">Home</Link>
+              <Link href="/site-map">Site Map</Link>
               <Link href="/clubs/tres-palapas">Club</Link>
               <Link href="/clubs/tres-palapas/live">Live</Link>
               <Link href="/clubs/tres-palapas/leaderboards">Leaderboards</Link>
@@ -80,6 +81,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <footer style={footerStyle}>
             <span style={{ color: "#475569" }}>JUPR is the live ratings and event layer for pickleball clubs.</span>
             <nav style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }} aria-label="Footer navigation">
+              <Link href="/site-map">Site Map</Link>
               <Link href="/clubs/tres-palapas/league-results">League Results</Link>
               <Link href="/clubs/tres-palapas/badge-codex">Badge Codex</Link>
               <Link href="/clubs/tres-palapas/challenge-ladder">Challenge Ladder</Link>
