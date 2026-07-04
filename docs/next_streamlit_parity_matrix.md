@@ -95,7 +95,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `tournament_registration_admin` | 🧾 Registration Management | Admin | `Not started`; listed under tournament admin in `/admin` operations cockpit. | Yes | Admin auth + registration audit gate | Port after public registration write path is proven in staging. |
 | `tournament_registration_confirmation` | ✅ Registration Confirmation | Public hidden | `Partial` — public FastAPI confirmation API and Next confirmation route exist. | No | Public form flow | Validate staging and add secure email/edit-link handoff. |
 | `tournament_registration_edit` | ✏️ Edit Registration | Public hidden | `Not started`. | Yes/intake | Tokenized edit/auth gate | Add secure edit links before porting. |
-| `tournament_roster` | 📋 Tournament Roster | Public hidden | `Not started`. | No | Public tournament read model | Add Next roster route using public tournament roster state. |
+| `tournament_roster` | 📋 Tournament Roster | Public hidden | `Partial` — public FastAPI roster API and Next `/clubs/[clubSlug]/tournament-roster` route exist with public-safe roster, summary, and needs-partner visibility. | No | Public tournament read model + smoke | Validate staging and then connect partner-board/edit-link handoff. |
 | `tournament_partner_board` | 🤝 Partner Board | Public | `Not started`. | Possibly yes | Public/organizer moderation gate | Define safe public interaction rules before porting. |
 | `weekly_recap` | 🗞️ Weekly Recap | Public | `Partial` — public FastAPI published-recap/PDF APIs and Next `/clubs/[clubSlug]/weekly-recap` route exist. | No | Public smoke + contract tests | Validate staging, then close final styling/print-view parity gaps. |
 | `top_players_printable` | 🧾 Top Active Players PDF | Admin | `Not started`. | Export only | Admin/PDF export gate | Defer until PDF/export strategy is standardized. |
@@ -121,8 +121,9 @@ Any admin workflow may fully move off Streamlit only when:
 12. Validate Match Uploader round-robin scheduling and new-player creation parity in staging.
 13. Validate Player Editor create/update foundation in staging.
 14. Validate League Manager read foundation in staging.
-15. Port public tournament roster and partner board.
-16. Port tournament/challenge/admin tools after the write foundation is proven.
+15. Validate public Tournament Roster in staging.
+16. Port public tournament partner board and edit-link handoff.
+17. Port tournament/challenge/admin tools after the write foundation is proven.
 
 ## Maintenance rule
 
