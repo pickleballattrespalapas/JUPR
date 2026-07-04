@@ -25,7 +25,7 @@ export default async function ClubPlayersPage({ params }: PlayersPageProps) {
       </p>
       <h1 style={{ marginTop: 0 }}>{clubName} players</h1>
       <p style={{ color: "#334155" }}>
-        Player profiles connect the core JUPR loop: ratings, match history, and league-specific performance.
+        Player profiles connect ratings, match history, and league-specific performance.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Players are temporarily unavailable. {error}</p> : null}
@@ -37,7 +37,7 @@ export default async function ClubPlayersPage({ params }: PlayersPageProps) {
             <thead>
               <tr>
                 <th style={thStyle}>Player</th>
-                <th style={thStyle}>JUPR</th>
+                <th style={thStyle}>Rating</th>
                 <th style={thStyle}>Matches</th>
                 <th style={thStyle}>W/L</th>
                 <th style={thStyle}>Status</th>

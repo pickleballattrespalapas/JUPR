@@ -58,7 +58,7 @@ export default async function PlayerProfilePage({ params }: PlayerProfilePagePro
       <h1 style={{ marginTop: 0 }}>{player.name}</h1>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-        <article style={cardStyle}><strong>Current JUPR</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.rating)}</div></article>
+        <article style={cardStyle}><strong>Current rating</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.rating)}</div></article>
         <article style={cardStyle}><strong>Matches</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.matches_played ?? wins + losses}</div></article>
         <article style={cardStyle}><strong>Record</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{wins}/{losses}</div></article>
         <article style={cardStyle}><strong>Status</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.is_active === false ? "Inactive" : "Active"}</div></article>
