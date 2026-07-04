@@ -6,6 +6,10 @@ from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 from supabase import Client
 
+from jupr_app.services.public_tournament_registration_edit_service import (
+    build_public_tournament_registration_edit_page,
+    submit_public_tournament_registration_edit,
+)
 from jupr_app.services.public_tournament_registration_service import (
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
@@ -35,6 +39,16 @@ class PublicTournamentRegistrationRequest(BaseModel):
     selections: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class PublicTournamentRegistrationEditRequest(PublicTournamentRegistrationRequest):
+    edit_token: str
+
+
+def _dump_model(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
 def install_public_tournament_registration_routes(
     app,
     *,
@@ -60,6 +74,47 @@ def install_public_tournament_registration_routes(
             registration_slug=registration_slug,
         )
         return {"club": public_club_payload(club, club_slug), **page}
+
+    @app.get("/clubs/{club_slug}/tournament-registration/edit")
+    def get_club_tournament_registration_edit(
+        club_slug: str,
+        edit_token: str = Query(...),
+        tournament_id: str | None = Query(default=None),
+        registration_slug: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        try:
+            page = build_public_tournament_registration_edit_page(
+                supabase,
+                club_id=club_id,
+                edit_token=edit_token,
+                tournament_id=tournament_id,
+                registration_slug=registration_slug,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"club": public_club_payload(club, club_slug), **page}
+
+    @app.post("/clubs/{club_slug}/tournament-registration/edit")
+    def submit_club_tournament_registration_edit(
+        club_slug: str,
+        payload: PublicTournamentRegistrationEditRequest,
+    ) -> dict[str, Any]:
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        try:
+            result = submit_public_tournament_registration_edit(
+                supabase,
+                club_id=club_id,
+                edit_token=payload.edit_token,
+                payload=_dump_model(payload),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"club": public_club_payload(club, club_slug), **result}
 
     @app.get("/clubs/{club_slug}/tournament-roster")
     def get_club_tournament_roster(
@@ -90,7 +145,7 @@ def install_public_tournament_registration_routes(
             result = submit_public_tournament_registration(
                 supabase,
                 club_id=club_id,
-                payload=payload.dict(),
+                payload=_dump_model(payload),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
