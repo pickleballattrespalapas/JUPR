@@ -1,10 +1,8 @@
-# Next.js → FastAPI Admin Auth Design (future implementation)
+# Next.js → FastAPI Admin Auth Design
 
 ## Purpose
 
 Define the minimum production-grade authentication and authorization contract required before enabling Next.js admin score entry.
-
-This document is a design stub only. **No auth behavior is implemented by this document** and current runtime behavior must remain unchanged.
 
 ## Scope
 
@@ -15,9 +13,9 @@ In scope:
 - Audit attribution for admin write actions.
 
 Out of scope:
-- Implementing auth in this PR.
-- Enabling Next.js admin score entry.
-- Changing existing endpoint behavior.
+- Enabling Next.js admin score entry by default.
+- Moving all admin workflows off Streamlit at once.
+- Changing existing guarded endpoint behavior without workflow-specific flags.
 
 ## 1) Authentication source and transport
 
@@ -93,7 +91,7 @@ Rollout must proceed in this order:
 Before enabling Next.js admin score entry for rated workflows, future implementation PRs must satisfy this design contract end-to-end.
 
 
-## Implementation status (Prompt 07)
+## FastAPI auth status (Prompt 07)
 
 - FastAPI admin score entry route now uses Bearer JWT auth scaffolding for Supabase tokens.
 - Authorization resolves role from `admin_role_assignments` by `club_id` + `email/user_id` and enforces `enter_scores`.
@@ -109,3 +107,20 @@ Before enabling Next.js admin score entry for rated workflows, future implementa
 - Unauthenticated requests are not audit-logged to avoid token leakage risk.
 - Strict mode: set `JUPR_REQUIRE_API_AUDIT_LOG=1` to fail writes when audit persistence fails.
 - Default mode degrades gracefully if `admin_activity_log` is unavailable in staging.
+
+## Next admin login foundation
+
+- `/admin/login` now provides a Next-side Supabase Auth login shell using browser-safe public Supabase configuration.
+- The login shell supports password sign-in, magic-link requests, hash-token callback consumption, token refresh, and sign-out.
+- The admin operations cockpit shows whether the current browser has a stored admin session.
+- Runtime configuration required on Vercel:
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- The login shell does **not** enable writes by itself. Every write workflow still requires its FastAPI feature flag, server-side JWT validation, role authorization, club scope, and audit/correction protections.
+
+## Remaining admin-login work before broad admin cutover
+
+- Route guarded admin write forms to use the stored admin session token instead of manual token paste.
+- Add server/route-handler validation helpers where same-origin Next admin API routes are introduced.
+- Add browser E2E or equivalent staging validation for sign-in, sign-out, expired token, wrong-club, and permission-denied cases.
+- Keep Streamlit fallback available until each workflow-specific pilot is proven.
