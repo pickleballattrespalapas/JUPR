@@ -280,6 +280,7 @@ def _build_checks(
             ("web: sitemap xml", "/sitemap.xml"),
             ("web: site map", "/site-map"),
             ("web: admin operations", "/admin"),
+            ("web: admin login", "/admin/login"),
             ("web: admin match log", "/admin/match-log"),
             ("web: admin replay", "/admin/replay-history"),
             ("web: admin match uploader", "/admin/match-uploader"),
