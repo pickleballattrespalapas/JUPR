@@ -44,9 +44,10 @@ const routeGroups = [
     ]
   },
   {
-    heading: "Admin migration shell",
+    heading: "Staff operations shell",
     routes: [
-      ["Admin cockpit", "/admin"],
+      ["Operations cockpit", "/admin"],
+      ["Staff sign-in", "/admin/login"],
       ["Match Log", "/admin/match-log"],
       ["Replay History", "/admin/replay-history"],
       ["Match Uploader", "/admin/match-uploader"],
@@ -64,7 +65,7 @@ export default function SiteMapPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Pickleball Club Sandwich route map</h1>
       <p style={{ color: "#334155", maxWidth: "780px" }}>
-        A click-through map for public pages, tournament pages, support routes, and the read-only admin migration shell.
+        A click-through map for public pages, tournament pages, support routes, and the staff operations shell.
       </p>
       <div style={{ display: "grid", gap: "1.25rem" }}>
         {routeGroups.map((group) => (
