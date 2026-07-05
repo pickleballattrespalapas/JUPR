@@ -2,8 +2,9 @@ import Link from "next/link";
 import { getAdminOperationsStatus } from "@/lib/adminOperationsApi";
 import type { AdminWorkflowStatus } from "@/lib/adminOperationsApi";
 
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
 const mutedStyle = { color: "#475569" };
+const codeStyle = { whiteSpace: "normal" as const, overflowWrap: "anywhere" as const, wordBreak: "break-word" as const };
 
 function statusLabel(status: string): string {
   return status.replace(/_/g, " ");
@@ -19,11 +20,11 @@ function riskStyle(risk: string) {
 function WorkflowCard({ workflow }: { workflow: AdminWorkflowStatus }) {
   const routeAvailable = Boolean(workflow.next_route);
   return (
-    <article style={cardStyle}>
+    <article style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: "0.6rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <h2 style={{ margin: "0 0 0.25rem", fontSize: "1.08rem" }}>{workflow.label}</h2>
-          <p style={{ margin: 0, color: "#64748b", fontSize: "0.85rem" }}>{workflow.streamlit_page_key} · {workflow.api_scope}</p>
+          <p style={{ margin: 0, color: "#64748b", fontSize: "0.85rem", overflowWrap: "anywhere" }}>{workflow.streamlit_page_key} · {workflow.api_scope}</p>
         </div>
         <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
           <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.15rem 0.5rem", fontSize: "0.76rem", background: workflow.enabled ? "#dcfce7" : "white" }}>
@@ -34,14 +35,16 @@ function WorkflowCard({ workflow }: { workflow: AdminWorkflowStatus }) {
           </span>
         </div>
       </div>
-      <p style={mutedStyle}>{workflow.next_action}</p>
-      <p style={{ color: "#64748b", fontSize: "0.85rem" }}><strong>Flag:</strong> <code>{workflow.env_flag}</code></p>
+      <p style={{ ...mutedStyle, margin: 0 }}>{workflow.next_action}</p>
+      <p style={{ color: "#64748b", fontSize: "0.85rem", margin: 0 }}><strong>Flag:</strong> <code style={codeStyle}>{workflow.env_flag}</code></p>
       {workflow.safety_notes?.length ? (
-        <ul style={{ color: "#475569", paddingLeft: "1.2rem", marginBottom: "0.75rem" }}>
-          {workflow.safety_notes.map((note) => <li key={note}>{note}</li>)}
+        <ul style={{ color: "#475569", paddingLeft: "1.2rem", margin: 0 }}>
+          {workflow.safety_notes.map((note) => <li key={note} style={{ overflowWrap: "anywhere", marginBottom: "0.35rem" }}>{note}</li>)}
         </ul>
       ) : null}
-      {routeAvailable ? <Link href={workflow.next_route || "/admin"}>Open Next route</Link> : <span style={{ color: "#64748b" }}>Next route pending</span>}
+      <p style={{ margin: "auto 0 0" }}>
+        {routeAvailable ? <Link href={workflow.next_route || "/admin"}>Open Next route</Link> : <span style={{ color: "#64748b" }}>Next route pending</span>}
+      </p>
     </article>
   );
 }
@@ -91,9 +94,9 @@ export default async function AdminEntryPage() {
             {(sequence ?? workflows).map((workflow, index) => (
               <article key={`seq-${workflow.key}`} style={{ ...cardStyle, display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.75rem", alignItems: "start" }}>
                 <div style={{ fontWeight: 800, color: "#2563eb" }}>{index + 1}</div>
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <strong>{workflow.label}</strong>
-                  <div style={{ color: "#64748b", fontSize: "0.86rem" }}>{workflow.next_action}</div>
+                  <div style={{ color: "#64748b", fontSize: "0.86rem", overflowWrap: "anywhere" }}>{workflow.next_action}</div>
                 </div>
               </article>
             ))}
@@ -107,14 +110,14 @@ export default async function AdminEntryPage() {
           <h2>Pilot gates</h2>
           <article style={cardStyle}>
             <ol style={{ margin: 0, paddingLeft: "1.25rem" }}>
-              {data.pilot_gates.map((gate) => <li key={gate} style={{ marginBottom: "0.35rem" }}>{gate}</li>)}
+              {data.pilot_gates.map((gate) => <li key={gate} style={{ marginBottom: "0.35rem", overflowWrap: "anywhere" }}>{gate}</li>)}
             </ol>
           </article>
 
           <h2>Permanent guardrails</h2>
           <article style={cardStyle}>
             <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
-              {data.permanent_guardrails.map((guardrail) => <li key={guardrail} style={{ marginBottom: "0.35rem" }}>{guardrail}</li>)}
+              {data.permanent_guardrails.map((guardrail) => <li key={guardrail} style={{ marginBottom: "0.35rem", overflowWrap: "anywhere" }}>{guardrail}</li>)}
             </ul>
           </article>
         </>
