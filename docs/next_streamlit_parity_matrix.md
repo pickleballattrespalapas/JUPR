@@ -64,7 +64,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
 | `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist with Streamlit-compatible deep links, share-link hydration, beat-expectation metrics, player-level projected deltas, and rating-impact predictor chart. | No | Public smoke + contract tests | Validate chart/deep-link parity in staging, then close any styling/copy gaps. |
 | `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist. | No | Public smoke + contract tests | Add trophy room/badge/profile parity and improve search/deep links. |
-| `badge_codex` | 📼 Badge Codex | Public | `Partial` — public FastAPI badge/earner APIs and Next `/clubs/[clubSlug]/badge-codex` route exist. | No | Public smoke + contract tests | Validate staging, then close load-more/deep-link/trophy-room parity gaps. |
+| `badge_codex` | 📼 Badge Codex | Public | `Partial` — public FastAPI badge/earner APIs and Next `/clubs/[clubSlug]/badge-codex` route exist with section filters, load-more links, direct badge anchors, and a recent-earner trophy room. | No | Public smoke + contract tests | Validate load-more/deep-link/trophy-room parity in staging, then close final styling/copy gaps. |
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
 | `badge_audit` | 🧾 Badge Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Define admin badge audit API after badge public read model is stable. |
 | `match_canonical_audit` | 🧩 Match Canonical Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Keep Streamlit-only until replay/correction APIs exist. |
@@ -92,7 +92,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `tournament_ops` | 📋 Tournament Operations | Admin | `Not started`; listed under tournament admin in `/admin` operations cockpit. | Yes | Admin auth + tournament ops/audit gate | Port after tournament setup APIs. |
 | `tournament_live` | 🔴 Tournament Live | Admin | `Not started`. | Yes | Admin auth + live/tournament gate | Define relation to public Live before porting. |
 | `tournament_registration` | 📝 Tournament Registration | Public | `Partial` — public FastAPI registration page/submit APIs and Next `/clubs/[clubSlug]/tournament-registration` route exist. | Yes/intake | Public form + validation + anti-abuse + staging smoke gate | Validate staging, then close edit-link/email-confirmation parity gaps. |
-| `tournament_registration_admin` | 🧾 Registration Management | Admin | `Not started`; listed under tournament admin in `/admin` operations cockpit. | Yes | Admin auth + registration audit gate | Port after public registration write path is proven in staging. |
+| `tournament_registration_admin` | 🧾 Registration Management | Admin | `Not started`; listed under tournament admin in `/admin` operations cockpit. | Yes | Admin auth + registration audit gate | Port after public registration write path is proven. |
 | `tournament_registration_confirmation` | ✅ Registration Confirmation | Public hidden | `Partial` — public FastAPI confirmation API and Next confirmation route exist. | No | Public form flow | Validate staging and add secure email/edit-link handoff. |
 | `tournament_registration_edit` | ✏️ Edit Registration | Public hidden | `Not started`. | Yes/intake | Tokenized edit/auth gate | Add secure edit links before porting. |
 | `tournament_roster` | 📋 Tournament Roster | Public hidden | `Partial` — public FastAPI roster API and Next `/clubs/[clubSlug]/tournament-roster` route exist with public-safe roster, summary, and needs-partner visibility. | No | Public tournament read model + smoke | Validate staging and then connect edit-link handoff. |
@@ -110,7 +110,7 @@ Any admin workflow may fully move off Streamlit only when:
 1. Keep public read-only staging smoke and Vercel guardrails green.
 2. Validate public Match Explorer chart/deep-link parity in staging and close any final styling/copy gaps.
 3. Validate public League Results chart/deep-link/printout parity in staging and close any final styling/copy gaps.
-4. Validate public Badge Codex in staging and close load-more/deep-link/trophy-room parity gaps.
+4. Validate public Badge Codex load-more/deep-link/trophy-room parity in staging and close final styling/copy gaps.
 5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
 6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
 7. Review/approve static FAQ/legal/support copy and smoke the static routes.
