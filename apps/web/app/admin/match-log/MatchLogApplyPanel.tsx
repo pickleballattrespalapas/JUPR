@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { AdminDuplicateDeletePreview, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
+import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogApplyPanelProps = {
   apiBase: string | null;
@@ -26,7 +28,7 @@ function resultSummary(result: AdminMatchLogWriteResult | null): string | null {
 }
 
 export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicatePreview }: MatchLogApplyPanelProps) {
-  const [token, setToken] = useState("");
+  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [patchesJson, setPatchesJson] = useState('[\n  {"id": 123, "week_tag": "Week 1"}\n]');
   const [correctionNote, setCorrectionNote] = useState("");
   const [applyConfirm, setApplyConfirm] = useState("");
@@ -37,12 +39,12 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
 
   async function callApi(path: string, method: "PATCH" | "POST", body: unknown) {
     if (!apiBase) throw new Error("API base URL is not configured.");
-    if (!token.trim()) throw new Error("Paste a Supabase admin access token first.");
+    if (!accessToken) throw new Error("Sign in at /admin/login before applying Match Log changes.");
     const response = await fetch(apiUrl(apiBase, path), {
       method,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token.trim()}`
+        Authorization: `Bearer ${accessToken}`
       },
       body: JSON.stringify(body)
     });
@@ -109,15 +111,23 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Apply audited Match Log changes</h2>
       <p style={{ color: "#475569" }}>
-        This panel calls FastAPI write endpoints with a Supabase admin access token. It does not write directly from the browser to Supabase.
+        This panel uses the signed-in admin browser session and calls FastAPI write endpoints with a Supabase access token. It does not write directly from the browser to Supabase.
       </p>
 
+      <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
+        <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
+        <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
+          {accessToken ? "Ready to send authorized Match Log requests." : sessionLoading ? "Checking admin session…" : "Sign in before applying changes or cleaning duplicates."}
+        </p>
+        {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
+        {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
+      </div>
+
       <div style={{ display: "grid", gap: "0.75rem" }}>
-        <label><strong>Supabase access token</strong><br /><input type="password" value={token} onChange={(event) => setToken(event.target.value)} style={inputStyle} /></label>
         <label><strong>Correction note</strong><br /><input value={correctionNote} onChange={(event) => setCorrectionNote(event.target.value)} style={inputStyle} /></label>
         <label><strong>Patch JSON</strong><br /><textarea value={patchesJson} onChange={(event) => setPatchesJson(event.target.value)} rows={7} style={{ ...inputStyle, fontFamily: "monospace" }} /></label>
         <label><strong>Type APPLY to confirm edits</strong><br /><input value={applyConfirm} onChange={(event) => setApplyConfirm(event.target.value)} style={inputStyle} /></label>
-        <button type="button" onClick={submitPatches} disabled={busy || applyConfirm.trim().toUpperCase() !== "APPLY"} style={buttonStyle}>
+        <button type="button" onClick={submitPatches} disabled={busy || !accessToken || applyConfirm.trim().toUpperCase() !== "APPLY"} style={buttonStyle}>
           {busy ? "Working…" : "Apply match edits"}
         </button>
       </div>
@@ -130,7 +140,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       </p>
       <label><strong>Type DELETE to confirm duplicate cleanup</strong><br /><input value={cleanupConfirm} onChange={(event) => setCleanupConfirm(event.target.value)} style={inputStyle} /></label>
       <p>
-        <button type="button" onClick={cleanupDuplicates} disabled={busy || cleanupConfirm.trim().toUpperCase() !== "DELETE" || !(duplicatePreview?.delete_ids?.length)} style={buttonStyle}>
+        <button type="button" onClick={cleanupDuplicates} disabled={busy || !accessToken || cleanupConfirm.trim().toUpperCase() !== "DELETE" || !(duplicatePreview?.delete_ids?.length)} style={buttonStyle}>
           {busy ? "Working…" : "Clean duplicate rows from preview"}
         </button>
       </p>
