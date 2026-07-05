@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import type { PublicPlayer } from '@/lib/api';
 import type {
@@ -8,6 +9,7 @@ import type {
   AdminMatchUploaderStatusResponse,
   AdminMatchUploaderWriteResult
 } from '@/lib/adminMatchUploaderApi';
+import { adminSessionLabel, useAdminSession } from '@/lib/useAdminSession';
 
 type Props = {
   apiBase: string | null;
@@ -137,8 +139,8 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
 
 export default function MatchUploaderForm({ apiBase, clubId, players, status }: Props) {
   const firstFormat = status.round_robin_format_options?.[0] || '4-Player';
+  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
-  const [token, setToken] = useState('');
   const [entryMethod, setEntryMethod] = useState<'manual' | 'round_robin'>('manual');
   const [context, setContext] = useState<'league' | 'popup'>('league');
   const [defaultDate, setDefaultDate] = useState(todayIsoDate());
@@ -168,8 +170,8 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       setMessage('API base URL is not configured.');
       return false;
     }
-    if (!token.trim()) {
-      setMessage('Paste a Supabase admin access token first.');
+    if (!accessToken) {
+      setMessage('Sign in at /admin/login before using Match Uploader.');
       return false;
     }
     if (!status.enabled) {
@@ -206,9 +208,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
 
   async function postJson<T>(path: string, body: unknown): Promise<T> {
     if (!apiBase) throw new Error('API base URL is not configured.');
+    if (!accessToken) throw new Error('Sign in at /admin/login before using Match Uploader.');
     const response = await fetch(apiUrl(apiBase, path), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token.trim()}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body)
     });
     const payload = await response.json().catch(() => null);
@@ -355,8 +358,15 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Match entry setup</h2>
         <p style={{ color: '#475569' }}>Manual/batch entry and Streamlit-style single round-robin generation both submit through FastAPI, Supabase JWT role authorization, and the Python match-processing service.</p>
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '0.75rem', background: accessToken ? '#f0fdf4' : '#fffbeb', marginBottom: '0.75rem' }}>
+          <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : 'Admin session required'}</strong>
+          <p style={{ margin: '0.35rem 0 0', color: accessToken ? '#166534' : '#92400e' }}>
+            {accessToken ? 'Ready to send authorized Match Uploader requests.' : sessionLoading ? 'Checking admin session…' : 'Sign in before generating schedules, creating players, or submitting matches.'}
+          </p>
+          {sessionMessage ? <p style={{ color: '#b91c1c', marginBottom: 0 }}>{sessionMessage}</p> : null}
+          {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href='/admin/login'>Open admin login</Link></p> : null}
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
-          <label><strong>Supabase access token</strong><br /><input value={token} onChange={(event) => setToken(event.target.value)} type='password' style={inputStyle} /></label>
           <label><strong>Entry method</strong><br /><select value={entryMethod} onChange={(event) => setEntryMethod(event.target.value as 'manual' | 'round_robin')} style={inputStyle}><option value='manual'>Manual / Batch</option><option value='round_robin'>Single Round Robin</option></select></label>
           <label><strong>Context</strong><br /><select value={context} onChange={(event) => setContext(event.target.value as 'league' | 'popup')} style={inputStyle}><option value='league'>Official League</option><option value='popup'>Pop-Up / Social</option></select></label>
           <label><strong>Default date</strong><br /><input value={defaultDate} onChange={(event) => setDefaultDate(event.target.value)} type='date' style={inputStyle} /></label>
@@ -394,7 +404,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
             ))}
           </div>
           <p><strong>Ready rows:</strong> {validRows.length} / {rows.length}</p>
-          <button type='button' onClick={submitManualBatch} disabled={saving || !validRows.length} style={buttonStyle}>{saving ? 'Submitting…' : 'Submit batch'}</button>
+          <button type='button' onClick={submitManualBatch} disabled={saving || !accessToken || !validRows.length} style={buttonStyle}>{saving ? 'Submitting…' : 'Submit batch'}</button>
         </article>
       ) : (
         <>
@@ -414,7 +424,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
             </div>
             <p><button type='button' onClick={() => setRrCourts((current) => [...current, { rowId: randomId('court'), formatType: firstFormat, namesText: '' }])} disabled={rrCourts.length >= 10} style={ghostButtonStyle}>Add court</button></p>
             <label><strong>Custom schedule override</strong><br /><textarea value={rrCustomSchedule} onChange={(event) => setRrCustomSchedule(event.target.value)} rows={3} placeholder='Optional lines like: 1 2 3 4' style={inputStyle} /></label>
-            <p><button type='button' onClick={generateRoundRobin} disabled={generating || creatingPlayers} style={buttonStyle}>{generating ? 'Generating…' : 'Generate schedule'}</button></p>
+            <p><button type='button' onClick={generateRoundRobin} disabled={generating || creatingPlayers || !accessToken} style={buttonStyle}>{generating ? 'Generating…' : 'Generate schedule'}</button></p>
           </article>
 
           {newPlayerDrafts.length ? (
@@ -429,7 +439,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                   </div>
                 ))}
               </div>
-              <p><button type='button' onClick={createPlayersAndContinue} disabled={creatingPlayers || generating} style={buttonStyle}>{creatingPlayers ? 'Creating…' : 'Create Players & Continue'}</button></p>
+              <p><button type='button' onClick={createPlayersAndContinue} disabled={creatingPlayers || generating || !accessToken} style={buttonStyle}>{creatingPlayers ? 'Creating…' : 'Create Players & Continue'}</button></p>
             </article>
           ) : null}
 
@@ -455,7 +465,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                 ))}
               </div>
               <p><strong>Scored games:</strong> {scoredRrRows.length} / {rrSchedule.reduce((total, court) => total + court.matches.length, 0)}</p>
-              <button type='button' onClick={submitRoundRobinScores} disabled={saving || !scoredRrRows.length} style={buttonStyle}>{saving ? 'Submitting…' : 'Submit scored round-robin games'}</button>
+              <button type='button' onClick={submitRoundRobinScores} disabled={saving || !accessToken || !scoredRrRows.length} style={buttonStyle}>{saving ? 'Submitting…' : 'Submit scored round-robin games'}</button>
             </article>
           ) : null}
         </>
