@@ -58,7 +58,7 @@ Any admin workflow may fully move off Streamlit only when:
 | Streamlit key | Streamlit label | Access | Current Next/FastAPI coverage | Writes? | Required gate | Next action |
 |---|---|---|---|---|---|---|
 | `home` | Home | Public | `Done` — Next `/` product shell exists. | No | Public smoke | Keep aligned with product positioning and club-aware routing. |
-| `leaderboards` | 🏆 Leaderboards | Public | `Partial` — Next `/clubs/[clubSlug]/leaderboards` and FastAPI leaderboard API exist. | No | Public smoke + contract tests | Close display parity gaps: league filters, top performers, badge chips, inactive rules. |
+| `leaderboards` | 🏆 Leaderboards | Public | `Partial` — Next `/clubs/[clubSlug]/leaderboards` and FastAPI leaderboard API exist with league/status/sort filters, top ratings/most active/best win % chart cards, player deep links, status chips, and inactive visibility. | No | Public smoke + contract tests | Validate leaderboard display parity in staging, then close final styling/copy gaps. |
 | `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile route naming with `/faq` and final product copy. |
 | `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist with league tabs, section/week/player deep links, standings/weekly/player charts, and print-friendly view. | No | Public smoke + contract tests | Validate chart/deep-link/printout parity in staging, then close any final styling/copy gaps. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
@@ -113,17 +113,19 @@ Any admin workflow may fully move off Streamlit only when:
 4. Validate public Badge Codex load-more/deep-link/trophy-room parity in staging and close final styling/copy gaps.
 5. Validate public Challenge Ladder deep-link/public-rule parity in staging and close final styling/copy gaps.
 6. Validate public Weekly Recap final styling/print-view parity in staging and close final copy gaps.
-7. Review/approve static FAQ/legal/support copy and smoke the static routes.
-8. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
-9. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
-10. Validate Match Log apply + Replay History in the closed-club pilot.
-11. Validate Match Uploader manual/batch entry.
-12. Validate Match Uploader round-robin scheduling and new-player creation parity in staging.
-13. Validate Player Editor create/update foundation in staging.
-14. Validate League Manager read foundation in staging.
-15. Validate public Tournament Roster and read-only Partner Board in staging.
-16. Port public tournament edit-link handoff and partner request flow.
-17. Port tournament/challenge/admin tools after the write foundation is proven.
+7. Validate public Leaderboards filters/charts/inactive visibility in staging and close final styling/copy gaps.
+8. Improve public Player Search/profile/trophy-room parity and validate in staging.
+9. Review/approve static FAQ/legal/support copy and smoke the static routes.
+10. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
+11. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
+12. Validate Match Log apply + Replay History in the closed-club pilot.
+13. Validate Match Uploader manual/batch entry.
+14. Validate Match Uploader round-robin scheduling and new-player creation parity in staging.
+15. Validate Player Editor create/update foundation in staging.
+16. Validate League Manager read foundation in staging.
+17. Validate public Tournament Roster and read-only Partner Board in staging.
+18. Port public tournament edit-link handoff and partner request flow.
+19. Port tournament/challenge/admin tools after the write foundation is proven.
 
 ## Maintenance rule
 
