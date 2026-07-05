@@ -307,6 +307,14 @@ def _build_checks(
             ("web: data corrections", "/data-corrections"),
         ]:
             checks.append(SmokeCheck(label, _join_url(web_base_url, path), (200,)))
+        checks.append(
+            SmokeCheck(
+                "web: match explorer preview proxy validation",
+                _join_url(web_base_url, f"/api/clubs/{club_slug}/match-explorer/preview"),
+                (422,),
+                require_json=True,
+            )
+        )
 
     return checks
 
