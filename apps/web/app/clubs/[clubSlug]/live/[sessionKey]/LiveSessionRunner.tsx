@@ -67,6 +67,8 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession, e
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const canEdit = Boolean(editToken);
+  const publicPath = `/clubs/${clubSlug}/live/${session.session_key}`;
+  const editPath = `${publicPath}?edit=${encodeURIComponent(editToken)}`;
 
   const allMatches = useMemo(() => {
     const seen = new Set<string>();
@@ -83,6 +85,18 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession, e
     }
     return matches;
   }, [session]);
+  const scoredMatches = allMatches.filter((match) => match.is_scored).length;
+  const progressLabel = allMatches.length ? `${scoredMatches}/${allMatches.length}` : "0/0";
+
+  async function copyPath(path: string, label: string) {
+    try {
+      const absolute = typeof window === "undefined" ? path : `${window.location.origin}${path}`;
+      await navigator.clipboard.writeText(absolute);
+      setMessage(`${label} copied.`);
+    } catch {
+      setMessage(`Unable to copy ${label.toLowerCase()}.`);
+    }
+  }
 
   async function saveScores() {
     if (!apiBase) {
@@ -179,6 +193,23 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession, e
         </span>
       </div>
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+        <article style={cardStyle}><strong>Rounds</strong><br />{session.rounds.length}</article>
+        <article style={cardStyle}><strong>Matches scored</strong><br />{progressLabel}</article>
+        <article style={cardStyle}><strong>Current round</strong><br />{session.current_round ?? "—"}</article>
+        <article style={cardStyle}><strong>Mode</strong><br />{canEdit ? "Score entry" : "Public view"}</article>
+      </div>
+
+      <div style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
+        <strong>Share links</strong>
+        <p style={{ color: "#475569" }}>Share the public link with players. Keep the edit link private for score entry.</p>
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          <Link href={publicPath}>Open public view</Link>
+          <button type="button" onClick={() => copyPath(publicPath, "Public link")} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", fontWeight: 800, cursor: "pointer" }}>Copy public link</button>
+          {canEdit ? <button type="button" onClick={() => copyPath(editPath, "Edit link")} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", fontWeight: 800, cursor: "pointer" }}>Copy edit link</button> : null}
+        </div>
+      </div>
+
       {canEdit ? (
         <div style={{ ...cardStyle, marginBottom: "1rem", background: "#eff6ff", borderColor: "#bfdbfe" }}>
           <strong>Score entry enabled.</strong> Save as you go, then share the URL without the <code>?edit=</code> token for view-only access.
@@ -191,10 +222,10 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession, e
             >
               {saving ? "Saving…" : "Save scores"}
             </button>
-            {message ? <span style={{ marginLeft: "0.75rem", color: message === "Scores saved." ? "#166534" : "#b91c1c" }}>{message}</span> : null}
+            {message ? <span style={{ marginLeft: "0.75rem", color: message === "Scores saved." || message.endsWith("copied.") ? "#166534" : "#b91c1c" }}>{message}</span> : null}
           </div>
         </div>
-      ) : null}
+      ) : message ? <p style={{ color: message.endsWith("copied.") ? "#166534" : "#b91c1c" }}>{message}</p> : null}
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(280px, 1fr)", gap: "1rem", alignItems: "start" }}>
         <div style={{ display: "grid", gap: "1rem" }}>

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getClubLiveSessions } from "@/lib/api";
+import { getClubLiveSessions, getClubPlayers } from "@/lib/api";
 import PublicLiveCreator from "./PublicLiveCreator";
 
 type LivePageProps = {
@@ -13,8 +13,8 @@ const cardStyle = {
   background: "white"
 };
 
-function apiBase(): string | null {
-  return process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || process.env.JUPR_API_BASE_URL || null;
+function apiBase(): string {
+  return "/api";
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -31,9 +31,14 @@ function eventTypeLabel(value?: string | null): string {
 
 export default async function ClubLivePage({ params }: LivePageProps) {
   const { clubSlug } = params;
-  const { data, error } = await getClubLiveSessions(clubSlug);
-  const clubName = data?.club?.name ?? clubSlug;
+  const [liveResult, playersResult] = await Promise.all([
+    getClubLiveSessions(clubSlug),
+    getClubPlayers(clubSlug)
+  ]);
+  const { data, error } = liveResult;
+  const clubName = data?.club?.name ?? playersResult.data?.club?.name ?? clubSlug;
   const sessions = data?.sessions ?? [];
+  const players = playersResult.data?.players ?? [];
 
   return (
     <section>
@@ -42,16 +47,17 @@ export default async function ClubLivePage({ params }: LivePageProps) {
           Live Events
         </p>
         <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.2rem", lineHeight: 1.1 }}>{clubName} live sessions</h1>
-        <p style={{ color: "#334155", marginTop: 0 }}>
-          Start a public live round robin, enter scores, and share the live scoreboard. Admin scoring remains separate for official rated events.
+        <p style={{ color: "#334155", marginTop: 0, maxWidth: "900px" }}>
+          Start a public JUPR Live quick session, enter browser-only scores, and share the live scoreboard. Official rated workflows remain separate in JUPR Live Admin.
         </p>
       </div>
 
-      <PublicLiveCreator apiBase={apiBase()} clubSlug={clubSlug} />
+      <PublicLiveCreator apiBase={apiBase()} clubSlug={clubSlug} players={players} />
 
       {error ? (
         <p style={{ color: "#b91c1c" }}>Live sessions are temporarily unavailable. {error}</p>
       ) : null}
+      {playersResult.error ? <p style={{ color: "#b45309" }}>Current-player picker unavailable. {playersResult.error}</p> : null}
 
       {!error && sessions.length === 0 ? (
         <div style={cardStyle}>

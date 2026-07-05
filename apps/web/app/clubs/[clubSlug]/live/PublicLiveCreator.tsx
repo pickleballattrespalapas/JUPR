@@ -1,32 +1,96 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { PublicPlayer } from "@/lib/api";
 
 type PublicLiveCreatorProps = {
   apiBase: string | null;
   clubSlug: string;
+  players?: PublicPlayer[];
 };
 
+type LiveMode = "quick" | "club_social";
+type EventType = "round_robin" | "league_ladder";
+
 const defaultNames = "Amy\nBrooke\nChris\nDana";
+const participantCounts = Array.from({ length: 17 }, (_, index) => index + 4);
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
-export default function PublicLiveCreator({ apiBase, clubSlug }: PublicLiveCreatorProps) {
-  const [eventName, setEventName] = useState("Live Round Robin");
+function namesFromText(text: string): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const rawName of text.split(/\r?\n|,/)) {
+    const name = rawName.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function appendNames(currentText: string, newNames: string[]): string {
+  const existing = namesFromText(currentText);
+  const seen = new Set(existing.map((name) => name.toLowerCase()));
+  const merged = [...existing];
+  for (const name of newNames) {
+    const clean = name.trim();
+    if (!clean || seen.has(clean.toLowerCase())) continue;
+    seen.add(clean.toLowerCase());
+    merged.push(clean);
+  }
+  return merged.join("\n");
+}
+
+export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: PublicLiveCreatorProps) {
+  const [liveMode, setLiveMode] = useState<LiveMode>("quick");
+  const [eventType, setEventType] = useState<EventType>("round_robin");
+  const [targetCount, setTargetCount] = useState(8);
+  const [eventName, setEventName] = useState("Saturday Event");
   const [participantText, setParticipantText] = useState(defaultNames);
+  const [selectedPlayerNames, setSelectedPlayerNames] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const participantCount = useMemo(
-    () => participantText.split(/\r?\n|,/).map((name) => name.trim()).filter(Boolean).length,
-    [participantText]
+  const participantNames = useMemo(() => namesFromText(participantText), [participantText]);
+  const participantCount = participantNames.length;
+  const playerOptions = useMemo(
+    () => [...players].filter((player) => player.is_active !== false).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300),
+    [players]
   );
+  const countMessage = participantCount < 4
+    ? "Add at least 4 unique players."
+    : participantCount > 20
+      ? "Public quick sessions support up to 20 players."
+      : participantCount !== targetCount
+        ? `Current roster has ${participantCount}; selected count is ${targetCount}.`
+        : `Ready with ${participantCount} players.`;
+  const canSubmit = liveMode === "quick" && eventType === "round_robin" && participantCount >= 4 && participantCount <= 20;
+
+  function addSelectedPlayers() {
+    setParticipantText((current) => appendNames(current, selectedPlayerNames));
+    setSelectedPlayerNames([]);
+  }
 
   async function createSession() {
     if (!apiBase) {
       setError("The public API base URL is not configured for this deployment.");
+      return;
+    }
+    if (liveMode !== "quick") {
+      setError("Club Social setup is still handled in the Streamlit/JUPR Live admin workflow.");
+      return;
+    }
+    if (eventType !== "round_robin") {
+      setError("League / Ladder setup is still handled in the Streamlit/JUPR Live admin workflow.");
+      return;
+    }
+    if (!canSubmit) {
+      setError(countMessage);
       return;
     }
     setSubmitting(true);
@@ -38,7 +102,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug }: PublicLiveCreat
         body: JSON.stringify({
           event_name: eventName,
           event_type: "round_robin",
-          participant_names: participantText.split(/\r?\n|,/).map((name) => name.trim()).filter(Boolean)
+          participant_names: participantNames
         })
       });
       const payload = await response.json().catch(() => null);
@@ -60,11 +124,54 @@ export default function PublicLiveCreator({ apiBase, clubSlug }: PublicLiveCreat
 
   return (
     <section style={{ border: "1px solid #bfdbfe", borderRadius: "14px", padding: "1rem", background: "#eff6ff", marginBottom: "1rem" }}>
-      <h2 style={{ marginTop: 0, fontSize: "1.2rem" }}>Start your own live event</h2>
-      <p style={{ color: "#334155" }}>
-        Create a public round robin, enter scores from this browser, and share the scoreboard link with players.
-      </p>
-      <div style={{ display: "grid", gap: "0.75rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div>
+          <h2 style={{ margin: "0 0 0.35rem", fontSize: "1.35rem" }}>🔴 JUPR Live</h2>
+          <p style={{ color: "#334155", marginTop: 0 }}>
+            Run a lightweight JUPR Live quick session with session-only scoring. No persistence to rated match history and no official rating updates are used in this mode.
+          </p>
+        </div>
+        <span style={{ border: "1px solid #bfdbfe", borderRadius: "999px", padding: "0.25rem 0.75rem", background: "white", color: "#1d4ed8", fontWeight: 800, fontSize: "0.85rem" }}>Public</span>
+      </div>
+
+      <div style={{ display: "grid", gap: "1rem" }}>
+        <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+          <legend style={{ fontWeight: 800, marginBottom: "0.5rem" }}>Live mode</legend>
+          <label style={{ marginRight: "1rem" }}>
+            <input type="radio" checked={liveMode === "quick"} onChange={() => setLiveMode("quick")} /> Quick Session
+          </label>
+          <label>
+            <input type="radio" checked={liveMode === "club_social"} onChange={() => setLiveMode("club_social")} /> Club Social
+          </label>
+        </fieldset>
+
+        <p style={{ color: "#334155", margin: 0 }}>
+          {liveMode === "quick"
+            ? "Quick Session creates a public round-robin scoreboard that expires automatically."
+            : "Club Social remains in the Streamlit/JUPR Live admin workflow until organizer permissions are ported."}
+        </p>
+
+        <div style={{ height: "0.7rem", borderRadius: "999px", background: "white", border: "1px solid #dbeafe" }} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend style={{ fontWeight: 800, marginBottom: "0.5rem" }}>Event type</legend>
+            <label style={{ marginRight: "1rem" }}>
+              <input type="radio" checked={eventType === "round_robin"} onChange={() => setEventType("round_robin")} /> Round Robin
+            </label>
+            <label>
+              <input type="radio" checked={eventType === "league_ladder"} onChange={() => setEventType("league_ladder")} /> League / Ladder
+            </label>
+          </fieldset>
+
+          <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
+            Count
+            <select value={targetCount} onChange={(event) => setTargetCount(Number(event.target.value))} style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}>
+              {participantCounts.map((count) => <option key={count} value={count}>{count}</option>)}
+            </select>
+          </label>
+        </div>
+
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
           Event name
           <input
@@ -73,23 +180,64 @@ export default function PublicLiveCreator({ apiBase, clubSlug }: PublicLiveCreat
             style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}
           />
         </label>
+
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-          Player names ({participantCount})
-          <textarea
-            value={participantText}
-            onChange={(event) => setParticipantText(event.target.value)}
-            rows={7}
+          Add from current players
+          <select
+            multiple
+            value={selectedPlayerNames}
+            onChange={(event) => setSelectedPlayerNames(Array.from(event.currentTarget.selectedOptions).map((option) => option.value))}
+            size={Math.min(8, Math.max(3, playerOptions.length || 3))}
             style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}
-          />
+          >
+            {playerOptions.length ? playerOptions.map((player) => <option key={String(player.id)} value={player.name}>{player.name}</option>) : <option disabled>No current players loaded</option>}
+          </select>
         </label>
         <div>
           <button
             type="button"
-            onClick={createSession}
-            disabled={submitting}
-            style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: "#2563eb", color: "white", fontWeight: 800, cursor: submitting ? "default" : "pointer" }}
+            onClick={addSelectedPlayers}
+            disabled={!selectedPlayerNames.length}
+            style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.5rem 0.85rem", background: "white", color: "#0f172a", fontWeight: 800, cursor: selectedPlayerNames.length ? "pointer" : "default" }}
           >
-            {submitting ? "Creating…" : "Create live event"}
+            Add selected players
+          </button>
+        </div>
+
+        <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
+          Names or roster entry ({participantCount})
+          <textarea
+            value={participantText}
+            onChange={(event) => setParticipantText(event.target.value)}
+            rows={8}
+            style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}
+          />
+        </label>
+        <p style={{ margin: 0, color: participantCount >= 4 && participantCount <= 20 ? "#166534" : "#b45309" }}>{countMessage}</p>
+
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={createSession}
+            disabled={submitting || !canSubmit}
+            style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: canSubmit ? "#2563eb" : "#94a3b8", color: "white", fontWeight: 800, cursor: submitting || !canSubmit ? "default" : "pointer" }}
+          >
+            {submitting ? "Creating…" : "Create event"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEventName("Saturday Event");
+              setParticipantText(defaultNames);
+              setTargetCount(8);
+              setLiveMode("quick");
+              setEventType("round_robin");
+              setSelectedPlayerNames([]);
+              setError(null);
+            }}
+            style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.65rem 1rem", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}
+          >
+            Reset
           </button>
         </div>
         {error ? <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
