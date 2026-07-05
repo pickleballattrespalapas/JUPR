@@ -4,6 +4,15 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
+try:
+    from services.api.auth import jwt_verification_configured, jwt_verification_mode
+except Exception:  # pragma: no cover - imported by non-API contexts too
+    def jwt_verification_configured() -> bool:
+        return False
+
+    def jwt_verification_mode() -> str:
+        return "unavailable"
+
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 STREAMLIT_FALLBACK_DEFAULT = "https://juprtrespalapas.streamlit.app"
 
@@ -247,6 +256,8 @@ def build_admin_operations_status() -> dict[str, Any]:
         "streamlit_fallback_url": _env_text("JUPR_STREAMLIT_FALLBACK_URL", STREAMLIT_FALLBACK_DEFAULT),
         "strict_audit_required": _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"),
         "service_role_configured": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
+        "jwt_verification_configured": jwt_verification_configured(),
+        "jwt_verification_mode": jwt_verification_mode(),
         "enabled_workflows": enabled_workflows,
         "recommended_sequence": [
             "admin_shell",
