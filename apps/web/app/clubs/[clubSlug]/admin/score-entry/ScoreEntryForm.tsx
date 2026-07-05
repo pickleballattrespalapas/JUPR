@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
+import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type ScoreEntryFormProps = {
   apiBase: string | null;
@@ -46,7 +47,7 @@ function deltaLabel(value?: number | null): string {
 }
 
 export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palapas", players }: ScoreEntryFormProps) {
-  const [token, setToken] = useState("");
+  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [league, setLeague] = useState("Open");
   const [date, setDate] = useState(todayIsoDate());
   const [t1p1, setT1p1] = useState("");
@@ -64,8 +65,8 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
       setMessage("API base URL is not configured.");
       return;
     }
-    if (!token.trim()) {
-      setMessage("Paste a Supabase admin access token first.");
+    if (!accessToken) {
+      setMessage("Sign in at /admin/login before saving rated matches.");
       return;
     }
     if (!t1p1 || !t1p2 || !t2p1 || !t2p2) {
@@ -85,7 +86,7 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token.trim()}`
+          Authorization: `Bearer ${accessToken}`
         },
         body: JSON.stringify({
           source: "next_score_entry_mvp",
@@ -129,10 +130,17 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
     <section style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" }}>
       <h2 style={{ marginTop: 0 }}>Enter one rated match</h2>
       <p style={{ color: "#475569" }}>
-        This MVP uses the existing FastAPI match submission service. It requires a Supabase JWT with score-entry permission and the backend feature flag enabled.
+        This MVP uses the existing FastAPI match submission service. It requires a signed-in Supabase admin session with score-entry permission and the backend feature flag enabled.
       </p>
+      <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
+        <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
+        <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
+          {accessToken ? "Ready to send authorized score-entry requests." : sessionLoading ? "Checking admin session…" : "Sign in before saving rated matches."}
+        </p>
+        {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
+        {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
+      </div>
       <div style={{ display: "grid", gap: "0.75rem" }}>
-        <label style={labelStyle}>Supabase access token<input value={token} onChange={(event) => setToken(event.target.value)} type="password" style={selectStyle} /></label>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
           <label style={labelStyle}>Date<input value={date} onChange={(event) => setDate(event.target.value)} type="date" style={selectStyle} /></label>
           <label style={labelStyle}>League<input value={league} onChange={(event) => setLeague(event.target.value)} style={selectStyle} /></label>
@@ -148,7 +156,7 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
           <label style={labelStyle}>Team 2 Score<input value={scoreT2} onChange={(event) => setScoreT2(event.target.value)} type="number" min={0} max={99} style={selectStyle} /></label>
         </div>
         <div>
-          <button type="button" onClick={submitMatch} disabled={saving} style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: "#2563eb", color: "white", fontWeight: 800 }}>
+          <button type="button" onClick={submitMatch} disabled={saving || !accessToken} style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: !accessToken ? "#94a3b8" : "#2563eb", color: "white", fontWeight: 800 }}>
             {saving ? "Saving…" : "Save rated match"}
           </button>
         </div>
