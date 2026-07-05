@@ -1,4 +1,4 @@
-.PHONY: db-migrate check-migration-sources check-next-parity-matrix api-test public-web-smoke
+.PHONY: db-migrate check-migration-sources check-next-parity-matrix api-test public-web-smoke admin-pilot-smoke
 
 db-migrate: ## Apply pending SQL migrations (requires DATABASE_URL)
 	@bash scripts/db_migrate.sh
@@ -15,3 +15,6 @@ api-test: ## Run API contract tests
 
 public-web-smoke: ## Smoke-test staging FastAPI + Next.js public routes
 	@python scripts/smoke_public_web.py $(JUPR_SMOKE_ARGS)
+
+admin-pilot-smoke: ## Non-mutating Match Log + Replay History pilot readiness smoke
+	@python scripts/smoke_admin_pilot.py $(JUPR_ADMIN_PILOT_SMOKE_ARGS)
