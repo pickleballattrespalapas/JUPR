@@ -80,7 +80,20 @@ export default async function AdminEntryPage() {
             <article style={cardStyle}><strong>Enabled workflows</strong><br />{enabledCount}</article>
             <article style={cardStyle}><strong>Strict audit</strong><br />{data.strict_audit_required ? "Required" : "Graceful"}</article>
             <article style={cardStyle}><strong>API service role</strong><br />{data.service_role_configured ? "Configured" : "Not configured"}</article>
+            <article style={cardStyle}><strong>JWT verification</strong><br />{data.jwt_verification_configured ? `Configured (${data.jwt_verification_mode || "unknown"})` : "Not configured"}</article>
           </div>
+
+          {!data.jwt_verification_configured && data.write_pilot_enabled ? (
+            <article style={{ ...cardStyle, marginBottom: "1rem", background: "#fffbeb", borderColor: "#f59e0b" }}>
+              <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Admin JWT verification needs API configuration</h2>
+              <p style={{ color: "#92400e" }}>
+                The write pilot is enabled, but guarded FastAPI admin write routes cannot authorize staff sessions until the API can verify Supabase access tokens.
+              </p>
+              <p style={{ color: "#92400e", marginBottom: 0 }}>
+                Set <code>SUPABASE_JWT_SECRET</code> for secret mode, or set <code>SUPABASE_JWKS_URL</code> with <code>JUPR_SUPABASE_JWT_MODE=jwks</code>. If the API has <code>SUPABASE_URL</code>, JWKS can be derived automatically for asymmetric-key projects.
+              </p>
+            </article>
+          ) : null}
 
           <article style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Summer migration posture</h2>

@@ -19,13 +19,18 @@ class AdminReplayRequest(BaseModel):
 
 def _resolve_replay_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
-    role_resolution = resolve_admin_role(
-        supabase=supabase,
-        club_id=str(club_id),
-        email=user.email,
-        user_id=user.user_id,
-        allowlist=set(),
-    )
+    try:
+        role_resolution = resolve_admin_role(
+            supabase=supabase,
+            club_id=str(club_id),
+            email=user.email,
+            user_id=user.user_id,
+            allowlist=set(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - expose pilot auth configuration errors without opaque 500s
+        raise HTTPException(status_code=503, detail=f"Admin role lookup failed: {exc.__class__.__name__}") from exc
     if not has_permission(role_resolution.role, PERMISSION_RUN_REPLAY):
         denied_payload = build_activity_payload(
             club_id=str(club_id),
