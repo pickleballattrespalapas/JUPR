@@ -25,6 +25,8 @@ export type AdminOperationsStatusResponse = {
   streamlit_fallback_url: string;
   strict_audit_required: boolean;
   service_role_configured: boolean;
+  jwt_verification_configured?: boolean;
+  jwt_verification_mode?: string;
   enabled_workflows: string[];
   recommended_sequence: string[];
   pilot_gates: string[];
