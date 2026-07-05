@@ -97,7 +97,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `tournament_registration_edit` | ✏️ Edit Registration | Public hidden | `Not started`. | Yes/intake | Tokenized edit/auth gate | Add secure edit links before porting. |
 | `tournament_roster` | 📋 Tournament Roster | Public hidden | `Partial` — public FastAPI roster API and Next `/clubs/[clubSlug]/tournament-roster` route exist with public-safe roster, summary, and needs-partner visibility. | No | Public tournament read model + smoke | Validate staging and then connect edit-link handoff. |
 | `tournament_partner_board` | 🤝 Partner Board | Public | `Partial` — Next `/clubs/[clubSlug]/tournament-partner-board` exists as a read-only partner-needed board backed by the public roster projection; request/accept/moderation actions are not started. | No in this slice | Public/organizer moderation gate before writes | Validate read-only board in staging, then add request flow with anti-abuse and moderation. |
-| `weekly_recap` | 🗞️ Weekly Recap | Public | `Partial` — public FastAPI published-recap/PDF APIs and Next `/clubs/[clubSlug]/weekly-recap` route exist. | No | Public smoke + contract tests | Validate staging, then close final styling/print-view parity gaps. |
+| `weekly_recap` | 🗞️ Weekly Recap | Public | `Partial` — public FastAPI published-recap/PDF APIs and Next `/clubs/[clubSlug]/weekly-recap` route exist with week/section deep links, section-filtered recap rendering, PDF handoff, and print-friendly layout. | No | Public smoke + contract tests | Validate final styling/print-view parity in staging, then close final copy gaps. |
 | `top_players_printable` | 🧾 Top Active Players PDF | Admin | `Not started`. | Export only | Admin/PDF export gate | Defer until PDF/export strategy is standardized. |
 | `weekly_recap_admin` | 🗞️ Weekly Recap Admin | Admin | `Not started`; listed in `/admin` operations cockpit. | Yes | Admin auth + recap write/audit gate | Port after public weekly recap read side and admin auth shell. |
 | `player_updates_admin` | 📬 Player Updates Admin | Admin | `Not started`. | Yes/email | Admin auth + email safety gate | Keep blocked until staging email safety is proven. |
@@ -112,7 +112,7 @@ Any admin workflow may fully move off Streamlit only when:
 3. Validate public League Results chart/deep-link/printout parity in staging and close any final styling/copy gaps.
 4. Validate public Badge Codex load-more/deep-link/trophy-room parity in staging and close final styling/copy gaps.
 5. Validate public Challenge Ladder deep-link/public-rule parity in staging and close final styling/copy gaps.
-6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
+6. Validate public Weekly Recap final styling/print-view parity in staging and close final copy gaps.
 7. Review/approve static FAQ/legal/support copy and smoke the static routes.
 8. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
 9. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
