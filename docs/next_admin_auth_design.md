@@ -118,9 +118,16 @@ Before enabling Next.js admin score entry for rated workflows, future implementa
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - The login shell does **not** enable writes by itself. Every write workflow still requires its FastAPI feature flag, server-side JWT validation, role authorization, club scope, and audit/correction protections.
 
+## Next admin form session wiring
+
+- A shared admin session hook now lets guarded client forms read and refresh the stored Supabase Auth session.
+- Match Log apply/duplicate-cleanup, Replay History, and Score Entry MVP now use the stored admin session instead of asking staff to paste a Supabase access token.
+- Buttons stay disabled and link back to `/admin/login` when no browser admin session is available.
+- Match Uploader still needs to be migrated from manual token paste to the shared session helper.
+
 ## Remaining admin-login work before broad admin cutover
 
-- Route guarded admin write forms to use the stored admin session token instead of manual token paste.
+- Route the remaining guarded admin write forms, especially Match Uploader, to use the stored admin session token instead of manual token paste.
 - Add server/route-handler validation helpers where same-origin Next admin API routes are introduced.
 - Add browser E2E or equivalent staging validation for sign-in, sign-out, expired token, wrong-club, and permission-denied cases.
 - Keep Streamlit fallback available until each workflow-specific pilot is proven.
