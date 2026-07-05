@@ -60,7 +60,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `home` | Home | Public | `Done` — Next `/` product shell exists. | No | Public smoke | Keep aligned with product positioning and club-aware routing. |
 | `leaderboards` | 🏆 Leaderboards | Public | `Partial` — Next `/clubs/[clubSlug]/leaderboards` and FastAPI leaderboard API exist. | No | Public smoke + contract tests | Close display parity gaps: league filters, top performers, badge chips, inactive rules. |
 | `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile route naming with `/faq` and final product copy. |
-| `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist. | No | Public smoke + contract tests | Validate staging, then close chart/deep-link/printout parity gaps. |
+| `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist with league tabs, section/week/player deep links, standings/weekly/player charts, and print-friendly view. | No | Public smoke + contract tests | Validate chart/deep-link/printout parity in staging, then close any final styling/copy gaps. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
 | `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist with Streamlit-compatible deep links, share-link hydration, beat-expectation metrics, player-level projected deltas, and rating-impact predictor chart. | No | Public smoke + contract tests | Validate chart/deep-link parity in staging, then close any styling/copy gaps. |
 | `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist. | No | Public smoke + contract tests | Add trophy room/badge/profile parity and improve search/deep links. |
@@ -109,7 +109,7 @@ Any admin workflow may fully move off Streamlit only when:
 
 1. Keep public read-only staging smoke and Vercel guardrails green.
 2. Validate public Match Explorer chart/deep-link parity in staging and close any final styling/copy gaps.
-3. Validate public League Results in staging and close chart/deep-link/printout parity gaps.
+3. Validate public League Results chart/deep-link/printout parity in staging and close any final styling/copy gaps.
 4. Validate public Badge Codex in staging and close load-more/deep-link/trophy-room parity gaps.
 5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
 6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
