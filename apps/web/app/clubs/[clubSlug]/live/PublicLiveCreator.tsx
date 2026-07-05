@@ -52,16 +52,24 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
   const [targetCount, setTargetCount] = useState(8);
   const [eventName, setEventName] = useState("Saturday Event");
   const [participantText, setParticipantText] = useState(defaultNames);
-  const [selectedPlayerNames, setSelectedPlayerNames] = useState<string[]>([]);
+  const [playerSearch, setPlayerSearch] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const participantNames = useMemo(() => namesFromText(participantText), [participantText]);
   const participantCount = participantNames.length;
+  const participantNameSet = useMemo(() => new Set(participantNames.map((name) => name.toLowerCase())), [participantNames]);
   const playerOptions = useMemo(
-    () => [...players].filter((player) => player.is_active !== false).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 300),
+    () => [...players].filter((player) => player.is_active !== false).sort((a, b) => a.name.localeCompare(b.name)),
     [players]
   );
+  const filteredPlayerOptions = useMemo(() => {
+    const query = playerSearch.trim().toLowerCase();
+    if (query.length < 2) return [];
+    return playerOptions
+      .filter((player) => player.name.toLowerCase().includes(query))
+      .slice(0, 10);
+  }, [playerOptions, playerSearch]);
   const countMessage = participantCount < 4
     ? "Add at least 4 unique players."
     : participantCount > 20
@@ -71,9 +79,9 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
         : `Ready with ${participantCount} players.`;
   const canSubmit = liveMode === "quick" && eventType === "round_robin" && participantCount >= 4 && participantCount <= 20;
 
-  function addSelectedPlayers() {
-    setParticipantText((current) => appendNames(current, selectedPlayerNames));
-    setSelectedPlayerNames([]);
+  function addPlayerName(name: string) {
+    setParticipantText((current) => appendNames(current, [name]));
+    setPlayerSearch("");
   }
 
   async function createSession() {
@@ -181,27 +189,40 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
           />
         </label>
 
-        <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-          Add from current players
-          <select
-            multiple
-            value={selectedPlayerNames}
-            onChange={(event) => setSelectedPlayerNames(Array.from(event.currentTarget.selectedOptions).map((option) => option.value))}
-            size={Math.min(8, Math.max(3, playerOptions.length || 3))}
-            style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}
-          >
-            {playerOptions.length ? playerOptions.map((player) => <option key={String(player.id)} value={player.name}>{player.name}</option>) : <option disabled>No current players loaded</option>}
-          </select>
-        </label>
-        <div>
-          <button
-            type="button"
-            onClick={addSelectedPlayers}
-            disabled={!selectedPlayerNames.length}
-            style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.5rem 0.85rem", background: "white", color: "#0f172a", fontWeight: 800, cursor: selectedPlayerNames.length ? "pointer" : "default" }}
-          >
-            Add selected players
-          </button>
+        <div style={{ display: "grid", gap: "0.5rem" }}>
+          <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
+            Search current players
+            <input
+              value={playerSearch}
+              onChange={(event) => setPlayerSearch(event.target.value)}
+              placeholder="Type at least 2 letters, then add a player"
+              style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}
+            />
+          </label>
+          {playerSearch.trim().length < 2 ? (
+            <p style={{ margin: 0, color: "#64748b", fontSize: "0.9rem" }}>Type at least 2 characters to search the current player list. Guest names can still be typed directly below.</p>
+          ) : filteredPlayerOptions.length ? (
+            <div style={{ display: "grid", gap: "0.4rem" }}>
+              {filteredPlayerOptions.map((player) => {
+                const alreadyAdded = participantNameSet.has(player.name.toLowerCase());
+                return (
+                  <div key={String(player.id)} style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0.5rem", background: "white" }}>
+                    <span>{player.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => addPlayerName(player.name)}
+                      disabled={alreadyAdded}
+                      style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: alreadyAdded ? "#f1f5f9" : "white", color: "#0f172a", fontWeight: 800, cursor: alreadyAdded ? "default" : "pointer" }}
+                    >
+                      {alreadyAdded ? "Added" : "Add"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p style={{ margin: 0, color: "#b45309", fontSize: "0.9rem" }}>No current players match “{playerSearch.trim()}”. Type a guest name in the roster box below.</p>
+          )}
         </div>
 
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
@@ -232,7 +253,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
               setTargetCount(8);
               setLiveMode("quick");
               setEventType("round_robin");
-              setSelectedPlayerNames([]);
+              setPlayerSearch("");
               setError(null);
             }}
             style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.65rem 1rem", background: "white", color: "#0f172a", fontWeight: 800, cursor: "pointer" }}
