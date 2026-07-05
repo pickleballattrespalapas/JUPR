@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: "Optional staging FastAPI base URL. Uses STAGING_JUPR_API_BASE_URL secret when blank."
+        description: "Optional FastAPI base URL. For JUPR use https://api.juprleagues.com; do not use the public web domain. Uses STAGING_JUPR_API_BASE_URL secret when blank."
         required: false
         type: string
       web_base_url:
-        description: "Optional staging/Vercel web base URL. Uses STAGING_WEB_BASE_URL secret when blank."
+        description: "Optional staging/Vercel web base URL, e.g. https://pickleballclubsandwich.com or https://juprleagues.com. Uses STAGING_WEB_BASE_URL secret when blank."
         required: false
         type: string
       club_slug:
