@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import BinaryIO, Iterable
@@ -24,6 +25,14 @@ DEFAULT_CLUB_SLUG = "tres-palapas"
 DEFAULT_CLUB_ID = "tres_palapas"
 PREVIEW_BODY_BYTES = 2048
 MAX_JSON_BODY_BYTES = 10 * 1024 * 1024
+
+KNOWN_PUBLIC_WEB_HOSTS = {
+    "pickleballclubsandwich.com",
+    "www.pickleballclubsandwich.com",
+    "juprleagues.com",
+    "www.juprleagues.com",
+}
+KNOWN_FASTAPI_BASE_URL = "https://api.juprleagues.com"
 
 API_BASE_ENV_NAMES = (
     "JUPR_API_BASE_URL",
@@ -78,6 +87,44 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _host(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        return urllib.parse.urlparse(value).hostname or ""
+    except Exception:
+        return ""
+
+
+def _origin(value: str | None) -> tuple[str, str, int | None]:
+    if not value:
+        return ("", "", None)
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except Exception:
+        return ("", "", None)
+    return (parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port)
+
+
+def _base_url_validation_errors(api_base_url: str | None, web_base_url: str | None) -> list[str]:
+    errors: list[str] = []
+    api_host = _host(api_base_url).lower()
+
+    if api_base_url and api_host in KNOWN_PUBLIC_WEB_HOSTS:
+        errors.append(
+            "STAGING_JUPR_API_BASE_URL/api_base_url points at a public Next/Vercel web domain "
+            f"({api_base_url}). Use the FastAPI origin {KNOWN_FASTAPI_BASE_URL}."
+        )
+
+    if api_base_url and web_base_url and _origin(api_base_url) == _origin(web_base_url):
+        errors.append(
+            "STAGING_JUPR_API_BASE_URL/api_base_url and STAGING_WEB_BASE_URL/web_base_url have the same origin. "
+            f"Use {KNOWN_FASTAPI_BASE_URL} for the API and the public website domain for the web app."
+        )
+
+    return errors
+
+
 def _looks_like_html(body: bytes) -> bool:
     preview = body[:512].lower().lstrip()
     return preview.startswith(b"<!doctype html") or preview.startswith(b"<html") or b"<html" in preview[:160]
@@ -88,7 +135,7 @@ def _api_base_hint(url: str) -> str:
         f"{url} returned HTML instead of FastAPI JSON. "
         "The API base URL likely points at the Next/Vercel web domain. "
         "Set STAGING_JUPR_API_BASE_URL/api_base_url to the FastAPI origin, "
-        "for example https://api.juprleagues.com, and use STAGING_WEB_BASE_URL/web_base_url for the public website."
+        f"for example {KNOWN_FASTAPI_BASE_URL}, and use STAGING_WEB_BASE_URL/web_base_url for the public website."
     )
 
 
@@ -301,6 +348,13 @@ def main(argv: list[str]) -> int:
             "JUPR_WEB_BASE_URL/STAGING_WEB_BASE_URL, or pass --api-base-url/--web-base-url.",
             file=sys.stderr,
         )
+        return 2
+
+    config_errors = _base_url_validation_errors(api_base_url, web_base_url)
+    if config_errors:
+        print("Invalid public smoke URL configuration:", file=sys.stderr)
+        for error in config_errors:
+            print(f"- {error}", file=sys.stderr)
         return 2
 
     checks = _build_checks(
