@@ -17,11 +17,13 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
-from typing import Iterable
+from typing import BinaryIO, Iterable
 
 
 DEFAULT_CLUB_SLUG = "tres-palapas"
 DEFAULT_CLUB_ID = "tres_palapas"
+PREVIEW_BODY_BYTES = 2048
+MAX_JSON_BODY_BYTES = 10 * 1024 * 1024
 
 API_BASE_ENV_NAMES = (
     "JUPR_API_BASE_URL",
@@ -76,6 +78,16 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _read_response_body(response: BinaryIO, *, require_json: bool) -> tuple[bytes, bool]:
+    """Read enough response body for validation without unbounded memory growth."""
+
+    if require_json:
+        body = response.read(MAX_JSON_BODY_BYTES + 1)
+        return body[:MAX_JSON_BODY_BYTES], len(body) > MAX_JSON_BODY_BYTES
+
+    return response.read(PREVIEW_BODY_BYTES), False
+
+
 def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
     started = time.perf_counter()
     data = check.body.encode("utf-8") if check.body is not None else None
@@ -93,14 +105,16 @@ def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
         method=check.method,
     )
 
+    body_truncated = False
+
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             status = int(response.status)
-            body = response.read(2048)
+            body, body_truncated = _read_response_body(response, require_json=check.require_json)
             content_type = response.headers.get("content-type", "")
     except urllib.error.HTTPError as exc:
         status = int(exc.code)
-        body = exc.read(2048)
+        body, body_truncated = _read_response_body(exc, require_json=check.require_json)
         content_type = exc.headers.get("content-type", "") if exc.headers else ""
     except Exception as exc:  # noqa: BLE001 - report smoke failures compactly
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -120,14 +134,18 @@ def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
 
     if ok and check.require_json:
         looks_json = "json" in content_type.lower()
-        try:
-            json.loads(body.decode("utf-8") or "{}")
-        except Exception as exc:
+        if body_truncated:
             ok = False
-            error = f"Expected JSON response, but parsing failed: {exc}"
+            error = f"Expected JSON response, but body exceeded {MAX_JSON_BODY_BYTES} bytes"
         else:
-            if not looks_json:
-                error = f"JSON parsed, but content-type was {content_type!r}"
+            try:
+                json.loads(body.decode("utf-8") or "{}")
+            except Exception as exc:
+                ok = False
+                error = f"Expected JSON response, but parsing failed: {exc}"
+            else:
+                if not looks_json:
+                    error = f"JSON parsed, but content-type was {content_type!r}"
 
     if not ok and error is None:
         preview = body.decode("utf-8", "replace").replace("\n", " ")[:240]
