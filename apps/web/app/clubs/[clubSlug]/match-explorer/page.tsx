@@ -13,8 +13,9 @@ function firstParam(searchParams: MatchExplorerPageProps["searchParams"], key: s
   return value ?? null;
 }
 
-function apiBase(): string | null {
-  return process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || process.env.JUPR_API_BASE_URL || null;
+function apiBase(): string {
+  // Use the same-origin Next route handler so browser previews do not depend on cross-origin FastAPI access.
+  return "/api";
 }
 
 export default async function MatchExplorerPage({ params, searchParams }: MatchExplorerPageProps) {
