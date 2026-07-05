@@ -85,16 +85,56 @@ def normalize_role(value: str | None) -> str:
     return normalized if normalized in ALL_ROLES else ROLE_READ_ONLY
 
 
+def _api_error_payload(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, APIError) and exc.args and isinstance(exc.args[0], dict):
+        return exc.args[0]
+    return {}
+
+
 def is_roles_table_missing_error(exc: Exception) -> bool:
     if isinstance(exc, APIError):
         code = getattr(exc, "code", None)
         if code in {"42P01", "PGRST205"}:
             return True
-        if exc.args and isinstance(exc.args[0], dict):
-            payload = exc.args[0]
-            if payload.get("code") in {"42P01", "PGRST205"}:
-                return True
+        payload = _api_error_payload(exc)
+        if payload.get("code") in {"42P01", "PGRST205"}:
+            return True
     return False
+
+
+def is_missing_column_error(exc: Exception, column: str) -> bool:
+    if not isinstance(exc, APIError):
+        return False
+    payload = _api_error_payload(exc)
+    code = getattr(exc, "code", None) or payload.get("code")
+    message = " ".join(str(payload.get(key) or "") for key in ("message", "details", "hint"))
+    return code in {"42703", "PGRST204"} and column in message
+
+
+def _select_role_assignment_rows(*, supabase: Any, club_id: str, email: str) -> list[dict[str, Any]]:
+    try:
+        response = (
+            supabase.table("admin_role_assignments")
+            .select("role,user_id")
+            .eq("club_id", str(club_id or "").strip())
+            .eq("email", email)
+            .execute()
+        )
+        return response.data or []
+    except Exception as exc:  # noqa: BLE001 - tolerate older role table schema during migration
+        if is_missing_column_error(exc, "user_id"):
+            response = (
+                supabase.table("admin_role_assignments")
+                .select("role")
+                .eq("club_id", str(club_id or "").strip())
+                .eq("email", email)
+                .execute()
+            )
+            rows = response.data or []
+            for row in rows:
+                row.setdefault("user_id", None)
+            return rows
+        raise
 
 
 def resolve_admin_role(
@@ -109,14 +149,7 @@ def resolve_admin_role(
     normalized_user_id = str(user_id or "").strip() or None
 
     try:
-        response = (
-            supabase.table("admin_role_assignments")
-            .select("role,user_id")
-            .eq("club_id", str(club_id or "").strip())
-            .eq("email", normalized_email)
-            .execute()
-        )
-        rows = response.data or []
+        rows = _select_role_assignment_rows(supabase=supabase, club_id=club_id, email=normalized_email)
         if rows:
             preferred_row = None
             if normalized_user_id:
