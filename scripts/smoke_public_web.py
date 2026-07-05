@@ -78,6 +78,20 @@ def _join_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _looks_like_html(body: bytes) -> bool:
+    preview = body[:512].lower().lstrip()
+    return preview.startswith(b"<!doctype html") or preview.startswith(b"<html") or b"<html" in preview[:160]
+
+
+def _api_base_hint(url: str) -> str:
+    return (
+        f"{url} returned HTML instead of FastAPI JSON. "
+        "The API base URL likely points at the Next/Vercel web domain. "
+        "Set STAGING_JUPR_API_BASE_URL/api_base_url to the FastAPI origin, "
+        "for example https://api.juprleagues.com, and use STAGING_WEB_BASE_URL/web_base_url for the public website."
+    )
+
+
 def _read_response_body(response: BinaryIO, *, require_json: bool) -> tuple[bytes, bool]:
     """Read enough response body for validation without unbounded memory growth."""
 
@@ -142,14 +156,20 @@ def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
                 json.loads(body.decode("utf-8") or "{}")
             except Exception as exc:
                 ok = False
-                error = f"Expected JSON response, but parsing failed: {exc}"
+                if _looks_like_html(body):
+                    error = _api_base_hint(check.url)
+                else:
+                    error = f"Expected JSON response, but parsing failed: {exc}"
             else:
                 if not looks_json:
                     error = f"JSON parsed, but content-type was {content_type!r}"
 
     if not ok and error is None:
         preview = body.decode("utf-8", "replace").replace("\n", " ")[:240]
-        error = f"Expected status {check.expected_statuses}, got {status}. {preview}".strip()
+        if check.require_json and _looks_like_html(body):
+            error = _api_base_hint(check.url)
+        else:
+            error = f"Expected status {check.expected_statuses}, got {status}. {preview}".strip()
 
     return SmokeResult(
         name=check.name,
