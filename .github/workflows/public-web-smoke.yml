@@ -1,0 +1,53 @@
+name: Public Web Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "FastAPI base URL to smoke"
+        required: true
+        type: string
+      web_base_url:
+        description: "Next/Vercel web base URL to smoke"
+        required: true
+        type: string
+      club_slug:
+        description: "Public club slug"
+        required: false
+        default: "tres-palapas"
+        type: string
+      club_id:
+        description: "Backend club id"
+        required: false
+        default: "tres_palapas"
+        type: string
+      allow_live_unconfigured:
+        description: "Allow live-session endpoint to return setup 503"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run public web smoke
+        run: |
+          ARGS=""
+          if [ "${{ inputs.allow_live_unconfigured }}" = "true" ]; then
+            ARGS="$ARGS --allow-live-unconfigured"
+          fi
+          python scripts/smoke_public_web.py \
+            --api-base-url "${{ inputs.api_base_url }}" \
+            --web-base-url "${{ inputs.web_base_url }}" \
+            --club-slug "${{ inputs.club_slug }}" \
+            --club-id "${{ inputs.club_id }}" \
+            $ARGS
