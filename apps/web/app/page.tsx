@@ -7,10 +7,56 @@ const cardStyle = {
   background: "white"
 };
 
+const primaryLinks = [
+  ["Open Tres Palapas", "/clubs/tres-palapas"],
+  ["View leaderboards", "/clubs/tres-palapas/leaderboards"],
+  ["Explore matches", "/clubs/tres-palapas/matches"],
+  ["Open site map", "/site-map"]
+];
+
+const featureGroups = [
+  {
+    title: "Ratings and results",
+    description: "Leaderboards, league results, player profiles, match history, badges, and Match Explorer live on the public site.",
+    links: [
+      ["Leaderboards", "/clubs/tres-palapas/leaderboards"],
+      ["League Results", "/clubs/tres-palapas/league-results"],
+      ["Players", "/clubs/tres-palapas/players"],
+      ["Matches", "/clubs/tres-palapas/matches"],
+      ["Match Explorer", "/clubs/tres-palapas/match-explorer"],
+      ["Badge Codex", "/clubs/tres-palapas/badge-codex"]
+    ]
+  },
+  {
+    title: "Events and tournaments",
+    description: "Registration, roster, partner board, live event pages, weekly recaps, and the challenge ladder are ready for public navigation.",
+    links: [
+      ["Register", "/clubs/tres-palapas/tournament-registration"],
+      ["Roster", "/clubs/tres-palapas/tournament-roster"],
+      ["Partner Board", "/clubs/tres-palapas/tournament-partner-board"],
+      ["Live", "/clubs/tres-palapas/live"],
+      ["Weekly Recap", "/clubs/tres-palapas/weekly-recap"],
+      ["Challenge Ladder", "/clubs/tres-palapas/challenge-ladder"]
+    ]
+  },
+  {
+    title: "Help and operations",
+    description: "Public help pages and the read-only admin migration shell provide clear paths while Streamlit fallback remains available.",
+    links: [
+      ["Ratings explainer", "/how-ratings-work"],
+      ["FAQ", "/faq"],
+      ["Support", "/support"],
+      ["Data corrections", "/data-corrections"],
+      ["Admin cockpit", "/admin"],
+      ["Site Map", "/site-map"]
+    ]
+  }
+];
+
 export default function HomePage() {
   return (
     <section>
-      <div style={{ maxWidth: "760px", marginBottom: "1.5rem" }}>
+      <div style={{ maxWidth: "820px", marginBottom: "1.5rem" }}>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
           Live ratings for pickleball clubs
         </p>
@@ -18,35 +64,31 @@ export default function HomePage() {
           Pickleball Club Sandwich is the new home for club leagues, events, and ratings.
         </h1>
         <p style={{ marginTop: 0, fontSize: "1.1rem", color: "#334155" }}>
-          Follow live event scoring, club leaderboards, player profiles, tournament registration, public rosters, and rating history from one public website.
+          Follow live event scoring, club leaderboards, player profiles, tournament registration, public rosters, partner-board discovery, weekly recaps, and rating history from one public website.
         </p>
-        <p>
-          <Link href="/clubs/tres-palapas" style={{ fontWeight: 700 }}>Open Tres Palapas</Link>
-          <span style={{ color: "#64748b" }}> · </span>
-          <Link href="/clubs/tres-palapas/leaderboards" style={{ fontWeight: 700 }}>View leaderboards</Link>
-          <span style={{ color: "#64748b" }}> · </span>
-          <Link href="/site-map" style={{ fontWeight: 700 }}>Open site map</Link>
+        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          {primaryLinks.map(([label, href]) => <Link key={href} href={href} style={{ fontWeight: 800 }}>{label}</Link>)}
         </p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem" }}>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Live event pages</h2>
-          <p style={{ color: "#475569" }}>Follow active events, scores, standings, and brackets from the public website as organizer workflows are ported.</p>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Leaderboards</h2>
-          <p style={{ color: "#475569" }}>Public club rankings powered by the same ratings data organizers use to run leagues and events.</p>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Player profiles</h2>
-          <p style={{ color: "#475569" }}>A durable home for each player’s rating, match history, badges, and rating movement.</p>
-        </article>
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Organizer tools</h2>
-          <p style={{ color: "#475569" }}>The website becomes the main entry point while legacy Streamlit admin remains available during migration.</p>
-        </article>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
+        {featureGroups.map((group) => (
+          <article key={group.title} style={cardStyle}>
+            <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>{group.title}</h2>
+            <p style={{ color: "#475569" }}>{group.description}</p>
+            <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
+              {group.links.map(([label, href]) => <Link key={href} href={href}>{label}</Link>)}
+            </div>
+          </article>
+        ))}
       </div>
+
+      <article style={{ ...cardStyle, background: "#f8fafc" }}>
+        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Migration status</h2>
+        <p style={{ color: "#475569", marginBottom: 0 }}>
+          The public Next/Vercel site is the front door for club members. Admin write workflows remain guarded and are being ported one workflow at a time behind FastAPI and audit controls.
+        </p>
+      </article>
     </section>
   );
 }
