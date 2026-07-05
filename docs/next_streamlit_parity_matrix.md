@@ -62,8 +62,8 @@ Any admin workflow may fully move off Streamlit only when:
 | `rating_rules` | Rating Rules | Public | `Partial` — Next `/how-ratings-work` exists as public explainer. | No | Static content review | Reconcile route naming with `/faq` and final product copy. |
 | `league_results` | 📊 League Results | Public | `Partial` — public FastAPI summary API and Next `/clubs/[clubSlug]/league-results` route exist with league tabs, section/week/player deep links, standings/weekly/player charts, and print-friendly view. | No | Public smoke + contract tests | Validate chart/deep-link/printout parity in staging, then close any final styling/copy gaps. |
 | `league_printout` | 🖨️ League Night Printout | Admin | `Not started`. | Export only | Auth/PDF/export gate | Defer until admin auth and export strategy are in place. |
-| `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist with Streamlit-compatible deep links, share-link hydration, beat-expectation metrics, player-level projected deltas, and rating-impact predictor chart. | No | Public smoke + contract tests | Validate chart/deep-link parity in staging, then close any styling/copy gaps. |
-| `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist; directory now has search/status/sort filters, stat cards, last-played visibility, leaderboard row links, and row deep links. | No | Public smoke + contract tests | Improve player profile section deep links and trophy-room handoff, then validate in staging. |
+| `match_explorer` | 🎯 Match Explorer | Public | `Partial` — public FastAPI context/preview API and Next `/clubs/[clubSlug]/match-explorer` route exist with Streamlit-compatible deep links, share-link hydration, beat-expectation metrics, player-level projected deltas, rating-impact predictor chart, and a same-origin preview proxy. | No | Public smoke + contract tests | Validate chart/deep-link/preview parity in staging, then close any styling/copy gaps. |
+| `players` | 🔍 Player Search | Public | `Partial` — Next player directory, profile, match history, and match detail exist; directory has search/status/sort filters, stat cards, last-played visibility, leaderboard row links, and row deep links; profile has section deep links, league filters, linked match rows, and trophy/leaderboard handoff. | No | Public smoke + contract tests | Validate player directory/profile parity in staging, then close final styling/copy gaps. |
 | `badge_codex` | 📼 Badge Codex | Public | `Partial` — public FastAPI badge/earner APIs and Next `/clubs/[clubSlug]/badge-codex` route exist with section filters, load-more links, direct badge anchors, and a recent-earner trophy room. | No | Public smoke + contract tests | Validate load-more/deep-link/trophy-room parity in staging, then close final styling/copy gaps. |
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
 | `badge_audit` | 🧾 Badge Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Define admin badge audit API after badge public read model is stable. |
@@ -108,13 +108,13 @@ Any admin workflow may fully move off Streamlit only when:
 ## Recommended implementation sequence
 
 1. Keep public read-only staging smoke and Vercel guardrails green.
-2. Validate public Match Explorer chart/deep-link parity in staging and close any final styling/copy gaps.
+2. Validate public Match Explorer chart/deep-link/preview parity in staging and close any final styling/copy gaps.
 3. Validate public League Results chart/deep-link/printout parity in staging and close any final styling/copy gaps.
 4. Validate public Badge Codex load-more/deep-link/trophy-room parity in staging and close final styling/copy gaps.
 5. Validate public Challenge Ladder deep-link/public-rule parity in staging and close final styling/copy gaps.
 6. Validate public Weekly Recap final styling/print-view parity in staging and close final copy gaps.
 7. Validate public Leaderboards filters/charts/inactive visibility in staging and close final styling/copy gaps.
-8. Validate public Player Search filters and player row deep links in staging, then continue profile section/trophy-room parity.
+8. Validate public Player Search/profile filters and deep links in staging, then close final styling/copy gaps.
 9. Review/approve static FAQ/legal/support copy and smoke the static routes.
 10. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
 11. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
