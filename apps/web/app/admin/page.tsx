@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getAdminOperationsStatus } from "@/lib/adminOperationsApi";
 import type { AdminWorkflowStatus } from "@/lib/adminOperationsApi";
+import AdminSessionCard from "./AdminSessionCard";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
 const mutedStyle = { color: "#475569" };
@@ -65,6 +66,8 @@ export default async function AdminEntryPage() {
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Closed-club migration control for moving operational authority from Streamlit to Next/FastAPI one workflow at a time. This page is status-first: it shows which write workflows are enabled, which remain on Streamlit fallback, and which permanent guardrails still apply.
       </p>
+
+      <AdminSessionCard />
 
       {error ? <p style={{ color: "#b91c1c" }}>Admin operations status is temporarily unavailable. {error}</p> : null}
 
