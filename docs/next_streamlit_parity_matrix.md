@@ -68,7 +68,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `badge_debug` | 🧪 Badge Debug | Admin | `Not started`. | Diagnostic only | Admin auth + role gate | Keep Streamlit-only until admin diagnostics/audit shell exists. |
 | `badge_audit` | 🧾 Badge Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Define admin badge audit API after badge public read model is stable. |
 | `match_canonical_audit` | 🧩 Match Canonical Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Keep Streamlit-only until replay/correction APIs exist. |
-| `challenge_ladder` | 🪜 Challenge Ladder | Public | `Partial` — public FastAPI ladder API and Next `/clubs/[clubSlug]/challenge-ladder` route exist. | No | Public smoke + contract tests | Validate staging, then close deep-link and public challenge-rule parity gaps. |
+| `challenge_ladder` | 🪜 Challenge Ladder | Public | `Partial` — public FastAPI ladder API and Next `/clubs/[clubSlug]/challenge-ladder` route exist with section/tier/player/challenge deep links, ladder search links, status legend, public rulebook copy, and eligible-opponent hints. | No | Public smoke + contract tests | Validate deep-link/public-rule parity in staging, then close final styling/copy gaps. |
 | `faqs` | ❓ FAQs | Public | `Partial` — Next `/faq` exists with public JUPR FAQ content. | No | Static content review | Validate copy against Streamlit FAQ and decide whether `/faq` or `/how-ratings-work` is canonical. |
 | `privacy_policy` | Privacy Policy | Public hidden | `Partial` — first-party Next `/privacy` placeholder exists. | No | Static/legal review | Replace placeholder with approved legal policy before broad production launch. |
 | `terms_of_use` | Terms of Use | Public hidden | `Partial` — first-party Next `/terms` placeholder exists. | No | Static/legal review | Replace placeholder with approved legal terms before broad production launch. |
@@ -111,7 +111,7 @@ Any admin workflow may fully move off Streamlit only when:
 2. Validate public Match Explorer chart/deep-link parity in staging and close any final styling/copy gaps.
 3. Validate public League Results chart/deep-link/printout parity in staging and close any final styling/copy gaps.
 4. Validate public Badge Codex load-more/deep-link/trophy-room parity in staging and close final styling/copy gaps.
-5. Validate public Challenge Ladder in staging and close deep-link/public-rule parity gaps.
+5. Validate public Challenge Ladder deep-link/public-rule parity in staging and close final styling/copy gaps.
 6. Validate public Weekly Recap in staging and close final styling/print-view parity gaps.
 7. Review/approve static FAQ/legal/support copy and smoke the static routes.
 8. Validate public tournament registration in staging, including duplicate-email and closed-registration cases.
