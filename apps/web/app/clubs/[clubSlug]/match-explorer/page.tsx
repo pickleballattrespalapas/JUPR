@@ -4,13 +4,20 @@ import MatchExplorerForm from "./MatchExplorerForm";
 
 type MatchExplorerPageProps = {
   params: { clubSlug: string };
+  searchParams?: Record<string, string | string[] | undefined>;
 };
+
+function firstParam(searchParams: MatchExplorerPageProps["searchParams"], key: string): string | null {
+  const value = searchParams?.[key];
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
 
 function apiBase(): string | null {
   return process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || process.env.JUPR_API_BASE_URL || null;
 }
 
-export default async function MatchExplorerPage({ params }: MatchExplorerPageProps) {
+export default async function MatchExplorerPage({ params, searchParams }: MatchExplorerPageProps) {
   const { clubSlug } = params;
   const [playersResult, contextResult] = await Promise.all([
     getClubPlayers(clubSlug),
@@ -20,6 +27,15 @@ export default async function MatchExplorerPage({ params }: MatchExplorerPagePro
   const players = playersResult.data?.players ?? [];
   const contexts = contextResult.data?.contexts?.length ? contextResult.data.contexts : ["OVERALL"];
   const error = playersResult.error || contextResult.error;
+  const initialSelection = {
+    context: firstParam(searchParams, "ctx") ?? firstParam(searchParams, "league") ?? firstParam(searchParams, "context"),
+    me: firstParam(searchParams, "me"),
+    partner: firstParam(searchParams, "partner"),
+    opp1: firstParam(searchParams, "opp1"),
+    opp2: firstParam(searchParams, "opp2"),
+    scoreYou: firstParam(searchParams, "sy") ?? firstParam(searchParams, "score_you"),
+    scoreOpp: firstParam(searchParams, "so") ?? firstParam(searchParams, "score_opp")
+  };
 
   return (
     <section>
@@ -35,7 +51,7 @@ export default async function MatchExplorerPage({ params }: MatchExplorerPagePro
       {!error && players.length < 4 ? <p>At least four public players are required to preview a doubles matchup.</p> : null}
 
       {players.length >= 4 ? (
-        <MatchExplorerForm apiBase={apiBase()} clubSlug={clubSlug} players={players} contexts={contexts} />
+        <MatchExplorerForm apiBase={apiBase()} clubSlug={clubSlug} players={players} contexts={contexts} initialSelection={initialSelection} />
       ) : null}
 
       <p style={{ marginTop: "1rem" }}>
