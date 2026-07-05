@@ -7,8 +7,8 @@ type LiveSessionPageProps = {
   searchParams?: { edit?: string | string[] };
 };
 
-function apiBase(): string | null {
-  return process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || process.env.JUPR_API_BASE_URL || null;
+function apiBase(): string {
+  return "/api";
 }
 
 function searchParamText(value: string | string[] | undefined): string {
