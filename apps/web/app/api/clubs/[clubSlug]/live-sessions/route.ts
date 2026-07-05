@@ -20,6 +20,28 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+export async function GET(_request: Request, { params }: { params: { clubSlug: string } }) {
+  const base = baseUrl();
+  if (!base) {
+    return NextResponse.json({ detail: "JUPR API base URL is not configured." }, { status: 500 });
+  }
+
+  try {
+    const response = await fetch(`${base.replace(/\/$/, "")}/clubs/${encodeURIComponent(params.clubSlug)}/live-sessions`, {
+      method: "GET",
+      cache: "no-store",
+      headers: { accept: "application/json" }
+    });
+    const result = await readJson(response);
+    return NextResponse.json(result, { status: response.status });
+  } catch (error) {
+    return NextResponse.json(
+      { detail: error instanceof Error ? error.message : "Unable to reach JUPR Live sessions service." },
+      { status: 502 }
+    );
+  }
+}
+
 export async function POST(request: Request, { params }: { params: { clubSlug: string } }) {
   const base = baseUrl();
   if (!base) {
