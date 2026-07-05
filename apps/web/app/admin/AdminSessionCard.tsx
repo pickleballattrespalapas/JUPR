@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AdminSession, getAdminAuthConfig, loadAdminSession, refreshAdminSession, signOutAdminSession } from "@/lib/adminAuthClient";
+import { getAdminAuthConfig, loadAdminSession, refreshAdminSession, signOutAdminSession } from "@/lib/adminAuthClient";
+import type { AdminSession } from "@/lib/adminAuthClient";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
