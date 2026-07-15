@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from tests.conftest import require_api_dependency
+from tests.test_admin_match_log_service import FakeSupabase
+
+require_api_dependency("fastapi")
+require_api_dependency("supabase")
+
+from fastapi.testclient import TestClient
+
+from services.api.main import app
+
+
+def merge_tables() -> dict[str, list[dict]]:
+    return {
+        "players": [
+            {"club_id": "club", "id": 1, "name": "Source Player", "rating": 1200, "active": True},
+            {"club_id": "club", "id": 2, "name": "Target Player", "rating": 1300, "active": True},
+            {"club_id": "club", "id": 3, "name": "Other A", "rating": 1200, "active": True},
+            {"club_id": "club", "id": 4, "name": "Other B", "rating": 1200, "active": True},
+        ],
+        "matches": [
+            {"club_id": "club", "id": 11, "t1_p1": 1, "t1_p2": 3, "t2_p1": 4, "t2_p2": 2, "score_t1": 11, "score_t2": 9},
+            {"club_id": "club", "id": 12, "match_format": "singles", "t1_p1": 3, "t1_p2": None, "t2_p1": 1, "t2_p2": None, "score_t1": 6, "score_t2": 11},
+        ],
+        "league_ratings": [
+            {"club_id": "club", "id": 101, "player_id": 1, "league_name": "Tuesday", "rating": 1200},
+            {"club_id": "club", "id": 102, "player_id": 1, "league_name": "Thursday", "rating": 1220},
+            {"club_id": "club", "id": 201, "player_id": 2, "league_name": "Tuesday", "rating": 1300},
+        ],
+        "club_people": [
+            {"club_id": "club", "id": "person-source", "display_name": "Source Social", "normalized_name": "source social", "linked_player_id": 1},
+        ],
+        "admin_activity_log": [],
+    }
+
+
+def _install_env(monkeypatch, supabase):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr("services.api.admin_player_editor_routes.authenticate_bearer", lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"))
+    monkeypatch.setattr("services.api.admin_player_editor_routes.resolve_admin_role", lambda **_kwargs: SimpleNamespace(role="club_owner"))
+
+
+def test_admin_player_merge_preview_contract(monkeypatch):
+    supabase = FakeSupabase(merge_tables())
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/players/editor/merge/preview",
+        headers={"Authorization": "Bearer local"},
+        json={"source_player_id": 1, "target_player_id": 2},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "player_merge_preview"
+    assert payload["match_reference_counts"]["total"] == 2
+    assert payload["league_rating_plan"]["move_ids"] == [102]
+    assert payload["league_rating_plan"]["delete_ids"] == [101]
+
+
+def test_admin_player_merge_execute_contract(monkeypatch):
+    tables = merge_tables()
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/players/editor/merge",
+        headers={"Authorization": "Bearer local"},
+        json={"source_player_id": 1, "target_player_id": 2, "confirmation_text": "MERGE"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "player_merge_execute"
+    assert all(row.get("t1_p1") != 1 and row.get("t2_p1") != 1 for row in tables["matches"])
+    assert tables["matches"][0]["t1_p1"] == 2
+    assert tables["matches"][1]["t2_p1"] == 2
+    assert {row["id"] for row in tables["league_ratings"]} == {102, 201}
+    moved = [row for row in tables["league_ratings"] if row["id"] == 102][0]
+    assert moved["player_id"] == 2
+    source_player = [row for row in tables["players"] if row["id"] == 1][0]
+    assert source_player["active"] is False
+    assert "MERGED into Target Player" in source_player["name"]
+    assert tables["admin_activity_log"][0]["action_type"] == "merge_player_editor_players_admin"
+    assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_player_merge_requires_confirmation(monkeypatch):
+    supabase = FakeSupabase(merge_tables())
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/players/editor/merge",
+        headers={"Authorization": "Bearer local"},
+        json={"source_player_id": 1, "target_player_id": 2, "confirmation_text": "M"},
+    )
+
+    assert response.status_code == 400
+    assert "MERGE" in response.json()["detail"]

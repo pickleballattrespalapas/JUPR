@@ -4,6 +4,7 @@ export type AdminPlayerEditorStatusResponse = {
   players_endpoint?: string | null;
   player_detail_endpoint?: string | null;
   social_identities_endpoint?: string | null;
+  player_merge_endpoint?: string | null;
   player_count?: number | null;
   warnings: string[];
 };
@@ -57,6 +58,23 @@ export type AdminPlayerSocialIdentityListResponse = {
   summary?: { people?: number; linked?: number; unlinked?: number };
 };
 
+export type AdminPlayerMergePreview = {
+  ok: boolean;
+  mode?: string;
+  source_player?: { id: number; name: string };
+  target_player?: { id: number; name: string };
+  match_reference_counts?: Record<string, number>;
+  league_rating_plan?: {
+    source_rows?: Array<Record<string, unknown>>;
+    target_rows?: Array<Record<string, unknown>>;
+    move_ids?: number[];
+    delete_ids?: number[];
+    conflicts?: string[];
+  };
+  social_identity_counts?: Record<string, number>;
+  warnings?: string[];
+};
+
 export type AdminPlayerEditorListResponse = {
   ok: boolean;
   mode?: string;
@@ -81,6 +99,14 @@ export type AdminPlayerEditorWriteResponse = {
   club_person?: AdminPlayerSocialIdentity | null;
   linked_count?: number;
   skipped_count?: number;
+  source_player_id?: number;
+  target_player_id?: number;
+  match_updates?: Record<string, number>;
+  league_rating_plan?: AdminPlayerMergePreview["league_rating_plan"];
+  moved_league_rating_count?: number;
+  deleted_conflicting_league_rating_count?: number;
+  social_identity_rows_updated?: number;
+  requires_replay?: boolean;
   warnings?: string[];
 };
 
