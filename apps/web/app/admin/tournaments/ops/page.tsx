@@ -1,25 +1,21 @@
 import Link from "next/link";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
-import TournamentAdminPanel from "./TournamentAdminPanel";
+import TournamentOpsPanel from "./TournamentOpsPanel";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-export default async function AdminTournamentsPage() {
+export default async function AdminTournamentOpsPage() {
   const clubId = "tres_palapas";
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Tournament Admin
+        Tournament Ops
       </p>
-      <h1 style={{ marginTop: 0 }}>Tournament registration management</h1>
+      <h1 style={{ marginTop: 0 }}>Tournament operations snapshot</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Read-foundation for moving Streamlit tournament registration management to Next/Vercel. This view is guarded by the stored admin session and FastAPI tournament permissions.
-      </p>
-      <p style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-        <Link href="/admin/tournaments/bulk">Open bulk registration actions</Link>
-        <Link href="/admin/tournaments/ops">Open Tournament Ops snapshot</Link>
+        Read-only Next/FastAPI foundation for Tournament Operations. It mirrors Streamlit operational visibility for draws, teams, games, and podium rows while write workflows remain Streamlit-only until explicitly ported.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}
@@ -31,11 +27,15 @@ export default async function AdminTournamentsPage() {
             <article style={cardStyle}><strong>Tournaments</strong><br />{data.tournament_count ?? "—"}</article>
             <article style={cardStyle}><strong>API</strong><br />{data.tournaments_endpoint ? "Configured" : "Guarded off"}</article>
           </div>
-          <TournamentAdminPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} />
+          <TournamentOpsPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} />
         </>
       ) : null}
 
-      <p style={{ marginTop: "1rem" }}><Link href="/admin">Back to operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+        <Link href="/admin/tournaments">Tournament Admin</Link>
+        <Link href="/admin/tournaments/bulk">Bulk registration actions</Link>
+        <Link href="/admin">Operations cockpit</Link>
+      </p>
     </section>
   );
 }

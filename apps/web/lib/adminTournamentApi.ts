@@ -81,6 +81,25 @@ export type AdminTournamentDetailResponse = {
   warnings?: string[];
 };
 
+export type AdminTournamentOpsSnapshotResponse = {
+  ok: boolean;
+  mode?: string;
+  tournament: AdminTournament;
+  draw_id?: string | null;
+  summary: {
+    draws: number;
+    teams: number;
+    games: number;
+    podium: number;
+    completed_games?: number;
+  };
+  draws: Array<Record<string, unknown>>;
+  teams: Array<Record<string, unknown>>;
+  games: Array<Record<string, unknown>>;
+  podium: Array<Record<string, unknown>>;
+  warnings?: string[];
+};
+
 export type AdminTournamentWriteResponse = {
   ok: boolean;
   mode?: string;

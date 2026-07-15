@@ -98,7 +98,19 @@ def tournament_tables():
                 "show_on_partner_board": True,
             }
         ],
-        "tournament_teams": [],
+        "tournament_event_draws": [
+            {"id": "draw_1", "tournament_id": "tour_1", "registration_day_id": "day_1", "event_option_id": "event_1", "name": "3.5 Draw", "status": "active", "team_count": 2}
+        ],
+        "tournament_teams": [
+            {"id": "team_1", "tournament_id": "tour_1", "draw_id": "draw_1", "team_number": 1, "player1_id": 1, "player2_id": 2, "source": "REGISTRATION"},
+            {"id": "team_2", "tournament_id": "tour_1", "draw_id": "draw_1", "team_number": 2, "player1_id": 3, "player2_id": 4, "source": "REGISTRATION"},
+        ],
+        "tournament_games": [
+            {"id": "game_1", "tournament_id": "tour_1", "draw_id": "draw_1", "stage": "ROUND_ROBIN", "rr_round_number": 1, "rr_slot_number": 1, "team1_id": "team_1", "team2_id": "team_2", "score_team1": 11, "score_team2": 7, "winner_team_id": "team_1", "status": "complete"}
+        ],
+        "tournament_podium": [
+            {"id": "podium_1", "tournament_id": "tour_1", "draw_id": "draw_1", "placement": 1, "team_id": "team_1", "award_label": "Gold"}
+        ],
         "admin_activity_log": [],
     }
 
@@ -177,6 +189,30 @@ def test_admin_tournament_detail_contract(monkeypatch):
     assert payload["registrations"][0]["notes"] == "Original note"
     assert payload["event_options"][0]["division_name"] == "3.5"
     assert payload["selections"][0]["event_label"] == "Gender Doubles / 3.5"
+
+
+def test_admin_tournament_ops_snapshot_contract(monkeypatch):
+    supabase = FakeSupabase(tournament_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/ops",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "tournament_ops_snapshot"
+    assert payload["summary"] == {"draws": 1, "teams": 2, "games": 1, "podium": 1, "completed_games": 1}
+    assert payload["draws"][0]["id"] == "draw_1"
+    assert payload["teams"][0]["team_number"] == 1
+    assert payload["games"][0]["winner_team_id"] == "team_1"
+    assert payload["podium"][0]["award_label"] == "Gold"
 
 
 def test_admin_tournament_registration_update_contract(monkeypatch):

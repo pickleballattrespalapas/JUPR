@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
+from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_ops_snapshot
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_status,
     get_admin_tournament_detail,
@@ -108,6 +109,36 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/ops")
+    def get_admin_tournament_ops(
+        club_id: str,
+        tournament_id: str,
+        draw_id: str | None = Query(default=None),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_tournament_admin_ops",
+        )
+        try:
+            return get_admin_tournament_ops_snapshot(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                draw_id=draw_id,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
