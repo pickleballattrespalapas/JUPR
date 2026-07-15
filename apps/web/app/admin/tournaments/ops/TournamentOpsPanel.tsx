@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useState } from "react";
 import type {
   AdminTournament,
+  AdminTournamentDetailResponse,
   AdminTournamentListResponse,
   AdminTournamentOpsSnapshotResponse,
-  AdminTournamentStatusResponse
+  AdminTournamentStatusResponse,
+  AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -29,6 +31,13 @@ function shortValue(value: unknown): string {
   if (value == null || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value).slice(0, 160);
   return String(value);
+}
+
+function eventOptionLabel(row: Record<string, unknown>): string {
+  const family = String(row.event_family_label || "").trim();
+  const division = String(row.division_name || row.label || "").trim();
+  if (family && division && family !== division) return `${family} / ${division}`;
+  return division || family || String(row.id || "Event");
 }
 
 function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<string, unknown>>; preferredColumns: string[] }) {
@@ -59,14 +68,21 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [selectedDrawId, setSelectedDrawId] = useState("");
+  const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
   const [snapshot, setSnapshot] = useState<AdminTournamentOpsSnapshotResponse | null>(null);
+  const [drawEventOptionId, setDrawEventOptionId] = useState("");
+  const [drawName, setDrawName] = useState("");
+  const [drawConfirm, setDrawConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function requestJson<T>(path: string): Promise<T> {
+  async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
     if (!accessToken) throw new Error("Sign in at /admin/login before using Tournament Ops.");
-    const response = await fetch(apiUrl(apiBase, path), { headers: { Authorization: `Bearer ${accessToken}` } });
+    const headers = new Headers(options?.headers);
+    headers.set("Authorization", `Bearer ${accessToken}`);
+    if (options?.body) headers.set("Content-Type", "application/json");
+    const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
     return payload as T;
@@ -76,6 +92,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     setSnapshot(null);
+    setDetail(null);
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments${suffix}`);
@@ -88,6 +105,13 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function loadTournamentDetail(tournamentId: string): Promise<AdminTournamentDetailResponse> {
+    const payload = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`);
+    setDetail(payload);
+    if (!drawEventOptionId && payload.event_options?.length) setDrawEventOptionId(String(payload.event_options[0].id || ""));
+    return payload;
+  }
+
   async function loadOps(tournamentId = selectedTournamentId, drawId = selectedDrawId) {
     if (!tournamentId) {
       setMessage("Select a tournament first.");
@@ -96,6 +120,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     try {
+      await loadTournamentDetail(tournamentId);
       const params = new URLSearchParams();
       if (drawId) params.set("draw_id", drawId);
       const suffix = params.toString() ? `?${params.toString()}` : "";
@@ -104,6 +129,37 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       setMessage("Tournament operations snapshot loaded.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load tournament operations.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createDraw() {
+    if (!selectedTournamentId) {
+      setMessage("Select a tournament before creating a draw.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const selectedEvent = detail?.event_options?.find((row) => String(row.id || "") === drawEventOptionId) || null;
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws`, {
+        method: "POST",
+        body: JSON.stringify({
+          event_option_id: drawEventOptionId || null,
+          registration_day_id: String(selectedEvent?.registration_day_id || "") || null,
+          name: drawName,
+          confirmation_text: drawConfirm,
+          source: "next_tournament_ops_create_draw"
+        })
+      });
+      const nextDrawId = payload.draw?.id || "";
+      setSelectedDrawId(nextDrawId);
+      setDrawConfirm("");
+      await loadOps(selectedTournamentId, nextDrawId);
+      setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to create draw.");
     } finally {
       setBusy(false);
     }
@@ -121,8 +177,8 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Tournament Ops snapshot</h2>
-        <p style={{ color: "#475569" }}>Read-only visibility into draws, teams, games, and podium rows. Tournament Ops writes remain Streamlit-only until each write workflow is separately ported and audited.</p>
+        <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
+        <p style={{ color: "#475569" }}>Operations visibility plus the first guarded write: creating an empty division draw. Team import, scheduling, scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>
@@ -141,7 +197,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
           <h2 style={{ marginTop: 0 }}>Select tournament</h2>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 240px) auto", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Tournament</strong><br />
-              <select value={selectedTournamentId} onChange={(event) => { setSelectedTournamentId(event.target.value); setSelectedDrawId(""); setSnapshot(null); }} style={inputStyle}>
+              <select value={selectedTournamentId} onChange={(event) => { setSelectedTournamentId(event.target.value); setSelectedDrawId(""); setSnapshot(null); setDetail(null); setDrawEventOptionId(""); }} style={inputStyle}>
                 <option value="">Choose a tournament…</option>
                 {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}
               </select>
@@ -149,6 +205,24 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
             <label><strong>Draw ID filter</strong><br /><input value={selectedDrawId} onChange={(event) => setSelectedDrawId(event.target.value)} placeholder="optional" style={inputStyle} /></label>
             <button type="button" onClick={() => loadOps()} disabled={busy || !selectedTournamentId} style={ghostButtonStyle}>Load ops snapshot</button>
           </div>
+        </article>
+      ) : null}
+
+      {detail ? (
+        <article style={{ ...cardStyle, background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
+          <p style={{ color: "#475569" }}>This creates a DRAFT draw shell scoped to the selected registration division. It does not import teams or generate games.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(180px, 1fr) minmax(160px, 220px)", gap: "0.75rem", alignItems: "end" }}>
+            <label><strong>Registration division</strong><br />
+              <select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}>
+                <option value="">Legacy / tournament-wide draw</option>
+                {detail.event_options.map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}
+              </select>
+            </label>
+            <label><strong>Draw name</strong><br /><input value={drawName} onChange={(event) => setDrawName(event.target.value)} placeholder="optional" style={inputStyle} /></label>
+            <label><strong>Type CREATE DRAW</strong><br /><input value={drawConfirm} onChange={(event) => setDrawConfirm(event.target.value)} style={inputStyle} /></label>
+          </div>
+          <p><button type="button" onClick={createDraw} disabled={busy || !accessToken || drawConfirm.trim().toUpperCase() !== "CREATE DRAW"} style={buttonStyle}>{busy ? "Creating…" : "Create draw"}</button></p>
         </article>
       ) : null}
 
