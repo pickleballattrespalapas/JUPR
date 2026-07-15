@@ -3,6 +3,7 @@ export type AdminLeagueManagerStatusResponse = {
   status: string;
   leagues_endpoint?: string | null;
   league_detail_endpoint?: string | null;
+  league_settings_update_endpoint?: string | null;
   league_count?: number | null;
   active_count?: number | null;
   warnings: string[];
@@ -77,6 +78,15 @@ export type AdminLeagueManagerDetailResponse = {
   roster?: AdminLeagueManagerRosterRow[];
   roster_count?: number | null;
   league_roster_count?: number | null;
+};
+
+export type AdminLeagueManagerWriteResponse = {
+  ok: boolean;
+  mode?: string;
+  league?: AdminLeagueManagerLeague | null;
+  detail?: AdminLeagueManagerDetailResponse | null;
+  created?: boolean | null;
+  warnings?: string[];
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
