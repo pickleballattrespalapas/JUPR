@@ -216,11 +216,12 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
             continue
         league_row = standing_by_player.get(int(pid))
         rating = _safe_float((league_row or {}).get("rating"))
+        league_active = bool((league_row or {}).get("is_active", False)) and not bool((league_row or {}).get("inactive_at")) if league_row else False
         roster.append(
             {
                 "player_id": int(pid),
                 "player_name": _clean_text(player.get("name"), limit=160) or f"Player {int(pid)}",
-                "in_league": league_row is not None,
+                "in_league": league_row is not None and league_active,
                 "league_name": str(league_name),
                 "rating": rating,
                 "rating_jupr": None if rating is None else rating / 400.0,
@@ -228,7 +229,7 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
                 "losses": _safe_int((league_row or {}).get("losses")) or 0,
                 "matches_played": _safe_int((league_row or {}).get("matches_played")) or 0,
                 "player_active": bool(player.get("active", True)),
-                "league_active": bool((league_row or {}).get("is_active", False)) if league_row else False,
+                "league_active": league_active,
                 "last_game_at": player.get("last_game_at"),
             }
         )
@@ -243,6 +244,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "leagues_endpoint": None,
             "league_detail_endpoint": None,
             "league_settings_update_endpoint": None,
+            "league_roster_update_endpoint": None,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
         }
     leagues: list[dict[str, Any]] = []
@@ -253,13 +255,14 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             leagues = []
     return {
         "enabled": True,
-        "status": "ready_for_league_manager_settings_pilot",
+        "status": "ready_for_league_manager_roster_pilot",
         "leagues_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
         "league_detail_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
+        "league_roster_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}",
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
-        "warnings": ["Settings edits are enabled through guarded FastAPI. Roster movement, score submission, and end-of-league awards remain Streamlit-only in this slice."],
+        "warnings": ["Settings and roster membership edits are enabled through guarded FastAPI. Score submission and end-of-league awards remain Streamlit-only in this slice."],
     }
 
 
