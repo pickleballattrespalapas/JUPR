@@ -147,6 +147,9 @@ export type AdminTournamentWriteResponse = {
   games?: Array<Record<string, unknown>>;
   game?: Record<string, unknown> | null;
   game_count?: number;
+  match_count?: number;
+  tournament_game_ids?: string[];
+  process_result?: Record<string, unknown>;
   advance_count?: number;
   standings?: Array<Record<string, unknown>>;
   podium?: Array<Record<string, unknown>>;
