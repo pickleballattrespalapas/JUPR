@@ -71,8 +71,9 @@ def fake_storage():
             {"club_id": "club", "league_name": "Advanced", "is_active": False, "status": "ended", "k_factor": 24},
         ],
         "players": [
-            {"club_id": "club", "id": 1, "name": "Alex"},
-            {"club_id": "club", "id": 2, "name": "Blair"},
+            {"club_id": "club", "id": 1, "name": "Alex", "active": True, "last_game_at": "2026-07-08T18:00:00Z"},
+            {"club_id": "club", "id": 2, "name": "Blair", "active": True},
+            {"club_id": "club", "id": 3, "name": "Casey", "active": True},
         ],
         "league_ratings": [
             {"club_id": "club", "id": 10, "player_id": 1, "league_name": "Open", "rating": 1500, "starting_rating": 1400, "wins": 4, "losses": 1, "matches_played": 5, "is_active": True},
@@ -115,3 +116,8 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     assert detail["standings"][0]["player_name"] == "Alex"
     assert detail["standings"][0]["rank"] == 1
     assert detail["standings"][0]["rating_jupr"] == 3.75
+    assert detail["roster_count"] == 3
+    assert detail["league_roster_count"] == 2
+    assert detail["roster"][0]["player_name"] == "Alex"
+    assert detail["roster"][2]["player_name"] == "Casey"
+    assert detail["roster"][2]["in_league"] is False

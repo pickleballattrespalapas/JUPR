@@ -119,7 +119,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>League Manager admin session</h2>
-        <p style={{ color: "#475569" }}>This foundation route is read-only: league list, schedule preview, config visibility, and standings. Setup, court movement, scoring, and awards stay on Streamlit for now.</p>
+        <p style={{ color: "#475569" }}>This foundation route is read-only: league list, schedule preview, roster snapshot, config visibility, and standings. Setup, court movement, scoring, and awards stay on Streamlit for now.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -159,6 +159,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
               <div><strong>K-factor</strong><br />{detail.league.k_factor ?? "—"}</div>
               <div><strong>Min games</strong><br />{detail.league.min_games ?? "—"}</div>
               <div><strong>Standings rows</strong><br />{detail.standings_count}</div>
+              <div><strong>League roster</strong><br />{detail.league_roster_count ?? 0} / {detail.roster_count ?? detail.roster?.length ?? 0}</div>
             </div>
           </article>
 
@@ -192,6 +193,18 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
                 </table>
               </div>
             ) : <p style={{ color: "#64748b" }}>No league standings rows are available yet.</p>}
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Roster snapshot</h2>
+            {detail.roster?.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "760px" }}>
+                  <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>In league</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>JUPR</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>W-L</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>MP</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Last game</th></tr></thead>
+                  <tbody>{detail.roster.map((row) => <tr key={row.player_id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "Yes" : "No"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{juprLabel(row.rating_jupr)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.matches_played ?? 0}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.last_game_at ? String(row.last_game_at).slice(0, 10) : "—"}</td></tr>)}</tbody>
+                </table>
+              </div>
+            ) : <p style={{ color: "#64748b" }}>No roster rows are available yet.</p>}
           </article>
 
           <article style={cardStyle}>
