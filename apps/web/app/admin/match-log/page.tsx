@@ -194,6 +194,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             applyEnabled={Boolean(data.apply_enabled)}
             duplicatePreview={data.duplicate_delete_preview}
             duplicateGroups={data.duplicate_groups}
+            matches={data.matches}
           />
 
           <h2>Matches</h2>
