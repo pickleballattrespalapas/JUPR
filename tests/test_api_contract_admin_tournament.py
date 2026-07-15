@@ -247,3 +247,39 @@ def test_admin_tournament_selection_update_contract(monkeypatch):
     assert tables["tournament_registration_selections"][0]["registration_day_id"] == "day_1"
     assert tables["admin_activity_log"][0]["action_type"] == "update_tournament_registration_selection_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_tournament_bulk_registration_update_contract(monkeypatch):
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/bulk",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "registration_ids": ["registration_1"],
+            "registration_status": "cancelled",
+            "payment_status": "refunded",
+            "append_note": "Bulk cancellation.",
+            "confirmation_text": "BULK UPDATE REGISTRATIONS",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "tournament_registration_bulk_update"
+    assert payload["updated_count"] == 1
+    assert payload["registration_ids"] == ["registration_1"]
+    assert payload["registrations"][0]["registration_status"] == "cancelled"
+    assert payload["registrations"][0]["payment_status"] == "refunded"
+    assert tables["tournament_registrations"][0]["status"] == "cancelled"
+    assert tables["tournament_registrations"][0]["payment_status"] == "refunded"
+    assert tables["tournament_registrations"][0]["notes"] == "Original note\nBulk cancellation."
+    assert tables["admin_activity_log"][0]["action_type"] == "bulk_update_tournament_registrations_admin"
+    assert tables["admin_activity_log"][0]["flagged_for_review"] is True
