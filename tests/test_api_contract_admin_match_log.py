@@ -155,6 +155,55 @@ def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):
     assert [row["id"] for row in tables["matches"]] == [1, 3]
 
 
+def test_admin_match_log_bulk_exclude_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    called = {}
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
+
+    def fake_delete_rated_matches_with_replay(**kwargs):
+        called.update(kwargs)
+        return {
+            "deleted_count": len(kwargs["match_ids"]),
+            "deleted_ids": list(kwargs["match_ids"]),
+            "affected_player_ids": [1, 2],
+            "replay_result": {"matches_scanned_total": 3, "matches_rewritten": 2, "league_ratings_rows": 4, "skipped_incomplete": 0},
+            "warning": None,
+            "error": None,
+            "replay_error": None,
+            "actor": kwargs["actor"],
+        }
+
+    monkeypatch.setattr("services.api.admin_match_log_routes.delete_rated_matches_with_replay", fake_delete_rated_matches_with_replay)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "DELETE", "match_ids": [3], "note": "wrong test row"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "matches_excluded"
+    assert payload["deleted_ids"] == [3]
+    assert called["actor"] == "admin@example.com"
+    assert called["actor_role"] == "club_owner"
+    assert called["note"] == "wrong test row"
+    assert called["source"] == "next_match_log_bulk_exclude"
+
+
 def test_admin_match_log_duplicate_no_issue_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
