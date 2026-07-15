@@ -144,11 +144,22 @@ def _fetch_league_rows(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     return sorted(leagues, key=lambda row: str(row.get("league_name") or "").lower())
 
 
-def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
+def _fetch_player_rows(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     try:
-        rows = _safe_rows(supabase.table("players").select("id,name").eq("club_id", str(club_id)).execute())
+        rows = _safe_rows(
+            supabase.table("players")
+            .select("id,name,active,last_game_at")
+            .eq("club_id", str(club_id))
+            .order("name", desc=False)
+            .execute()
+        )
     except Exception:
-        rows = []
+        rows = _safe_rows(supabase.table("players").select("id,name").eq("club_id", str(club_id)).order("name", desc=False).execute())
+    return rows
+
+
+def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
+    rows = _fetch_player_rows(supabase, club_id=str(club_id))
     names: dict[int, str] = {}
     for row in rows:
         pid = _safe_int(row.get("id"))
@@ -196,6 +207,34 @@ def _league_standings(supabase: Any, *, club_id: str, league_name: str, limit: i
     return standings[: max(1, min(int(limit), 200))]
 
 
+def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    standing_by_player = {int(row["player_id"]): row for row in standings if row.get("player_id") is not None}
+    roster: list[dict[str, Any]] = []
+    for player in _fetch_player_rows(supabase, club_id=str(club_id)):
+        pid = _safe_int(player.get("id"))
+        if pid is None:
+            continue
+        league_row = standing_by_player.get(int(pid))
+        rating = _safe_float((league_row or {}).get("rating"))
+        roster.append(
+            {
+                "player_id": int(pid),
+                "player_name": _clean_text(player.get("name"), limit=160) or f"Player {int(pid)}",
+                "in_league": league_row is not None,
+                "league_name": str(league_name),
+                "rating": rating,
+                "rating_jupr": None if rating is None else rating / 400.0,
+                "wins": _safe_int((league_row or {}).get("wins")) or 0,
+                "losses": _safe_int((league_row or {}).get("losses")) or 0,
+                "matches_played": _safe_int((league_row or {}).get("matches_played")) or 0,
+                "player_active": bool(player.get("active", True)),
+                "league_active": bool((league_row or {}).get("is_active", False)) if league_row else False,
+                "last_game_at": player.get("last_game_at"),
+            }
+        )
+    return sorted(roster, key=lambda row: (not bool(row.get("in_league")), str(row.get("player_name") or "").lower()))
+
+
 def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     if not is_admin_league_manager_enabled():
         return {
@@ -238,6 +277,7 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
     if league is None:
         raise ValueError("league not found")
     standings = _league_standings(supabase, club_id=str(club_id), league_name=clean_league)
+    roster = _league_roster(supabase, club_id=str(club_id), league_name=clean_league, standings=standings)
     return {
         "ok": True,
         "mode": "league_manager_detail",
@@ -245,4 +285,7 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
         "schedule_preview": _schedule_preview(league.get("schedule_config")),
         "standings": standings,
         "standings_count": len(standings),
+        "roster": roster,
+        "roster_count": len(roster),
+        "league_roster_count": len([row for row in roster if row.get("in_league")]),
     }
