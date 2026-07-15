@@ -16,6 +16,10 @@ class AuthenticatedUser:
     claims: dict[str, Any]
 
 
+JWKS_ALGORITHMS = ("RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "EdDSA")
+SECRET_ALGORITHMS = ("HS256",)
+
+
 def _unauthorized(detail: str = "invalid bearer token") -> HTTPException:
     return HTTPException(status_code=401, detail=detail)
 
@@ -30,9 +34,16 @@ def parse_bearer_token(authorization: str | None) -> str:
     return token.strip()
 
 
+def _unverified_alg(token: str) -> str:
+    try:
+        return str(jwt.get_unverified_header(token).get("alg") or "").strip()
+    except Exception:
+        return ""
+
+
 def _decode_with_secret(token: str, *, secret: str, audience: str | None) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
-        "algorithms": ["HS256"],
+        "algorithms": list(SECRET_ALGORITHMS),
         "options": {"require": ["exp", "sub"]},
     }
     if audience:
@@ -42,7 +53,7 @@ def _decode_with_secret(token: str, *, secret: str, audience: str | None) -> dic
 
 def _decode_with_jwks(token: str, *, jwks_url: str, audience: str | None) -> dict[str, Any]:
     signing_key = jwt.PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
-    kwargs: dict[str, Any] = {"algorithms": ["RS256"], "options": {"require": ["exp", "sub"]}}
+    kwargs: dict[str, Any] = {"algorithms": list(JWKS_ALGORITHMS), "options": {"require": ["exp", "sub"]}}
     if audience:
         kwargs["audience"] = audience
     return jwt.decode(token, signing_key.key, **kwargs)
@@ -70,14 +81,26 @@ def get_supabase_jwks_url() -> str:
     return f"{supabase_url}/auth/v1/.well-known/jwks.json"
 
 
-def jwt_verification_mode() -> str:
+def _configured_jwt_inputs() -> tuple[str, str, str]:
     mode = os.getenv("JUPR_SUPABASE_JWT_MODE", "").strip().lower()
     secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
     jwks_url = get_supabase_jwks_url()
-    if mode in {"", "secret"} and secret:
+    return mode, secret, jwks_url
+
+
+def jwt_verification_mode() -> str:
+    mode, secret, jwks_url = _configured_jwt_inputs()
+    if mode == "secret" and secret:
         return "secret"
-    if mode in {"jwks", ""} and jwks_url:
+    if mode == "jwks" and jwks_url:
         return "jwks"
+    if mode in {"", "auto"}:
+        if secret and jwks_url:
+            return "auto"
+        if secret:
+            return "secret"
+        if jwks_url:
+            return "jwks"
     return "unconfigured"
 
 
@@ -86,21 +109,42 @@ def jwt_verification_configured() -> bool:
 
 
 def get_token_decoder() -> Callable[[str], dict[str, Any]]:
-    mode = os.getenv("JUPR_SUPABASE_JWT_MODE", "").strip().lower()
-    secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
+    mode, secret, jwks_url = _configured_jwt_inputs()
     audience = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated").strip() or None
-    jwks_url = get_supabase_jwks_url()
 
-    if mode in {"", "secret"} and secret:
+    if mode == "secret":
+        if not secret:
+            raise RuntimeError("Supabase JWT secret mode is enabled, but SUPABASE_JWT_SECRET is not set.")
         return lambda token: _decode_with_secret(token, secret=secret, audience=audience)
-    if mode in {"jwks", ""} and jwks_url:
+
+    if mode == "jwks":
+        if not jwks_url:
+            raise RuntimeError("Supabase JWT JWKS mode is enabled, but SUPABASE_JWKS_URL or SUPABASE_URL is not set.")
         return lambda token: _decode_with_jwks(token, jwks_url=jwks_url, audience=audience)
 
-    raise RuntimeError(
-        "Supabase JWT verification is not configured. Set SUPABASE_JWT_SECRET for secret mode "
-        "or SUPABASE_JWKS_URL with JUPR_SUPABASE_JWT_MODE=jwks. If SUPABASE_URL is set, "
-        "JWKS mode can be derived automatically for projects that use asymmetric signing keys."
-    )
+    if mode not in {"", "auto"}:
+        raise RuntimeError(f"Unsupported JUPR_SUPABASE_JWT_MODE={mode!r}. Use auto, secret, or jwks.")
+
+    def decode_auto(token: str) -> dict[str, Any]:
+        alg = _unverified_alg(token)
+        if alg in SECRET_ALGORITHMS:
+            if not secret:
+                raise RuntimeError("Supabase JWT uses HS256, but SUPABASE_JWT_SECRET is not set.")
+            return _decode_with_secret(token, secret=secret, audience=audience)
+        if alg in JWKS_ALGORITHMS:
+            if not jwks_url:
+                raise RuntimeError("Supabase JWT uses an asymmetric algorithm, but SUPABASE_JWKS_URL or SUPABASE_URL is not set.")
+            return _decode_with_jwks(token, jwks_url=jwks_url, audience=audience)
+        if secret and not jwks_url:
+            return _decode_with_secret(token, secret=secret, audience=audience)
+        if jwks_url:
+            return _decode_with_jwks(token, jwks_url=jwks_url, audience=audience)
+        raise RuntimeError(
+            "Supabase JWT verification is not configured. Set SUPABASE_JWT_SECRET for HS256 tokens "
+            "or SUPABASE_JWKS_URL/SUPABASE_URL for asymmetric Supabase tokens."
+        )
+
+    return decode_auto
 
 
 def authenticate_bearer(
@@ -115,6 +159,8 @@ def authenticate_bearer(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
         claims = decoder(token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except InvalidTokenError:
         raise _unauthorized("invalid bearer token")
     except Exception:
