@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
+from pydantic import BaseModel
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -11,8 +12,23 @@ from jupr_app.services.admin_tournament_service import (
     get_admin_tournament_detail,
     is_admin_tournament_admin_enabled,
     list_admin_tournaments,
+    update_admin_tournament_registration,
 )
 from services.api.auth import authenticate_bearer, auth_header
+
+
+class AdminTournamentRegistrationUpdateRequest(BaseModel):
+    registration_status: str | None = None
+    payment_status: str | None = None
+    notes: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_registration_update"
+
+
+def _dump_model(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
 
 
 def _resolve_tournament_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
@@ -42,7 +58,7 @@ def _resolve_tournament_role_or_403(*, supabase: Any, club_id: str, authorizatio
 
 
 def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
-    """Register guarded Tournament Admin read-foundation routes for the Next admin pilot."""
+    """Register guarded Tournament Admin routes for the Next admin pilot."""
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/status")
     def get_admin_tournament_status(club_id: str) -> dict[str, Any]:
@@ -94,5 +110,44 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}")
+    def patch_admin_tournament_registration(
+        club_id: str,
+        tournament_id: str,
+        registration_id: str,
+        payload: AdminTournamentRegistrationUpdateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        patch = _dump_model(payload)
+        source = str(patch.pop("source", payload.source))
+        confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        try:
+            return update_admin_tournament_registration(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                registration_id=str(registration_id),
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
