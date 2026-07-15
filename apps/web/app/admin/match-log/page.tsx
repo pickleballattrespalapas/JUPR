@@ -3,6 +3,7 @@ import { getAdminApiBaseUrl, getAdminMatchLog } from "@/lib/adminMatchLogApi";
 import type { AdminDuplicateGroup, AdminMatchLogMatch } from "@/lib/adminMatchLogApi";
 import { getAdminReplayStatus } from "@/lib/adminReplayApi";
 import MatchLogApplyPanel from "./MatchLogApplyPanel";
+import MatchLogBulkExcludePanel from "./MatchLogBulkExcludePanel";
 import MatchLogQuickReplayPanel from "./MatchLogQuickReplayPanel";
 
 type MatchLogPageProps = {
@@ -210,6 +211,15 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
               recommendedTarget={data.duplicate_delete_preview?.recommended_replay_scope || null}
               statusError={replayError}
               warnings={replayData?.warnings || []}
+            />
+          </div>
+
+          <div style={{ marginTop: "1rem" }}>
+            <MatchLogBulkExcludePanel
+              apiBase={getAdminApiBaseUrl()}
+              clubId={clubId}
+              enabled={Boolean(data.apply_enabled)}
+              matches={data.matches}
             />
           </div>
 
