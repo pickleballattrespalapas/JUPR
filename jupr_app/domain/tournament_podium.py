@@ -13,20 +13,21 @@ PODIUM_BADGE_MAP = {
 }
 
 
-def fetch_tournament_podium(supabase: Any, tournament_id: str) -> list[dict[str, Any]]:
+def fetch_tournament_podium(supabase: Any, tournament_id: str, draw_id: str | None = None) -> list[dict[str, Any]]:
     if supabase is None or not tournament_id:
         return []
     try:
-        resp = (
+        query = (
             supabase.table("tournament_podium")
-            .select("placement,team_id,source")
+            .select("placement,team_id,source,draw_id")
             .eq("tournament_id", tournament_id)
-            .order("placement", desc=False)
-            .execute()
         )
+        if draw_id:
+            query = query.eq("draw_id", str(draw_id))
+        resp = query.order("placement", desc=False).execute()
         return resp.data or []
     except Exception:
-        logger.exception("Failed to fetch tournament podium", extra={"tournament_id": tournament_id})
+        logger.exception("Failed to fetch tournament podium", extra={"tournament_id": tournament_id, "draw_id": draw_id})
         return []
 
 
@@ -34,20 +35,22 @@ def upsert_tournament_podium(
     supabase: Any,
     tournament_id: str,
     payload: list[dict[str, Any]],
+    draw_id: str | None = None,
 ) -> None:
     if supabase is None or not tournament_id or not payload:
         return
+    on_conflict = "tournament_id,draw_id,placement" if draw_id else "tournament_id,placement"
     try:
         supabase.table("tournament_podium").upsert(
             payload,
-            on_conflict="tournament_id,placement",
+            on_conflict=on_conflict,
         ).execute()
     except Exception:
-        logger.exception("Failed to upsert tournament podium", extra={"tournament_id": tournament_id})
+        logger.exception("Failed to upsert tournament podium", extra={"tournament_id": tournament_id, "draw_id": draw_id})
 
 
 def build_tournament_podium_candidates(
-    ctx: Any, tournament_id: str, tournament_name: str | None
+    ctx: Any, tournament_id: str, tournament_name: str | None, draw_id: str | None = None
 ) -> list[BadgeCandidate]:
     from jupr_app.domain.gamification.badge_types import BadgeCandidate
 
@@ -56,7 +59,7 @@ def build_tournament_podium_candidates(
     if supabase is None or not club_id or not tournament_id:
         return []
 
-    podium_rows = fetch_tournament_podium(supabase, tournament_id)
+    podium_rows = fetch_tournament_podium(supabase, tournament_id, draw_id=draw_id)
     if not podium_rows:
         return []
 
@@ -67,13 +70,13 @@ def build_tournament_podium_candidates(
     try:
         teams_resp = (
             supabase.table("tournament_teams")
-            .select("id,team_number,player1_id,player2_id")
+            .select("id,team_number,player1_id,player2_id,draw_id,event_option_id")
             .in_("id", team_ids)
             .execute()
         )
         teams = teams_resp.data or []
     except Exception:
-        logger.exception("Failed to fetch tournament teams", extra={"tournament_id": tournament_id})
+        logger.exception("Failed to fetch tournament teams", extra={"tournament_id": tournament_id, "draw_id": draw_id})
         return []
 
     teams_by_id = {t["id"]: t for t in teams}
@@ -87,6 +90,8 @@ def build_tournament_podium_candidates(
         team = teams_by_id.get(team_id)
         if not team:
             continue
+        podium_draw_id = str(draw_id or row.get("draw_id") or team.get("draw_id") or "").strip() or None
+        context_id = f"{tournament_id}:draw:{podium_draw_id}:podium:{placement}" if podium_draw_id else f"{tournament_id}:podium:{placement}"
         for player_id in [team.get("player1_id"), team.get("player2_id")]:
             if not player_id:
                 continue
@@ -96,11 +101,13 @@ def build_tournament_podium_candidates(
                     player_id=int(player_id),
                     club_id=club_id,
                     context_type="tournament",
-                    context_id=f"{tournament_id}:podium:{placement}",
+                    context_id=context_id,
                     match_id=None,
                     value_json={
                         "tournament_id": tournament_id,
                         "tournament_name": tournament_name,
+                        "draw_id": podium_draw_id,
+                        "event_option_id": team.get("event_option_id"),
                         "placement": placement,
                         "team_id": team_id,
                         "team_number": team.get("team_number"),
@@ -112,13 +119,13 @@ def build_tournament_podium_candidates(
     return candidates
 
 
-def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
+def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tournament_name: str | None, draw_id: str | None = None) -> list[BadgeCandidate]:
     supabase = getattr(ctx, "supabase", None)
     club_id = str(getattr(ctx, "club_id", "") or "")
     if supabase is None or not club_id or not tournament_id:
         return []
 
-    candidates = build_tournament_podium_candidates(ctx, tournament_id, tournament_name)
+    candidates = build_tournament_podium_candidates(ctx, tournament_id, tournament_name, draw_id=draw_id)
     if not candidates:
         return []
 
@@ -127,13 +134,13 @@ def award_tournament_trophies_from_podium(ctx: Any, tournament_id: str, tourname
     return upsert_player_badges(supabase, club_id, candidates, awarded_by="engine")
 
 
-def mint_tournament_podium_badges(ctx: Any, tournament_id: str, tournament_name: str | None) -> list[BadgeCandidate]:
+def mint_tournament_podium_badges(ctx: Any, tournament_id: str, tournament_name: str | None, draw_id: str | None = None) -> list[BadgeCandidate]:
     supabase = getattr(ctx, "supabase", None)
     club_id = str(getattr(ctx, "club_id", "") or "")
     if supabase is None or not club_id or not tournament_id:
         return []
 
-    candidates = build_tournament_podium_candidates(ctx, tournament_id, tournament_name)
+    candidates = build_tournament_podium_candidates(ctx, tournament_id, tournament_name, draw_id=draw_id)
     if not candidates:
         return []
 
