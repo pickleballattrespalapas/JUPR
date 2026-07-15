@@ -208,7 +208,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
           </div>
 
           <div style={{ marginTop: "1rem" }}>
-            <MatchLogBulkExcludePanel apiBase={apiBase} clubId={clubId} applyEnabled={Boolean(data.apply_enabled)} matches={data.matches} />
+            <MatchLogBulkExcludePanel apiBase={apiBase} clubId={clubId} enabled={Boolean(data.apply_enabled)} matches={data.matches} />
           </div>
 
           <div style={{ marginTop: "1rem" }}>
