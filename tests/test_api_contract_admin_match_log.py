@@ -13,6 +13,20 @@ from fastapi.testclient import TestClient
 from services.api.main import app
 
 
+def _patch_admin_auth(monkeypatch, supabase: FakeSupabase, role: str = "club_owner") -> None:
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role=role),
+    )
+
+
 def test_admin_match_log_disabled_contract(monkeypatch):
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", raising=False)
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", raising=False)
@@ -56,17 +70,7 @@ def test_admin_match_log_player_options_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
-    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _patch_admin_auth(monkeypatch, supabase)
 
     response = TestClient(app).get(
         "/admin/clubs/club/match-log/player-options",
@@ -80,6 +84,69 @@ def test_admin_match_log_player_options_contract(monkeypatch):
     assert payload["count"] == 4
     assert [player["id"] for player in payload["players"]] == [1, 2, 3, 4]
     assert payload["players"][0]["label"] == "Alex (#1)"
+
+
+def test_admin_match_log_social_list_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log/social",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "social_match_log_rows"
+    assert payload["count"] == 1
+    assert payload["rows"][0]["social_match_id"] == "social-1"
+    assert payload["rows"][0]["event_name"] == "Friday Social"
+    assert payload["rows"][0]["t1_p1"] == "Social Alex"
+
+
+def test_admin_match_log_social_update_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"event_name": "Friday Social Updated", "score_t1": 8, "score_t2": 11},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "social_match_updated"
+    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert tables["live_events"][0]["name"] == "Friday Social Updated"
+    assert tables["admin_activity_log"][0]["action_type"] == "social_match_log_update"
+
+
+def test_admin_match_log_social_delete_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/social/delete",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "DELETE", "social_match_ids": ["social-1"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "social_matches_deleted"
+    assert payload["deleted_count"] == 1
+    assert tables["live_event_matches"] == []
+    assert tables["admin_activity_log"][0]["action_type"] == "social_match_log_delete"
 
 
 def test_admin_match_log_apply_disabled_before_auth(monkeypatch):
@@ -101,17 +168,7 @@ def test_admin_match_log_apply_edits_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
-    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _patch_admin_auth(monkeypatch, supabase)
 
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/edits",
@@ -130,17 +187,7 @@ def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
-    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _patch_admin_auth(monkeypatch, supabase)
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-log/duplicates/cleanup",
@@ -160,17 +207,7 @@ def test_admin_match_log_bulk_exclude_contract(monkeypatch):
     supabase = FakeSupabase(tables)
     called = {}
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
-    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _patch_admin_auth(monkeypatch, supabase)
 
     def fake_delete_rated_matches_with_replay(**kwargs):
         called.update(kwargs)
@@ -208,17 +245,7 @@ def test_admin_match_log_duplicate_no_issue_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
-    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_match_log_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _patch_admin_auth(monkeypatch, supabase)
 
     response = TestClient(app).post(
         "/admin/clubs/club/match-log/duplicates/resolve",
