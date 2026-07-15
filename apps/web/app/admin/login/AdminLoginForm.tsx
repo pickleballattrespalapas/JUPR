@@ -142,6 +142,7 @@ export default function AdminLoginForm() {
             {busy ? "Working…" : "Sign in"}
           </button>
           <button type="button" onClick={onMagicLink} disabled={busy || !email} style={ghostButtonStyle}>Send magic link</button>
+          <Link href="/admin/reset-password" style={ghostButtonStyle}>Reset password</Link>
         </div>
       </form>
       {message ? <p style={{ color: message.includes("sent") || message.includes("Signed") ? "#166534" : "#b91c1c" }}>{message}</p> : null}
