@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AdminDuplicateDeletePreview, AdminDuplicateGroup, AdminMatchLogMatch, AdminMatchLogPlayer, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -67,6 +67,11 @@ function groupLabel(group: AdminDuplicateGroup): string {
 
 function playerNames(players: AdminMatchLogPlayer[]): string {
   return players.map((player) => player.name || (player.id ? `#${player.id}` : "—")).join(" / ");
+}
+
+function playerOptionLabel(player: AdminMatchLogPlayer): string {
+  const name = player.name || (player.id == null ? "Unknown player" : `Player ${player.id}`);
+  return player.id == null ? name : `${name} (#${player.id})`;
 }
 
 function dateLabel(value?: string | null): string {
@@ -187,6 +192,19 @@ function collectVisiblePlayers(matches: AdminMatchLogMatch[]): AdminMatchLogPlay
   return Array.from(byId.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 }
 
+function PlayerSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: AdminMatchLogPlayer[] }) {
+  const currentInOptions = Boolean(value) && options.some((player) => String(player.id) === String(value));
+  return (
+    <label><strong>{label}</strong><br />
+      <select value={value} onChange={(event) => onChange(event.target.value)} style={inputStyle}>
+        <option value="">Select player…</option>
+        {value && !currentInOptions ? <option value={value}>Current player #{value}</option> : null}
+        {options.map((player) => <option key={String(player.id)} value={String(player.id)}>{playerOptionLabel(player)}</option>)}
+      </select>
+    </label>
+  );
+}
+
 function MatchSummary({ match }: { match: AdminMatchLogMatch }) {
   return (
     <div style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem", background: "#f8fafc" }}>
@@ -204,6 +222,8 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
   const [selectedMatchId, setSelectedMatchId] = useState(firstMatch?.id == null ? "" : String(firstMatch.id));
   const [edit, setEdit] = useState<MatchEditState>(() => editStateFromMatch(firstMatch));
   const [stagedPatches, setStagedPatches] = useState<MatchPatch[]>([]);
+  const [rosterPlayers, setRosterPlayers] = useState<AdminMatchLogPlayer[]>([]);
+  const [rosterMessage, setRosterMessage] = useState<string | null>(null);
   const [correctionNote, setCorrectionNote] = useState("");
   const [applyConfirm, setApplyConfirm] = useState("");
   const [cleanupConfirm, setCleanupConfirm] = useState("");
@@ -213,8 +233,41 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
   const selectedMatch = matches.find((match) => match.id != null && String(match.id) === selectedMatchId) || null;
-  const playerOptions = collectVisiblePlayers(matches);
+  const visiblePlayerOptions = collectVisiblePlayers(matches);
+  const playerOptions = rosterPlayers.length ? rosterPlayers : visiblePlayerOptions;
   const scope = patchScope(stagedPatches);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRosterPlayers() {
+      if (!applyEnabled || !apiBase || !accessToken) {
+        setRosterPlayers([]);
+        setRosterMessage(null);
+        return;
+      }
+      setRosterMessage("Loading full roster picker…");
+      try {
+        const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/match-log/player-options`), {
+          cache: "no-store",
+          headers: { accept: "application/json", Authorization: `Bearer ${accessToken}` }
+        });
+        const payload = await response.json().catch(() => null) as { players?: AdminMatchLogPlayer[]; detail?: unknown } | null;
+        if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+        const players = (Array.isArray(payload?.players) ? payload.players : []).filter((player) => player && player.id != null);
+        if (!cancelled) {
+          setRosterPlayers(players);
+          setRosterMessage(players.length ? `Full roster picker loaded (${players.length} players).` : "Roster picker returned no players; using visible-player fallback.");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setRosterPlayers([]);
+          setRosterMessage(`Full roster picker unavailable; using visible-player fallback. ${error instanceof Error ? error.message : ""}`.trim());
+        }
+      }
+    }
+    void loadRosterPlayers();
+    return () => { cancelled = true; };
+  }, [accessToken, apiBase, applyEnabled, clubId]);
 
   function updateEdit<K extends keyof MatchEditState>(key: K, value: MatchEditState[K]) {
     setEdit((current) => ({ ...current, [key]: value }));
@@ -359,9 +412,6 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       <p style={{ color: "#475569" }}>
         Select a match from the current filtered results, change fields with form controls, stage the edit, then apply all staged edits together.
       </p>
-      <datalist id="match-log-visible-player-options">
-        {playerOptions.map((player) => <option key={player.id ?? player.name} value={String(player.id ?? "")} label={player.name} />)}
-      </datalist>
       <div style={{ display: "grid", gap: "0.75rem" }}>
         <label><strong>Match</strong><br />
           <select value={selectedMatchId} onChange={(event) => selectMatch(event.target.value)} style={inputStyle}>
@@ -391,15 +441,15 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
           </label>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem" }}>
-          <label><strong>Team 1 player 1 ID</strong><br /><input list="match-log-visible-player-options" value={edit.t1p1} onChange={(event) => updateEdit("t1p1", event.target.value)} style={inputStyle} /></label>
-          <label><strong>Team 1 player 2 ID</strong><br /><input list="match-log-visible-player-options" value={edit.t1p2} onChange={(event) => updateEdit("t1p2", event.target.value)} style={inputStyle} /></label>
-          <label><strong>Team 2 player 1 ID</strong><br /><input list="match-log-visible-player-options" value={edit.t2p1} onChange={(event) => updateEdit("t2p1", event.target.value)} style={inputStyle} /></label>
-          <label><strong>Team 2 player 2 ID</strong><br /><input list="match-log-visible-player-options" value={edit.t2p2} onChange={(event) => updateEdit("t2p2", event.target.value)} style={inputStyle} /></label>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
+          <PlayerSelect label="Team 1 player 1" value={edit.t1p1} onChange={(value) => updateEdit("t1p1", value)} options={playerOptions} />
+          <PlayerSelect label="Team 1 player 2" value={edit.t1p2} onChange={(value) => updateEdit("t1p2", value)} options={playerOptions} />
+          <PlayerSelect label="Team 2 player 1" value={edit.t2p1} onChange={(value) => updateEdit("t2p1", value)} options={playerOptions} />
+          <PlayerSelect label="Team 2 player 2" value={edit.t2p2} onChange={(value) => updateEdit("t2p2", value)} options={playerOptions} />
         </div>
 
-        <p style={{ color: "#64748b", margin: 0 }}>
-          Player fields accept IDs and offer visible-player autocomplete. A full roster selector can be added next once the admin API exposes roster options to Next.
+        <p style={{ color: rosterPlayers.length ? "#166534" : "#64748b", margin: 0 }}>
+          {rosterMessage || (playerOptions.length ? `Player picker using ${playerOptions.length} visible player option(s).` : "No player options are loaded yet.")}
         </p>
 
         <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
