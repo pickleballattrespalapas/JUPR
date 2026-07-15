@@ -105,6 +105,8 @@ export type AdminTournamentWriteResponse = {
   mode?: string;
   action?: string;
   tournament?: AdminTournament | null;
+  tournament_id?: string;
+  usage_summary?: Record<string, number>;
   registration?: AdminTournamentRegistration | null;
   registrations?: AdminTournamentRegistration[];
   selection?: AdminTournamentSelection | null;
