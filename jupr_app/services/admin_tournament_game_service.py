@@ -94,6 +94,8 @@ def _game_payload(row: dict[str, Any]) -> dict[str, Any]:
         "score_a": _safe_int(row.get("score_a")),
         "score_b": _safe_int(row.get("score_b")),
         "winner_team_id": _clean_text(row.get("winner_team_id"), limit=120) or None,
+        "loser_team_id": _clean_text(row.get("loser_team_id"), limit=120) or None,
+        "finalized_at": row.get("finalized_at"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }

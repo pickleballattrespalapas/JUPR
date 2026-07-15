@@ -49,6 +49,14 @@ function eventOptionLabel(row: Record<string, unknown>): string {
   return division || family || String(row.id || "Event");
 }
 
+function gameLabel(row: Record<string, unknown>): string {
+  const stage = String(row.stage || "Game");
+  const round = row.rr_round_number ? `R${row.rr_round_number}` : String(row.playoff_round || "");
+  const slot = row.rr_slot_number ? `S${row.rr_slot_number}` : String(row.playoff_game_code || "");
+  const teams = `${shortValue(row.team_a_id)} vs ${shortValue(row.team_b_id)}`;
+  return [stage, round, slot, teams].filter(Boolean).join(" · ");
+}
+
 function teamRowsFromTeams(teams: AdminTournamentOpsTeam[], drawId: string): TeamEditorRow[] {
   const scoped = teams
     .filter((row) => !drawId || String(row.draw_id || "") === drawId)
@@ -101,6 +109,10 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   const [teamRows, setTeamRows] = useState<TeamEditorRow[]>(() => teamRowsFromTeams([], ""));
   const [teamConfirm, setTeamConfirm] = useState("");
   const [gameConfirm, setGameConfirm] = useState("");
+  const [scoreGameId, setScoreGameId] = useState("");
+  const [scoreA, setScoreA] = useState("");
+  const [scoreB, setScoreB] = useState("");
+  const [scoreConfirm, setScoreConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -119,6 +131,14 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
     setTeamRows(teamRowsFromTeams(nextSnapshot?.teams || [], drawId));
     setTeamConfirm("");
+  }
+
+  function resetScoreEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null) {
+    const firstGame = (nextSnapshot?.games || [])[0] || null;
+    setScoreGameId(firstGame ? String(firstGame.id || "") : "");
+    setScoreA(firstGame?.score_a == null ? "" : String(firstGame.score_a));
+    setScoreB(firstGame?.score_b == null ? "" : String(firstGame.score_b));
+    setScoreConfirm("");
   }
 
   async function loadTournaments() {
@@ -160,6 +180,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       const payload = await requestJson<AdminTournamentOpsSnapshotResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops${suffix}`);
       setSnapshot(payload);
       resetTeamEditor(payload, drawId);
+      resetScoreEditor(payload);
       setGameConfirm("");
       setMessage("Tournament operations snapshot loaded.");
     } catch (error) {
@@ -262,6 +283,42 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function saveScore() {
+    if (!selectedTournamentId || !scoreGameId) {
+      setMessage("Select a game before saving a score.");
+      return;
+    }
+    const nextA = Number(scoreA);
+    const nextB = Number(scoreB);
+    if (!Number.isFinite(nextA) || !Number.isFinite(nextB)) {
+      setMessage("Both scores must be numeric.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/games/${encodeURIComponent(scoreGameId)}/score`, {
+        method: "PATCH",
+        body: JSON.stringify({ score_a: nextA, score_b: nextB, confirmation_text: scoreConfirm, source: "next_tournament_ops_score_game" })
+      });
+      await loadOps(selectedTournamentId, selectedDrawId);
+      setScoreConfirm("");
+      setMessage(`Saved score for game ${String(payload.game?.id || scoreGameId)}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save score.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function selectScoreGame(gameId: string) {
+    setScoreGameId(gameId);
+    const game = (snapshot?.games || []).find((row) => String(row.id || "") === gameId) || null;
+    setScoreA(game?.score_a == null ? "" : String(game.score_a));
+    setScoreB(game?.score_b == null ? "" : String(game.score_b));
+    setScoreConfirm("");
+  }
+
   function updateTeamRow(index: number, patch: Partial<TeamEditorRow>) {
     setTeamRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   }
@@ -283,7 +340,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
-        <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws, maintaining teams, and generating round-robin games. Scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
+        <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws, maintaining teams, generating round-robin games, and scoring round-robin games. Playoff scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>
@@ -416,6 +473,25 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
               <label><strong>Type GENERATE GAMES</strong><br /><input value={gameConfirm} onChange={(event) => setGameConfirm(event.target.value)} style={inputStyle} /></label>
               <button type="button" onClick={generateGames} disabled={busy || !accessToken || !selectedDrawId || gameConfirm.trim().toUpperCase() !== "GENERATE GAMES"} style={buttonStyle}>{busy ? "Generating…" : "Generate games"}</button>
             </div>
+          </article>
+
+          <article style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h2 style={{ marginTop: 0 }}>Score round-robin game</h2>
+            <p style={{ color: "#475569" }}>Select a generated round-robin game, enter the score, then type <code>SAVE SCORE</code>. Ties are blocked.</p>
+            {snapshot.games.length ? (
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
+                <label><strong>Game</strong><br />
+                  <select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}>
+                    <option value="">Choose a game…</option>
+                    {snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}
+                  </select>
+                </label>
+                <label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label>
+                <label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label>
+                <label><strong>Type SAVE SCORE</strong><br /><input value={scoreConfirm} onChange={(event) => setScoreConfirm(event.target.value)} style={inputStyle} /></label>
+                <button type="button" onClick={saveScore} disabled={busy || !accessToken || !scoreGameId || scoreConfirm.trim().toUpperCase() !== "SAVE SCORE"} style={buttonStyle}>{busy ? "Saving…" : "Save score"}</button>
+              </div>
+            ) : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}
           </article>
 
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>
