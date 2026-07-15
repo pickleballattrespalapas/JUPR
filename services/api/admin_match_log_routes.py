@@ -44,6 +44,46 @@ class AdminMatchLogDuplicateResolutionRequest(BaseModel):
     source: str = "next_match_log_duplicate_no_issue"
 
 
+def _safe_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _clean_text(value: Any, *, limit: int = 200) -> str:
+    return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
+
+
+def _list_match_log_player_options(supabase: Any, *, club_id: str) -> dict[str, Any]:
+    try:
+        rows = (
+            supabase.table("players")
+            .select("id,name")
+            .eq("club_id", str(club_id))
+            .order("name", desc=False)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001 - surface schema/configuration issues to the operator
+        raise RuntimeError(f"Could not load Match Log player options: {exc.__class__.__name__}") from exc
+
+    players: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for row in rows:
+        player_id = _safe_int(dict(row).get("id") if isinstance(row, dict) else None)
+        if player_id is None or int(player_id) in seen_ids:
+            continue
+        seen_ids.add(int(player_id))
+        name = _clean_text(dict(row).get("name") if isinstance(row, dict) else None, limit=160) or f"Player {int(player_id)}"
+        players.append({"id": int(player_id), "name": name, "label": f"{name} (#{int(player_id)})"})
+    players = sorted(players, key=lambda player: (str(player.get("name") or "").lower(), int(player.get("id") or 0)))
+    return {"ok": True, "mode": "match_log_player_options", "players": players, "count": len(players)}
+
+
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, permission: str, source: str) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
     try:
@@ -101,6 +141,26 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             end_date=end_date,
             limit=limit,
         )
+
+    @app.get("/admin/clubs/{club_id}/match-log/player-options")
+    def get_admin_match_log_player_options(
+        club_id: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_MANAGE_MATCHES,
+            source="next_match_log_player_options",
+        )
+        try:
+            return _list_match_log_player_options(supabase, club_id=str(club_id))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.patch("/admin/clubs/{club_id}/match-log/edits")
     def patch_admin_match_log_edits(
