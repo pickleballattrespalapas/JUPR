@@ -162,6 +162,7 @@ def build_admin_player_editor_status(supabase: Any | None, *, club_id: str) -> d
             "status": "guarded_off",
             "players_endpoint": None,
             "player_detail_endpoint": None,
+            "social_identities_endpoint": None,
             "warnings": ["Next Player Editor is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR on FastAPI for a closed-club pilot."],
         }
     player_count = None
@@ -172,11 +173,12 @@ def build_admin_player_editor_status(supabase: Any | None, *, club_id: str) -> d
             player_count = None
     return {
         "enabled": True,
-        "status": "ready_for_player_create_update_foundation",
+        "status": "ready_for_player_editor_social_identity_pilot",
         "players_endpoint": "/admin/clubs/{club_id}/players/editor/players",
         "player_detail_endpoint": "/admin/clubs/{club_id}/players/editor/players/{player_id}",
+        "social_identities_endpoint": "/admin/clubs/{club_id}/players/editor/social-identities",
         "player_count": player_count,
-        "warnings": ["Merge, league-rating edits, and social identity linking remain Streamlit-only until replay/correction safety is proven in Next."],
+        "warnings": ["Player create/update, league-rating edits, and social identity linking are enabled. Merge remains Streamlit-only until replay/correction safety is proven in Next."],
     }
 
 
