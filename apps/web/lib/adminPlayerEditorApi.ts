@@ -3,6 +3,7 @@ export type AdminPlayerEditorStatusResponse = {
   status: string;
   players_endpoint?: string | null;
   player_detail_endpoint?: string | null;
+  social_identities_endpoint?: string | null;
   player_count?: number | null;
   warnings: string[];
 };
@@ -37,6 +38,25 @@ export type AdminPlayerEditorLeagueRating = {
   inactive_at?: string | null;
 };
 
+export type AdminPlayerSocialIdentity = {
+  id: string;
+  club_id?: string;
+  display_name: string;
+  normalized_name?: string | null;
+  linked_player_id?: number | null;
+  linked_player_name?: string | null;
+  first_seen_on?: string | null;
+  last_seen_on?: string | null;
+};
+
+export type AdminPlayerSocialIdentityListResponse = {
+  ok: boolean;
+  mode?: string;
+  people: AdminPlayerSocialIdentity[];
+  players: Array<{ id: number; name: string; active?: boolean | null }>;
+  summary?: { people?: number; linked?: number; unlinked?: number };
+};
+
 export type AdminPlayerEditorListResponse = {
   ok: boolean;
   mode?: string;
@@ -58,6 +78,9 @@ export type AdminPlayerEditorWriteResponse = {
   player?: AdminPlayerEditorPlayer | null;
   league_rating?: AdminPlayerEditorLeagueRating | null;
   league_ratings?: AdminPlayerEditorLeagueRating[];
+  club_person?: AdminPlayerSocialIdentity | null;
+  linked_count?: number;
+  skipped_count?: number;
   warnings?: string[];
 };
 

@@ -16,6 +16,11 @@ from jupr_app.services.admin_player_editor_service import (
     update_admin_player_editor_player,
 )
 from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
+from jupr_app.services.admin_player_social_identity_service import (
+    auto_link_admin_player_social_identities,
+    list_admin_player_social_identities,
+    update_admin_player_social_identity,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -39,6 +44,18 @@ class AdminPlayerEditorLeagueRatingUpdateRequest(BaseModel):
     is_active: bool | None = None
     confirmation_text: str = ""
     source: str = "next_player_editor_league_rating"
+
+
+class AdminPlayerSocialIdentityUpdateRequest(BaseModel):
+    linked_player_id: int | None = None
+    display_name: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_player_editor_social_identity"
+
+
+class AdminPlayerSocialIdentityAutoLinkRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_player_editor_social_auto_link"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -73,6 +90,16 @@ def _resolve_player_editor_role_or_403(*, supabase: Any, club_id: str, authoriza
     return user.email, role_resolution.role
 
 
+def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    raise exc
+
+
 def install_admin_player_editor_routes(app, *, get_supabase_client) -> None:
     """Register guarded Player Editor routes for the Next admin pilot."""
 
@@ -81,155 +108,97 @@ def install_admin_player_editor_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client() if is_admin_player_editor_enabled() else None
         return build_admin_player_editor_status(supabase, club_id=str(club_id))
 
-    @app.get("/admin/clubs/{club_id}/players/editor/players")
-    def get_admin_player_editor_players(
-        club_id: str,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    @app.get("/admin/clubs/{club_id}/players/editor/social-identities")
+    def get_admin_player_social_identities(club_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled():
             raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client()
-        _resolve_player_editor_role_or_403(
-            supabase=supabase,
-            club_id=str(club_id),
-            authorization=authorization,
-            source="next_player_editor_list",
-        )
+        _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_player_editor_social_identity_list")
+        try:
+            return list_admin_player_social_identities(supabase, club_id=str(club_id))
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/players/editor/social-identities/auto-link")
+    def post_admin_player_social_auto_link(club_id: str, payload: AdminPlayerSocialIdentityAutoLinkRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled():
+            raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return auto_link_admin_player_social_identities(supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.patch("/admin/clubs/{club_id}/players/editor/social-identities/{club_person_id}")
+    def patch_admin_player_social_identity(club_id: str, club_person_id: str, payload: AdminPlayerSocialIdentityUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled():
+            raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return update_admin_player_social_identity(supabase, club_id=str(club_id), club_person_id=str(club_person_id), linked_player_id=payload.linked_player_id, display_name=payload.display_name, confirmation_text=payload.confirmation_text, actor_email=actor_email, actor_role=actor_role, source=payload.source)
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/players/editor/players")
+    def get_admin_player_editor_players(club_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled():
+            raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client()
+        _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_player_editor_list")
         try:
             return list_admin_player_editor_players(supabase, club_id=str(club_id))
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.get("/admin/clubs/{club_id}/players/editor/players/{player_id}")
-    def get_admin_player_editor_player_detail(
-        club_id: str,
-        player_id: int,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def get_admin_player_editor_player_detail(club_id: str, player_id: int, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled():
             raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client()
-        _resolve_player_editor_role_or_403(
-            supabase=supabase,
-            club_id=str(club_id),
-            authorization=authorization,
-            source="next_player_editor_detail",
-        )
+        _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_player_editor_detail")
         try:
             return get_admin_player_editor_detail(supabase, club_id=str(club_id), player_id=int(player_id))
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.post("/admin/clubs/{club_id}/players/editor/players")
-    def post_admin_player_editor_player(
-        club_id: str,
-        payload: AdminPlayerEditorCreateRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def post_admin_player_editor_player(club_id: str, payload: AdminPlayerEditorCreateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled():
             raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client()
-        actor_email, actor_role = _resolve_player_editor_role_or_403(
-            supabase=supabase,
-            club_id=str(club_id),
-            authorization=authorization,
-            source=payload.source,
-        )
+        actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return create_admin_player_editor_player(
-                supabase,
-                club_id=str(club_id),
-                name=payload.name,
-                starting_jupr=payload.starting_jupr,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                source=payload.source,
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            return create_admin_player_editor_player(supabase, club_id=str(club_id), name=payload.name, starting_jupr=payload.starting_jupr, actor_email=actor_email, actor_role=actor_role, source=payload.source)
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.patch("/admin/clubs/{club_id}/players/editor/players/{player_id}")
-    def patch_admin_player_editor_player(
-        club_id: str,
-        player_id: int,
-        payload: AdminPlayerEditorUpdateRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def patch_admin_player_editor_player(club_id: str, player_id: int, payload: AdminPlayerEditorUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled():
             raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client()
-        actor_email, actor_role = _resolve_player_editor_role_or_403(
-            supabase=supabase,
-            club_id=str(club_id),
-            authorization=authorization,
-            source=payload.source,
-        )
+        actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         patch = _dump_model(payload)
         source = str(patch.pop("source", payload.source))
         try:
-            return update_admin_player_editor_player(
-                supabase,
-                club_id=str(club_id),
-                player_id=int(player_id),
-                patch=patch,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                source=source,
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            return update_admin_player_editor_player(supabase, club_id=str(club_id), player_id=int(player_id), patch=patch, actor_email=actor_email, actor_role=actor_role, source=source)
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.patch("/admin/clubs/{club_id}/players/editor/players/{player_id}/league-ratings/{league_rating_id}")
-    def patch_admin_player_editor_league_rating(
-        club_id: str,
-        player_id: int,
-        league_rating_id: int,
-        payload: AdminPlayerEditorLeagueRatingUpdateRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def patch_admin_player_editor_league_rating(club_id: str, player_id: int, league_rating_id: int, payload: AdminPlayerEditorLeagueRatingUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_player_editor_enabled():
             raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
         supabase = get_supabase_client()
-        actor_email, actor_role = _resolve_player_editor_role_or_403(
-            supabase=supabase,
-            club_id=str(club_id),
-            authorization=authorization,
-            source=payload.source,
-        )
+        actor_email, actor_role = _resolve_player_editor_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         patch = _dump_model(payload)
         source = str(patch.pop("source", payload.source))
         confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
         try:
-            return update_admin_player_editor_league_rating(
-                supabase,
-                club_id=str(club_id),
-                player_id=int(player_id),
-                league_rating_id=int(league_rating_id),
-                patch=patch,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=confirmation_text,
-                source=source,
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            return update_admin_player_editor_league_rating(supabase, club_id=str(club_id), player_id=int(player_id), league_rating_id=int(league_rating_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+        except Exception as exc:
+            _handle_common(exc)
