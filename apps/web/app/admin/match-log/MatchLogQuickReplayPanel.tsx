@@ -1,0 +1,153 @@
+"use client";
+
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import type { FormEvent } from "react";
+import type { AdminReplayResultResponse } from "@/lib/adminReplayApi";
+import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+
+type MatchLogQuickReplayPanelProps = {
+  apiBase: string | null;
+  clubId: string;
+  enabled: boolean;
+  options: string[];
+  defaultTarget: string;
+  recommendedTarget?: string | null;
+  statusError?: string | null;
+  warnings?: string[];
+};
+
+const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
+const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
+
+function apiUrl(apiBase: string, path: string): string {
+  return `${apiBase.replace(/\/$/, "")}${path}`;
+}
+
+function normalizeRecommendedTarget(value: string | null | undefined, defaultTarget: string, options: string[]): string {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return defaultTarget || options[0] || "ALL (Full System Reset)";
+  if (cleaned.toUpperCase() === "ALL") return defaultTarget || options[0] || "ALL (Full System Reset)";
+  return options.includes(cleaned) ? cleaned : defaultTarget || options[0] || cleaned;
+}
+
+function replayMessage(result: AdminReplayResultResponse | null): string | null {
+  if (!result?.ok) return null;
+  return `Replay complete for ${result.target_reset}: scanned ${result.result.matches_scanned_total}, rewrote ${result.result.matches_rewritten} snapshot row(s), rebuilt ${result.result.league_ratings_rows} league rating row(s).`;
+}
+
+export default function MatchLogQuickReplayPanel({
+  apiBase,
+  clubId,
+  enabled,
+  options,
+  defaultTarget,
+  recommendedTarget,
+  statusError,
+  warnings = []
+}: MatchLogQuickReplayPanelProps) {
+  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
+  const replayOptions = options.length ? options : [defaultTarget || "ALL (Full System Reset)"];
+  const initialTarget = useMemo(() => normalizeRecommendedTarget(recommendedTarget, defaultTarget, replayOptions), [recommendedTarget, defaultTarget, replayOptions]);
+  const [targetReset, setTargetReset] = useState(initialTarget);
+  const [confirmationText, setConfirmationText] = useState("");
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(statusError || null);
+  const [result, setResult] = useState<AdminReplayResultResponse | null>(null);
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setResult(null);
+    if (!apiBase) {
+      setMessage("API base URL is not configured.");
+      return;
+    }
+    if (!accessToken) {
+      setMessage("Sign in at /admin/login before running Replay History.");
+      return;
+    }
+    setPending(true);
+    try {
+      const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/replay-history`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          target_reset: targetReset,
+          confirmation_text: confirmationText,
+          source: "next_match_log_quick_replay"
+        })
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+      setResult(payload as AdminReplayResultResponse);
+      setMessage(replayMessage(payload as AdminReplayResultResponse));
+      setConfirmationText("");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to run replay.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (!enabled) {
+    return (
+      <article style={{ ...cardStyle, background: "#f8fafc" }}>
+        <h2 style={{ marginTop: 0 }}>Quick Replay is disabled</h2>
+        <p style={{ color: "#475569" }}>
+          Enable <code>JUPR_ENABLE_NEXT_ADMIN_REPLAY=1</code> on FastAPI to run Replay History from Match Log.
+        </p>
+        {statusError ? <p style={{ color: "#b91c1c" }}>{statusError}</p> : null}
+      </article>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} style={{ ...cardStyle, display: "grid", gap: "0.75rem" }}>
+      <h2 style={{ marginTop: 0 }}>Quick Replay</h2>
+      <p style={{ color: "#475569", marginTop: 0 }}>
+        Streamlit parity control for running Replay History directly after Match Log edits or duplicate cleanup. Prefer a league-specific replay when appropriate; use full reset when the cleanup preview recommends ALL or when ratings may be broadly stale.
+      </p>
+      <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb" }}>
+        <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
+        <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
+          {accessToken ? "Ready to send authorized replay requests." : sessionLoading ? "Checking admin session…" : "Sign in before running Replay History."}
+        </p>
+        {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
+        {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
+      </div>
+      {recommendedTarget ? (
+        <p style={{ color: "#92400e", margin: 0 }}>
+          Current Match Log recommendation: <strong>{recommendedTarget}</strong>
+        </p>
+      ) : null}
+      <label><strong>Replay scope</strong><br />
+        <select value={targetReset} onChange={(event) => setTargetReset(event.target.value)} style={inputStyle}>
+          {replayOptions.map((option) => <option key={option}>{option}</option>)}
+        </select>
+      </label>
+      <label><strong>Type REPLAY to confirm</strong><br /><input value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} style={inputStyle} /></label>
+      <button type="submit" disabled={pending || !accessToken || confirmationText.trim().toUpperCase() !== "REPLAY"} style={buttonStyle}>
+        {pending ? "Running replay…" : "Run Quick Replay"}
+      </button>
+      {message ? <p style={{ color: result?.ok ? "#166534" : "#b91c1c" }}>{message}</p> : null}
+      {result ? (
+        <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
+          <div><dt style={{ fontWeight: 700 }}>Players updated</dt><dd style={{ margin: 0 }}>{result.result.players_updated ? "Yes" : "No"}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Skipped incomplete</dt><dd style={{ margin: 0 }}>{result.result.skipped_incomplete}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>Snapshot rows updated</dt><dd style={{ margin: 0 }}>{result.result.matches_snapshots_updated_rows}</dd></div>
+          <div><dt style={{ fontWeight: 700 }}>League ratings rows</dt><dd style={{ margin: 0 }}>{result.result.league_ratings_rows}</dd></div>
+        </dl>
+      ) : null}
+      {(result?.warnings?.length || warnings.length) ? (
+        <ul style={{ color: "#92400e", paddingLeft: "1.25rem" }}>
+          {[...(warnings || []), ...(result?.warnings || [])].map((warning) => <li key={warning}>{warning}</li>)}
+        </ul>
+      ) : null}
+    </form>
+  );
+}
