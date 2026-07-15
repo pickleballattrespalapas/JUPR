@@ -52,6 +52,36 @@ def test_admin_match_log_enabled_contract(monkeypatch):
     assert "notes" not in payload["matches"][0]
 
 
+def test_admin_match_log_player_options_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log/player-options",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "match_log_player_options"
+    assert payload["count"] == 4
+    assert [player["id"] for player in payload["players"]] == [1, 2, 3, 4]
+    assert payload["players"][0]["label"] == "Alex (#1)"
+
+
 def test_admin_match_log_apply_disabled_before_auth(monkeypatch):
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", raising=False)
     called = {"auth": False}
