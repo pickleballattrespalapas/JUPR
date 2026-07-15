@@ -2,6 +2,7 @@ export type AdminMatchUploaderStatusResponse = {
   enabled: boolean;
   status: string;
   submit_endpoint?: string | null;
+  singles_submit_endpoint?: string | null;
   round_robin_preview_endpoint?: string | null;
   player_create_endpoint?: string | null;
   max_batch_rows: number;
@@ -18,14 +19,17 @@ export type AdminMatchUploaderWriteResult = {
   submitted_count?: number;
   result?: {
     inserted?: number;
+    match_format?: string;
     skipped_incomplete?: number;
     skipped_empty?: number;
     skipped_unrated?: number;
+    winner_bonus_summary?: Record<string, unknown>;
     badge_summary?: Record<string, unknown>;
     player_update_queue?: Record<string, unknown>;
   };
   feedback?: {
     ratings_updated?: boolean;
+    rating_type?: string;
     latest_match_id?: string | number | null;
     affected_players?: Array<{
       id: number;
