@@ -103,6 +103,8 @@ export type AdminTournamentOpsSnapshotResponse = {
 export type AdminTournamentWriteResponse = {
   ok: boolean;
   mode?: string;
+  action?: string;
+  tournament?: AdminTournament | null;
   registration?: AdminTournamentRegistration | null;
   registrations?: AdminTournamentRegistration[];
   selection?: AdminTournamentSelection | null;
