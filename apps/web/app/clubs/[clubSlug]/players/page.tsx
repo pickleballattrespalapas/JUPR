@@ -7,7 +7,7 @@ type PlayersPageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-type SortKey = "rating" | "matches" | "name" | "win_pct" | "recent";
+type SortKey = "rating" | "singles" | "matches" | "name" | "win_pct" | "recent";
 type StatusKey = "all" | "active" | "inactive";
 
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.6rem", whiteSpace: "nowrap" as const, color: "#475569", fontSize: "0.82rem" };
@@ -21,7 +21,7 @@ function firstParam(searchParams: PlayersPageProps["searchParams"], key: string)
 }
 
 function normalizeSort(value: string | null): SortKey {
-  if (value === "matches" || value === "name" || value === "win_pct" || value === "recent") return value;
+  if (value === "singles" || value === "matches" || value === "name" || value === "win_pct" || value === "recent") return value;
   return "rating";
 }
 
@@ -44,10 +44,18 @@ function playerAnchor(playerId: string | number): string {
   return `player-${encodeURIComponent(String(playerId))}`;
 }
 
-function ratingValue(player: PublicPlayer): number | null {
-  if (player.rating == null || Number.isNaN(Number(player.rating))) return null;
-  const n = Number(player.rating);
+function normalizedRating(value?: number | null): number | null {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const n = Number(value);
   return n > 20 ? n / 400 : n;
+}
+
+function ratingValue(player: PublicPlayer): number | null {
+  return normalizedRating(player.rating);
+}
+
+function singlesRatingValue(player: PublicPlayer): number | null {
+  return normalizedRating(player.singles_rating);
 }
 
 function ratingLabel(value?: number | null): string {
@@ -70,6 +78,10 @@ function matchesPlayed(player: PublicPlayer): number {
   return player.matches_played ?? (player.wins ?? 0) + (player.losses ?? 0);
 }
 
+function singlesMatchesPlayed(player: PublicPlayer): number {
+  return player.singles_matches_played ?? (player.singles_wins ?? 0) + (player.singles_losses ?? 0);
+}
+
 function dateLabel(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
@@ -81,6 +93,7 @@ function sortPlayers(players: PublicPlayer[], sort: SortKey): PublicPlayer[] {
   const sorted = [...players];
   sorted.sort((a, b) => {
     if (sort === "matches") return matchesPlayed(b) - matchesPlayed(a);
+    if (sort === "singles") return Number(singlesRatingValue(b) ?? -1) - Number(singlesRatingValue(a) ?? -1);
     if (sort === "name") return a.name.localeCompare(b.name);
     if (sort === "win_pct") return Number(winPct(b) ?? -1) - Number(winPct(a) ?? -1);
     if (sort === "recent") return String(b.last_game_at ?? "").localeCompare(String(a.last_game_at ?? ""));
@@ -106,7 +119,9 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
     return textOk && statusOk;
   });
   const totalMatches = players.reduce((sum, player) => sum + matchesPlayed(player), 0);
+  const totalSinglesMatches = players.reduce((sum, player) => sum + singlesMatchesPlayed(player), 0);
   const topRated = sortPlayers(activePlayers, "rating")[0];
+  const topSingles = sortPlayers(activePlayers, "singles")[0];
   const mostActive = sortPlayers(players, "matches")[0];
 
   return (
@@ -116,7 +131,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
       </p>
       <h1 style={{ marginTop: 0 }}>{clubName} players</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Player profiles connect ratings, match history, league-specific performance, and leaderboards.
+        Player profiles connect doubles/overall ratings, singles ratings, match history, league-specific performance, and leaderboards.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Players are temporarily unavailable. {error}</p> : null}
@@ -127,10 +142,12 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Public players</strong><br />{players.length}</article>
             <article style={cardStyle}><strong>Active players</strong><br />{activePlayers.length}</article>
-            <article style={cardStyle}><strong>Inactive players</strong><br />{inactivePlayers}</article>
-            <article style={cardStyle}><strong>Recorded matches</strong><br />{totalMatches}</article>
+            <article style={cardStyle}><strong>Recorded doubles</strong><br />{totalMatches}</article>
+            <article style={cardStyle}><strong>Recorded singles</strong><br />{totalSinglesMatches}</article>
             <article style={cardStyle}><strong>Top rating</strong><br />{topRated ? <Link href={`/clubs/${clubSlug}/players/${topRated.id}`}>{topRated.name}</Link> : "—"}</article>
+            <article style={cardStyle}><strong>Top singles</strong><br />{topSingles ? <Link href={`/clubs/${clubSlug}/players/${topSingles.id}`}>{topSingles.name}</Link> : "—"}</article>
             <article style={cardStyle}><strong>Most active</strong><br />{mostActive ? <Link href={`/clubs/${clubSlug}/players/${mostActive.id}`}>{mostActive.name}</Link> : "—"}</article>
+            <article style={cardStyle}><strong>Inactive players</strong><br />{inactivePlayers}</article>
           </div>
 
           <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
@@ -144,11 +161,11 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
                   </Link>
                 );
               })}
-              {(["rating", "matches", "win_pct", "recent", "name"] as SortKey[]).map((sort) => {
+              {(["rating", "singles", "matches", "win_pct", "recent", "name"] as SortKey[]).map((sort) => {
                 const active = sort === selectedSort;
                 return (
                   <Link key={sort} href={pageHref({ clubSlug, q, status: selectedStatus, sort, player: selectedPlayer })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                    Sort: {sort === "win_pct" ? "Win %" : sort === "recent" ? "Recent" : sort[0].toUpperCase() + sort.slice(1)}
+                    Sort: {sort === "win_pct" ? "Win %" : sort === "recent" ? "Recent" : sort === "singles" ? "Singles" : sort[0].toUpperCase() + sort.slice(1)}
                   </Link>
                 );
               })}
@@ -156,13 +173,16 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
           </div>
 
           <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "820px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "980px" }}>
               <thead>
                 <tr>
                   <th style={thStyle}>Player</th>
-                  <th style={thStyle}>Rating</th>
-                  <th style={thStyle}>Matches</th>
-                  <th style={thStyle}>W/L</th>
+                  <th style={thStyle}>Doubles rating</th>
+                  <th style={thStyle}>Singles rating</th>
+                  <th style={thStyle}>Doubles MP</th>
+                  <th style={thStyle}>Singles MP</th>
+                  <th style={thStyle}>Doubles W/L</th>
+                  <th style={thStyle}>Singles W/L</th>
                   <th style={thStyle}>Win %</th>
                   <th style={thStyle}>Last played</th>
                   <th style={thStyle}>Status</th>
@@ -178,8 +198,11 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
                     <tr key={String(player.id)} id={playerAnchor(player.id)} style={{ background: selected ? "#eff6ff" : undefined }}>
                       <td style={tdStyle}><Link href={`/clubs/${clubSlug}/players/${player.id}`}>{player.name}</Link></td>
                       <td style={tdStyle}>{ratingLabel(ratingValue(player))}</td>
+                      <td style={tdStyle}>{ratingLabel(singlesRatingValue(player))}</td>
                       <td style={tdStyle}>{matchesPlayed(player)}</td>
+                      <td style={tdStyle}>{singlesMatchesPlayed(player)}</td>
                       <td style={tdStyle}>{wins}/{losses}</td>
+                      <td style={tdStyle}>{player.singles_wins ?? 0}/{player.singles_losses ?? 0}</td>
                       <td style={tdStyle}>{winPctLabel(player)}</td>
                       <td style={tdStyle}>{dateLabel(player.last_game_at)}</td>
                       <td style={tdStyle}>{player.is_active === false ? "Inactive" : "Active"}</td>
