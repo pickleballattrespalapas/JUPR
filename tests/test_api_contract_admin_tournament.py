@@ -68,8 +68,9 @@ def tournament_tables():
                 "display_name": "Alex Example",
                 "email": "alex@example.com",
                 "phone": "555-0100",
-                "registration_status": "confirmed",
+                "status": "confirmed",
                 "payment_status": "paid",
+                "notes": "Original note",
                 "wants_partner_board_contact": True,
                 "created_at": "2026-03-03T00:00:00Z",
             }
@@ -79,6 +80,17 @@ def tournament_tables():
         ],
         "admin_activity_log": [],
     }
+
+
+def _install_auth(monkeypatch):
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
 
 
 def test_admin_tournament_status_disabled_contract(monkeypatch):
@@ -101,14 +113,7 @@ def test_admin_tournament_list_contract(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_tournament_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_tournament_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _install_auth(monkeypatch)
 
     response = TestClient(app).get(
         "/admin/clubs/club/tournaments/admin/tournaments",
@@ -131,14 +136,7 @@ def test_admin_tournament_detail_contract(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
-    monkeypatch.setattr(
-        "services.api.admin_tournament_routes.authenticate_bearer",
-        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
-    )
-    monkeypatch.setattr(
-        "services.api.admin_tournament_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
-    )
+    _install_auth(monkeypatch)
 
     response = TestClient(app).get(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1",
@@ -155,4 +153,38 @@ def test_admin_tournament_detail_contract(monkeypatch):
     assert payload["summary"]["by_registration_status"] == {"confirmed": 1}
     assert payload["summary"]["by_payment_status"] == {"paid": 1}
     assert payload["registrations"][0]["display_name"] == "Alex Example"
+    assert payload["registrations"][0]["notes"] == "Original note"
     assert payload["event_options"][0]["division_name"] == "3.5"
+
+
+def test_admin_tournament_registration_update_contract(monkeypatch):
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/registration_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "registration_status": "waitlist",
+            "payment_status": "refunded",
+            "notes": "Refunded after withdrawal.",
+            "confirmation_text": "SAVE REGISTRATION",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "tournament_registration_update"
+    assert payload["registration"]["registration_status"] == "waitlist"
+    assert payload["registration"]["payment_status"] == "refunded"
+    assert payload["registration"]["notes"] == "Refunded after withdrawal."
+    assert tables["tournament_registrations"][0]["status"] == "waitlist"
+    assert tables["tournament_registrations"][0]["payment_status"] == "refunded"
+    assert tables["admin_activity_log"][0]["action_type"] == "update_tournament_registration_admin"
+    assert tables["admin_activity_log"][0]["flagged_for_review"] is True
