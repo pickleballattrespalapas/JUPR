@@ -30,7 +30,7 @@ class FakeQuery:
         return self
 
     def in_(self, key, values):
-        self.filters.append(("in", key, {int(value) for value in values or []}))
+        self.filters.append(("in", key, {str(value) for value in values or []}))
         return self
 
     def order(self, key, desc=False):
@@ -60,7 +60,7 @@ class FakeQuery:
             if op == "eq":
                 result = [row for row in result if str(row.get(key)) == str(expected)]
             elif op == "in":
-                result = [row for row in result if int(row.get(key)) in expected]
+                result = [row for row in result if str(row.get(key)) in expected]
         return result
 
     def execute(self):
@@ -145,6 +145,48 @@ def fake_tables():
                 "score_t1": 9,
                 "score_t2": 11,
             },
+        ],
+        "club_people": [
+            {"id": "cp1", "display_name": "Social Alex", "normalized_name": "social alex", "linked_player_id": None},
+            {"id": "cp2", "display_name": "Social Blair", "normalized_name": "social blair", "linked_player_id": None},
+            {"id": "cp3", "display_name": "Social Casey", "normalized_name": "social casey", "linked_player_id": None},
+            {"id": "cp4", "display_name": "Social Devon", "normalized_name": "social devon", "linked_player_id": None},
+        ],
+        "live_events": [
+            {
+                "id": "event-1",
+                "club_id": "club",
+                "name": "Friday Social",
+                "event_date": "2026-03-05",
+                "result_mode": "social_unrated",
+                "status": "saved",
+                "submission_mode": "admin",
+            }
+        ],
+        "live_event_participants": [
+            {"id": "part-1", "event_id": "event-1", "club_person_id": "cp1", "participant_key": "a"},
+            {"id": "part-2", "event_id": "event-1", "club_person_id": "cp2", "participant_key": "b"},
+            {"id": "part-3", "event_id": "event-1", "club_person_id": "cp3", "participant_key": "c"},
+            {"id": "part-4", "event_id": "event-1", "club_person_id": "cp4", "participant_key": "d"},
+        ],
+        "live_event_matches": [
+            {
+                "id": "social-1",
+                "event_id": "event-1",
+                "match_key": "r1-c1",
+                "played_on": "2026-03-05",
+                "round_number": 1,
+                "court_number": 1,
+                "mini_round_number": 1,
+                "status": "saved",
+                "submission_mode": "admin",
+                "t1_p1_participant_id": "part-1",
+                "t1_p2_participant_id": "part-2",
+                "t2_p1_participant_id": "part-3",
+                "t2_p2_participant_id": "part-4",
+                "score_t1": 7,
+                "score_t2": 11,
+            }
         ],
         "admin_match_log_duplicate_resolutions": [],
         "admin_activity_log": [],
