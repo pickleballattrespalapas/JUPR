@@ -7,6 +7,7 @@ import type {
   AdminTournamentDetailResponse,
   AdminTournamentListResponse,
   AdminTournamentOpsSnapshotResponse,
+  AdminTournamentOpsTeam,
   AdminTournamentStatusResponse,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
@@ -16,6 +17,14 @@ type Props = {
   apiBase: string | null;
   clubId: string;
   status: AdminTournamentStatusResponse;
+};
+
+type TeamEditorRow = {
+  team_number: string;
+  player1_id: string;
+  player2_id: string;
+  seed: string;
+  notes: string;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -38,6 +47,22 @@ function eventOptionLabel(row: Record<string, unknown>): string {
   const division = String(row.division_name || row.label || "").trim();
   if (family && division && family !== division) return `${family} / ${division}`;
   return division || family || String(row.id || "Event");
+}
+
+function teamRowsFromTeams(teams: AdminTournamentOpsTeam[], drawId: string): TeamEditorRow[] {
+  const scoped = teams
+    .filter((row) => !drawId || String(row.draw_id || "") === drawId)
+    .sort((left, right) => Number(left.team_number || 0) - Number(right.team_number || 0));
+  if (!scoped.length) {
+    return [1, 2, 3, 4].map((teamNumber) => ({ team_number: String(teamNumber), player1_id: "", player2_id: "", seed: String(teamNumber), notes: "" }));
+  }
+  return scoped.map((row, index) => ({
+    team_number: String(row.team_number || index + 1),
+    player1_id: row.player1_id == null ? "" : String(row.player1_id),
+    player2_id: row.player2_id == null ? "" : String(row.player2_id),
+    seed: row.seed == null ? "" : String(row.seed),
+    notes: row.notes || ""
+  }));
 }
 
 function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<string, unknown>>; preferredColumns: string[] }) {
@@ -73,6 +98,8 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   const [drawEventOptionId, setDrawEventOptionId] = useState("");
   const [drawName, setDrawName] = useState("");
   const [drawConfirm, setDrawConfirm] = useState("");
+  const [teamRows, setTeamRows] = useState<TeamEditorRow[]>(() => teamRowsFromTeams([], ""));
+  const [teamConfirm, setTeamConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -86,6 +113,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
     return payload as T;
+  }
+
+  function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
+    setTeamRows(teamRowsFromTeams(nextSnapshot?.teams || [], drawId));
+    setTeamConfirm("");
   }
 
   async function loadTournaments() {
@@ -126,6 +158,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       const suffix = params.toString() ? `?${params.toString()}` : "";
       const payload = await requestJson<AdminTournamentOpsSnapshotResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops${suffix}`);
       setSnapshot(payload);
+      resetTeamEditor(payload, drawId);
       setMessage("Tournament operations snapshot loaded.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load tournament operations.");
@@ -165,6 +198,54 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function saveTeams() {
+    if (!selectedTournamentId || !selectedDrawId) {
+      setMessage("Select a tournament and draw before saving teams.");
+      return;
+    }
+    const teams = teamRows
+      .filter((row) => row.player1_id.trim())
+      .map((row, index) => ({
+        team_number: Number(row.team_number || index + 1),
+        player1_id: Number(row.player1_id),
+        player2_id: row.player2_id.trim() ? Number(row.player2_id) : null,
+        seed: row.seed.trim() ? Number(row.seed) : null,
+        source: "MANUAL",
+        notes: row.notes
+      }));
+    if (!teams.length) {
+      setMessage("Add at least one team with Player 1 before saving.");
+      return;
+    }
+    if (teams.some((team) => !Number.isFinite(team.team_number) || !Number.isFinite(team.player1_id) || (team.player2_id !== null && !Number.isFinite(team.player2_id)))) {
+      setMessage("Team number and player IDs must be numeric. Use player selectors when available.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams`, {
+        method: "PUT",
+        body: JSON.stringify({ teams, confirmation_text: teamConfirm, source: "next_tournament_ops_team_editor" })
+      });
+      await loadOps(selectedTournamentId, selectedDrawId);
+      setTeamConfirm("");
+      setMessage(`Saved ${payload.updated_count ?? payload.teams?.length ?? teams.length} team(s).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save teams.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateTeamRow(index: number, patch: Partial<TeamEditorRow>) {
+    setTeamRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
+  }
+
+  function playerSelectValue(id: string) {
+    return id || "";
+  }
+
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -178,7 +259,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
-        <p style={{ color: "#475569" }}>Operations visibility plus the first guarded write: creating an empty division draw. Team import, scheduling, scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
+        <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws and manually maintaining teams before game generation. Scheduling, scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>
@@ -239,9 +320,74 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
             </div>
             {snapshot.warnings?.length ? <ul style={{ color: "#92400e" }}>{snapshot.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
           </article>
+
+          <article style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h2 style={{ marginTop: 0 }}>Team editor</h2>
+            <p style={{ color: "#475569" }}>Select a DRAFT draw, assign players, then type <code>SAVE TEAMS</code>. Saving replaces the current teams for that draw and is blocked once games exist.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
+              <label><strong>Draw</strong><br />
+                <select value={selectedDrawId} onChange={(event) => { setSelectedDrawId(event.target.value); resetTeamEditor(snapshot, event.target.value); }} style={inputStyle}>
+                  <option value="">Choose a draw…</option>
+                  {snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name || draw.id}</option>)}
+                </select>
+              </label>
+              <label><strong>Type SAVE TEAMS</strong><br /><input value={teamConfirm} onChange={(event) => setTeamConfirm(event.target.value)} style={inputStyle} /></label>
+              <button type="button" onClick={() => selectedTournamentId && selectedDrawId ? loadOps(selectedTournamentId, selectedDrawId) : undefined} disabled={!selectedTournamentId || !selectedDrawId || busy} style={ghostButtonStyle}>Reload selected draw</button>
+            </div>
+            {selectedDrawId ? (
+              <>
+                <div style={{ overflowX: "auto", marginTop: "1rem" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "920px" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Team #</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player 1</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player 2</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Seed</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Notes</th>
+                        <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {teamRows.map((row, index) => (
+                        <tr key={index}>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.team_number} onChange={(event) => updateTeamRow(index, { team_number: event.target.value })} style={inputStyle} /></td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>
+                            {snapshot.players?.length ? (
+                              <select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}>
+                                <option value="">Choose player…</option>
+                                {snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}
+                              </select>
+                            ) : <input value={row.player1_id} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} placeholder="player id" style={inputStyle} />}
+                          </td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>
+                            {snapshot.players?.length ? (
+                              <select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}>
+                                <option value="">Singles / no partner</option>
+                                {snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}
+                              </select>
+                            ) : <input value={row.player2_id} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} placeholder="optional player id" style={inputStyle} />}
+                          </td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.seed} onChange={(event) => updateTeamRow(index, { seed: event.target.value })} style={inputStyle} /></td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.notes} onChange={(event) => updateTeamRow(index, { notes: event.target.value })} style={inputStyle} /></td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><button type="button" onClick={() => setTeamRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} style={ghostButtonStyle}>Remove</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setTeamRows((current) => [...current, { team_number: String(current.length + 1), player1_id: "", player2_id: "", seed: String(current.length + 1), notes: "" }])} style={ghostButtonStyle}>Add team row</button>
+                  <button type="button" onClick={() => resetTeamEditor(snapshot, selectedDrawId)} style={ghostButtonStyle}>Reset from snapshot</button>
+                  <button type="button" onClick={saveTeams} disabled={busy || !accessToken || teamConfirm.trim().toUpperCase() !== "SAVE TEAMS"} style={buttonStyle}>{busy ? "Saving…" : "Save teams"}</button>
+                </p>
+              </>
+            ) : <p style={{ color: "#64748b" }}>Create or select a draw before editing teams.</p>}
+          </article>
+
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Teams</h2><GenericRowsTable rows={snapshot.teams} preferredColumns={["team_number", "player1_id", "player2_id", "source", "draw_id", "event_option_id"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Games</h2><GenericRowsTable rows={snapshot.games} preferredColumns={["stage", "rr_round_number", "rr_slot_number", "team1_id", "team2_id", "score_team1", "score_team2", "winner_team_id", "status"]} /></article>
+          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Games</h2><GenericRowsTable rows={snapshot.games} preferredColumns={["stage", "rr_round_number", "rr_slot_number", "team_a_id", "team_b_id", "score_a", "score_b", "winner_team_id", "status"]} /></article>
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Podium</h2><GenericRowsTable rows={snapshot.podium} preferredColumns={["placement", "team_id", "player1_id", "player2_id", "award_label", "draw_id"]} /></article>
         </>
       ) : null}
