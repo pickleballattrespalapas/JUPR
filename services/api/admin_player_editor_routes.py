@@ -15,6 +15,7 @@ from jupr_app.services.admin_player_editor_service import (
     list_admin_player_editor_players,
     update_admin_player_editor_player,
 )
+from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -30,6 +31,14 @@ class AdminPlayerEditorUpdateRequest(BaseModel):
     starting_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
     active: bool | None = None
     source: str = "next_player_editor"
+
+
+class AdminPlayerEditorLeagueRatingUpdateRequest(BaseModel):
+    rating_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
+    starting_jupr: float | None = Field(default=None, ge=1.0, le=7.0)
+    is_active: bool | None = None
+    confirmation_text: str = ""
+    source: str = "next_player_editor_league_rating"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -177,6 +186,45 @@ def install_admin_player_editor_routes(app, *, get_supabase_client) -> None:
                 patch=patch,
                 actor_email=actor_email,
                 actor_role=actor_role,
+                source=source,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.patch("/admin/clubs/{club_id}/players/editor/players/{player_id}/league-ratings/{league_rating_id}")
+    def patch_admin_player_editor_league_rating(
+        club_id: str,
+        player_id: int,
+        league_rating_id: int,
+        payload: AdminPlayerEditorLeagueRatingUpdateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_player_editor_enabled():
+            raise HTTPException(status_code=403, detail="Next Player Editor is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_player_editor_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        patch = _dump_model(payload)
+        source = str(patch.pop("source", payload.source))
+        confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        try:
+            return update_admin_player_editor_league_rating(
+                supabase,
+                club_id=str(club_id),
+                player_id=int(player_id),
+                league_rating_id=int(league_rating_id),
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
                 source=source,
             )
         except PermissionError as exc:
