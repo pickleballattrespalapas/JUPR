@@ -100,6 +100,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   const [drawConfirm, setDrawConfirm] = useState("");
   const [teamRows, setTeamRows] = useState<TeamEditorRow[]>(() => teamRowsFromTeams([], ""));
   const [teamConfirm, setTeamConfirm] = useState("");
+  const [gameConfirm, setGameConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -159,6 +160,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       const payload = await requestJson<AdminTournamentOpsSnapshotResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops${suffix}`);
       setSnapshot(payload);
       resetTeamEditor(payload, drawId);
+      setGameConfirm("");
       setMessage("Tournament operations snapshot loaded.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load tournament operations.");
@@ -238,6 +240,28 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function generateGames() {
+    if (!selectedTournamentId || !selectedDrawId) {
+      setMessage("Select a tournament and draw before generating games.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/games/round-robin`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: gameConfirm, source: "next_tournament_ops_generate_round_robin" })
+      });
+      await loadOps(selectedTournamentId, selectedDrawId);
+      setGameConfirm("");
+      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to generate games.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function updateTeamRow(index: number, patch: Partial<TeamEditorRow>) {
     setTeamRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   }
@@ -259,7 +283,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
-        <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws and manually maintaining teams before game generation. Scheduling, scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
+        <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws, maintaining teams, and generating round-robin games. Scoring, podiums, and awards remain Streamlit-only until their write contracts are ported.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>
@@ -383,6 +407,15 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
                 </p>
               </>
             ) : <p style={{ color: "#64748b" }}>Create or select a draw before editing teams.</p>}
+          </article>
+
+          <article style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h2 style={{ marginTop: 0 }}>Generate round-robin games</h2>
+            <p style={{ color: "#475569" }}>After teams are saved and team numbers are contiguous, type <code>GENERATE GAMES</code>. Generation is blocked if games already exist for the selected draw.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
+              <label><strong>Type GENERATE GAMES</strong><br /><input value={gameConfirm} onChange={(event) => setGameConfirm(event.target.value)} style={inputStyle} /></label>
+              <button type="button" onClick={generateGames} disabled={busy || !accessToken || !selectedDrawId || gameConfirm.trim().toUpperCase() !== "GENERATE GAMES"} style={buttonStyle}>{busy ? "Generating…" : "Generate games"}</button>
+            </div>
           </article>
 
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>

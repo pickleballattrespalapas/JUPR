@@ -144,6 +144,8 @@ export type AdminTournamentWriteResponse = {
   registrations?: AdminTournamentRegistration[];
   selection?: AdminTournamentSelection | null;
   teams?: AdminTournamentOpsTeam[];
+  games?: Array<Record<string, unknown>>;
+  game_count?: number;
   updated_count?: number;
   registration_ids?: string[];
   skipped?: string[];
