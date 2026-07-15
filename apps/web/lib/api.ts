@@ -39,6 +39,11 @@ export type PublicPlayer = {
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
+  singles_rating?: number | null;
+  singles_wins?: number | null;
+  singles_losses?: number | null;
+  singles_matches_played?: number | null;
+  singles_last_game_at?: string | null;
   is_active?: boolean | null;
   last_game_at?: string | null;
 };
@@ -69,6 +74,7 @@ export type PublicMatch = {
   league?: string | null;
   week_tag?: string | null;
   match_type?: string | null;
+  match_format?: string | null;
   rating_scope?: string | null;
   context_type?: string | null;
   context_id?: string | null;
@@ -118,206 +124,4 @@ export type PublicLiveMatch = {
   score_a?: number | null;
   score_b?: number | null;
   is_scored?: boolean;
-  winner?: string | null;
 };
-
-export type PublicLiveRound = {
-  number: number;
-  matches: PublicLiveMatch[];
-  courts?: Array<{ court_number: number; size?: number | null; matches: PublicLiveMatch[] }>;
-};
-
-export type PublicLiveSessionSummary = {
-  session_key: string;
-  title: string;
-  status: string;
-  event_type?: string | null;
-  current_round?: number | null;
-  has_event?: boolean;
-  created_at?: string | null;
-  updated_at?: string | null;
-  last_seen_at?: string | null;
-  expires_at?: string | null;
-};
-
-export type PublicLiveSessionDetail = PublicLiveSessionSummary & {
-  rounds: PublicLiveRound[];
-  standings: Array<Record<string, string | number | boolean | null>>;
-  bracket?: { champion?: string | null; rows: Array<Record<string, string | number | boolean | null>> } | null;
-  court_standings?: Array<Record<string, unknown>>;
-};
-
-export type LiveSessionsResponse = {
-  club: { id: string; slug: string; name: string };
-  sessions: PublicLiveSessionSummary[];
-};
-
-export type LiveSessionDetailResponse = {
-  club: { id: string; slug: string; name: string };
-  session: PublicLiveSessionDetail;
-};
-
-export type MatchExplorerContextResponse = {
-  club: { id: string; slug: string; name: string };
-  contexts: string[];
-};
-
-export type MatchExplorerPlayer = {
-  id: string | number;
-  name: string;
-  overall_rating: number;
-  overall_jupr?: number | null;
-  context_rating: number;
-  context_jupr?: number | null;
-};
-
-export type MatchExplorerPreview = {
-  context: { name: string; k_factor: number };
-  teams: {
-    you: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
-    opponents: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
-  };
-  expected: { you: number; opponents: number; label: string };
-  score: { you: number; opponents: number };
-  rating_delta: {
-    you_team_elo: number;
-    opponent_team_elo: number;
-    you_team_jupr?: number | null;
-    opponent_team_jupr?: number | null;
-  };
-};
-
-export type MatchExplorerPreviewResponse = {
-  club: { id: string; slug: string; name: string };
-  preview: MatchExplorerPreview;
-};
-
-export type LeagueResultsLeague = {
-  name: string;
-  min_games?: number | null;
-  k_factor?: number | null;
-};
-
-export type LeagueResultsStanding = {
-  rank?: number | null;
-  player_id: string | number;
-  player_name: string;
-  rating?: number | null;
-  rating_jupr?: number | null;
-  wins?: number | null;
-  losses?: number | null;
-  matches_played?: number | null;
-  win_pct?: number | null;
-  rating_delta_jupr?: number | null;
-};
-
-export type LeagueResultsStatRow = {
-  week_num?: number | null;
-  player_id: string | number;
-  player_name: string;
-  games?: number | null;
-  wins?: number | null;
-  losses?: number | null;
-  win_pct?: number | null;
-  rating_delta_jupr?: number | null;
-};
-
-export type LeagueResultsResponse = {
-  club: { id: string; slug: string; name: string };
-  leagues: LeagueResultsLeague[];
-  selected_league?: string | null;
-  league?: LeagueResultsLeague | null;
-  standings: LeagueResultsStanding[];
-  weeks: Array<{ week_num: number; week_label: string }>;
-  weekly_results: LeagueResultsStatRow[];
-  cumulative: LeagueResultsStatRow[];
-  highlights: {
-    biggest_climbers: LeagueResultsStatRow[];
-    best_win_pct: LeagueResultsStatRow[];
-    most_active: LeagueResultsStatRow[];
-  };
-};
-
-type ApiResult<T> = { data: T | null; error: string | null };
-
-function baseUrl(): string | null {
-  return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
-}
-
-async function apiErrorMessage(response: Response): Promise<string> {
-  const fallback = `API error (${response.status}).`;
-  let bodyText = "";
-  try {
-    bodyText = await response.text();
-  } catch {
-    return fallback;
-  }
-  if (!bodyText) return fallback;
-  try {
-    const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
-    const detail = payload.detail ?? payload.message ?? payload.error;
-    if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
-    if (detail) return `${fallback} ${String(detail)}`;
-  } catch {
-    // Fall through to a short text excerpt below.
-  }
-  return `${fallback} ${bodyText.slice(0, 240)}`;
-}
-
-async function fetchJson<T>(path: string, options: { noStore?: boolean } = {}): Promise<ApiResult<T>> {
-  const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
-  const url = `${apiBase.replace(/\/$/, "")}${path}`;
-  try {
-    const response = await fetch(url, options.noStore ? { cache: "no-store" } : { next: { revalidate: 60 } });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
-    return { data: (await response.json()) as T, error: null };
-  } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
-  }
-}
-
-export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>> {
-  return fetchJson<ClubSummary>(`/clubs/${clubSlug}`);
-}
-
-export async function getClubLeaderboard(clubSlug: string): Promise<ApiResult<LeaderboardResponse>> {
-  return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards`);
-}
-
-export async function getClubPlayers(clubSlug: string): Promise<ApiResult<PlayersResponse>> {
-  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players`);
-}
-
-export async function getClubPlayerProfile(clubSlug: string, playerId: string): Promise<ApiResult<PlayerProfileResponse>> {
-  return fetchJson<PlayerProfileResponse>(`/clubs/${clubSlug}/players/${playerId}`);
-}
-
-export async function getClubMatches(clubSlug: string): Promise<ApiResult<MatchesResponse>> {
-  return fetchJson<MatchesResponse>(`/clubs/${clubSlug}/matches`);
-}
-
-export async function getClubMatch(clubSlug: string, matchId: string): Promise<ApiResult<MatchDetailResponse>> {
-  return fetchJson<MatchDetailResponse>(`/clubs/${clubSlug}/matches/${matchId}`);
-}
-
-export async function getClubPlayerMatches(clubSlug: string, playerId: string): Promise<ApiResult<MatchesResponse>> {
-  return fetchJson<MatchesResponse>(`/clubs/${clubSlug}/players/${playerId}/matches`);
-}
-
-export async function getClubLiveSessions(clubSlug: string): Promise<ApiResult<LiveSessionsResponse>> {
-  return fetchJson<LiveSessionsResponse>(`/clubs/${clubSlug}/live-sessions`, { noStore: true });
-}
-
-export async function getClubLiveSession(clubSlug: string, sessionKey: string): Promise<ApiResult<LiveSessionDetailResponse>> {
-  return fetchJson<LiveSessionDetailResponse>(`/clubs/${clubSlug}/live-sessions/${sessionKey}`, { noStore: true });
-}
-
-export async function getClubMatchExplorerContext(clubSlug: string): Promise<ApiResult<MatchExplorerContextResponse>> {
-  return fetchJson<MatchExplorerContextResponse>(`/clubs/${clubSlug}/match-explorer`);
-}
-
-export async function getClubLeagueResults(clubSlug: string, leagueName?: string | null): Promise<ApiResult<LeagueResultsResponse>> {
-  const query = leagueName ? `?league_name=${encodeURIComponent(leagueName)}` : "";
-  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query}`);
-}
