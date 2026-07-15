@@ -216,11 +216,12 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
             continue
         league_row = standing_by_player.get(int(pid))
         rating = _safe_float((league_row or {}).get("rating"))
+        league_active = bool((league_row or {}).get("is_active", False)) and not bool((league_row or {}).get("inactive_at")) if league_row else False
         roster.append(
             {
                 "player_id": int(pid),
                 "player_name": _clean_text(player.get("name"), limit=160) or f"Player {int(pid)}",
-                "in_league": league_row is not None,
+                "in_league": league_row is not None and league_active,
                 "league_name": str(league_name),
                 "rating": rating,
                 "rating_jupr": None if rating is None else rating / 400.0,
@@ -228,7 +229,7 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
                 "losses": _safe_int((league_row or {}).get("losses")) or 0,
                 "matches_played": _safe_int((league_row or {}).get("matches_played")) or 0,
                 "player_active": bool(player.get("active", True)),
-                "league_active": bool((league_row or {}).get("is_active", False)) if league_row else False,
+                "league_active": league_active,
                 "last_game_at": player.get("last_game_at"),
             }
         )
