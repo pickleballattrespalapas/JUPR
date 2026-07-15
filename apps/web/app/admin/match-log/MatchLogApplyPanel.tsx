@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
-import type { AdminDuplicateDeletePreview, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
+import type { AdminDuplicateDeletePreview, AdminDuplicateGroup, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogApplyPanelProps = {
@@ -10,6 +11,7 @@ type MatchLogApplyPanelProps = {
   clubId: string;
   applyEnabled: boolean;
   duplicatePreview?: AdminDuplicateDeletePreview | null;
+  duplicateGroups?: AdminDuplicateGroup[];
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -23,16 +25,24 @@ function apiUrl(apiBase: string, path: string): string {
 function resultSummary(result: AdminMatchLogWriteResult | null): string | null {
   if (!result) return null;
   if (result.mode === "duplicates_cleaned") return `Cleaned ${result.deleted_count ?? 0} duplicate row(s). Replay scope: ${result.recommended_replay_scope ?? "ALL"}.`;
+  if (result.mode === "duplicate_no_issue") return `Marked match IDs ${(result.match_ids ?? []).join(", ") || "selected group"} as no issue.`;
   if (result.mode === "applied") return `Applied ${result.updated_count ?? 0} match edit(s).`;
   return "Operation completed.";
 }
 
-export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicatePreview }: MatchLogApplyPanelProps) {
+function groupLabel(group: AdminDuplicateGroup): string {
+  return `${group.league || "—"} · ${group.week_tag || "—"} · IDs ${group.ids.join(", ")}`;
+}
+
+export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, duplicatePreview, duplicateGroups = [] }: MatchLogApplyPanelProps) {
+  const router = useRouter();
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [patchesJson, setPatchesJson] = useState('[\n  {"id": 123, "week_tag": "Week 1"}\n]');
+  const [patchesJson, setPatchesJson] = useState('[]');
   const [correctionNote, setCorrectionNote] = useState("");
   const [applyConfirm, setApplyConfirm] = useState("");
   const [cleanupConfirm, setCleanupConfirm] = useState("");
+  const [noIssueReason, setNoIssueReason] = useState("");
+  const [noIssueConfirm, setNoIssueConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
@@ -68,6 +78,7 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       });
       setResult(payload);
       setMessage(resultSummary(payload));
+      router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to apply match edits.");
     } finally {
@@ -89,8 +100,33 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
       });
       setResult(payload);
       setMessage(resultSummary(payload));
+      router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to clean duplicates.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveNoIssue(group: AdminDuplicateGroup) {
+    setBusy(true);
+    setMessage(null);
+    setResult(null);
+    try {
+      const payload = await callApi(`/admin/clubs/${encodeURIComponent(clubId)}/match-log/duplicates/resolve`, "POST", {
+        match_ids: group.ids,
+        dup_key: group.dup_key,
+        reason: noIssueReason,
+        confirmation_text: noIssueConfirm,
+        source: "next_match_log_duplicate_no_issue_panel"
+      });
+      setResult(payload);
+      setMessage(resultSummary(payload));
+      setNoIssueConfirm("");
+      setNoIssueReason("");
+      router.refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to mark duplicate group as no issue.");
     } finally {
       setBusy(false);
     }
@@ -134,9 +170,38 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
 
       <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
 
+      <h3>Duplicate false positive / no issue</h3>
+      <p style={{ color: "#475569" }}>
+        Use this when the scanner found a legitimate repeated matchup that should no longer appear as an active cleanup candidate.
+      </p>
+      {duplicateGroups.length ? (
+        <div style={{ display: "grid", gap: "0.75rem" }}>
+          <label><strong>Reason for no-issue resolution</strong><br /><input value={noIssueReason} onChange={(event) => setNoIssueReason(event.target.value)} style={inputStyle} /></label>
+          <label><strong>Type NO ISSUE to confirm false-positive resolution</strong><br /><input value={noIssueConfirm} onChange={(event) => setNoIssueConfirm(event.target.value)} style={inputStyle} /></label>
+          {duplicateGroups.map((group) => (
+            <div key={group.dup_key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem", background: "#f8fafc" }}>
+              <p style={{ marginTop: 0 }}><strong>{groupLabel(group)}</strong></p>
+              <p style={{ color: "#475569" }}>Cleanup candidates: {group.delete_ids.map((id) => `#${id}`).join(", ") || "none"}</p>
+              <button
+                type="button"
+                onClick={() => resolveNoIssue(group)}
+                disabled={busy || !accessToken || noIssueConfirm.trim().toUpperCase() !== "NO ISSUE" || !noIssueReason.trim()}
+                style={buttonStyle}
+              >
+                {busy ? "Working…" : "Mark this group no issue"}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p style={{ color: "#475569" }}>No active duplicate groups are available to resolve as no issue.</p>
+      )}
+
+      <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
+
       <h3>Duplicate cleanup</h3>
       <p style={{ color: "#475569" }}>
-        Current preview would review {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
+        Current preview would remove {duplicatePreview?.delete_count ?? 0} duplicate row(s): {(duplicatePreview?.delete_ids ?? []).join(", ") || "none"}.
       </p>
       <label><strong>Type DELETE to confirm duplicate cleanup</strong><br /><input value={cleanupConfirm} onChange={(event) => setCleanupConfirm(event.target.value)} style={inputStyle} /></label>
       <p>
