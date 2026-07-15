@@ -44,9 +44,9 @@ function MatchRow({ match }: { match: AdminMatchLogMatch }) {
   );
 }
 
-function DuplicateGroupCard({ group }: { group: AdminDuplicateGroup }) {
+function DuplicateGroupCard({ group, resolved = false }: { group: AdminDuplicateGroup; resolved?: boolean }) {
   return (
-    <article style={{ ...cardStyle, background: "#fff7ed" }}>
+    <article style={{ ...cardStyle, background: resolved ? "#f0fdf4" : "#fff7ed" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
         <div>
           <strong>{group.league || "—"} · {group.week_tag || "—"}</strong>
@@ -54,11 +54,23 @@ function DuplicateGroupCard({ group }: { group: AdminDuplicateGroup }) {
             {playerNames(group.team1)} vs {playerNames(group.team2)} · {group.score.display}
           </p>
           <p style={{ margin: 0, color: "#64748b", fontSize: "0.86rem" }}>IDs: {group.ids.join(", ")}</p>
+          {resolved && group.resolution?.reason ? (
+            <p style={{ margin: "0.35rem 0 0", color: "#166534" }}>Resolved as no issue: {group.resolution.reason}</p>
+          ) : null}
         </div>
         <div style={{ textAlign: "right" }}>
           <div><strong>{group.dup_count}</strong> copies</div>
-          <div style={{ color: "#166534" }}>Keep #{group.keep_id}</div>
-          <div style={{ color: "#b91c1c" }}>Cleanup candidates: {group.delete_ids.map((id) => `#${id}`).join(", ") || "—"}</div>
+          {resolved ? (
+            <>
+              <div style={{ color: "#166534" }}>No issue</div>
+              {group.resolution?.actor_email ? <div style={{ color: "#64748b" }}>{group.resolution.actor_email}</div> : null}
+            </>
+          ) : (
+            <>
+              <div style={{ color: "#166534" }}>Keep #{group.keep_id}</div>
+              <div style={{ color: "#b91c1c" }}>Cleanup candidates: {group.delete_ids.map((id) => `#${id}`).join(", ") || "—"}</div>
+            </>
+          )}
         </div>
       </div>
     </article>
@@ -79,6 +91,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
   });
 
   const selectedFilter = searchParams?.filter || data?.filters.filter || "All";
+  const resolvedDuplicateGroups = data?.resolved_duplicate_groups || [];
 
   return (
     <section>
@@ -127,6 +140,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             <article style={cardStyle}><strong>Shown</strong><br />{data.summary.returned_matches}</article>
             <article style={cardStyle}><strong>Duplicate groups</strong><br />{data.summary.duplicate_groups}</article>
             <article style={cardStyle}><strong>Cleanup candidates</strong><br />{data.summary.duplicate_delete_count}</article>
+            <article style={cardStyle}><strong>Resolved no issue</strong><br />{data.summary.resolved_duplicate_groups ?? resolvedDuplicateGroups.length}</article>
           </div>
 
           {data.warnings?.length ? (
@@ -143,7 +157,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
               {data.duplicate_groups.map((group) => <DuplicateGroupCard key={group.dup_key} group={group} />)}
             </div>
-          ) : <p style={muted}>No duplicate groups found in the current filtered view.</p>}
+          ) : <p style={muted}>No active duplicate groups found in the current filtered view.</p>}
 
           {data.duplicate_delete_preview ? (
             <article style={{ ...cardStyle, marginBottom: "1rem" }}>
@@ -153,10 +167,20 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             </article>
           ) : null}
 
+          {resolvedDuplicateGroups.length ? (
+            <>
+              <h2>Resolved duplicate candidates</h2>
+              <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
+                {resolvedDuplicateGroups.map((group) => <DuplicateGroupCard key={`${group.dup_key}-resolved`} group={group} resolved />)}
+              </div>
+            </>
+          ) : null}
+
           <h2>Correction and replay planning</h2>
           <article style={{ ...cardStyle, marginBottom: "1rem" }}>
             <p style={muted}>Apply endpoint: {data.correction_plan.apply_endpoint || "not enabled"}</p>
             <p style={muted}>Duplicate cleanup endpoint: {data.correction_plan.duplicate_cleanup_endpoint || "not enabled"}</p>
+            <p style={muted}>Duplicate no-issue endpoint: {data.correction_plan.duplicate_no_issue_endpoint || "not enabled"}</p>
             <p><strong>Editable fields:</strong> {data.correction_plan.editable_fields_planned.join(", ")}</p>
             <p><strong>Sample recompute scope:</strong> standings={String(data.correction_plan.recompute_scope_for_sample_edit.standings)}, ratings={String(data.correction_plan.recompute_scope_for_sample_edit.ratings)}</p>
             <ul style={{ paddingLeft: "1.25rem", marginBottom: 0 }}>
@@ -169,6 +193,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             clubId={clubId}
             applyEnabled={Boolean(data.apply_enabled)}
             duplicatePreview={data.duplicate_delete_preview}
+            duplicateGroups={data.duplicate_groups}
           />
 
           <h2>Matches</h2>
