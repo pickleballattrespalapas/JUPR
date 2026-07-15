@@ -13,6 +13,7 @@ from jupr_app.services.admin_tournament_bulk_team_import_service import import_a
 from jupr_app.services.admin_tournament_delete_service import delete_admin_tournament_draft
 from jupr_app.services.admin_tournament_draw_service import create_admin_tournament_draw
 from jupr_app.services.admin_tournament_game_service import generate_admin_tournament_round_robin_games
+from jupr_app.services.admin_tournament_match_publish_service import publish_admin_tournament_draw_matches
 from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_ops_snapshot
 from jupr_app.services.admin_tournament_playoff_service import generate_admin_tournament_playoff_games
 from jupr_app.services.admin_tournament_podium_service import generate_admin_tournament_draw_podium
@@ -107,6 +108,11 @@ class AdminTournamentPodiumGenerateRequest(BaseModel):
 class AdminTournamentPodiumAwardRequest(BaseModel):
     confirmation_text: str = ""
     source: str = "next_tournament_admin_award_podium"
+
+
+class AdminTournamentOfficialMatchPublishRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_publish_matches"
 
 
 class AdminTournamentGameScoreRequest(BaseModel):
@@ -232,6 +238,13 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try: return award_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/matches/publish")
+    def post_admin_tournament_draw_matches_publish(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentOfficialMatchPublishRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try: return publish_admin_tournament_draw_matches(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except Exception as exc: _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/games/{game_id}/score")
