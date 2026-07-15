@@ -100,6 +100,37 @@ export type AdminMatchLogResponse = {
   warnings: string[];
 };
 
+export type AdminSocialMatchLogRow = {
+  source_type?: string | null;
+  source_label?: string | null;
+  id?: string | number | null;
+  social_match_id?: string | number | null;
+  event_id?: string | number | null;
+  event_name?: string | null;
+  date?: string | null;
+  played_on?: string | null;
+  round_number?: number | null;
+  court_number?: number | null;
+  mini_round_number?: number | null;
+  status?: string | null;
+  submission_mode?: string | null;
+  match_key?: string | null;
+  t1_p1?: string | null;
+  t1_p2?: string | null;
+  t2_p1?: string | null;
+  t2_p2?: string | null;
+  score_t1?: number | null;
+  score_t2?: number | null;
+};
+
+export type AdminSocialMatchLogResponse = {
+  ok: boolean;
+  mode: string;
+  rows: AdminSocialMatchLogRow[];
+  count: number;
+  warnings?: string[];
+};
+
 export type AdminMatchLogWriteResult = {
   ok: boolean;
   mode?: string;
@@ -115,8 +146,11 @@ export type AdminMatchLogWriteResult = {
   dup_key?: string;
   match_ids?: number[];
   reason?: string;
+  social_match_id?: string;
+  requested_ids?: string[];
   warnings?: string[];
   badge_summary?: Record<string, unknown>;
+  replay_error?: string | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
