@@ -56,6 +56,8 @@ export type AdminPlayerEditorWriteResponse = {
   ok: boolean;
   mode?: string;
   player?: AdminPlayerEditorPlayer | null;
+  league_rating?: AdminPlayerEditorLeagueRating | null;
+  league_ratings?: AdminPlayerEditorLeagueRating[];
   warnings?: string[];
 };
 

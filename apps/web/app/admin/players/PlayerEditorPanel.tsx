@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import type {
   AdminPlayerEditorDetailResponse,
+  AdminPlayerEditorLeagueRating,
   AdminPlayerEditorListResponse,
   AdminPlayerEditorPlayer,
   AdminPlayerEditorStatusResponse,
@@ -21,6 +22,7 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const leagueRatingConfirmText = "SAVE LEAGUE RATING";
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -41,6 +43,11 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   const [editRating, setEditRating] = useState("3.5");
   const [editStartingRating, setEditStartingRating] = useState("3.5");
   const [editActive, setEditActive] = useState(true);
+  const [selectedLeagueRatingId, setSelectedLeagueRatingId] = useState("");
+  const [editLeagueRating, setEditLeagueRating] = useState("3.5");
+  const [editLeagueStartingRating, setEditLeagueStartingRating] = useState("3.5");
+  const [editLeagueActive, setEditLeagueActive] = useState(true);
+  const [leagueRatingConfirm, setLeagueRatingConfirm] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -79,6 +86,14 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     setEditActive(player.active !== false);
   }
 
+  function seedLeagueRatingForm(row: AdminPlayerEditorLeagueRating | null) {
+    setSelectedLeagueRatingId(row ? String(row.id) : "");
+    setEditLeagueRating(String(row?.rating_jupr ?? 3.5));
+    setEditLeagueStartingRating(String(row?.starting_jupr ?? row?.rating_jupr ?? 3.5));
+    setEditLeagueActive(row?.is_active !== false);
+    setLeagueRatingConfirm("");
+  }
+
   async function loadPlayers() {
     setMessage(null);
     if (!requireReady()) return;
@@ -104,6 +119,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       const payload = await requestJson<AdminPlayerEditorDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(playerId)}`);
       setDetail(payload);
       seedEditForm(payload.player);
+      seedLeagueRatingForm(payload.league_ratings?.[0] || null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load player detail.");
     } finally {
@@ -168,6 +184,38 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
+  async function saveLeagueRating() {
+    setMessage(null);
+    if (!selectedId || !selectedLeagueRatingId || !requireReady()) return;
+    const rating = Number(editLeagueRating);
+    const starting = Number(editLeagueStartingRating);
+    if (!Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) {
+      setMessage("League JUPR and league Starting JUPR must be between 1.0 and 7.0.");
+      return;
+    }
+    if (leagueRatingConfirm.trim().toUpperCase() !== leagueRatingConfirmText) {
+      setMessage(`Type ${leagueRatingConfirmText} to confirm league-rating edits.`);
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = await requestJson<AdminPlayerEditorWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players/${encodeURIComponent(selectedId)}/league-ratings/${encodeURIComponent(selectedLeagueRatingId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ rating_jupr: rating, starting_jupr: starting, is_active: editLeagueActive, confirmation_text: leagueRatingConfirm, source: "next_player_editor_league_rating" })
+      });
+      if (payload.league_ratings && detail) {
+        setDetail({ ...detail, league_ratings: payload.league_ratings });
+        const updated = payload.league_ratings.find((row) => String(row.id) === selectedLeagueRatingId) || payload.league_ratings[0] || null;
+        seedLeagueRatingForm(updated);
+      }
+      setMessage("League rating saved and audit-flagged for review. Run Replay History if you need to rebuild derived history.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save league rating.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -181,7 +229,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Player Editor admin session</h2>
-        <p style={{ color: "#475569" }}>This foundation route supports roster/detail read, add player, and basic player profile updates through FastAPI. Merge, league-rating edits, and social identity linking stay on Streamlit for now.</p>
+        <p style={{ color: "#475569" }}>This route supports roster/detail read, add player, basic player updates, and guarded league-rating edits through FastAPI. Merge and social identity linking stay on Streamlit for now.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -232,7 +280,21 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
       {detail?.league_ratings?.length ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>League ratings — read only in this slice</h2>
+          <h2 style={{ marginTop: 0 }}>League ratings</h2>
+          <p style={{ color: "#475569" }}>League-rating edits are audit-flagged because they can diverge from replayed history. Use them for targeted corrections only, then run Replay History if needed.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+            <label><strong>League rating row</strong><br />
+              <select value={selectedLeagueRatingId} onChange={(event) => seedLeagueRatingForm(detail.league_ratings.find((row) => String(row.id) === event.target.value) || null)} style={inputStyle}>
+                <option value="">Choose league rating…</option>
+                {detail.league_ratings.map((row) => <option key={row.id} value={String(row.id)}>{row.league_name} · {juprLabel(row.rating_jupr)}</option>)}
+              </select>
+            </label>
+            <label><strong>League JUPR</strong><br /><input value={editLeagueRating} onChange={(event) => setEditLeagueRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label>
+            <label><strong>League starting JUPR</strong><br /><input value={editLeagueStartingRating} onChange={(event) => setEditLeagueStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label>
+            <label><strong>League active</strong><br /><select value={editLeagueActive ? "yes" : "no"} onChange={(event) => setEditLeagueActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label>
+          </div>
+          <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Type {leagueRatingConfirmText} to confirm</strong><br /><input value={leagueRatingConfirm} onChange={(event) => setLeagueRatingConfirm(event.target.value)} style={inputStyle} /></label>
+          <p><button type="button" onClick={saveLeagueRating} disabled={saving || !accessToken || !selectedLeagueRatingId || leagueRatingConfirm.trim().toUpperCase() !== leagueRatingConfirmText} style={buttonStyle}>{saving ? "Saving…" : "Save league rating"}</button></p>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>League</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>JUPR</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Start</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>W-L</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Active</th></tr></thead>

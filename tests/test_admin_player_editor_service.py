@@ -9,6 +9,7 @@ from jupr_app.services.admin_player_editor_service import (
     list_admin_player_editor_players,
     update_admin_player_editor_player,
 )
+from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
 
 
 class FakeQuery:
@@ -180,3 +181,28 @@ def test_update_player_editor_player_writes_audit(monkeypatch) -> None:
     assert result["player"]["active"] is False
     assert result["player"]["inactive_at"]
     assert storage["admin_activity_log"][0]["action_type"] == "update_player_editor_player"
+
+
+def test_update_player_editor_league_rating_writes_audit(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+
+    result = update_admin_player_editor_league_rating(
+        FakeSupabase(storage),
+        club_id="club",
+        player_id=1,
+        league_rating_id=10,
+        patch={"rating_jupr": 3.8, "starting_jupr": 3.5, "is_active": False},
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        confirmation_text="SAVE LEAGUE RATING",
+        source="test",
+    )
+
+    assert result["ok"] is True
+    assert result["mode"] == "player_editor_league_rating_update"
+    assert result["league_rating"]["rating"] == 1520.0
+    assert result["league_rating"]["starting_rating"] == 1400.0
+    assert result["league_rating"]["is_active"] is False
+    assert result["league_rating"]["inactive_at"]
+    assert storage["admin_activity_log"][0]["action_type"] == "update_player_editor_league_rating"

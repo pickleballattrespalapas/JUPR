@@ -116,3 +116,32 @@ def test_player_editor_create_and_patch_contract(monkeypatch):
     assert patched["name"] == "Casey R"
     assert patched["rating"] == 1440.0
     assert [row["action_type"] for row in storage["admin_activity_log"]] == ["create_player_editor_player", "update_player_editor_player"]
+
+
+def test_player_editor_league_rating_patch_contract(monkeypatch):
+    storage = fake_storage()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/players/editor/players/1/league-ratings/10",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "rating_jupr": 3.8,
+            "starting_jupr": 3.5,
+            "is_active": False,
+            "confirmation_text": "SAVE LEAGUE RATING",
+            "source": "test",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "player_editor_league_rating_update"
+    assert payload["league_rating"]["rating"] == 1520.0
+    assert payload["league_ratings"][0]["rating"] == 1520.0
+    assert storage["admin_activity_log"][0]["action_type"] == "update_player_editor_league_rating"
