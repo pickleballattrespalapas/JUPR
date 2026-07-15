@@ -66,6 +66,26 @@ export type AdminTournamentDraw = {
   updated_at?: string | null;
 };
 
+export type AdminTournamentOpsPlayer = {
+  id: number;
+  name: string;
+  active?: boolean | null;
+};
+
+export type AdminTournamentOpsTeam = {
+  id?: string | null;
+  tournament_id?: string | null;
+  draw_id?: string | null;
+  registration_day_id?: string | null;
+  event_option_id?: string | null;
+  team_number?: number | null;
+  player1_id?: number | null;
+  player2_id?: number | null;
+  seed?: number | null;
+  source?: string | null;
+  notes?: string | null;
+};
+
 export type AdminTournamentListResponse = {
   ok: boolean;
   mode?: string;
@@ -104,10 +124,11 @@ export type AdminTournamentOpsSnapshotResponse = {
     podium: number;
     completed_games?: number;
   };
-  draws: Array<Record<string, unknown>>;
-  teams: Array<Record<string, unknown>>;
+  draws: AdminTournamentDraw[];
+  teams: AdminTournamentOpsTeam[];
   games: Array<Record<string, unknown>>;
   podium: Array<Record<string, unknown>>;
+  players?: AdminTournamentOpsPlayer[];
   warnings?: string[];
 };
 
@@ -122,6 +143,7 @@ export type AdminTournamentWriteResponse = {
   registration?: AdminTournamentRegistration | null;
   registrations?: AdminTournamentRegistration[];
   selection?: AdminTournamentSelection | null;
+  teams?: AdminTournamentOpsTeam[];
   updated_count?: number;
   registration_ids?: string[];
   skipped?: string[];
