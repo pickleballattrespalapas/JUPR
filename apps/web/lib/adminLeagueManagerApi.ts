@@ -45,6 +45,21 @@ export type AdminLeagueManagerStanding = {
   inactive_at?: string | null;
 };
 
+export type AdminLeagueManagerRosterRow = {
+  player_id: number;
+  player_name: string;
+  in_league: boolean;
+  league_name: string;
+  rating?: number | null;
+  rating_jupr?: number | null;
+  wins?: number | null;
+  losses?: number | null;
+  matches_played?: number | null;
+  player_active?: boolean | null;
+  league_active?: boolean | null;
+  last_game_at?: string | null;
+};
+
 export type AdminLeagueManagerListResponse = {
   ok: boolean;
   mode?: string;
@@ -59,6 +74,9 @@ export type AdminLeagueManagerDetailResponse = {
   schedule_preview: AdminLeagueManagerSchedulePreviewRow[];
   standings: AdminLeagueManagerStanding[];
   standings_count: number;
+  roster?: AdminLeagueManagerRosterRow[];
+  roster_count?: number | null;
+  league_roster_count?: number | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
