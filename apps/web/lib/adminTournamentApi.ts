@@ -148,6 +148,8 @@ export type AdminTournamentWriteResponse = {
   game?: Record<string, unknown> | null;
   game_count?: number;
   match_count?: number;
+  singles_match_count?: number;
+  doubles_match_count?: number;
   tournament_game_ids?: string[];
   playoff_winner_bonus_elo?: number;
   bonus_match_count?: number;

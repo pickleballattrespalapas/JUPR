@@ -14,12 +14,25 @@ from jupr_app.services.admin_match_uploader_service import (
     is_admin_match_uploader_enabled,
     submit_admin_match_uploader_batch,
 )
+from jupr_app.services.admin_singles_match_service import submit_admin_singles_match
 from services.api.auth import authenticate_bearer, auth_header
 
 
 class AdminMatchUploaderBatchRequest(BaseModel):
     matches: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "next_match_uploader"
+
+
+class AdminMatchUploaderSinglesRequest(BaseModel):
+    date: str | None = None
+    league: str = "Singles"
+    week_tag: str = "Singles"
+    t1_p1: int
+    t2_p1: int
+    score_t1: int
+    score_t2: int
+    rating_scope: str | None = None
+    source: str = "next_match_uploader_singles"
 
 
 class AdminMatchUploaderRoundRobinCourtRequest(BaseModel):
@@ -79,13 +92,25 @@ def _resolve_score_entry_role_or_403(*, supabase: Any, club_id: str, authorizati
     return user.email, role_resolution.role
 
 
+def _handle_write_error(exc: Exception) -> None:
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    raise exc
+
+
 def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
     """Register guarded Match Uploader routes for the Next admin pilot."""
 
     @app.get("/admin/clubs/{club_id}/match-uploader/status")
     def get_admin_match_uploader_status(club_id: str) -> dict[str, Any]:
         supabase = get_supabase_client() if is_admin_match_uploader_enabled() else None
-        return build_admin_match_uploader_status(supabase, club_id=str(club_id))
+        status = build_admin_match_uploader_status(supabase, club_id=str(club_id))
+        status["singles_submit_endpoint"] = "/admin/clubs/{club_id}/match-uploader/singles"
+        return status
 
     @app.post("/admin/clubs/{club_id}/match-uploader/round-robin/preview")
     def post_admin_match_uploader_round_robin_preview(
@@ -111,12 +136,8 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 schedule_mode=payload.schedule_mode,
                 source=payload.source,
             )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_write_error(exc)
 
     @app.post("/admin/clubs/{club_id}/match-uploader/players")
     def post_admin_match_uploader_players(
@@ -142,12 +163,35 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
             )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_write_error(exc)
+
+    @app.post("/admin/clubs/{club_id}/match-uploader/singles")
+    def post_admin_match_uploader_singles(
+        club_id: str,
+        payload: AdminMatchUploaderSinglesRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_uploader_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Uploader is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_score_entry_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return submit_admin_singles_match(
+                supabase,
+                club_id=str(club_id),
+                match=_dump_model(payload),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_write_error(exc)
 
     @app.post("/admin/clubs/{club_id}/match-uploader/batch")
     def post_admin_match_uploader_batch(
@@ -173,9 +217,5 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
             )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_write_error(exc)

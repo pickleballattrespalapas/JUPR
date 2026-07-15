@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-PLAYER_SELECT = "id,club_id,name,rating,wins,losses,matches_played,active,last_game_at,inactive_at"
+PLAYER_SELECT = "id,club_id,name,rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
 PLAYER_MINIMAL_SELECT = "id,club_id,name,rating,wins,losses,matches_played"
 LEAGUE_RATINGS_SELECT = "id,club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
 MATCH_SELECT = "*"
@@ -59,6 +59,11 @@ def _player_base(row: dict[str, Any]) -> dict[str, Any]:
     matches_played = _int_or_none(row.get("matches_played"))
     if matches_played is None:
         matches_played = wins + losses
+    singles_wins = _int_or_none(row.get("singles_wins")) or 0
+    singles_losses = _int_or_none(row.get("singles_losses")) or 0
+    singles_matches_played = _int_or_none(row.get("singles_matches_played"))
+    if singles_matches_played is None:
+        singles_matches_played = singles_wins + singles_losses
     return {
         "id": _int_or_none(row.get("id")) or row.get("id"),
         "club_id": str(row.get("club_id") or ""),
@@ -67,6 +72,11 @@ def _player_base(row: dict[str, Any]) -> dict[str, Any]:
         "wins": wins,
         "losses": losses,
         "matches_played": matches_played,
+        "singles_rating": _float_or_none(row.get("singles_rating")),
+        "singles_wins": singles_wins,
+        "singles_losses": singles_losses,
+        "singles_matches_played": singles_matches_played,
+        "singles_last_game_at": _json_safe(row.get("singles_last_game_at")),
         "is_active": _is_active_player(row),
         "last_game_at": _json_safe(row.get("last_game_at")),
     }
@@ -230,6 +240,7 @@ def _public_match(row: dict[str, Any], name_by_id: dict[str, str], *, include_ra
         "league": row.get("league"),
         "week_tag": row.get("week_tag"),
         "match_type": row.get("match_type"),
+        "match_format": row.get("match_format") or "doubles",
         "rating_scope": row.get("rating_scope"),
         "context_type": row.get("context_type"),
         "context_id": row.get("context_id"),

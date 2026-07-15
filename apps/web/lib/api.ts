@@ -39,6 +39,11 @@ export type PublicPlayer = {
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
+  singles_rating?: number | null;
+  singles_wins?: number | null;
+  singles_losses?: number | null;
+  singles_matches_played?: number | null;
+  singles_last_game_at?: string | null;
   is_active?: boolean | null;
   last_game_at?: string | null;
 };
@@ -69,6 +74,7 @@ export type PublicMatch = {
   league?: string | null;
   week_tag?: string | null;
   match_type?: string | null;
+  match_format?: string | null;
   rating_scope?: string | null;
   context_type?: string | null;
   context_id?: string | null;
@@ -259,7 +265,7 @@ async function apiErrorMessage(response: Response): Promise<string> {
     if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
     if (detail) return `${fallback} ${String(detail)}`;
   } catch {
-    // Fall through to a short text excerpt below.
+    // Fall through to short text excerpt below.
   }
   return `${fallback} ${bodyText.slice(0, 240)}`;
 }

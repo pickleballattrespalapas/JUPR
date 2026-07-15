@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
-OPTIONAL_MATCH_INSERT_COLUMNS = ("rating_scope", "rating_bonus_elo", "rating_bonus_reason")
+OPTIONAL_MATCH_INSERT_COLUMNS = ("rating_scope", "rating_bonus_elo", "rating_bonus_reason", "match_format")
 
 
 def _safe_positive_float(value: Any) -> float:
@@ -15,20 +15,37 @@ def _safe_positive_float(value: Any) -> float:
         return 0.0
 
 
+def _maybe_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _normalize_match_format(value: Any) -> str:
+    clean = str(value or "").strip().lower()
+    if clean == "singles":
+        return "singles"
+    return "doubles"
+
+
 def build_match_row(
     *,
     club_id: str,
     dt_val: str,
     league_name: str,
-    pids: tuple[int, int, int, int],
+    pids: tuple[int | None, int | None, int | None, int | None],
     scores: tuple[int, int],
     stored_elo_delta: float,
     match_type: str,
     week_tag: str,
-    start_ratings: tuple[float, float, float, float],
-    end_ratings: tuple[float, float, float, float],
+    start_ratings: tuple[float | None, float | None, float | None, float | None],
+    end_ratings: tuple[float | None, float | None, float | None, float | None],
     context: dict[str, Any],
     rating_scope: str,
+    match_format: str | None = None,
 ) -> dict[str, Any]:
     p1, p2, p3, p4 = pids
     s1, s2 = scores
@@ -47,19 +64,20 @@ def build_match_row(
         "elo_delta": float(stored_elo_delta),
         "match_type": match_type,
         "week_tag": week_tag,
-        "t1_p1_r": float(ro1),
-        "t1_p2_r": float(ro2),
-        "t2_p1_r": float(ro3),
-        "t2_p2_r": float(ro4),
-        "t1_p1_r_end": float(end_r1),
-        "t1_p2_r_end": float(end_r2),
-        "t2_p1_r_end": float(end_r3),
-        "t2_p2_r_end": float(end_r4),
+        "t1_p1_r": _maybe_float(ro1),
+        "t1_p2_r": _maybe_float(ro2),
+        "t2_p1_r": _maybe_float(ro3),
+        "t2_p2_r": _maybe_float(ro4),
+        "t1_p1_r_end": _maybe_float(end_r1),
+        "t1_p2_r_end": _maybe_float(end_r2),
+        "t2_p1_r_end": _maybe_float(end_r3),
+        "t2_p2_r_end": _maybe_float(end_r4),
         "context_type": context.get("context_type"),
         "context_id": context.get("context_id"),
         "tournament_id": context.get("tournament_id"),
         "tournament_game_id": context.get("tournament_game_id"),
         "rating_scope": rating_scope,
+        "match_format": _normalize_match_format(match_format or context.get("match_format")),
     }
     bonus_elo = _safe_positive_float(context.get("rating_bonus_elo", context.get("winner_bonus_elo")))
     if bonus_elo > 0:
@@ -121,6 +139,7 @@ def insert_match_chunks_with_rating_scope_fallback(*, db_matches: list[dict[str,
             debug_payload = {
                 "club_id": sample.get("club_id"),
                 "league": sample.get("league"),
+                "match_format": sample.get("match_format"),
                 "t1_p1": sample.get("t1_p1"),
                 "t1_p2": sample.get("t1_p2"),
                 "t2_p1": sample.get("t2_p1"),

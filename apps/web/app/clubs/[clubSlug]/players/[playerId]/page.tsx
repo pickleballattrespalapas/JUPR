@@ -76,10 +76,6 @@ function teamLabel(clubSlug: string, players: Array<{ id?: string | number | nul
   ) : "—";
 }
 
-function plainTeamLabel(players: Array<{ name: string }>): string {
-  return players.map((p) => p.name).filter(Boolean).join(" / ") || "—";
-}
-
 function matchLabel(match: PublicMatch): string {
   const scoreA = match.score_t1 ?? null;
   const scoreB = match.score_t2 ?? null;
@@ -109,6 +105,8 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
 
   const wins = player.wins ?? 0;
   const losses = player.losses ?? 0;
+  const singlesWins = player.singles_wins ?? 0;
+  const singlesLosses = player.singles_losses ?? 0;
   const leagueRatings = data?.league_ratings ?? [];
   const matches = data?.recent_matches ?? [];
   const leagues = Array.from(new Set([...leagueRatings.map((row) => row.league_name).filter(Boolean), ...matches.map((match) => match.league).filter(Boolean)] as string[])).sort((a, b) => a.localeCompare(b));
@@ -122,7 +120,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
       </p>
       <h1 style={{ marginTop: 0 }}>{player.name}</h1>
       <p style={{ color: "#475569", maxWidth: "760px" }}>
-        Public rating, league-specific records, recent match history, and direct links into the surrounding club pages.
+        Public doubles/overall rating, singles rating, league-specific records, recent match history, and direct links into the surrounding club pages.
       </p>
 
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -139,11 +137,13 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-        <article style={cardStyle}><strong>Current rating</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.rating)}</div></article>
-        <article style={cardStyle}><strong>Matches</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.matches_played ?? wins + losses}</div></article>
-        <article style={cardStyle}><strong>Record</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{wins}/{losses}</div></article>
-        <article style={cardStyle}><strong>Win %</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{pctLabel(wins, losses)}</div></article>
-        <article style={cardStyle}><strong>Status</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.is_active === false ? "Inactive" : "Active"}</div></article>
+        <article style={cardStyle}><strong>Doubles / overall rating</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.rating)}</div></article>
+        <article style={cardStyle}><strong>Singles rating</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating)}</div></article>
+        <article style={cardStyle}><strong>Doubles matches</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.matches_played ?? wins + losses}</div></article>
+        <article style={cardStyle}><strong>Singles matches</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{player.singles_matches_played ?? singlesWins + singlesLosses}</div></article>
+        <article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{wins}/{losses}</div></article>
+        <article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{singlesWins}/{singlesLosses}</div></article>
+        <article style={cardStyle}><strong>Singles win %</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{pctLabel(singlesWins, singlesLosses)}</div></article>
         <article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "2rem", fontWeight: 800 }}>{dateLabel(player.last_game_at ?? lastMatch?.date)}</div></article>
       </div>
 
@@ -192,14 +192,15 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
           {filteredMatches.length === 0 ? <p style={{ color: "#475569" }}>No recent public matches yet.</p> : null}
           {filteredMatches.length > 0 ? (
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "760px" }}>
-                <thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>League</th></tr></thead>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "820px" }}>
+                <thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Format</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>League</th></tr></thead>
                 <tbody>
                   {filteredMatches.map((match, index) => {
                     const detailHref = match.id ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`;
                     return (
                       <tr key={`${match.id ?? index}`}>
                         <td style={tdStyle}>{match.id ? <Link href={detailHref}>{formatMatchDate(match.date)}</Link> : formatMatchDate(match.date)}</td>
+                        <td style={tdStyle}>{match.match_format === "singles" ? "Singles" : "Doubles"}</td>
                         <td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td>
                         <td style={tdStyle}>{match.id ? <Link href={detailHref}>{matchLabel(match)}</Link> : matchLabel(match)}</td>
                         <td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td>
