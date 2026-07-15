@@ -3,6 +3,7 @@ export type AdminTournamentStatusResponse = {
   status: string;
   tournaments_endpoint?: string | null;
   tournament_detail_endpoint?: string | null;
+  registration_update_endpoint?: string | null;
   tournament_count?: number | null;
   warnings: string[];
 };
@@ -29,6 +30,7 @@ export type AdminTournamentRegistration = {
   phone?: string | null;
   registration_status?: string | null;
   payment_status?: string | null;
+  notes?: string | null;
   wants_partner_board_contact?: boolean | null;
   selection_count?: number | null;
   created_at?: string | null;
@@ -58,6 +60,13 @@ export type AdminTournamentDetailResponse = {
     by_registration_status: Record<string, number>;
     by_payment_status: Record<string, number>;
   };
+  warnings?: string[];
+};
+
+export type AdminTournamentWriteResponse = {
+  ok: boolean;
+  mode?: string;
+  registration?: AdminTournamentRegistration | null;
   warnings?: string[];
 };
 
