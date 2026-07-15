@@ -153,6 +153,7 @@ export type AdminTournamentWriteResponse = {
   podium_source?: string;
   candidate_count?: number;
   awarded_count?: number;
+  import_mode?: string;
   updated_count?: number;
   registration_ids?: string[];
   skipped?: string[];
