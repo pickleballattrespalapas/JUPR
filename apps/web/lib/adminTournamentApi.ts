@@ -149,6 +149,9 @@ export type AdminTournamentWriteResponse = {
   game_count?: number;
   match_count?: number;
   tournament_game_ids?: string[];
+  playoff_winner_bonus_elo?: number;
+  bonus_match_count?: number;
+  bonus_tournament_game_ids?: string[];
   process_result?: Record<string, unknown>;
   advance_count?: number;
   standings?: Array<Record<string, unknown>>;
