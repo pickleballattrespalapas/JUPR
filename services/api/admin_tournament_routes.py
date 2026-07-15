@@ -9,6 +9,7 @@ from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permi
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tournament_award_service import award_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
+from jupr_app.services.admin_tournament_bulk_team_import_service import import_admin_tournament_bulk_teams
 from jupr_app.services.admin_tournament_delete_service import delete_admin_tournament_draft
 from jupr_app.services.admin_tournament_draw_service import create_admin_tournament_draw
 from jupr_app.services.admin_tournament_game_service import generate_admin_tournament_round_robin_games
@@ -17,14 +18,7 @@ from jupr_app.services.admin_tournament_playoff_service import generate_admin_to
 from jupr_app.services.admin_tournament_podium_service import generate_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_registration_import_service import import_admin_tournament_registrations_to_draw
 from jupr_app.services.admin_tournament_score_service import update_admin_tournament_game_score
-from jupr_app.services.admin_tournament_service import (
-    build_admin_tournament_status,
-    get_admin_tournament_detail,
-    is_admin_tournament_admin_enabled,
-    list_admin_tournaments,
-    update_admin_tournament_registration,
-    update_admin_tournament_selection,
-)
+from jupr_app.services.admin_tournament_service import build_admin_tournament_status, get_admin_tournament_detail, is_admin_tournament_admin_enabled, list_admin_tournaments, update_admin_tournament_registration, update_admin_tournament_selection
 from jupr_app.services.admin_tournament_status_service import apply_admin_tournament_status_action
 from jupr_app.services.admin_tournament_team_service import replace_admin_tournament_draw_teams
 from services.api.auth import authenticate_bearer, auth_header
@@ -87,6 +81,13 @@ class AdminTournamentRegistrationImportRequest(BaseModel):
     source: str = "next_tournament_admin_import_registrations"
 
 
+class AdminTournamentBulkTeamImportRequest(BaseModel):
+    raw_text: str = ""
+    import_mode: str = "REPLACE"
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_import_bulk_teams"
+
+
 class AdminTournamentRoundRobinGenerateRequest(BaseModel):
     confirmation_text: str = ""
     source: str = "next_tournament_admin_generate_round_robin"
@@ -142,6 +143,16 @@ def _resolve_tournament_role_or_403(*, supabase: Any, club_id: str, authorizatio
     return user.email, role_resolution.role
 
 
+def _handle(exc: Exception) -> None:
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    raise exc
+
+
 def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
     """Register guarded Tournament Admin routes for the Next admin pilot."""
 
@@ -154,228 +165,121 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
     def get_admin_tournaments(club_id: str, include_archived: bool = Query(default=False), authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
-        supabase = get_supabase_client()
-        _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_tournament_admin_list")
-        try:
-            return list_admin_tournaments(supabase, club_id=str(club_id), include_archived=bool(include_archived))
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        supabase = get_supabase_client(); _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_tournament_admin_list")
+        try: return list_admin_tournaments(supabase, club_id=str(club_id), include_archived=bool(include_archived))
+        except Exception as exc: _handle(exc)
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/ops")
     def get_admin_tournament_ops(club_id: str, tournament_id: str, draw_id: str | None = Query(default=None), authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
-        supabase = get_supabase_client()
-        _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_tournament_admin_ops")
-        try:
-            return get_admin_tournament_ops_snapshot(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=draw_id)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        supabase = get_supabase_client(); _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_tournament_admin_ops")
+        try: return get_admin_tournament_ops_snapshot(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=draw_id)
+        except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws")
     def post_admin_tournament_draw(club_id: str, tournament_id: str, payload: AdminTournamentDrawCreateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return create_admin_tournament_draw(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_day_id=payload.registration_day_id, event_option_id=payload.event_option_id, name=payload.name, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return create_admin_tournament_draw(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_day_id=payload.registration_day_id, event_option_id=payload.event_option_id, name=payload.name, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.put("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams")
     def put_admin_tournament_draw_teams(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentDrawTeamsReplaceRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            teams = [_dump_model(team) for team in payload.teams]
-            return replace_admin_tournament_draw_teams(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), teams=teams, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return replace_admin_tournament_draw_teams(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), teams=[_dump_model(team) for team in payload.teams], actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations")
     def post_admin_tournament_registration_team_import(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentRegistrationImportRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return import_admin_tournament_registrations_to_draw(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), import_mode=payload.import_mode, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return import_admin_tournament_registrations_to_draw(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), import_mode=payload.import_mode, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-bulk")
+    def post_admin_tournament_bulk_team_import(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentBulkTeamImportRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try: return import_admin_tournament_bulk_teams(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), raw_text=payload.raw_text, import_mode=payload.import_mode, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin")
     def post_admin_tournament_round_robin_games(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentRoundRobinGenerateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return generate_admin_tournament_round_robin_games(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return generate_admin_tournament_round_robin_games(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/playoffs")
     def post_admin_tournament_playoff_games(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentPlayoffGenerateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return generate_admin_tournament_playoff_games(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), advance_count=payload.advance_count, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return generate_admin_tournament_playoff_games(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), advance_count=payload.advance_count, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium")
     def post_admin_tournament_draw_podium(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentPodiumGenerateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return generate_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return generate_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium/awards")
     def post_admin_tournament_draw_podium_awards(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentPodiumAwardRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return award_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return award_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/games/{game_id}/score")
     def patch_admin_tournament_game_score(club_id: str, tournament_id: str, game_id: str, payload: AdminTournamentGameScoreRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return update_admin_tournament_game_score(supabase, club_id=str(club_id), tournament_id=str(tournament_id), game_id=str(game_id), score_a=payload.score_a, score_b=payload.score_b, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return update_admin_tournament_game_score(supabase, club_id=str(club_id), tournament_id=str(tournament_id), game_id=str(game_id), score_a=payload.score_a, score_b=payload.score_b, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/status-action")
     def patch_admin_tournament_status_action(club_id: str, tournament_id: str, payload: AdminTournamentStatusActionRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return apply_admin_tournament_status_action(supabase, club_id=str(club_id), tournament_id=str(tournament_id), action=payload.action, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return apply_admin_tournament_status_action(supabase, club_id=str(club_id), tournament_id=str(tournament_id), action=payload.action, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/delete-draft")
     def post_admin_tournament_delete_draft(club_id: str, tournament_id: str, payload: AdminTournamentDeleteDraftRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        try:
-            return delete_admin_tournament_draft(supabase, club_id=str(club_id), tournament_id=str(tournament_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return delete_admin_tournament_draft(supabase, club_id=str(club_id), tournament_id=str(tournament_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc: _handle(exc)
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}")
     def get_admin_tournament(club_id: str, tournament_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client(); _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_tournament_admin_detail")
-        try:
-            return get_admin_tournament_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try: return get_admin_tournament_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
+        except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc: _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/bulk")
     def patch_admin_tournament_registrations_bulk(club_id: str, tournament_id: str, payload: AdminTournamentRegistrationBulkUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
-        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text)); registration_ids = list(patch.pop("registration_ids", payload.registration_ids) or [])
-        try:
-            return bulk_update_admin_tournament_registrations(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_ids=registration_ids, patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source); patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text)); registration_ids = list(patch.pop("registration_ids", payload.registration_ids) or [])
+        try: return bulk_update_admin_tournament_registrations(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_ids=registration_ids, patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+        except Exception as exc: _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}")
     def patch_admin_tournament_registration(club_id: str, tournament_id: str, registration_id: str, payload: AdminTournamentRegistrationUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
-        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
-        try:
-            return update_admin_tournament_registration(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_id=str(registration_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source); patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        try: return update_admin_tournament_registration(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_id=str(registration_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+        except Exception as exc: _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}")
     def patch_admin_tournament_selection(club_id: str, tournament_id: str, selection_id: str, payload: AdminTournamentSelectionUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
-        if not is_admin_tournament_admin_enabled():
-            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
-        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
-        patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
-        try:
-            return update_admin_tournament_selection(supabase, club_id=str(club_id), tournament_id=str(tournament_id), selection_id=str(selection_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if not is_admin_tournament_admin_enabled(): raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client(); actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source); patch = _dump_model(payload); source = str(patch.pop("source", payload.source)); confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        try: return update_admin_tournament_selection(supabase, club_id=str(club_id), tournament_id=str(tournament_id), selection_id=str(selection_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+        except Exception as exc: _handle(exc)
