@@ -1,0 +1,109 @@
+export type AdminTournamentStatusResponse = {
+  enabled: boolean;
+  status: string;
+  tournaments_endpoint?: string | null;
+  tournament_detail_endpoint?: string | null;
+  tournament_count?: number | null;
+  warnings: string[];
+};
+
+export type AdminTournament = {
+  id: string;
+  name: string;
+  status: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  registration_slug?: string | null;
+  registration_status?: string | null;
+  registration_count?: number | null;
+  selection_count?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AdminTournamentRegistration = {
+  id: string;
+  player_id?: string | number | null;
+  display_name: string;
+  email?: string | null;
+  phone?: string | null;
+  registration_status?: string | null;
+  payment_status?: string | null;
+  wants_partner_board_contact?: boolean | null;
+  selection_count?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type AdminTournamentListResponse = {
+  ok: boolean;
+  mode?: string;
+  tournaments: AdminTournament[];
+  count: number;
+  warnings?: string[];
+};
+
+export type AdminTournamentDetailResponse = {
+  ok: boolean;
+  mode?: string;
+  tournament: AdminTournament;
+  settings?: Record<string, unknown>;
+  days: Array<Record<string, unknown>>;
+  event_options: Array<Record<string, unknown>>;
+  registrations: AdminTournamentRegistration[];
+  selections: Array<Record<string, unknown>>;
+  summary: {
+    registrations: number;
+    selections: number;
+    by_registration_status: Record<string, number>;
+    by_payment_status: Record<string, number>;
+  };
+  warnings?: string[];
+};
+
+type ApiResult<T> = { data: T | null; error: string | null };
+
+function baseUrl(): string | null {
+  return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
+}
+
+export function getAdminTournamentApiBaseUrl(): string | null {
+  return baseUrl();
+}
+
+async function apiErrorMessage(response: Response): Promise<string> {
+  const fallback = `API error (${response.status}).`;
+  let bodyText = "";
+  try {
+    bodyText = await response.text();
+  } catch {
+    return fallback;
+  }
+  if (!bodyText) return fallback;
+  try {
+    const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
+    const detail = payload.detail ?? payload.message ?? payload.error;
+    if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
+    if (detail) return `${fallback} ${String(detail)}`;
+  } catch {
+    // Fall through to short text excerpt below.
+  }
+  return `${fallback} ${bodyText.slice(0, 240)}`;
+}
+
+async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
+  const apiBase = baseUrl();
+  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
+  const url = `${apiBase.replace(/\/$/, "")}${path}`;
+  try {
+    const response = await fetch(url, { next: { revalidate: 30 } });
+    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
+    return { data: (await response.json()) as T, error: null };
+  } catch (error) {
+    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+  }
+}
+
+export async function getAdminTournamentStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentStatusResponse>> {
+  return fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status`);
+}

@@ -8,6 +8,7 @@ from services.api.admin_match_log_routes import install_admin_match_log_routes
 from services.api.admin_match_uploader_routes import install_admin_match_uploader_routes
 from services.api.admin_player_editor_routes import install_admin_player_editor_routes
 from services.api.admin_replay_routes import install_admin_replay_routes
+from services.api.admin_tournament_routes import install_admin_tournament_routes
 
 
 def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
@@ -23,3 +24,4 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
         install_admin_match_uploader_routes(app, get_supabase_client=get_supabase_client)
         install_admin_player_editor_routes(app, get_supabase_client=get_supabase_client)
         install_admin_league_manager_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_tournament_routes(app, get_supabase_client=get_supabase_client)
