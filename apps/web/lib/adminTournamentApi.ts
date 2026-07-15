@@ -4,6 +4,7 @@ export type AdminTournamentStatusResponse = {
   tournaments_endpoint?: string | null;
   tournament_detail_endpoint?: string | null;
   registration_update_endpoint?: string | null;
+  selection_update_endpoint?: string | null;
   tournament_count?: number | null;
   warnings: string[];
 };
@@ -37,6 +38,22 @@ export type AdminTournamentRegistration = {
   updated_at?: string | null;
 };
 
+export type AdminTournamentSelection = {
+  id: string;
+  registration_id: string;
+  registration_day_id?: string | null;
+  event_option_id?: string | null;
+  event_label?: string | null;
+  partner_mode?: string | null;
+  partner_name?: string | null;
+  partner_email?: string | null;
+  partner_phone?: string | null;
+  partner_note?: string | null;
+  show_on_partner_board?: boolean | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type AdminTournamentListResponse = {
   ok: boolean;
   mode?: string;
@@ -53,7 +70,7 @@ export type AdminTournamentDetailResponse = {
   days: Array<Record<string, unknown>>;
   event_options: Array<Record<string, unknown>>;
   registrations: AdminTournamentRegistration[];
-  selections: Array<Record<string, unknown>>;
+  selections: AdminTournamentSelection[];
   summary: {
     registrations: number;
     selections: number;
@@ -67,6 +84,7 @@ export type AdminTournamentWriteResponse = {
   ok: boolean;
   mode?: string;
   registration?: AdminTournamentRegistration | null;
+  selection?: AdminTournamentSelection | null;
   warnings?: string[];
 };
 

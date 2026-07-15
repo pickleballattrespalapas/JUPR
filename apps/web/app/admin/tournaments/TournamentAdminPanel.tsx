@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import type { AdminTournament, AdminTournamentDetailResponse, AdminTournamentListResponse, AdminTournamentRegistration, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
+import type {
+  AdminTournament,
+  AdminTournamentDetailResponse,
+  AdminTournamentListResponse,
+  AdminTournamentRegistration,
+  AdminTournamentSelection,
+  AdminTournamentStatusResponse,
+  AdminTournamentWriteResponse
+} from "@/lib/adminTournamentApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
@@ -18,8 +26,19 @@ type RegistrationEdit = {
   confirm: string;
 };
 
+type SelectionEdit = {
+  eventOptionId: string;
+  partnerMode: string;
+  partnerName: string;
+  partnerEmail: string;
+  partnerPhone: string;
+  partnerNote: string;
+  confirm: string;
+};
+
 const REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"];
 const PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"];
+const PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"];
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
@@ -50,11 +69,30 @@ function StatusChip({ value }: { value?: string | null }) {
   return <span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.5rem", fontSize: "0.78rem", ...statusStyle(value) }}>{value || "—"}</span>;
 }
 
+function eventOptionLabel(row: Record<string, unknown>): string {
+  const family = String(row.event_family_label || "").trim();
+  const division = String(row.division_name || row.label || "").trim();
+  if (family && division && family !== division) return `${family} / ${division}`;
+  return division || family || String(row.id || "Event");
+}
+
 function editStateFromRegistration(row: AdminTournamentRegistration | null): RegistrationEdit {
   return {
     registrationStatus: row?.registration_status || "confirmed",
     paymentStatus: row?.payment_status || "unpaid",
     notes: row?.notes || "",
+    confirm: ""
+  };
+}
+
+function editStateFromSelection(row: AdminTournamentSelection | null): SelectionEdit {
+  return {
+    eventOptionId: row?.event_option_id || "",
+    partnerMode: row?.partner_mode || "NONE",
+    partnerName: row?.partner_name || "",
+    partnerEmail: row?.partner_email || "",
+    partnerPhone: row?.partner_phone || "",
+    partnerNote: row?.partner_note || "",
     confirm: ""
   };
 }
@@ -66,10 +104,14 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
   const [selectedRegistrationId, setSelectedRegistrationId] = useState("");
+  const [selectedSelectionId, setSelectedSelectionId] = useState("");
   const [registrationEdit, setRegistrationEdit] = useState<RegistrationEdit>(() => editStateFromRegistration(null));
+  const [selectionEdit, setSelectionEdit] = useState<SelectionEdit>(() => editStateFromSelection(null));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selectedRegistration = detail?.registrations.find((row) => row.id === selectedRegistrationId) || null;
+  const registrationSelections = (detail?.selections || []).filter((row) => row.registration_id === selectedRegistrationId);
+  const selectedSelection = registrationSelections.find((row) => row.id === selectedSelectionId) || null;
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -83,11 +125,16 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     return payload as T;
   }
 
+  async function refreshDetail(tournamentId: string): Promise<AdminTournamentDetailResponse> {
+    return requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`);
+  }
+
   async function loadTournaments() {
     setBusy(true);
     setMessage(null);
     setDetail(null);
     setSelectedRegistrationId("");
+    setSelectedSelectionId("");
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
       const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments${suffix}`);
@@ -105,10 +152,11 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     setDetail(null);
     setMessage(null);
     setSelectedRegistrationId("");
+    setSelectedSelectionId("");
     if (!tournamentId) return;
     setBusy(true);
     try {
-      const payload = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`);
+      const payload = await refreshDetail(tournamentId);
       setDetail(payload);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load tournament detail.");
@@ -120,6 +168,16 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
   function selectRegistration(row: AdminTournamentRegistration) {
     setSelectedRegistrationId(row.id);
     setRegistrationEdit(editStateFromRegistration(row));
+    const firstSelection = (detail?.selections || []).find((selection) => selection.registration_id === row.id) || null;
+    setSelectedSelectionId(firstSelection?.id || "");
+    setSelectionEdit(editStateFromSelection(firstSelection));
+    setMessage(null);
+  }
+
+  function selectSelection(selectionId: string) {
+    const nextSelection = registrationSelections.find((row) => row.id === selectionId) || null;
+    setSelectedSelectionId(selectionId);
+    setSelectionEdit(editStateFromSelection(nextSelection));
     setMessage(null);
   }
 
@@ -144,16 +202,49 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
           })
         }
       );
-      if (payload.registration) {
-        setDetail((current) => current ? { ...current, registrations: current.registrations.map((row) => row.id === payload.registration?.id ? payload.registration : row) } : current);
-        setRegistrationEdit(editStateFromRegistration(payload.registration));
-      }
-      const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}`);
+      const refreshed = await refreshDetail(detail.tournament.id);
       setDetail(refreshed);
       setSelectedRegistrationId(payload.registration?.id || selectedRegistration.id);
+      setRegistrationEdit(editStateFromRegistration(payload.registration || selectedRegistration));
       setMessage("Registration saved and audit-flagged for review.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save registration.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSelectionEdit() {
+    if (!detail || !selectedSelection) {
+      setMessage("Select an event entry before saving.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}/selections/${encodeURIComponent(selectedSelection.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            event_option_id: selectionEdit.eventOptionId,
+            partner_mode: selectionEdit.partnerMode,
+            partner_name: selectionEdit.partnerName,
+            partner_email: selectionEdit.partnerEmail,
+            partner_phone: selectionEdit.partnerPhone,
+            partner_note: selectionEdit.partnerNote,
+            confirmation_text: selectionEdit.confirm,
+            source: "next_tournament_admin_selection_editor"
+          })
+        }
+      );
+      const refreshed = await refreshDetail(detail.tournament.id);
+      setDetail(refreshed);
+      setSelectedSelectionId(payload.selection?.id || selectedSelection.id);
+      setSelectionEdit(editStateFromSelection(payload.selection || selectedSelection));
+      setMessage("Event entry saved and audit-flagged for review.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save event entry.");
     } finally {
       setBusy(false);
     }
@@ -173,7 +264,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Admin session</h2>
         <p style={{ color: "#475569" }}>
-          This workflow loads tournament setup, registration summaries, event options, and registrants through FastAPI. Registration status and payment status edits are guarded by role checks, audit logging, and explicit confirmation text.
+          This workflow loads tournament setup, registration summaries, event options, and registrants through FastAPI. Registration and event-entry edits are guarded by role checks, audit logging, and explicit confirmation text.
         </p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
@@ -254,6 +345,47 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
               <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 <button type="button" onClick={saveRegistrationEdit} disabled={busy || !accessToken || registrationEdit.confirm.trim().toUpperCase() !== "SAVE REGISTRATION"} style={buttonStyle}>{busy ? "Saving…" : "Save registration"}</button>
                 <button type="button" onClick={() => selectedRegistration ? setRegistrationEdit(editStateFromRegistration(selectedRegistration)) : undefined} disabled={busy} style={ghostButtonStyle}>Reset fields</button>
+              </p>
+            </article>
+          ) : null}
+
+          {selectedRegistration && registrationSelections.length ? (
+            <article style={{ ...cardStyle, background: "#f8fafc" }}>
+              <h2 style={{ marginTop: 0 }}>Edit event entry / partner</h2>
+              <p style={{ color: "#475569" }}>
+                Move the selected registration entry to another division or update partner-board fields. Type <code>SAVE SELECTION</code> to confirm. Entries already imported into a draw cannot be moved.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
+                <label><strong>Event entry</strong><br />
+                  <select value={selectedSelectionId} onChange={(event) => selectSelection(event.target.value)} style={inputStyle}>
+                    <option value="">Choose an entry…</option>
+                    {registrationSelections.map((selection) => <option key={selection.id} value={selection.id}>{selection.event_label || selection.event_option_id || selection.id}</option>)}
+                  </select>
+                </label>
+                <label><strong>Division</strong><br />
+                  <select value={selectionEdit.eventOptionId} onChange={(event) => setSelectionEdit((current) => ({ ...current, eventOptionId: event.target.value }))} style={inputStyle}>
+                    <option value="">Choose a division…</option>
+                    {detail.event_options.map((eventOption) => <option key={String(eventOption.id)} value={String(eventOption.id)}>{eventOptionLabel(eventOption)}</option>)}
+                  </select>
+                </label>
+                <label><strong>Partner mode</strong><br />
+                  <select value={selectionEdit.partnerMode} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerMode: event.target.value }))} style={inputStyle}>
+                    {PARTNER_MODE_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </label>
+                <label><strong>Type SAVE SELECTION</strong><br />
+                  <input value={selectionEdit.confirm} onChange={(event) => setSelectionEdit((current) => ({ ...current, confirm: event.target.value }))} style={inputStyle} />
+                </label>
+                <label><strong>Partner name</strong><br /><input value={selectionEdit.partnerName} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerName: event.target.value }))} style={inputStyle} /></label>
+                <label><strong>Partner email</strong><br /><input value={selectionEdit.partnerEmail} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerEmail: event.target.value }))} style={inputStyle} /></label>
+                <label><strong>Partner phone</strong><br /><input value={selectionEdit.partnerPhone} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerPhone: event.target.value }))} style={inputStyle} /></label>
+              </div>
+              <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Partner note</strong><br />
+                <textarea value={selectionEdit.partnerNote} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerNote: event.target.value }))} rows={3} style={inputStyle} />
+              </label>
+              <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button type="button" onClick={saveSelectionEdit} disabled={busy || !accessToken || !selectedSelection || selectionEdit.confirm.trim().toUpperCase() !== "SAVE SELECTION"} style={buttonStyle}>{busy ? "Saving…" : "Save event entry"}</button>
+                <button type="button" onClick={() => selectedSelection ? setSelectionEdit(editStateFromSelection(selectedSelection)) : undefined} disabled={busy} style={ghostButtonStyle}>Reset fields</button>
               </p>
             </article>
           ) : null}
