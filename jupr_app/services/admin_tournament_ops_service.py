@@ -39,11 +39,28 @@ def _table_rows(supabase: Any, table_name: str, *, tournament_id: str, limit: in
         return [], [f"{table_name} unavailable: {exc.__class__.__name__}"]
 
 
-def _maybe_filter_draw_id(rows: list[dict[str, Any]], draw_id: str | None) -> list[dict[str, Any]]:
-    if not draw_id:
-        return rows
-    clean_draw_id = str(draw_id)
-    return [row for row in rows if str(row.get("draw_id") or row.get("id") or "") == clean_draw_id]
+def _player_options(supabase: Any, *, club_id: str) -> tuple[list[dict[str, Any]], list[str]]:
+    try:
+        rows = _safe_rows(
+            supabase.table("players")
+            .select("id,name,active,is_active")
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - player options are helpful but not required for the ops snapshot
+        return [], [f"players unavailable: {exc.__class__.__name__}"]
+    players: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            player_id = int(float(row.get("id")))
+        except Exception:
+            continue
+        name = _clean_text(row.get("name"), limit=160)
+        if not name:
+            continue
+        active_value = row.get("active", row.get("is_active", True))
+        players.append({"id": player_id, "name": name, "active": bool(active_value)})
+    return sorted(players, key=lambda row: str(row.get("name") or "").lower()), []
 
 
 def _sort_rows(rows: list[dict[str, Any]], *keys: str) -> list[dict[str, Any]]:
@@ -74,7 +91,8 @@ def get_admin_tournament_ops_snapshot(
     teams, team_warnings = _table_rows(supabase, OPS_TABLES["teams"], tournament_id=clean_tournament_id)
     games, game_warnings = _table_rows(supabase, OPS_TABLES["games"], tournament_id=clean_tournament_id)
     podium, podium_warnings = _table_rows(supabase, OPS_TABLES["podium"], tournament_id=clean_tournament_id)
-    warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings])
+    players, player_warnings = _player_options(supabase, club_id=str(club_id))
+    warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings, *player_warnings])
 
     clean_draw_id = _clean_text(draw_id, limit=120) or None
     if clean_draw_id:
@@ -104,5 +122,6 @@ def get_admin_tournament_ops_snapshot(
         "teams": teams,
         "games": games,
         "podium": podium,
+        "players": players,
         "warnings": warnings,
     }

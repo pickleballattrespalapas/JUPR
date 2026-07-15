@@ -20,6 +20,7 @@ from jupr_app.services.admin_tournament_service import (
     update_admin_tournament_selection,
 )
 from jupr_app.services.admin_tournament_status_service import apply_admin_tournament_status_action
+from jupr_app.services.admin_tournament_team_service import replace_admin_tournament_draw_teams
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -57,6 +58,21 @@ class AdminTournamentDrawCreateRequest(BaseModel):
     name: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_create_draw"
+
+
+class AdminTournamentDrawTeamRow(BaseModel):
+    team_number: int
+    player1_id: int
+    player2_id: int | None = None
+    seed: int | None = None
+    source: str | None = "MANUAL"
+    notes: str | None = None
+
+
+class AdminTournamentDrawTeamsReplaceRequest(BaseModel):
+    teams: list[AdminTournamentDrawTeamRow] = Field(default_factory=list)
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_replace_teams"
 
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
@@ -188,6 +204,43 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 registration_day_id=payload.registration_day_id,
                 event_option_id=payload.event_option_id,
                 name=payload.name,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.put("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams")
+    def put_admin_tournament_draw_teams(
+        club_id: str,
+        tournament_id: str,
+        draw_id: str,
+        payload: AdminTournamentDrawTeamsReplaceRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            teams = [_dump_model(team) for team in payload.teams]
+            return replace_admin_tournament_draw_teams(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                draw_id=str(draw_id),
+                teams=teams,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
