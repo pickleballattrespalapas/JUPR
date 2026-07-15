@@ -40,6 +40,39 @@ def tournament_scoring_tables():
     }
 
 
+def tournament_playoff_scoring_tables():
+    return {
+        "tournaments": [{"club_id": "club", "id": "tour_1", "name": "Spring Classic", "status": "PUBLISHED"}],
+        "tournament_games": [
+            {
+                "id": "p1",
+                "tournament_id": "tour_1",
+                "draw_id": "draw_1",
+                "stage": "PLAYOFF",
+                "playoff_game_code": "P1",
+                "playoff_round": "SF",
+                "team_a_id": "team_1",
+                "team_b_id": "team_4",
+                "team_a_source": {"seed": 1},
+                "team_b_source": {"seed": 4},
+            },
+            {
+                "id": "p3",
+                "tournament_id": "tour_1",
+                "draw_id": "draw_1",
+                "stage": "PLAYOFF",
+                "playoff_game_code": "P3",
+                "playoff_round": "Final",
+                "team_a_id": None,
+                "team_b_id": None,
+                "team_a_source": {"winnerOf": "P1"},
+                "team_b_source": {"winnerOf": "P2"},
+            },
+        ],
+        "admin_activity_log": [],
+    }
+
+
 def _install_auth(monkeypatch):
     monkeypatch.setattr(
         "services.api.admin_tournament_routes.authenticate_bearer",
@@ -69,14 +102,38 @@ def test_admin_tournament_round_robin_score_contract(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["mode"] == "tournament_round_robin_score"
+    assert payload["mode"] == "tournament_game_score"
     assert payload["game"]["score_a"] == 11
     assert payload["game"]["score_b"] == 7
     assert payload["game"]["winner_team_id"] == "team_1"
     assert payload["game"]["loser_team_id"] == "team_2"
     assert tables["tournament_games"][0]["winner_team_id"] == "team_1"
-    assert tables["admin_activity_log"][0]["action_type"] == "score_tournament_round_robin_game_admin"
+    assert tables["admin_activity_log"][0]["action_type"] == "score_tournament_game_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_tournament_playoff_score_updates_dependencies(monkeypatch):
+    tables = tournament_playoff_scoring_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/games/p1/score",
+        headers={"Authorization": "Bearer local"},
+        json={"score_a": 11, "score_b": 5, "confirmation_text": "SAVE SCORE"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["game"]["winner_team_id"] == "team_1"
+    assert payload["dependency_updates"][0]["id"] == "p3"
+    assert payload["dependency_updates"][0]["team_a_id"] == "team_1"
+    assert tables["tournament_games"][1]["team_a_id"] == "team_1"
 
 
 def test_admin_tournament_round_robin_score_blocks_ties(monkeypatch):
