@@ -17,6 +17,17 @@ from jupr_app.services.admin_tournament_service import (
 )
 
 CONFIRM_PUBLISH_MATCHES = "PUBLISH MATCHES"
+MAX_PLAYOFF_WINNER_BONUS_ELO = 40.0
+BONUS_PLAYOFF_ROUNDS = {
+    "SF": "semifinal",
+    "SEMIFINAL": "semifinal",
+    "SEMIFINALS": "semifinal",
+    "BRONZE": "bronze",
+    "BRONZE MEDAL MATCH": "bronze",
+    "FINAL": "gold",
+    "GOLD": "gold",
+    "GOLD MEDAL MATCH": "gold",
+}
 
 
 def _now_iso() -> str:
@@ -35,6 +46,15 @@ def _safe_int(value: Any) -> int | None:
         return None
     try:
         return int(float(value))
+    except Exception:
+        return None
+
+
+def _safe_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
     except Exception:
         return None
 
@@ -178,6 +198,24 @@ def _validate_scored_game(game: dict[str, Any], *, game_index: int) -> tuple[int
     return int(score_a), int(score_b)
 
 
+def _validate_bonus_elo(value: Any) -> float:
+    bonus = _safe_float(value)
+    if bonus is None:
+        return 0.0
+    if bonus < 0:
+        raise ValueError("Playoff winner bonus cannot be negative.")
+    if bonus > MAX_PLAYOFF_WINNER_BONUS_ELO:
+        raise ValueError(f"Playoff winner bonus is capped at {MAX_PLAYOFF_WINNER_BONUS_ELO:g} Elo points per winning player.")
+    return float(bonus)
+
+
+def _bonus_label_for_game(game: dict[str, Any]) -> str | None:
+    if _clean_text(game.get("stage"), limit=80).upper() != "PLAYOFF":
+        return None
+    round_key = _clean_text(game.get("playoff_round"), limit=80).upper()
+    return BONUS_PLAYOFF_ROUNDS.get(round_key)
+
+
 def _build_official_match_payloads(
     *,
     tournament: dict[str, Any],
@@ -185,12 +223,14 @@ def _build_official_match_payloads(
     event_option: dict[str, Any] | None,
     teams: list[dict[str, Any]],
     games: list[dict[str, Any]],
+    playoff_winner_bonus_elo: float = 0.0,
 ) -> list[dict[str, Any]]:
     teams_by_id = {str(row.get("id")): row for row in teams if row.get("id")}
     tournament_name = _clean_text(tournament.get("name"), limit=160) or "Tournament"
     division_label = _division_label(event_option, draw)
     league_name = f"Tournament · {tournament_name} · {division_label}"
     week_tag = _clean_text(draw.get("name"), limit=120) or division_label
+    bonus_elo = _validate_bonus_elo(playoff_winner_bonus_elo)
 
     payloads: list[dict[str, Any]] = []
     for index, game in enumerate(games, start=1):
@@ -203,25 +243,30 @@ def _build_official_match_payloads(
         b1, b2 = _safe_int(team_b.get("player1_id")), _safe_int(team_b.get("player2_id"))
         if a1 is None or a2 is None or b1 is None or b2 is None:
             raise ValueError("Official match publishing currently requires doubles teams with two linked JUPR players per team.")
-        payloads.append(
-            {
-                "date": _published_date(tournament, draw, game),
-                "league": league_name,
-                "week_tag": week_tag,
-                "match_type": "Tournament",
-                "t1_p1": a1,
-                "t1_p2": a2,
-                "t2_p1": b1,
-                "t2_p2": b2,
-                "score_t1": score_a,
-                "score_t2": score_b,
-                "context_type": "tournament_game",
-                "context_id": _clean_text(game.get("id"), limit=120),
-                "tournament_id": _clean_text(tournament.get("id"), limit=120),
-                "tournament_game_id": _clean_text(game.get("id"), limit=120),
-                "rating_scope": "",
-            }
-        )
+        payload = {
+            "date": _published_date(tournament, draw, game),
+            "league": league_name,
+            "week_tag": week_tag,
+            "match_type": "Tournament",
+            "t1_p1": a1,
+            "t1_p2": a2,
+            "t2_p1": b1,
+            "t2_p2": b2,
+            "score_t1": score_a,
+            "score_t2": score_b,
+            "context_type": "tournament_game",
+            "context_id": _clean_text(game.get("id"), limit=120),
+            "tournament_id": _clean_text(tournament.get("id"), limit=120),
+            "tournament_game_id": _clean_text(game.get("id"), limit=120),
+            "rating_scope": "",
+        }
+        bonus_label = _bonus_label_for_game(game)
+        if bonus_elo > 0 and bonus_label:
+            payload["winner_bonus_elo"] = bonus_elo
+            payload["winner_bonus_reason"] = f"tournament_{bonus_label}_winner_bonus"
+            payload["rating_bonus_elo"] = bonus_elo
+            payload["rating_bonus_reason"] = f"tournament_{bonus_label}_winner_bonus"
+        payloads.append(payload)
     return payloads
 
 
@@ -234,6 +279,7 @@ def publish_admin_tournament_draw_matches(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    playoff_winner_bonus_elo: Any = 0.0,
     source: str = "next_tournament_admin_publish_matches",
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
@@ -243,6 +289,7 @@ def publish_admin_tournament_draw_matches(
 
     clean_tournament_id = _clean_text(tournament_id, limit=120)
     clean_draw_id = _clean_text(draw_id, limit=120)
+    bonus_elo = _validate_bonus_elo(playoff_winner_bonus_elo)
     tournament = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id)
     if not tournament or str(tournament.get("club_id") or "") != str(club_id):
         raise ValueError("tournament not found")
@@ -276,7 +323,9 @@ def publish_admin_tournament_draw_matches(
         event_option=event_option,
         teams=teams,
         games=games,
+        playoff_winner_bonus_elo=bonus_elo,
     )
+    bonus_game_ids = [str(payload.get("tournament_game_id")) for payload in match_payloads if _safe_float(payload.get("winner_bonus_elo"))]
 
     df_players_all = _table_frame(supabase, "players", club_id=str(club_id))
     df_leagues = _table_frame(supabase, "league_ratings", club_id=str(club_id))
@@ -308,6 +357,8 @@ def publish_admin_tournament_draw_matches(
             "draw": _draw_payload(draw),
             "match_count": inserted_count,
             "tournament_game_ids": game_ids,
+            "playoff_winner_bonus_elo": bonus_elo,
+            "bonus_tournament_game_ids": bonus_game_ids,
             "process_result": process_result,
         },
         source_page=source,
@@ -327,6 +378,9 @@ def publish_admin_tournament_draw_matches(
         "match_count": inserted_count,
         "game_count": len(games),
         "tournament_game_ids": game_ids,
+        "playoff_winner_bonus_elo": bonus_elo,
+        "bonus_match_count": len(bonus_game_ids),
+        "bonus_tournament_game_ids": bonus_game_ids,
         "process_result": process_result,
         "warnings": warnings,
     }
