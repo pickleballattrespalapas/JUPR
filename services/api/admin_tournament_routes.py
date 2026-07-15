@@ -9,6 +9,7 @@ from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permi
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
 from jupr_app.services.admin_tournament_delete_service import delete_admin_tournament_draft
+from jupr_app.services.admin_tournament_draw_service import create_admin_tournament_draw
 from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_ops_snapshot
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_status,
@@ -48,6 +49,14 @@ class AdminTournamentStatusActionRequest(BaseModel):
 class AdminTournamentDeleteDraftRequest(BaseModel):
     confirmation_text: str = ""
     source: str = "next_tournament_admin_delete_draft"
+
+
+class AdminTournamentDrawCreateRequest(BaseModel):
+    registration_day_id: str | None = None
+    event_option_id: str | None = None
+    name: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_create_draw"
 
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
@@ -152,6 +161,42 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws")
+    def post_admin_tournament_draw(
+        club_id: str,
+        tournament_id: str,
+        payload: AdminTournamentDrawCreateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return create_admin_tournament_draw(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                registration_day_id=payload.registration_day_id,
+                event_option_id=payload.event_option_id,
+                name=payload.name,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
