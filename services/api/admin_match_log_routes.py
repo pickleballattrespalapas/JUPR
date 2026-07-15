@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -13,6 +14,12 @@ from jupr_app.domain.admin.roles import (
     resolve_admin_role,
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.live_social import (
+    SocialTablesNotInstalledError,
+    delete_social_matches,
+    list_social_match_log_rows,
+    update_social_match_row,
+)
 from jupr_app.domain.match_delete import delete_rated_matches_with_replay
 from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_duplicate_cleanup,
@@ -53,6 +60,29 @@ class AdminMatchLogExcludeRequest(BaseModel):
     source: str = "next_match_log_bulk_exclude"
 
 
+class AdminMatchLogSocialUpdateRequest(BaseModel):
+    event_name: str | None = None
+    played_on: str | None = None
+    round_number: int | None = None
+    court_number: int | None = None
+    mini_round_number: int | None = None
+    score_t1: int | None = Field(default=None, ge=0)
+    score_t2: int | None = Field(default=None, ge=0)
+    source: str = "next_match_log_social_editor"
+
+
+class AdminMatchLogSocialDeleteRequest(BaseModel):
+    social_match_ids: list[str] = Field(default_factory=list)
+    confirmation_text: str = ""
+    source: str = "next_match_log_social_editor"
+
+
+def _dump_model(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
+
+
 def _safe_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -64,6 +94,28 @@ def _safe_int(value: Any) -> int | None:
 
 def _clean_text(value: Any, *, limit: int = 200) -> str:
     return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
+def _dataframe_rows(df: pd.DataFrame | None) -> list[dict[str, Any]]:
+    if df is None or df.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in df.to_dict(orient="records"):
+        rows.append({str(key): _json_safe(value) for key, value in row.items()})
+    return rows
 
 
 def _list_match_log_player_options(supabase: Any, *, club_id: str) -> dict[str, Any]:
@@ -185,6 +237,125 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             return _list_match_log_player_options(supabase, club_id=str(club_id))
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/admin/clubs/{club_id}/match-log/social")
+    def get_admin_match_log_social_rows(
+        club_id: str,
+        limit: int = Query(default=500, ge=1, le=1000),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_MANAGE_MATCHES,
+            source="next_match_log_social_list",
+        )
+        try:
+            rows = _dataframe_rows(list_social_match_log_rows(supabase, club_id=str(club_id), limit=int(limit)))
+            return {"ok": True, "mode": "social_match_log_rows", "rows": rows, "count": len(rows), "warnings": []}
+        except SocialTablesNotInstalledError as exc:
+            return {"ok": True, "mode": "social_match_log_unavailable", "rows": [], "count": 0, "warnings": [str(exc)]}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Unable to load Club Social Match Log rows: {exc.__class__.__name__}") from exc
+
+    @app.patch("/admin/clubs/{club_id}/match-log/social/{social_match_id}")
+    def patch_admin_match_log_social_row(
+        club_id: str,
+        social_match_id: str,
+        payload: AdminMatchLogSocialUpdateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_apply_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_MANAGE_MATCHES,
+            source=payload.source,
+        )
+        patch = _dump_model(payload)
+        source = str(patch.pop("source", payload.source))
+        if not patch:
+            raise HTTPException(status_code=400, detail="No Club Social changes provided.")
+        try:
+            result = update_social_match_row(
+                supabase,
+                club_id=str(club_id),
+                social_match_id=str(social_match_id),
+                patch=patch,
+            )
+        except SocialTablesNotInstalledError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_result = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                action_type="social_match_log_update",
+                entity_type="live_event_match",
+                entity_id=str(social_match_id),
+                after_json={"source_client": "fastapi/nextjs", "source_page": source, "patch": patch, "result": result},
+                source_page=source,
+                flagged_for_review=True,
+            ),
+        )
+        warnings = [audit_result.warning] if audit_result.warning else []
+        return {"ok": True, "mode": "social_match_updated", "social_match_id": str(social_match_id), "result": result, "warnings": warnings}
+
+    @app.post("/admin/clubs/{club_id}/match-log/social/delete")
+    def post_admin_match_log_social_delete(
+        club_id: str,
+        payload: AdminMatchLogSocialDeleteRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_apply_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        if str(payload.confirmation_text or "").strip().upper() != "DELETE":
+            raise HTTPException(status_code=400, detail="Type DELETE to confirm Club Social row deletion.")
+        social_ids = [str(value).strip() for value in (payload.social_match_ids or []) if str(value).strip()]
+        if not social_ids:
+            raise HTTPException(status_code=400, detail="Select at least one Club Social row to delete.")
+        if len(social_ids) > 100:
+            raise HTTPException(status_code=400, detail="No more than 100 Club Social rows can be deleted at once.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_DELETE_MATCHES,
+            source=payload.source,
+        )
+        try:
+            deleted = delete_social_matches(supabase, club_id=str(club_id), social_match_ids=social_ids)
+        except SocialTablesNotInstalledError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        audit_result = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                action_type="social_match_log_delete",
+                entity_type="live_event_match",
+                entity_id="bulk",
+                after_json={"source_client": "fastapi/nextjs", "source_page": payload.source, "requested_ids": social_ids, "deleted_count": deleted},
+                source_page=payload.source,
+                flagged_for_review=True,
+            ),
+        )
+        warnings = [audit_result.warning] if audit_result.warning else []
+        return {"ok": True, "mode": "social_matches_deleted", "deleted_count": deleted, "requested_ids": social_ids, "warnings": warnings}
 
     @app.patch("/admin/clubs/{club_id}/match-log/edits")
     def patch_admin_match_log_edits(

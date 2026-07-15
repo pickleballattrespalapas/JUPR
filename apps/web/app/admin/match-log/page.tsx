@@ -5,6 +5,7 @@ import { getAdminReplayStatus } from "@/lib/adminReplayApi";
 import MatchLogApplyPanel from "./MatchLogApplyPanel";
 import MatchLogBulkExcludePanel from "./MatchLogBulkExcludePanel";
 import MatchLogQuickReplayPanel from "./MatchLogQuickReplayPanel";
+import MatchLogSocialPanel from "./MatchLogSocialPanel";
 
 type MatchLogPageProps = {
   searchParams?: {
@@ -96,6 +97,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
 
   const selectedFilter = searchParams?.filter || data?.filters.filter || "All";
   const resolvedDuplicateGroups = data?.resolved_duplicate_groups || [];
+  const apiBase = getAdminApiBaseUrl();
 
   return (
     <section>
@@ -193,7 +195,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
           </article>
 
           <MatchLogApplyPanel
-            apiBase={getAdminApiBaseUrl()}
+            apiBase={apiBase}
             clubId={clubId}
             applyEnabled={Boolean(data.apply_enabled)}
             duplicatePreview={data.duplicate_delete_preview}
@@ -202,8 +204,16 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
           />
 
           <div style={{ marginTop: "1rem" }}>
+            <MatchLogSocialPanel apiBase={apiBase} clubId={clubId} enabled={Boolean(data.enabled)} />
+          </div>
+
+          <div style={{ marginTop: "1rem" }}>
+            <MatchLogBulkExcludePanel apiBase={apiBase} clubId={clubId} enabled={Boolean(data.apply_enabled)} matches={data.matches} />
+          </div>
+
+          <div style={{ marginTop: "1rem" }}>
             <MatchLogQuickReplayPanel
-              apiBase={getAdminApiBaseUrl()}
+              apiBase={apiBase}
               clubId={clubId}
               enabled={Boolean(replayData?.enabled)}
               options={replayData?.options || []}
@@ -211,15 +221,6 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
               recommendedTarget={data.duplicate_delete_preview?.recommended_replay_scope || null}
               statusError={replayError}
               warnings={replayData?.warnings || []}
-            />
-          </div>
-
-          <div style={{ marginTop: "1rem" }}>
-            <MatchLogBulkExcludePanel
-              apiBase={getAdminApiBaseUrl()}
-              clubId={clubId}
-              enabled={Boolean(data.apply_enabled)}
-              matches={data.matches}
             />
           </div>
 
