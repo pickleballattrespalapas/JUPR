@@ -150,6 +150,36 @@ def test_admin_tournament_publish_matches_contract(monkeypatch):
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
 
 
+def test_admin_tournament_publish_matches_applies_semifinal_bonus_to_winner_only_payload(monkeypatch):
+    tables = match_publish_tables()
+    tables["tournament_games"][0].update({"stage": "PLAYOFF", "playoff_round": "SF", "playoff_game_code": "P1"})
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    captured: dict[str, object] = {}
+
+    def fake_process_matches(match_list, **kwargs):
+        captured["match_list"] = match_list
+        return {"inserted": len(match_list), "winner_bonus_summary": {"match_count": 1, "player_elo_total": 12.0}}
+
+    monkeypatch.setattr("jupr_app.services.admin_tournament_match_publish_service.process_matches", fake_process_matches)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/matches/publish",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "PUBLISH MATCHES", "playoff_winner_bonus_elo": 6},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["playoff_winner_bonus_elo"] == 6.0
+    assert payload["bonus_match_count"] == 1
+    match_payload = captured["match_list"][0]
+    assert match_payload["winner_bonus_elo"] == 6.0
+    assert match_payload["rating_bonus_elo"] == 6.0
+    assert match_payload["winner_bonus_reason"] == "tournament_semifinal_winner_bonus"
+    assert tables["admin_activity_log"][0]["after_json"]["bonus_tournament_game_ids"] == ["game_1"]
+
+
 def test_admin_tournament_publish_matches_blocks_duplicate(monkeypatch):
     tables = match_publish_tables()
     tables["matches"] = [{"club_id": "club", "tournament_id": "tour_1", "tournament_game_id": "game_1"}]
