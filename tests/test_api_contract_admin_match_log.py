@@ -27,6 +27,7 @@ def test_admin_match_log_disabled_contract(monkeypatch):
     assert payload["enabled"] is False
     assert payload["matches"] == []
     assert payload["duplicate_groups"] == []
+    assert payload["resolved_duplicate_groups"] == []
 
 
 def test_admin_match_log_enabled_contract(monkeypatch):
@@ -44,10 +45,41 @@ def test_admin_match_log_enabled_contract(monkeypatch):
     assert payload["apply_enabled"] is False
     assert payload["status"] == "planning_only"
     assert payload["summary"]["duplicate_groups"] == 1
+    assert payload["summary"]["resolved_duplicate_groups"] == 0
     assert payload["duplicate_groups"][0]["delete_ids"] == [2]
     assert payload["duplicate_delete_preview"]["delete_count"] == 1
     assert payload["correction_plan"]["apply_endpoint"] is None
     assert "notes" not in payload["matches"][0]
+
+
+def test_admin_match_log_player_options_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log/player-options",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "match_log_player_options"
+    assert payload["count"] == 4
+    assert [player["id"] for player in payload["players"]] == [1, 2, 3, 4]
+    assert payload["players"][0]["label"] == "Alex (#1)"
 
 
 def test_admin_match_log_apply_disabled_before_auth(monkeypatch):
@@ -121,3 +153,88 @@ def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["deleted_count"] == 1
     assert [row["id"] for row in tables["matches"]] == [1, 3]
+
+
+def test_admin_match_log_bulk_exclude_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    called = {}
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
+
+    def fake_delete_rated_matches_with_replay(**kwargs):
+        called.update(kwargs)
+        return {
+            "deleted_count": len(kwargs["match_ids"]),
+            "deleted_ids": list(kwargs["match_ids"]),
+            "affected_player_ids": [1, 2],
+            "replay_result": {"matches_scanned_total": 3, "matches_rewritten": 2, "league_ratings_rows": 4, "skipped_incomplete": 0},
+            "warning": None,
+            "error": None,
+            "replay_error": None,
+            "actor": kwargs["actor"],
+        }
+
+    monkeypatch.setattr("services.api.admin_match_log_routes.delete_rated_matches_with_replay", fake_delete_rated_matches_with_replay)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/exclude",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "DELETE", "match_ids": [3], "note": "wrong test row"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "matches_excluded"
+    assert payload["deleted_ids"] == [3]
+    assert called["actor"] == "admin@example.com"
+    assert called["actor_role"] == "club_owner"
+    assert called["note"] == "wrong test row"
+    assert called["source"] == "next_match_log_bulk_exclude"
+
+
+def test_admin_match_log_duplicate_no_issue_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="admin@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/duplicates/resolve",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "NO ISSUE",
+            "match_ids": [1, 2],
+            "reason": "Legitimate repeated matchup with same score.",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "duplicate_no_issue"
+    assert payload["match_ids"] == [1, 2]
+    assert [row["id"] for row in tables["matches"]] == [1, 2, 3]
+    assert tables["admin_match_log_duplicate_resolutions"][0]["match_id_key"] == "1,2"
+    assert tables["admin_activity_log"][0]["action_type"] == "match_duplicate_false_positive_resolved"

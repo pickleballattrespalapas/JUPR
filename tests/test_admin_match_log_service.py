@@ -6,6 +6,7 @@ from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_duplicate_cleanup,
     apply_admin_match_log_edits,
     build_admin_match_log,
+    resolve_admin_match_log_duplicate_false_positive,
 )
 
 
@@ -145,6 +146,7 @@ def fake_tables():
                 "score_t2": 11,
             },
         ],
+        "admin_match_log_duplicate_resolutions": [],
         "admin_activity_log": [],
         "admin_audit_events": [],
         "player_badges": [],
@@ -166,6 +168,7 @@ def test_admin_match_log_disabled_is_db_free(monkeypatch) -> None:
     assert payload["status"] == "streamlit_fallback"
     assert payload["matches"] == []
     assert payload["correction_plan"]["mode"] == "planning_only"
+    assert payload["resolved_duplicate_groups"] == []
 
 
 def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
@@ -177,6 +180,7 @@ def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     assert payload["enabled"] is True
     assert payload["apply_enabled"] is False
     assert payload["summary"]["duplicate_groups"] == 1
+    assert payload["summary"]["resolved_duplicate_groups"] == 0
     assert payload["duplicate_groups"][0]["keep_id"] == 1
     assert payload["duplicate_groups"][0]["delete_ids"] == [2]
     assert payload["duplicate_delete_preview"]["recommended_replay_scope"] == "ALL"
@@ -234,3 +238,68 @@ def test_admin_match_log_duplicate_cleanup(monkeypatch) -> None:
     assert result["deleted_count"] == 1
     assert [row["id"] for row in tables["matches"]] == [1, 3]
     assert result["recompute_scope"] == {"standings": True, "ratings": True}
+
+
+def test_admin_match_log_duplicate_no_issue_resolution(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+
+    result = resolve_admin_match_log_duplicate_false_positive(
+        supabase,
+        club_id="club",
+        match_ids=[1, 2],
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        reason="Legitimate repeated matchup with same score.",
+        confirmation_text="NO ISSUE",
+    )
+
+    assert result["ok"] is True
+    assert result["mode"] == "duplicate_no_issue"
+    assert result["match_ids"] == [1, 2]
+    assert [row["id"] for row in tables["matches"]] == [1, 2, 3]
+    assert tables["admin_match_log_duplicate_resolutions"][0]["match_id_key"] == "1,2"
+    assert tables["admin_match_log_duplicate_resolutions"][0]["resolution"] == "no_issue"
+    assert tables["admin_activity_log"][0]["action_type"] == "match_duplicate_false_positive_resolved"
+
+    payload = build_admin_match_log(supabase, club_id="club", filter_type="League", limit=20)
+
+    assert payload["summary"]["duplicate_groups"] == 0
+    assert payload["summary"]["duplicate_delete_count"] == 0
+    assert payload["summary"]["resolved_duplicate_groups"] == 1
+    assert payload["duplicate_groups"] == []
+    assert payload["duplicate_delete_preview"] is None
+    assert payload["resolved_duplicate_groups"][0]["ids"] == [1, 2]
+    assert payload["resolved_duplicate_groups"][0]["resolution"]["reason"] == "Legitimate repeated matchup with same score."
+
+
+def test_admin_match_log_cleanup_rejects_no_issue_resolution(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+
+    resolve_admin_match_log_duplicate_false_positive(
+        supabase,
+        club_id="club",
+        match_ids=[1, 2],
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        reason="Legitimate repeated matchup with same score.",
+        confirmation_text="NO ISSUE",
+    )
+
+    try:
+        apply_admin_match_log_duplicate_cleanup(
+            supabase,
+            club_id="club",
+            delete_ids=[2],
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="DELETE",
+        )
+    except ValueError as exc:
+        assert "not currently active duplicate cleanup candidates" in str(exc)
+    else:
+        raise AssertionError("Expected resolved duplicate cleanup to be rejected")

@@ -118,6 +118,19 @@ Operator steps:
 4. Confirm audit row exists and is flagged for review.
 5. Immediately run Replay History.
 
+### Step 3a — Resolve duplicate false positives as no issue
+
+If the scanner flags a legitimate repeated matchup, do **not** run cleanup. Mark the group as no issue instead.
+
+Operator steps:
+
+1. Confirm the rows are distinct real matches.
+2. Add a reason, for example: `Legitimate repeated matchup with same players and score`.
+3. Type `NO ISSUE`.
+4. Confirm FastAPI response is `ok: true` with `mode: duplicate_no_issue`.
+5. Refresh Match Log and confirm the group is no longer listed as an active cleanup candidate.
+6. Confirm an audit row exists in `admin_activity_log` with `action_type=match_duplicate_false_positive_resolved`.
+
 ### Step 4 — Replay History recovery
 
 Open:
@@ -134,7 +147,7 @@ Operator steps:
 2. Type `REPLAY`.
 3. Confirm response summary.
 4. Verify public leaderboard/player/match pages still load.
-5. Keep Streamlit open as fallback during verification.
+5. Keep Streamlit open as fallback during pilot validation.
 
 ## Rollback path
 
@@ -143,6 +156,7 @@ Operator steps:
 3. Leave `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` temporarily if read-only investigation is still needed.
 4. Fall back to Streamlit correction tools.
 5. If a bad duplicate cleanup happened, restore via database backup/audit data and replay history.
+6. If a false-positive group was marked no issue by mistake, update the corresponding `admin_match_log_duplicate_resolutions` row to `is_active=false` and reload Match Log.
 
 ## Stop conditions
 

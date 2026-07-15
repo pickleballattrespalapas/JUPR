@@ -1,5 +1,14 @@
 export type AdminMatchLogPlayer = { id: number | null; name: string };
 
+export type AdminDuplicateResolution = {
+  resolution?: string | null;
+  reason?: string | null;
+  actor_email?: string | null;
+  actor_role?: string | null;
+  source_page?: string | null;
+  resolved_at?: string | null;
+};
+
 export type AdminMatchLogMatch = {
   id: number | null;
   date?: string | null;
@@ -32,6 +41,7 @@ export type AdminDuplicateGroup = {
   score: { team1: number; team2: number; display: string };
   team1: AdminMatchLogPlayer[];
   team2: AdminMatchLogPlayer[];
+  resolution?: AdminDuplicateResolution | null;
 };
 
 export type AdminDuplicateDeletePreview = {
@@ -50,10 +60,12 @@ export type AdminCorrectionPlan = {
   mode: string;
   apply_endpoint?: string | null;
   duplicate_cleanup_endpoint?: string | null;
+  duplicate_no_issue_endpoint?: string | null;
   future_apply_endpoint?: string | null;
   editable_fields_planned: string[];
   required_confirmation_text: string;
   duplicate_cleanup_confirmation_text?: string | null;
+  duplicate_no_issue_confirmation_text?: string | null;
   recompute_scope_for_sample_edit: { standings: boolean; ratings: boolean };
   safety_rules: string[];
 };
@@ -77,11 +89,13 @@ export type AdminMatchLogResponse = {
     returned_matches: number;
     duplicate_groups: number;
     duplicate_delete_count: number;
+    resolved_duplicate_groups?: number | null;
   };
   matches: AdminMatchLogMatch[];
   duplicate_groups: AdminDuplicateGroup[];
   duplicate_rows: AdminMatchLogMatch[];
   duplicate_delete_preview?: AdminDuplicateDeletePreview | null;
+  resolved_duplicate_groups?: AdminDuplicateGroup[];
   correction_plan: AdminCorrectionPlan;
   warnings: string[];
 };
@@ -97,6 +111,10 @@ export type AdminMatchLogWriteResult = {
   affected_player_ids?: number[];
   recompute_scope?: { standings: boolean; ratings: boolean };
   recommended_replay_scope?: string;
+  resolution?: string;
+  dup_key?: string;
+  match_ids?: number[];
+  reason?: string;
   warnings?: string[];
   badge_summary?: Record<string, unknown>;
 };
