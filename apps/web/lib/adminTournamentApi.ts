@@ -5,6 +5,7 @@ export type AdminTournamentStatusResponse = {
   tournament_detail_endpoint?: string | null;
   registration_update_endpoint?: string | null;
   selection_update_endpoint?: string | null;
+  bulk_registration_update_endpoint?: string | null;
   tournament_count?: number | null;
   warnings: string[];
 };
@@ -84,7 +85,11 @@ export type AdminTournamentWriteResponse = {
   ok: boolean;
   mode?: string;
   registration?: AdminTournamentRegistration | null;
+  registrations?: AdminTournamentRegistration[];
   selection?: AdminTournamentSelection | null;
+  updated_count?: number;
+  registration_ids?: string[];
+  skipped?: string[];
   warnings?: string[];
 };
 
