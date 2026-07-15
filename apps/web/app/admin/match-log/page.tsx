@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getAdminApiBaseUrl, getAdminMatchLog } from "@/lib/adminMatchLogApi";
 import type { AdminDuplicateGroup, AdminMatchLogMatch } from "@/lib/adminMatchLogApi";
+import { getAdminReplayStatus } from "@/lib/adminReplayApi";
 import MatchLogApplyPanel from "./MatchLogApplyPanel";
+import MatchLogQuickReplayPanel from "./MatchLogQuickReplayPanel";
 
 type MatchLogPageProps = {
   searchParams?: {
@@ -89,6 +91,7 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
     endDate: searchParams?.end_date || null,
     limit: searchParams?.limit || 250
   });
+  const { data: replayData, error: replayError } = await getAdminReplayStatus(clubId);
 
   const selectedFilter = searchParams?.filter || data?.filters.filter || "All";
   const resolvedDuplicateGroups = data?.resolved_duplicate_groups || [];
@@ -196,6 +199,19 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
             duplicateGroups={data.duplicate_groups}
             matches={data.matches}
           />
+
+          <div style={{ marginTop: "1rem" }}>
+            <MatchLogQuickReplayPanel
+              apiBase={getAdminApiBaseUrl()}
+              clubId={clubId}
+              enabled={Boolean(replayData?.enabled)}
+              options={replayData?.options || []}
+              defaultTarget={replayData?.default_target_reset || "ALL (Full System Reset)"}
+              recommendedTarget={data.duplicate_delete_preview?.recommended_replay_scope || null}
+              statusError={replayError}
+              warnings={replayData?.warnings || []}
+            />
+          </div>
 
           <h2>Matches</h2>
           {data.matches.length ? (
