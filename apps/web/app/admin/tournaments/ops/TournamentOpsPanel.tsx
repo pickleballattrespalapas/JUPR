@@ -74,7 +74,9 @@ function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<strin
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={String(row.id || index)}>{columns.map((column) => <td key={column} style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0", maxWidth: 260, overflowWrap: "anywhere" }}>{shortValue(row[column])}</td>)}</tr>
+            <tr key={String(row.id || index)}>
+              {columns.map((column) => <td key={column} style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0", maxWidth: 260, overflowWrap: "anywhere" }}>{shortValue(row[column])}</td>)}
+            </tr>
           ))}
         </tbody>
       </table>
@@ -110,6 +112,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   const [podiumConfirm, setPodiumConfirm] = useState("");
   const [awardConfirm, setAwardConfirm] = useState("");
   const [publishConfirm, setPublishConfirm] = useState("");
+  const [publishBonusElo, setPublishBonusElo] = useState("0");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -421,16 +424,21 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       setMessage("Select a tournament and draw before publishing official matches.");
       return;
     }
+    const bonusElo = Number(publishBonusElo || "0");
+    if (!Number.isFinite(bonusElo) || bonusElo < 0) {
+      setMessage("Playoff winner bonus must be a non-negative number.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/matches/publish`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: publishConfirm, source: "next_tournament_ops_publish_matches" })
+        body: JSON.stringify({ confirmation_text: publishConfirm, playoff_winner_bonus_elo: bonusElo, source: "next_tournament_ops_publish_matches" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setPublishConfirm("");
-      setMessage(`Published ${payload.match_count ?? 0} official rating match(es) from ${payload.game_count ?? 0} tournament game(s).`);
+      setMessage(`Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
     } finally {
@@ -572,7 +580,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance and type <code>GENERATE PLAYOFFS</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><label><strong>Type GENERATE PLAYOFFS</strong><br /><input value={playoffConfirm} onChange={(event) => setPlayoffConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePlayoffs} disabled={busy || !accessToken || !selectedDrawId || playoffConfirm.trim().toUpperCase() !== "GENERATE PLAYOFFS"} style={buttonStyle}>{busy ? "Generating…" : "Generate playoffs"}</button></div></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE PODIUM</strong><br /><input value={podiumConfirm} onChange={(event) => setPodiumConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePodium} disabled={busy || !accessToken || !selectedDrawId || podiumConfirm.trim().toUpperCase() !== "GENERATE PODIUM"} style={buttonStyle}>{busy ? "Generating…" : "Generate podium"}</button></div></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type AWARD PODIUM</strong><br /><input value={awardConfirm} onChange={(event) => setAwardConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={awardPodium} disabled={busy || !accessToken || !selectedDrawId || awardConfirm.trim().toUpperCase() !== "AWARD PODIUM"} style={buttonStyle}>{busy ? "Awarding…" : "Award podium"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}><h2 style={{ marginTop: 0 }}>Publish official rating matches</h2><p style={{ color: "#7c2d12" }}>This creates official Match Log rows from finalized tournament games and immediately applies the same rating update path used by regular matches. Publishing is blocked if any tournament game in this draw has already been published.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type PUBLISH MATCHES</strong><br /><input value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={publishOfficialMatches} disabled={busy || !accessToken || !selectedDrawId || publishConfirm.trim().toUpperCase() !== "PUBLISH MATCHES"} style={buttonStyle}>{busy ? "Publishing…" : "Publish official matches"}</button></div></article>
+          <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}><h2 style={{ marginTop: 0 }}>Publish official rating matches</h2><p style={{ color: "#7c2d12" }}>This creates official Match Log rows from finalized tournament games and immediately applies the same rating update path used by regular matches. Optional medal-playoff bonus is winner-only: it adds Elo to winners of semifinal, bronze, and gold medal matches without subtracting bonus points from losing teams.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR. Applied only to SF/Bronze/Gold winners.</small></label><label><strong>Type PUBLISH MATCHES</strong><br /><input value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={publishOfficialMatches} disabled={busy || !accessToken || !selectedDrawId || publishConfirm.trim().toUpperCase() !== "PUBLISH MATCHES"} style={buttonStyle}>{busy ? "Publishing…" : "Publish official matches"}</button></div></article>
 
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Teams</h2><GenericRowsTable rows={snapshot.teams} preferredColumns={["team_number", "player1_id", "player2_id", "source", "draw_id", "event_option_id"]} /></article>
