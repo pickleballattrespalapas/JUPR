@@ -4,6 +4,7 @@ export type AdminLeagueManagerStatusResponse = {
   leagues_endpoint?: string | null;
   league_detail_endpoint?: string | null;
   league_settings_update_endpoint?: string | null;
+  league_roster_update_endpoint?: string | null;
   league_count?: number | null;
   active_count?: number | null;
   warnings: string[];
@@ -86,6 +87,10 @@ export type AdminLeagueManagerWriteResponse = {
   league?: AdminLeagueManagerLeague | null;
   detail?: AdminLeagueManagerDetailResponse | null;
   created?: boolean | null;
+  league_name?: string | null;
+  player_id?: number | null;
+  action?: string | null;
+  league_rating?: Record<string, unknown> | null;
   warnings?: string[];
 };
 
