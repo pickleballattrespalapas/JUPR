@@ -129,6 +129,42 @@ export async function sendMagicLink(email: string, redirectTo?: string): Promise
   if (!response.ok) throw new Error(parseAuthError(payload, `Supabase magic-link request failed (${response.status}).`));
 }
 
+export async function sendPasswordResetEmail(email: string, redirectTo?: string): Promise<void> {
+  const config = getAdminAuthConfig();
+  if (!config) throw new Error("Supabase public auth configuration is missing.");
+  const response = await fetch(`${config.supabaseUrl}/auth/v1/recover`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${config.supabaseAnonKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      email: email.trim(),
+      redirect_to: redirectTo
+    })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(parseAuthError(payload, `Supabase password reset request failed (${response.status}).`));
+}
+
+export async function updateAdminPassword(password: string, session = loadAdminSession()): Promise<void> {
+  const config = getAdminAuthConfig();
+  if (!config) throw new Error("Supabase public auth configuration is missing.");
+  if (!session?.access_token) throw new Error("Open a valid password reset link or sign in before setting a new password.");
+  const response = await fetch(`${config.supabaseUrl}/auth/v1/user`, {
+    method: "PUT",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ password })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(parseAuthError(payload, `Supabase password update failed (${response.status}).`));
+}
+
 export async function refreshAdminSession(session = loadAdminSession()): Promise<AdminSession | null> {
   if (!session?.refresh_token) return session;
   if (adminSessionIsFresh(session)) return session;
