@@ -20,6 +20,7 @@ export default async function AdminTournamentsPage() {
       <p style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
         <Link href="/admin/tournaments/bulk">Open bulk registration actions</Link>
         <Link href="/admin/tournaments/ops">Open Tournament Ops snapshot</Link>
+        <Link href="/admin/tournaments/status">Open status actions</Link>
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}
