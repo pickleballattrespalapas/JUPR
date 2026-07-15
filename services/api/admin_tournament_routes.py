@@ -12,6 +12,7 @@ from jupr_app.services.admin_tournament_delete_service import delete_admin_tourn
 from jupr_app.services.admin_tournament_draw_service import create_admin_tournament_draw
 from jupr_app.services.admin_tournament_game_service import generate_admin_tournament_round_robin_games
 from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_ops_snapshot
+from jupr_app.services.admin_tournament_playoff_service import generate_admin_tournament_playoff_games
 from jupr_app.services.admin_tournament_score_service import update_admin_tournament_game_score
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_status,
@@ -82,6 +83,12 @@ class AdminTournamentRoundRobinGenerateRequest(BaseModel):
     source: str = "next_tournament_admin_generate_round_robin"
 
 
+class AdminTournamentPlayoffGenerateRequest(BaseModel):
+    advance_count: int | None = None
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_generate_playoffs"
+
+
 class AdminTournamentGameScoreRequest(BaseModel):
     score_a: int
     score_b: int
@@ -141,11 +148,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         return build_admin_tournament_status(supabase, club_id=str(club_id))
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments")
-    def get_admin_tournaments(
-        club_id: str,
-        include_archived: bool = Query(default=False),
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def get_admin_tournaments(club_id: str, include_archived: bool = Query(default=False), authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client()
@@ -160,12 +163,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/ops")
-    def get_admin_tournament_ops(
-        club_id: str,
-        tournament_id: str,
-        draw_id: str | None = Query(default=None),
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def get_admin_tournament_ops(club_id: str, tournament_id: str, draw_id: str | None = Query(default=None), authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_tournament_admin_enabled():
             raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
         supabase = get_supabase_client()
@@ -186,18 +184,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return create_admin_tournament_draw(
-                supabase,
-                club_id=str(club_id),
-                tournament_id=str(tournament_id),
-                registration_day_id=payload.registration_day_id,
-                event_option_id=payload.event_option_id,
-                name=payload.name,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return create_admin_tournament_draw(supabase, club_id=str(club_id), tournament_id=str(tournament_id), registration_day_id=payload.registration_day_id, event_option_id=payload.event_option_id, name=payload.name, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
@@ -213,17 +200,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
             teams = [_dump_model(team) for team in payload.teams]
-            return replace_admin_tournament_draw_teams(
-                supabase,
-                club_id=str(club_id),
-                tournament_id=str(tournament_id),
-                draw_id=str(draw_id),
-                teams=teams,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return replace_admin_tournament_draw_teams(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), teams=teams, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
@@ -238,16 +215,22 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return generate_admin_tournament_round_robin_games(
-                supabase,
-                club_id=str(club_id),
-                tournament_id=str(tournament_id),
-                draw_id=str(draw_id),
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return generate_admin_tournament_round_robin_games(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/playoffs")
+    def post_admin_tournament_playoff_games(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentPlayoffGenerateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return generate_admin_tournament_playoff_games(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), advance_count=payload.advance_count, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
@@ -262,18 +245,7 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return update_admin_tournament_game_score(
-                supabase,
-                club_id=str(club_id),
-                tournament_id=str(tournament_id),
-                game_id=str(game_id),
-                score_a=payload.score_a,
-                score_b=payload.score_b,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return update_admin_tournament_game_score(supabase, club_id=str(club_id), tournament_id=str(tournament_id), game_id=str(game_id), score_a=payload.score_a, score_b=payload.score_b, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
