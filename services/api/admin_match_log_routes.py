@@ -18,6 +18,7 @@ from jupr_app.services.admin_match_log_service import (
     build_admin_match_log,
     is_admin_match_log_apply_enabled,
     is_admin_match_log_enabled,
+    resolve_admin_match_log_duplicate_false_positive,
 )
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -33,6 +34,14 @@ class AdminMatchLogDuplicateCleanupRequest(BaseModel):
     delete_ids: list[int] = Field(default_factory=list)
     confirmation_text: str = ""
     source: str = "next_match_log_duplicate_cleanup"
+
+
+class AdminMatchLogDuplicateResolutionRequest(BaseModel):
+    match_ids: list[int] = Field(default_factory=list)
+    dup_key: str | None = None
+    reason: str = ""
+    confirmation_text: str = ""
+    source: str = "next_match_log_duplicate_no_issue"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, permission: str, source: str) -> tuple[str, str]:
@@ -148,6 +157,41 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 delete_ids=payload.delete_ids,
                 actor_email=actor_email,
                 actor_role=actor_role,
+                source=payload.source,
+                confirmation_text=payload.confirmation_text,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/clubs/{club_id}/match-log/duplicates/resolve")
+    def post_admin_match_log_duplicate_resolution(
+        club_id: str,
+        payload: AdminMatchLogDuplicateResolutionRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_apply_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_MANAGE_MATCHES,
+            source=payload.source,
+        )
+        try:
+            return resolve_admin_match_log_duplicate_false_positive(
+                supabase,
+                club_id=str(club_id),
+                match_ids=payload.match_ids,
+                dup_key=payload.dup_key,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                reason=payload.reason,
                 source=payload.source,
                 confirmation_text=payload.confirmation_text,
             )
