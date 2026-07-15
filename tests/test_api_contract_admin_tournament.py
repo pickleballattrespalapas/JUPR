@@ -59,7 +59,19 @@ def tournament_tables():
                 "status": "open",
                 "enabled": True,
                 "sort_order": 1,
-            }
+            },
+            {
+                "id": "event_2",
+                "tournament_id": "tour_1",
+                "registration_day_id": "day_1",
+                "event_family_label": "Gender Doubles",
+                "division_name": "4.0",
+                "event_format_default": "round_robin",
+                "scoring_default": "one_game_to_11",
+                "status": "open",
+                "enabled": True,
+                "sort_order": 2,
+            },
         ],
         "tournament_registrations": [
             {
@@ -76,8 +88,17 @@ def tournament_tables():
             }
         ],
         "tournament_registration_selections": [
-            {"id": "selection_1", "tournament_id": "tour_1", "registration_id": "registration_1", "event_option_id": "event_1", "partner_mode": "NEEDS_PARTNER"}
+            {
+                "id": "selection_1",
+                "tournament_id": "tour_1",
+                "registration_id": "registration_1",
+                "registration_day_id": "day_1",
+                "event_option_id": "event_1",
+                "partner_mode": "NEEDS_PARTNER",
+                "show_on_partner_board": True,
+            }
         ],
+        "tournament_teams": [],
         "admin_activity_log": [],
     }
 
@@ -155,6 +176,7 @@ def test_admin_tournament_detail_contract(monkeypatch):
     assert payload["registrations"][0]["display_name"] == "Alex Example"
     assert payload["registrations"][0]["notes"] == "Original note"
     assert payload["event_options"][0]["division_name"] == "3.5"
+    assert payload["selections"][0]["event_label"] == "Gender Doubles / 3.5"
 
 
 def test_admin_tournament_registration_update_contract(monkeypatch):
@@ -187,4 +209,41 @@ def test_admin_tournament_registration_update_contract(monkeypatch):
     assert tables["tournament_registrations"][0]["status"] == "waitlist"
     assert tables["tournament_registrations"][0]["payment_status"] == "refunded"
     assert tables["admin_activity_log"][0]["action_type"] == "update_tournament_registration_admin"
+    assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_tournament_selection_update_contract(monkeypatch):
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_option_id": "event_2",
+            "partner_mode": "HAS_PARTNER",
+            "partner_name": "Blair Partner",
+            "partner_email": "blair@example.com",
+            "partner_phone": "555-0101",
+            "partner_note": "Confirmed partner.",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "tournament_selection_update"
+    assert payload["selection"]["event_option_id"] == "event_2"
+    assert payload["selection"]["event_label"] == "Gender Doubles / 4.0"
+    assert payload["selection"]["partner_mode"] == "HAS_PARTNER"
+    assert payload["selection"]["partner_name"] == "Blair Partner"
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_2"
+    assert tables["tournament_registration_selections"][0]["registration_day_id"] == "day_1"
+    assert tables["admin_activity_log"][0]["action_type"] == "update_tournament_registration_selection_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
