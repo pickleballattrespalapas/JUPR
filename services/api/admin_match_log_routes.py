@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -12,6 +13,7 @@ from jupr_app.domain.admin.roles import (
     resolve_admin_role,
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.match_delete import delete_rated_matches_with_replay
 from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_duplicate_cleanup,
     apply_admin_match_log_edits,
@@ -42,6 +44,13 @@ class AdminMatchLogDuplicateResolutionRequest(BaseModel):
     reason: str = ""
     confirmation_text: str = ""
     source: str = "next_match_log_duplicate_no_issue"
+
+
+class AdminMatchLogExcludeRequest(BaseModel):
+    match_ids: list[int] = Field(default_factory=list)
+    confirmation_text: str = ""
+    note: str | None = None
+    source: str = "next_match_log_bulk_exclude"
 
 
 def _safe_int(value: Any) -> int | None:
@@ -82,6 +91,21 @@ def _list_match_log_player_options(supabase: Any, *, club_id: str) -> dict[str, 
         players.append({"id": int(player_id), "name": name, "label": f"{name} (#{int(player_id)})"})
     players = sorted(players, key=lambda player: (str(player.get("name") or "").lower(), int(player.get("id") or 0)))
     return {"ok": True, "mode": "match_log_player_options", "players": players, "count": len(players)}
+
+
+def _fetch_league_metadata_df(supabase: Any, *, club_id: str) -> pd.DataFrame:
+    try:
+        rows = (
+            supabase.table("leagues_metadata")
+            .select("league_name,k_factor,is_active,status")
+            .eq("club_id", str(club_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return pd.DataFrame(columns=["league_name", "k_factor", "is_active", "status"])
+    return pd.DataFrame([dict(row) for row in rows])
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, permission: str, source: str) -> tuple[str, str]:
@@ -222,6 +246,48 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/clubs/{club_id}/match-log/exclude")
+    def post_admin_match_log_exclude_matches(
+        club_id: str,
+        payload: AdminMatchLogExcludeRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_log_apply_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Log apply is disabled.")
+        normalized_confirmation = str(payload.confirmation_text or "").strip().upper()
+        if normalized_confirmation != "DELETE":
+            raise HTTPException(status_code=400, detail="Type DELETE to confirm rated match exclusion.")
+        match_ids = sorted({int(match_id) for match_id in (payload.match_ids or []) if _safe_int(match_id) is not None})
+        if not match_ids:
+            raise HTTPException(status_code=400, detail="Select at least one match to exclude.")
+        if len(match_ids) > 100:
+            raise HTTPException(status_code=400, detail="No more than 100 matches can be excluded at once.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            permission=PERMISSION_DELETE_MATCHES,
+            source=payload.source,
+        )
+        try:
+            result = delete_rated_matches_with_replay(
+                supabase=supabase,
+                club_id=str(club_id),
+                match_ids=match_ids,
+                df_meta=_fetch_league_metadata_df(supabase, club_id=str(club_id)),
+                actor=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                note=payload.note,
+                flagged_for_review=True,
+            )
+            return {"ok": True, "mode": "matches_excluded", **result}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
