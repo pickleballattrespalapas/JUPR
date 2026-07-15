@@ -3,21 +3,34 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_registration_repo import (
+    ADMIN_PAYMENT_STATUS_OPTIONS,
+    ADMIN_REGISTRATION_STATUS_OPTIONS,
+    update_admin_registration,
+)
+
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 TOURNAMENT_SELECT = "id,club_id,name,status,start_date,end_date,event_tags,created_at,updated_at"
 TOURNAMENT_MINIMAL_SELECT = "id,club_id,name,status"
 REGISTRATION_SETTINGS_SELECT = "id,tournament_id,registration_slug,registration_status,registration_open_at,registration_close_at,waitlist_enabled,partner_board_enabled,updated_at"
 REGISTRATION_SELECT = (
     "id,tournament_id,player_id,first_name,last_name,display_name,email,phone,"
+    "status,payment_status,notes,wants_partner_board_contact,created_at,updated_at"
+)
+REGISTRATION_LEGACY_SELECT = (
+    "id,tournament_id,player_id,first_name,last_name,display_name,email,phone,"
     "registration_status,payment_status,wants_partner_board_contact,created_at,updated_at"
 )
-REGISTRATION_MINIMAL_SELECT = "id,tournament_id,display_name,email,registration_status,payment_status,created_at,updated_at"
+REGISTRATION_MINIMAL_SELECT = "id,tournament_id,display_name,email,status,payment_status,created_at,updated_at"
+REGISTRATION_LEGACY_MINIMAL_SELECT = "id,tournament_id,display_name,email,registration_status,payment_status,created_at,updated_at"
 SELECTION_SELECT = "id,tournament_id,registration_id,event_option_id,partner_mode,partner_name,partner_email,created_at,updated_at"
 EVENT_OPTION_SELECT = (
     "id,tournament_id,registration_day_id,event_family_label,division_name,event_format_default,"
     "scoring_default,skill_mode,age_mode,status,enabled,waitlist_enabled,partner_board_enabled,sort_order"
 )
 DAY_SELECT = "id,tournament_id,label,date,start_date,end_date,enabled,sort_order"
+CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
 
 
 def _truthy_env(name: str) -> bool:
@@ -26,6 +39,10 @@ def _truthy_env(name: str) -> bool:
 
 def is_admin_tournament_admin_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS")
+
+
+def is_api_audit_log_required() -> bool:
+    return _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG")
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -97,23 +114,22 @@ def _table_rows_for_tournament(supabase: Any, table_name: str, select_expr: str,
 
 
 def _registration_rows(supabase: Any, *, tournament_id: str, limit: int = 500) -> list[dict[str, Any]]:
-    try:
-        rows = _query_rows(
-            supabase.table("tournament_registrations")
-            .select(REGISTRATION_SELECT)
-            .eq("tournament_id", str(tournament_id))
-            .order("created_at", desc=True)
-            .limit(int(limit))
-        )
-    except Exception:
-        rows = _query_rows(
-            supabase.table("tournament_registrations")
-            .select(REGISTRATION_MINIMAL_SELECT)
-            .eq("tournament_id", str(tournament_id))
-            .order("created_at", desc=True)
-            .limit(int(limit))
-        )
-    return rows
+    for select_expr in (REGISTRATION_SELECT, REGISTRATION_LEGACY_SELECT, REGISTRATION_MINIMAL_SELECT, REGISTRATION_LEGACY_MINIMAL_SELECT):
+        try:
+            return _query_rows(
+                supabase.table("tournament_registrations")
+                .select(select_expr)
+                .eq("tournament_id", str(tournament_id))
+                .order("created_at", desc=True)
+                .limit(int(limit))
+            )
+        except Exception:
+            continue
+    return []
+
+
+def _registration_status(row: dict[str, Any]) -> str:
+    return _clean_text(row.get("status") or row.get("registration_status") or "confirmed", limit=40) or "confirmed"
 
 
 def _display_name(row: dict[str, Any]) -> str:
@@ -131,8 +147,9 @@ def _registration_payload(row: dict[str, Any], *, selection_count: int = 0) -> d
         "display_name": _display_name(row),
         "email": _clean_text(row.get("email"), limit=180),
         "phone": _clean_text(row.get("phone"), limit=80),
-        "registration_status": _clean_text(row.get("registration_status") or "confirmed", limit=40),
+        "registration_status": _registration_status(row),
         "payment_status": _clean_text(row.get("payment_status") or "unpaid", limit=40),
+        "notes": _clean_text(row.get("notes"), limit=1000),
         "wants_partner_board_contact": _safe_bool(row.get("wants_partner_board_contact"), default=False),
         "selection_count": int(selection_count),
         "created_at": row.get("created_at"),
@@ -144,7 +161,7 @@ def _summary_counts(registrations: list[dict[str, Any]], selections: list[dict[s
     by_registration_status: dict[str, int] = {}
     by_payment_status: dict[str, int] = {}
     for row in registrations:
-        registration_status = _clean_text(row.get("registration_status") or "confirmed", limit=40) or "confirmed"
+        registration_status = _registration_status(row)
         payment_status = _clean_text(row.get("payment_status") or "unpaid", limit=40) or "unpaid"
         by_registration_status[registration_status] = by_registration_status.get(registration_status, 0) + 1
         by_payment_status[payment_status] = by_payment_status.get(payment_status, 0) + 1
@@ -173,6 +190,18 @@ def _tournament_payload(row: dict[str, Any], *, registration_count: int | None =
     }
 
 
+def _fetch_registration_by_id(supabase: Any, *, tournament_id: str, registration_id: str) -> dict[str, Any] | None:
+    for row in _registration_rows(supabase, tournament_id=str(tournament_id), limit=1000):
+        if _clean_text(row.get("id"), limit=120) == str(registration_id):
+            return row
+    return None
+
+
+def _selection_count_for_registration(supabase: Any, *, tournament_id: str, registration_id: str) -> int:
+    rows = _table_rows_for_tournament(supabase, "tournament_registration_selections", SELECTION_SELECT, tournament_id=str(tournament_id))
+    return len([row for row in rows if _clean_text(row.get("registration_id"), limit=120) == str(registration_id)])
+
+
 def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         return {
@@ -180,6 +209,7 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
             "status": "guarded_off",
             "tournaments_endpoint": None,
             "tournament_detail_endpoint": None,
+            "registration_update_endpoint": None,
             "warnings": ["Next Tournament Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS on FastAPI for a closed-club pilot."],
         }
     tournament_count = None
@@ -189,9 +219,10 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
         tournament_count = len(rows)
     return {
         "enabled": True,
-        "status": "ready_for_tournament_registration_read_foundation",
+        "status": "ready_for_tournament_registration_admin",
         "tournaments_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments",
         "tournament_detail_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}",
+        "registration_update_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}",
         "tournament_count": tournament_count,
         "warnings": warnings,
     }
@@ -245,3 +276,73 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
         "summary": _summary_counts(registrations_raw, selections),
         "warnings": [],
     }
+
+
+def update_admin_tournament_registration(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    registration_id: str,
+    patch: dict[str, Any],
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_tournament_admin_registration_update",
+) -> dict[str, Any]:
+    if not is_admin_tournament_admin_enabled():
+        raise PermissionError("Next Tournament Admin is disabled.")
+    if str(confirmation_text or "").strip().upper() != CONFIRM_REGISTRATION_UPDATE:
+        raise ValueError(f"Type {CONFIRM_REGISTRATION_UPDATE} to confirm registration changes.")
+    clean_tournament_id = _clean_text(tournament_id, limit=120)
+    clean_registration_id = _clean_text(registration_id, limit=120)
+    tournament = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id)
+    if not tournament or str(tournament.get("club_id") or "") != str(club_id):
+        raise ValueError("tournament not found")
+    before = _fetch_registration_by_id(supabase, tournament_id=clean_tournament_id, registration_id=clean_registration_id)
+    if before is None:
+        raise ValueError("registration not found")
+
+    update_payload: dict[str, Any] = {}
+    if "registration_status" in patch:
+        next_status = _clean_text(patch.get("registration_status"), limit=40).lower()
+        if next_status not in ADMIN_REGISTRATION_STATUS_OPTIONS:
+            raise ValueError(f"Invalid registration status: {patch.get('registration_status')}")
+        update_payload["status"] = next_status
+    if "payment_status" in patch:
+        next_payment = _clean_text(patch.get("payment_status"), limit=40).lower()
+        if next_payment not in ADMIN_PAYMENT_STATUS_OPTIONS:
+            raise ValueError(f"Invalid payment status: {patch.get('payment_status')}")
+        update_payload["payment_status"] = next_payment
+    if "notes" in patch:
+        update_payload["notes"] = _clean_text(patch.get("notes"), limit=2000)
+    if not update_payload:
+        raise ValueError("No supported registration fields were provided.")
+
+    updated = update_admin_registration(
+        supabase,
+        tournament_id=clean_tournament_id,
+        registration_id=clean_registration_id,
+        payload=update_payload,
+    )
+    selection_count = _selection_count_for_registration(supabase, tournament_id=clean_tournament_id, registration_id=clean_registration_id)
+    registration = _registration_payload(updated, selection_count=selection_count)
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="update_tournament_registration_admin",
+        entity_type="tournament_registration",
+        entity_id=clean_registration_id,
+        before_json={"registration": _registration_payload(before, selection_count=selection_count)},
+        after_json={"source_client": "fastapi/nextjs", "source_page": source, "patch": update_payload, "registration": registration},
+        source_page=source,
+        flagged_for_review=True,
+    )
+    audit_write = write_admin_activity_log(supabase, audit_payload)
+    warnings: list[str] = []
+    if audit_write.warning:
+        warnings.append(audit_write.warning)
+    if not audit_write.ok and is_api_audit_log_required():
+        raise RuntimeError("audit log write required but unavailable")
+    return {"ok": True, "mode": "tournament_registration_update", "registration": registration, "warnings": warnings}
