@@ -105,3 +105,38 @@ def test_process_matches_inserts_rows_when_match_insert_succeeds():
 
     assert result["inserted"] == 1
     assert len(supabase.inserted_matches) == 1
+
+
+def test_process_matches_winner_bonus_adds_to_winners_without_extra_loser_penalty():
+    base_supabase = _FakeSupabase(matches_data=[{"id": "base"}])
+    bonus_supabase = _FakeSupabase(matches_data=[{"id": "bonus"}])
+
+    process_matches(
+        [_match_payload()],
+        supabase=base_supabase,
+        club_id="club-1",
+        name_to_id={},
+        df_players_all=_players_df(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+    )
+    bonus_result = process_matches(
+        [{**_match_payload(), "winner_bonus_elo": 5.0, "winner_bonus_reason": "tournament_semifinal_winner_bonus"}],
+        supabase=bonus_supabase,
+        club_id="club-1",
+        name_to_id={},
+        df_players_all=_players_df(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame(),
+    )
+
+    base_row = base_supabase.inserted_matches[0]
+    bonus_row = bonus_supabase.inserted_matches[0]
+    assert round(float(bonus_row["t1_p1_r_end"]) - float(base_row["t1_p1_r_end"]), 6) == 5.0
+    assert round(float(bonus_row["t1_p2_r_end"]) - float(base_row["t1_p2_r_end"]), 6) == 5.0
+    assert round(float(bonus_row["t2_p1_r_end"]) - float(base_row["t2_p1_r_end"]), 6) == 0.0
+    assert round(float(bonus_row["t2_p2_r_end"]) - float(base_row["t2_p2_r_end"]), 6) == 0.0
+    assert bonus_row["rating_bonus_elo"] == 5.0
+    assert bonus_row["rating_bonus_reason"] == "tournament_semifinal_winner_bonus"
+    assert bonus_result["winner_bonus_summary"]["match_count"] == 1
+    assert bonus_result["winner_bonus_summary"]["player_elo_total"] == 10.0
