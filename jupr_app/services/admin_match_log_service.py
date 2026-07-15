@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -14,10 +14,12 @@ MATCH_LOG_SELECT = (
     "score_t1,score_t2,is_active,context_type,context_id,created_at,updated_at"
 )
 MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2"
+DUPLICATE_RESOLUTIONS_TABLE = "admin_match_log_duplicate_resolutions"
 MAX_FETCH_ROWS = 5000
 MAX_RETURN_ROWS = 1000
 MAX_PATCHES = 100
 MAX_CLEANUP_IDS = 500
+MAX_RESOLUTION_IDS = 20
 
 
 def _truthy_env(name: str) -> bool:
@@ -61,6 +63,14 @@ def _safe_rows(resp: Any) -> list[dict[str, Any]]:
 
 def _date_sort_key(row: dict[str, Any]) -> tuple[str, int]:
     return (str(row.get("date") or row.get("created_at") or ""), int(_safe_int(row.get("id")) or 0))
+
+
+def _match_id_key(match_ids: list[int]) -> str:
+    return ",".join(str(int(match_id)) for match_id in sorted({int(match_id) for match_id in match_ids}))
+
+
+def _resolution_lookup_key(*, dup_key: str, match_ids: list[int]) -> tuple[str, str]:
+    return (str(dup_key or "").strip(), _match_id_key(match_ids))
 
 
 def _fetch_match_rows(supabase: Any, *, club_id: str, fetch_limit: int) -> tuple[list[dict[str, Any]], list[str]]:
@@ -171,15 +181,55 @@ def _match_payload(row: dict[str, Any], *, club_id: str, names: dict[int, str]) 
     }
 
 
-def _duplicate_scan(rows: list[dict[str, Any]], *, club_id: str, names: dict[int, str]) -> dict[str, Any]:
+def _resolution_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "resolution": _clean_text(row.get("resolution") or "no_issue", limit=80),
+        "reason": _clean_text(row.get("reason"), limit=500),
+        "actor_email": _clean_text(row.get("actor_email"), limit=200),
+        "actor_role": _clean_text(row.get("actor_role"), limit=80),
+        "source_page": _clean_text(row.get("source_page"), limit=120),
+        "resolved_at": _json_safe(row.get("resolved_at") or row.get("created_at")),
+    }
+
+
+def _fetch_duplicate_resolutions(supabase: Any, *, club_id: str) -> tuple[dict[tuple[str, str], dict[str, Any]], str | None]:
+    try:
+        rows = _safe_rows(
+            supabase.table(DUPLICATE_RESOLUTIONS_TABLE)
+            .select("dup_key,match_id_key,match_ids,resolution,reason,actor_email,actor_role,source_page,resolved_at,created_at")
+            .eq("club_id", str(club_id))
+            .eq("is_active", True)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001 - keep the scanner usable while migrations roll out
+        return {}, f"Duplicate no-issue resolutions are unavailable: {exc.__class__.__name__}"
+
+    resolutions: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        dup_key = str(row.get("dup_key") or "").strip()
+        match_id_key = str(row.get("match_id_key") or "").strip()
+        if dup_key and match_id_key:
+            resolutions[(dup_key, match_id_key)] = row
+    return resolutions, None
+
+
+def _duplicate_scan(
+    rows: list[dict[str, Any]],
+    *,
+    club_id: str,
+    names: dict[int, str],
+    resolved_lookup: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not rows:
-        return {"duplicate_groups": [], "duplicate_rows": [], "delete_preview": None}
+        return {"duplicate_groups": [], "duplicate_rows": [], "delete_preview": None, "resolved_duplicate_groups": []}
+    resolved_lookup = resolved_lookup or {}
     keyed = []
     for row in rows:
         keyed.append({"key": canonical_dup_key(row, str(club_id)), "row": row})
     counts = Counter(item["key"] for item in keyed)
     duplicate_keys = {key for key, count in counts.items() if count > 1}
     groups = []
+    resolved_groups = []
     duplicate_rows = []
     delete_ids: list[int] = []
     keep_ids: list[int] = []
@@ -189,11 +239,32 @@ def _duplicate_scan(rows: list[dict[str, Any]], *, club_id: str, names: dict[int
     for key in sorted(duplicate_keys):
         group_rows = [item["row"] for item in keyed if item["key"] == key]
         group_rows = sorted(group_rows, key=lambda row: int(_safe_int(row.get("id")) or 0))
+        group_ids = [int(_safe_int(row.get("id")) or 0) for row in group_rows if _safe_int(row.get("id")) is not None]
+        resolution = resolved_lookup.get(_resolution_lookup_key(dup_key=key, match_ids=group_ids))
         keep_id = int(_safe_int(group_rows[0].get("id")) or 0)
         group_delete_ids = [int(_safe_int(row.get("id")) or 0) for row in group_rows[1:] if _safe_int(row.get("id")) is not None]
+        sample = _match_payload(group_rows[0], club_id=str(club_id), names=names)
+        group_payload = {
+            "dup_key": key,
+            "dup_count": len(group_rows),
+            "keep_id": keep_id,
+            "delete_ids": group_delete_ids,
+            "ids": group_ids,
+            "league": sample.get("league"),
+            "week_tag": sample.get("week_tag"),
+            "match_type": sample.get("match_type"),
+            "score": sample.get("score"),
+            "team1": sample.get("team1"),
+            "team2": sample.get("team2"),
+        }
+
+        if resolution:
+            group_payload["resolution"] = _resolution_metadata(resolution)
+            resolved_groups.append(group_payload)
+            continue
+
         keep_ids.append(keep_id)
         delete_ids.extend(group_delete_ids)
-        sample = _match_payload(group_rows[0], club_id=str(club_id), names=names)
         if sample.get("league"):
             affected_leagues.add(str(sample.get("league")))
         for row in group_rows:
@@ -201,21 +272,7 @@ def _duplicate_scan(rows: list[dict[str, Any]], *, club_id: str, names: dict[int
                 pid = _safe_int(row.get(col))
                 if pid is not None:
                     affected_players.add(int(pid))
-        groups.append(
-            {
-                "dup_key": key,
-                "dup_count": len(group_rows),
-                "keep_id": keep_id,
-                "delete_ids": group_delete_ids,
-                "ids": [int(_safe_int(row.get("id")) or 0) for row in group_rows],
-                "league": sample.get("league"),
-                "week_tag": sample.get("week_tag"),
-                "match_type": sample.get("match_type"),
-                "score": sample.get("score"),
-                "team1": sample.get("team1"),
-                "team2": sample.get("team2"),
-            }
-        )
+        groups.append(group_payload)
         for idx, row in enumerate(group_rows, start=1):
             payload = _match_payload(row, club_id=str(club_id), names=names)
             payload["dup_rank"] = idx
@@ -236,7 +293,12 @@ def _duplicate_scan(rows: list[dict[str, Any]], *, club_id: str, names: dict[int
             "recommended_replay_scope": "ALL",
             "confirmation_text": "DELETE",
         }
-    return {"duplicate_groups": groups, "duplicate_rows": duplicate_rows, "delete_preview": delete_preview}
+    return {
+        "duplicate_groups": groups,
+        "duplicate_rows": duplicate_rows,
+        "delete_preview": delete_preview,
+        "resolved_duplicate_groups": resolved_groups,
+    }
 
 
 def _correction_plan() -> dict[str, Any]:
@@ -252,6 +314,7 @@ def _correction_plan() -> dict[str, Any]:
         "mode": "apply_enabled" if apply_enabled else "planning_only",
         "apply_endpoint": "/admin/clubs/{club_id}/match-log/edits" if apply_enabled else None,
         "duplicate_cleanup_endpoint": "/admin/clubs/{club_id}/match-log/duplicates/cleanup" if apply_enabled else None,
+        "duplicate_no_issue_endpoint": "/admin/clubs/{club_id}/match-log/duplicates/resolve" if apply_enabled else None,
         "future_apply_endpoint": "/admin/clubs/{club_id}/match-log/edits",
         "editable_fields_planned": [
             "league",
@@ -269,12 +332,14 @@ def _correction_plan() -> dict[str, Any]:
         ],
         "required_confirmation_text": "APPLY",
         "duplicate_cleanup_confirmation_text": "DELETE",
+        "duplicate_no_issue_confirmation_text": "NO ISSUE",
         "recompute_scope_for_sample_edit": example_patch_scope,
         "safety_rules": [
             "Writes require Supabase JWT auth plus manage/delete match permissions.",
             "League/date changes auto-clear week_tag unless explicitly set.",
             "Player and score changes require rating replay review before broad use.",
             "Duplicate cleanup keeps the oldest row and recommends replay history afterward.",
+            "False-positive duplicate groups can be resolved as no issue without deleting rows.",
             "Writes use FastAPI audit attribution and Python domain services.",
         ],
     }
@@ -308,11 +373,18 @@ def build_admin_match_log(
             "apply_enabled": is_admin_match_log_apply_enabled(),
             "status": "streamlit_fallback",
             "filters": filters,
-            "summary": {"scanned_matches": 0, "returned_matches": 0, "duplicate_groups": 0, "duplicate_delete_count": 0},
+            "summary": {
+                "scanned_matches": 0,
+                "returned_matches": 0,
+                "duplicate_groups": 0,
+                "duplicate_delete_count": 0,
+                "resolved_duplicate_groups": 0,
+            },
             "matches": [],
             "duplicate_groups": [],
             "duplicate_rows": [],
             "duplicate_delete_preview": None,
+            "resolved_duplicate_groups": [],
             "correction_plan": _correction_plan(),
             "warnings": ["Next Match Log is disabled. Use Streamlit Match Log until JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG is enabled for the pilot."],
         }
@@ -336,7 +408,10 @@ def build_admin_match_log(
             if pid is not None:
                 player_ids.add(int(pid))
     names = _player_names(supabase, club_id=str(club_id), player_ids=player_ids)
-    duplicate_payload = _duplicate_scan(visible_rows, club_id=str(club_id), names=names)
+    resolved_lookup, resolution_warning = _fetch_duplicate_resolutions(supabase, club_id=str(club_id))
+    if resolution_warning:
+        warnings.append(resolution_warning)
+    duplicate_payload = _duplicate_scan(visible_rows, club_id=str(club_id), names=names, resolved_lookup=resolved_lookup)
     matches = [_match_payload(row, club_id=str(club_id), names=names) for row in visible_rows]
     duplicate_delete_count = len((duplicate_payload.get("delete_preview") or {}).get("delete_ids") or [])
     return {
@@ -350,11 +425,13 @@ def build_admin_match_log(
             "returned_matches": len(matches),
             "duplicate_groups": len(duplicate_payload["duplicate_groups"]),
             "duplicate_delete_count": duplicate_delete_count,
+            "resolved_duplicate_groups": len(duplicate_payload["resolved_duplicate_groups"]),
         },
         "matches": matches,
         "duplicate_groups": duplicate_payload["duplicate_groups"],
         "duplicate_rows": duplicate_payload["duplicate_rows"],
         "duplicate_delete_preview": duplicate_payload["delete_preview"],
+        "resolved_duplicate_groups": duplicate_payload["resolved_duplicate_groups"],
         "correction_plan": _correction_plan(),
         "warnings": warnings,
     }
@@ -394,8 +471,13 @@ def apply_admin_match_log_edits(
     return {"ok": True, "mode": "applied", "source": source, **result}
 
 
-def _cleanup_candidate_payload(supabase: Any, *, club_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    rows, _warnings = _fetch_match_rows(supabase, club_id=str(club_id), fetch_limit=MAX_FETCH_ROWS)
+def _cleanup_candidate_payload(
+    supabase: Any,
+    *,
+    club_id: str,
+    suppress_resolved: bool = True,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    rows, warnings = _fetch_match_rows(supabase, club_id=str(club_id), fetch_limit=MAX_FETCH_ROWS)
     player_ids: set[int] = set()
     for row in rows:
         for col in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
@@ -403,7 +485,13 @@ def _cleanup_candidate_payload(supabase: Any, *, club_id: str) -> tuple[dict[str
             if pid is not None:
                 player_ids.add(int(pid))
     names = _player_names(supabase, club_id=str(club_id), player_ids=player_ids)
-    return _duplicate_scan(rows, club_id=str(club_id), names=names), rows
+    resolved_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    if suppress_resolved:
+        resolution_lookup, resolution_warning = _fetch_duplicate_resolutions(supabase, club_id=str(club_id))
+        resolved_lookup = resolution_lookup
+        if resolution_warning:
+            warnings.append(resolution_warning)
+    return _duplicate_scan(rows, club_id=str(club_id), names=names, resolved_lookup=resolved_lookup), rows, warnings
 
 
 def apply_admin_match_log_duplicate_cleanup(
@@ -426,12 +514,12 @@ def apply_admin_match_log_duplicate_cleanup(
     if len(requested_ids) > MAX_CLEANUP_IDS:
         raise ValueError(f"No more than {MAX_CLEANUP_IDS} duplicate IDs can be cleaned up at once.")
 
-    duplicate_payload, all_rows = _cleanup_candidate_payload(supabase, club_id=str(club_id))
+    duplicate_payload, all_rows, scan_warnings = _cleanup_candidate_payload(supabase, club_id=str(club_id), suppress_resolved=True)
     preview = duplicate_payload.get("delete_preview") or {}
     allowed_ids = {int(match_id) for match_id in (preview.get("delete_ids") or [])}
     invalid_ids = [match_id for match_id in requested_ids if match_id not in allowed_ids]
     if invalid_ids:
-        raise ValueError(f"Some requested IDs are not currently duplicate cleanup candidates: {invalid_ids[:10]}")
+        raise ValueError(f"Some requested IDs are not currently active duplicate cleanup candidates: {invalid_ids[:10]}")
 
     rows_by_id = {int(_safe_int(row.get("id")) or 0): dict(row) for row in all_rows if _safe_int(row.get("id")) is not None}
     rows_to_remove = [rows_by_id[match_id] for match_id in requested_ids if match_id in rows_by_id]
@@ -450,7 +538,7 @@ def apply_admin_match_log_duplicate_cleanup(
                 affected_players.add(int(pid))
 
     supabase.table("matches").delete().eq("club_id", str(club_id)).in_("id", requested_ids).execute()
-    warnings: list[str] = []
+    warnings: list[str] = list(scan_warnings)
     try:
         from jupr_app.domain.player_activity import recompute_last_game_at_for_players
 
@@ -498,5 +586,118 @@ def apply_admin_match_log_duplicate_cleanup(
         "affected_player_ids": sorted(affected_players),
         "recompute_scope": {"standings": True, "ratings": True},
         "recommended_replay_scope": "ALL",
+        "warnings": warnings,
+    }
+
+
+def resolve_admin_match_log_duplicate_false_positive(
+    supabase: Any,
+    *,
+    club_id: str,
+    match_ids: list[int],
+    actor_email: str,
+    actor_role: str,
+    reason: str,
+    dup_key: str | None = None,
+    source: str = "next_match_log_duplicate_no_issue",
+    confirmation_text: str = "",
+) -> dict[str, Any]:
+    if not is_admin_match_log_apply_enabled():
+        raise PermissionError("Next Match Log apply is disabled.")
+    normalized_confirmation = str(confirmation_text or "").strip().upper().replace("_", " ")
+    if normalized_confirmation != "NO ISSUE":
+        raise ValueError("Type NO ISSUE to confirm this duplicate group is a false positive.")
+
+    requested_ids = sorted({int(match_id) for match_id in (match_ids or []) if _safe_int(match_id) is not None})
+    if len(requested_ids) < 2:
+        raise ValueError("At least two match IDs are required to resolve a duplicate false positive.")
+    if len(requested_ids) > MAX_RESOLUTION_IDS:
+        raise ValueError(f"No more than {MAX_RESOLUTION_IDS} match IDs can be resolved at once.")
+
+    clean_reason = _clean_text(reason, limit=500)
+    if not clean_reason:
+        raise ValueError("Add a reason before marking a duplicate group as no issue.")
+
+    duplicate_payload, _all_rows, scan_warnings = _cleanup_candidate_payload(supabase, club_id=str(club_id), suppress_resolved=False)
+    matched_group = None
+    requested_key = _match_id_key(requested_ids)
+    for group in duplicate_payload.get("duplicate_groups") or []:
+        group_ids = [int(match_id) for match_id in (group.get("ids") or []) if _safe_int(match_id) is not None]
+        if _match_id_key(group_ids) == requested_key:
+            matched_group = group
+            break
+    if matched_group is None:
+        raise ValueError(f"Match IDs {requested_ids} are not a current duplicate group.")
+
+    matched_dup_key = str(matched_group.get("dup_key") or "").strip()
+    if dup_key and str(dup_key).strip() != matched_dup_key:
+        raise ValueError("Duplicate key no longer matches the current scan. Refresh and try again.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    resolution_payload = {
+        "club_id": str(club_id),
+        "dup_key": matched_dup_key,
+        "match_id_key": requested_key,
+        "match_ids": requested_ids,
+        "resolution": "no_issue",
+        "reason": clean_reason,
+        "actor_email": str(actor_email or "").strip().lower(),
+        "actor_role": str(actor_role or "").strip(),
+        "source_page": source,
+        "is_active": True,
+        "resolved_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+    try:
+        existing_rows = _safe_rows(
+            supabase.table(DUPLICATE_RESOLUTIONS_TABLE)
+            .select("id")
+            .eq("club_id", str(club_id))
+            .eq("dup_key", matched_dup_key)
+            .eq("match_id_key", requested_key)
+            .execute()
+        )
+        if existing_rows:
+            supabase.table(DUPLICATE_RESOLUTIONS_TABLE).update(resolution_payload).eq("club_id", str(club_id)).eq("dup_key", matched_dup_key).eq("match_id_key", requested_key).execute()
+        else:
+            supabase.table(DUPLICATE_RESOLUTIONS_TABLE).insert(resolution_payload).execute()
+    except Exception as exc:  # noqa: BLE001 - expose migration/configuration problems clearly to operators
+        raise RuntimeError(f"Could not persist duplicate no-issue resolution: {exc.__class__.__name__}") from exc
+
+    warnings: list[str] = list(scan_warnings)
+    audit_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="match_duplicate_false_positive_resolved",
+        entity_type="match_duplicate_group",
+        entity_id=requested_key,
+        before_json={"duplicate_group": matched_group},
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "dup_key": matched_dup_key,
+            "match_ids": requested_ids,
+            "resolution": "no_issue",
+            "reason": clean_reason,
+        },
+        note=f"Duplicate group marked no issue: {clean_reason}",
+        source_page=source,
+        flagged_for_review=True,
+    )
+    audit_result = write_admin_activity_log(supabase, audit_payload)
+    if audit_result.warning:
+        warnings.append(audit_result.warning)
+    if not audit_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+        raise RuntimeError("audit log write required but unavailable")
+
+    return {
+        "ok": True,
+        "mode": "duplicate_no_issue",
+        "resolution": "no_issue",
+        "dup_key": matched_dup_key,
+        "match_ids": requested_ids,
+        "reason": clean_reason,
         "warnings": warnings,
     }
