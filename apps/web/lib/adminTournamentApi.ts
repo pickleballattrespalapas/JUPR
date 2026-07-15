@@ -55,6 +55,17 @@ export type AdminTournamentSelection = {
   updated_at?: string | null;
 };
 
+export type AdminTournamentDraw = {
+  id: string;
+  tournament_id?: string | null;
+  registration_day_id?: string | null;
+  event_option_id?: string | null;
+  name: string;
+  status?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type AdminTournamentListResponse = {
   ok: boolean;
   mode?: string;
@@ -107,6 +118,7 @@ export type AdminTournamentWriteResponse = {
   tournament?: AdminTournament | null;
   tournament_id?: string;
   usage_summary?: Record<string, number>;
+  draw?: AdminTournamentDraw | null;
   registration?: AdminTournamentRegistration | null;
   registrations?: AdminTournamentRegistration[];
   selection?: AdminTournamentSelection | null;
