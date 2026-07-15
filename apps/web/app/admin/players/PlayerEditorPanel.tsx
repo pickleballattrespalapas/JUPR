@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type {
   AdminPlayerEditorDetailResponse,
@@ -8,6 +9,7 @@ import type {
   AdminPlayerEditorStatusResponse,
   AdminPlayerEditorWriteResponse
 } from "@/lib/adminPlayerEditorApi";
+import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
   apiBase: string | null;
@@ -29,7 +31,7 @@ function juprLabel(value?: number | null): string {
 }
 
 export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
-  const [token, setToken] = useState("");
+  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [players, setPlayers] = useState<AdminPlayerEditorPlayer[]>([]);
   const [detail, setDetail] = useState<AdminPlayerEditorDetailResponse | null>(null);
   const [selectedId, setSelectedId] = useState("");
@@ -47,8 +49,8 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       setMessage("API base URL is not configured.");
       return false;
     }
-    if (!token.trim()) {
-      setMessage("Paste a Supabase admin access token first.");
+    if (!accessToken) {
+      setMessage("Sign in at /admin/login before using the Player Editor.");
       return false;
     }
     if (!status.enabled) {
@@ -60,9 +62,10 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
+    if (!accessToken) throw new Error("Sign in at /admin/login before using the Player Editor.");
     const headers = new Headers(options?.headers);
     headers.set("Content-Type", "application/json");
-    headers.set("Authorization", `Bearer ${token.trim()}`);
+    headers.set("Authorization", `Bearer ${accessToken}`);
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
@@ -177,12 +180,17 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Player Editor pilot token</h2>
+        <h2 style={{ marginTop: 0 }}>Player Editor admin session</h2>
         <p style={{ color: "#475569" }}>This foundation route supports roster/detail read, add player, and basic player profile updates through FastAPI. Merge, league-rating edits, and social identity linking stay on Streamlit for now.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-          <label><strong>Supabase access token</strong><br /><input value={token} onChange={(event) => setToken(event.target.value)} type="password" style={inputStyle} /></label>
-          <button type="button" onClick={loadPlayers} disabled={saving} style={buttonStyle}>{saving ? "Working…" : "Load players"}</button>
+        <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
+          <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
+          <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
+            {accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}
+          </p>
+          {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
+          {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
+        <button type="button" onClick={loadPlayers} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Working…" : "Load players"}</button>
         {status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
       </article>
 
@@ -191,13 +199,13 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(120px, 180px) auto", gap: "0.75rem", alignItems: "end" }}>
           <label><strong>Name</strong><br /><input value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label>
           <label><strong>Starting JUPR</strong><br /><input value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} style={inputStyle} /></label>
-          <button type="button" onClick={createPlayer} disabled={saving} style={ghostButtonStyle}>Add player</button>
+          <button type="button" onClick={createPlayer} disabled={saving || !accessToken} style={ghostButtonStyle}>Add player</button>
         </div>
       </article>
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Select player</h2>
-        <select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle}>
+        <select value={selectedId} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={!accessToken}>
           <option value="">Choose a player</option>
           {players.map((player) => <option key={player.id} value={String(player.id)}>{player.name} #{player.id}{player.active === false ? " [inactive]" : ""}</option>)}
         </select>
@@ -212,7 +220,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
             <label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label>
             <label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label>
           </div>
-          <p><button type="button" onClick={savePlayer} disabled={saving} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p>
+          <p><button type="button" onClick={savePlayer} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>
             <div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div>
             <div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div>
@@ -238,7 +246,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         </article>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("required") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("required") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }
