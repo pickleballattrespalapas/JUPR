@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.services.admin_tournament_award_service import award_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
 from jupr_app.services.admin_tournament_delete_service import delete_admin_tournament_draft
 from jupr_app.services.admin_tournament_draw_service import create_admin_tournament_draw
@@ -95,6 +96,11 @@ class AdminTournamentPodiumGenerateRequest(BaseModel):
     source: str = "next_tournament_admin_generate_podium"
 
 
+class AdminTournamentPodiumAwardRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_award_podium"
+
+
 class AdminTournamentGameScoreRequest(BaseModel):
     score_a: int
     score_b: int
@@ -121,13 +127,7 @@ def _dump_model(model: BaseModel) -> dict[str, Any]:
 
 def _resolve_tournament_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
-    role_resolution = resolve_admin_role(
-        supabase=supabase,
-        club_id=str(club_id),
-        email=user.email,
-        user_id=user.user_id,
-        allowlist=set(),
-    )
+    role_resolution = resolve_admin_role(supabase=supabase, club_id=str(club_id), email=user.email, user_id=user.user_id, allowlist=set())
     if not has_permission(role_resolution.role, PERMISSION_MANAGE_TOURNAMENTS):
         denied_payload = build_activity_payload(
             club_id=str(club_id),
@@ -252,6 +252,21 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
             return generate_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium/awards")
+    def post_admin_tournament_draw_podium_awards(club_id: str, tournament_id: str, draw_id: str, payload: AdminTournamentPodiumAwardRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return award_admin_tournament_draw_podium(supabase, club_id=str(club_id), tournament_id=str(tournament_id), draw_id=str(draw_id), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
