@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type {
   AdminLeagueManagerDetailResponse,
@@ -7,6 +8,7 @@ import type {
   AdminLeagueManagerListResponse,
   AdminLeagueManagerStatusResponse
 } from "@/lib/adminLeagueManagerApi";
+import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = {
   apiBase: string | null;
@@ -38,7 +40,7 @@ function compactJson(value: unknown): string {
 }
 
 export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
-  const [token, setToken] = useState("");
+  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [leagues, setLeagues] = useState<AdminLeagueManagerLeague[]>([]);
   const [selectedLeague, setSelectedLeague] = useState("");
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
@@ -50,8 +52,8 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
       setMessage("API base URL is not configured.");
       return false;
     }
-    if (!token.trim()) {
-      setMessage("Paste a Supabase admin access token first.");
+    if (!accessToken) {
+      setMessage("Sign in at /admin/login before using League Manager.");
       return false;
     }
     if (!status.enabled) {
@@ -63,8 +65,9 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
 
   async function requestJson<T>(path: string): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
+    if (!accessToken) throw new Error("Sign in at /admin/login before using League Manager.");
     const response = await fetch(apiUrl(apiBase, path), {
-      headers: { Authorization: `Bearer ${token.trim()}` }
+      headers: { Authorization: `Bearer ${accessToken}` }
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
@@ -115,25 +118,30 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>League Manager pilot token</h2>
+        <h2 style={{ marginTop: 0 }}>League Manager admin session</h2>
         <p style={{ color: "#475569" }}>This foundation route is read-only: league list, schedule preview, config visibility, and standings. Setup, court movement, scoring, and awards stay on Streamlit for now.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-          <label><strong>Supabase access token</strong><br /><input value={token} onChange={(event) => setToken(event.target.value)} type="password" style={inputStyle} /></label>
-          <button type="button" onClick={loadLeagues} disabled={saving} style={buttonStyle}>{saving ? "Working…" : "Load leagues"}</button>
+        <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
+          <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
+          <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
+            {accessToken ? "Ready to send authorized League Manager requests." : sessionLoading ? "Checking admin session…" : "Sign in before using League Manager."}
+          </p>
+          {sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}
+          {!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}
         </div>
+        <button type="button" onClick={loadLeagues} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Working…" : "Load leagues"}</button>
         {status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
       </article>
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Select league</h2>
-        <select value={selectedLeague} onChange={(event) => loadDetail(event.target.value)} style={inputStyle}>
+        <select value={selectedLeague} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={!accessToken}>
           <option value="">Choose a league</option>
           {leagues.map((league) => <option key={league.league_name} value={league.league_name}>{league.league_name} · {league.status}</option>)}
         </select>
         {leagues.length ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>
             {leagues.map((league) => (
-              <button key={league.league_name} type="button" onClick={() => loadDetail(league.league_name)} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}>
+              <button key={league.league_name} type="button" onClick={() => loadDetail(league.league_name)} disabled={!accessToken} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}>
                 <strong>{league.league_name}</strong><br />
                 <span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem", ...statusChipStyle(league.status) }}>{league.status}</span>
               </button>
@@ -198,7 +206,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
         </>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("required") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("required") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }
