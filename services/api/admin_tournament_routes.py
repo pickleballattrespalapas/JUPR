@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_status,
     get_admin_tournament_detail,
@@ -24,6 +25,15 @@ class AdminTournamentRegistrationUpdateRequest(BaseModel):
     notes: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_registration_update"
+
+
+class AdminTournamentRegistrationBulkUpdateRequest(BaseModel):
+    registration_ids: list[str] = Field(default_factory=list)
+    registration_status: str | None = None
+    payment_status: str | None = None
+    append_note: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_registration_bulk_update"
 
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
@@ -122,6 +132,45 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/bulk")
+    def patch_admin_tournament_registrations_bulk(
+        club_id: str,
+        tournament_id: str,
+        payload: AdminTournamentRegistrationBulkUpdateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        patch = _dump_model(payload)
+        source = str(patch.pop("source", payload.source))
+        confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        registration_ids = list(patch.pop("registration_ids", payload.registration_ids) or [])
+        try:
+            return bulk_update_admin_tournament_registrations(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                registration_ids=registration_ids,
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
