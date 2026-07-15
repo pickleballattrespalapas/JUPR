@@ -242,6 +242,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "status": "guarded_off",
             "leagues_endpoint": None,
             "league_detail_endpoint": None,
+            "league_settings_update_endpoint": None,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
         }
     leagues: list[dict[str, Any]] = []
@@ -252,12 +253,13 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             leagues = []
     return {
         "enabled": True,
-        "status": "ready_for_league_manager_read_foundation",
+        "status": "ready_for_league_manager_settings_pilot",
         "leagues_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
         "league_detail_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
+        "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
-        "warnings": ["Read-only foundation only. League setup, movement, score submission, and end-of-league awards remain Streamlit-only in this slice."],
+        "warnings": ["Settings edits are enabled through guarded FastAPI. Roster movement, score submission, and end-of-league awards remain Streamlit-only in this slice."],
     }
 
 
