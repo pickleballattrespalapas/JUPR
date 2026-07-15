@@ -13,6 +13,7 @@ from jupr_app.services.admin_tournament_service import (
     is_admin_tournament_admin_enabled,
     list_admin_tournaments,
     update_admin_tournament_registration,
+    update_admin_tournament_selection,
 )
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -23,6 +24,17 @@ class AdminTournamentRegistrationUpdateRequest(BaseModel):
     notes: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_registration_update"
+
+
+class AdminTournamentSelectionUpdateRequest(BaseModel):
+    event_option_id: str | None = None
+    partner_mode: str | None = None
+    partner_name: str | None = None
+    partner_email: str | None = None
+    partner_phone: str | None = None
+    partner_note: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_tournament_admin_selection_update"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -139,6 +151,45 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 club_id=str(club_id),
                 tournament_id=str(tournament_id),
                 registration_id=str(registration_id),
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}")
+    def patch_admin_tournament_selection(
+        club_id: str,
+        tournament_id: str,
+        selection_id: str,
+        payload: AdminTournamentSelectionUpdateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        patch = _dump_model(payload)
+        source = str(patch.pop("source", payload.source))
+        confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        try:
+            return update_admin_tournament_selection(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                selection_id=str(selection_id),
                 patch=patch,
                 actor_email=actor_email,
                 actor_role=actor_role,
