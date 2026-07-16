@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-const routes = [
+const publicRoutes = [
   "/",
   "/site-map",
   "/clubs/tres-palapas",
@@ -22,8 +22,45 @@ const routes = [
   "/terms",
   "/support",
   "/contact",
-  "/data-corrections"
+  "/data-corrections",
+  "/profile-privacy",
+  "/verified-updates",
+  "/email-preferences"
 ];
+
+const staffRoutes = [
+  "/admin",
+  "/admin/guide",
+  "/admin/login",
+  "/admin/reset-password",
+  "/admin/match-log",
+  "/admin/replay-history",
+  "/admin/match-uploader",
+  "/admin/players",
+  "/admin/player-updates",
+  "/admin/player-updates/verified-requests",
+  "/admin/support-requests",
+  "/admin/league-manager",
+  "/admin/league-manager/live",
+  "/admin/league-manager/awards",
+  "/admin/league-manager/print",
+  "/admin/top-players-printable",
+  "/admin/tournaments",
+  "/admin/tournaments/bulk",
+  "/admin/tournaments/ops",
+  "/admin/tournaments/status",
+  "/admin/tournaments/delete-draft",
+  "/admin/tournament-live",
+  "/admin/weekly-recap",
+  "/admin/badges",
+  "/admin/moneyball",
+  "/admin/jupr-live",
+  "/admin/challenge-ladder",
+  "/admin/match-canonical-audit",
+  "/admin/tools"
+];
+
+const routes = [...publicRoutes, ...staffRoutes];
 
 function baseUrl(): string {
   return (process.env.NEXT_PUBLIC_JUPR_WEB_BASE_URL || process.env.JUPR_WEB_BASE_URL || "https://pickleballclubsandwich.com").replace(/\/$/, "");
@@ -35,7 +72,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return routes.map((path) => ({
     url: `${origin}${path}`,
     lastModified: now,
-    changeFrequency: "weekly",
-    priority: path === "/" ? 1 : 0.7
+    changeFrequency: path.startsWith("/admin") ? "monthly" : "weekly",
+    priority: path === "/" ? 1 : path.startsWith("/admin") ? 0.3 : 0.7
   }));
 }
