@@ -32,7 +32,7 @@ SUPABASE_OBJECTS = (
     "badges",
     "player_badges",
     "badge_eval_queue",
-    "badge_recompute_runs",
+    "badge_eval_runs",
     "tournaments",
     "tournament_registration_settings",
     "tournament_registration_days",
