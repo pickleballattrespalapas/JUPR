@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
 
 from jupr_app.data.load import load_data
+from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.gamification.badge_audit import build_badge_audit_report
 from jupr_app.domain.gamification.badge_debug import build_badge_debug_report
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id, registry
+from jupr_app.domain.gamification.recompute import run_badge_recompute
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
+CONFIRM_RECOMPUTE = "RECOMPUTE BADGES"
+CONFIRM_REVOKE = "REVOKE BADGE"
 
 
 def _truthy_env(name: str) -> bool:
@@ -121,10 +126,13 @@ def build_admin_badge_diagnostics_status(supabase: Any | None, *, club_id: str) 
             player_badge_count = 0
     return {
         "enabled": True,
-        "status": "ready_for_badge_diagnostics_read_only",
+        "status": "ready_for_badge_diagnostics_and_repair",
         "options_endpoint": "/admin/clubs/{club_id}/badges/options",
         "debug_endpoint": "/admin/clubs/{club_id}/badges/debug",
         "audit_endpoint": "/admin/clubs/{club_id}/badges/audit",
+        "recompute_endpoint": "/admin/clubs/{club_id}/badges/recompute",
+        "revoke_endpoint": "/admin/clubs/{club_id}/badges/revoke",
+        "confirmation_text": {"recompute": CONFIRM_RECOMPUTE, "revoke": CONFIRM_REVOKE},
         "badge_count": badge_count,
         "player_badge_count": player_badge_count,
         "warnings": [],
@@ -228,3 +236,154 @@ def build_admin_badge_audit(
         match_limit=int(match_limit),
     )
     return {"ok": True, "mode": "badge_audit", "report": _json_safe(report)}
+
+
+def run_admin_badge_recompute(
+    supabase: Any,
+    *,
+    club_id: str,
+    mode: str,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    league_id: str | None = None,
+    player_id: int | None = None,
+    badge_id: str | None = None,
+    context_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    include_non_live: bool = False,
+    match_limit: int = 5000,
+    revoke_reason: str | None = None,
+    source: str = "next_badge_recompute",
+) -> dict[str, Any]:
+    if not is_admin_badge_diagnostics_enabled():
+        raise PermissionError("Next Badge Diagnostics is disabled.")
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_RECOMPUTE:
+        raise ValueError(f"Type {CONFIRM_RECOMPUTE} to run badge recompute.")
+    clean_mode = _clean_text(mode or "dry-run", limit=40).lower()
+    if clean_mode not in {"dry-run", "append-only", "strict"}:
+        raise ValueError("mode must be dry-run, append-only, or strict")
+    safe_player_id = _safe_int(player_id)
+    summary = run_badge_recompute(
+        supabase,
+        club_id=str(club_id),
+        mode=clean_mode,
+        league_id=_clean_text(league_id, limit=120) or None,
+        context_id=_clean_text(context_id, limit=240) or None,
+        player_id=safe_player_id,
+        badge_id=_clean_text(badge_id, limit=120) or None,
+        since=_clean_text(since, limit=40) or None,
+        until=_clean_text(until, limit=40) or None,
+        created_by=str(actor_email or "admin"),
+        revoke_reason=_clean_text(revoke_reason, limit=400) or None,
+        allow_strict_global=False,
+        match_limit=int(match_limit or 5000),
+        include_non_live=bool(include_non_live),
+    )
+    log_result = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="badge_recompute" if clean_mode != "dry-run" else "badge_recompute_dry_run",
+            entity_type="badge_admin",
+            entity_id=str(badge_id or player_id or league_id or context_id or "scoped_recompute"),
+            before_json=None,
+            after_json={"source_client": "fastapi/nextjs", "mode": clean_mode, "summary": _json_safe(summary)},
+            note="Badge recompute from Next Badge Diagnostics",
+            source_page=source,
+            flagged_for_review=clean_mode != "dry-run",
+        ),
+    )
+    if not log_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+        raise RuntimeError("audit log write required but unavailable")
+    return {"ok": True, "mode": "badge_recompute", "recompute_mode": clean_mode, "summary": _json_safe(summary), "audit_warning": log_result.warning}
+
+
+def _select_badge_rows(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_badge_id: str | None,
+    player_id: int | None,
+    badge_id: str | None,
+    context_id: str | None,
+) -> list[dict[str, Any]]:
+    query = supabase.table("player_badges").select("*").eq("club_id", str(club_id))
+    if player_badge_id:
+        query = query.eq("id", str(player_badge_id))
+    else:
+        if player_id is None or not badge_id:
+            raise ValueError("Provide player_badge_id, or player_id plus badge_id.")
+        query = query.eq("player_id", int(player_id)).eq("badge_id", str(badge_id))
+        if context_id:
+            query = query.eq("context_id", str(context_id))
+    return _safe_rows(query.execute())
+
+
+def revoke_admin_player_badge(
+    supabase: Any,
+    *,
+    club_id: str,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    player_badge_id: str | None = None,
+    player_id: int | None = None,
+    badge_id: str | None = None,
+    context_id: str | None = None,
+    revoke_reason: str | None = None,
+    source: str = "next_badge_revoke",
+) -> dict[str, Any]:
+    if not is_admin_badge_diagnostics_enabled():
+        raise PermissionError("Next Badge Diagnostics is disabled.")
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_REVOKE:
+        raise ValueError(f"Type {CONFIRM_REVOKE} to revoke a badge row.")
+    safe_player_id = _safe_int(player_id)
+    rows = _select_badge_rows(
+        supabase,
+        club_id=str(club_id),
+        player_badge_id=_clean_text(player_badge_id, limit=120) or None,
+        player_id=safe_player_id,
+        badge_id=_clean_text(badge_id, limit=120) or None,
+        context_id=_clean_text(context_id, limit=240) or None,
+    )
+    if not rows:
+        raise ValueError("No matching player_badges rows found to revoke.")
+    now = datetime.now(timezone.utc).isoformat()
+    reason = _clean_text(revoke_reason, limit=500) or "revoked from Next Badge Diagnostics"
+    revoked_rows: list[dict[str, Any]] = []
+    for row in rows:
+        row_id = row.get("id")
+        if row_id is None:
+            continue
+        patch = {"revoked_at": now, "revoked_by": str(actor_email or "admin"), "revoke_reason": reason}
+        updated = _safe_rows(
+            supabase.table("player_badges")
+            .update(patch)
+            .eq("club_id", str(club_id))
+            .eq("id", row_id)
+            .execute()
+        )
+        revoked_rows.extend(updated or [{**row, **patch}])
+    log_result = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="badge_revoke",
+            entity_type="player_badge",
+            entity_id=str(player_badge_id or badge_id or "badge_scope"),
+            before_json={"rows": _json_safe(rows[:25]), "matched_count": len(rows)},
+            after_json={"source_client": "fastapi/nextjs", "revoked_count": len(revoked_rows), "reason": reason},
+            note="Badge row revocation from Next Badge Diagnostics",
+            source_page=source,
+            flagged_for_review=True,
+        ),
+    )
+    if not log_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+        raise RuntimeError("audit log write required but unavailable")
+    return {"ok": True, "mode": "badge_revoke", "revoked_count": len(revoked_rows), "rows": _json_safe(revoked_rows), "audit_warning": log_result.warning}
