@@ -36,7 +36,6 @@ export default async function TopPlayersPrintablePage({ searchParams }: { search
 
       <article className="no-print" style={{ ...cardStyle, marginBottom: "1rem" }}>
         <p style={{ marginTop: 0, color: "#475569" }}>Use the browser print dialog to save as PDF. Query options: <code>?limit=100</code> and <code>?active=0</code>.</p>
-        <button type="button" onClick={undefined as never} style={{ display: "none" }} />
         <Link href="/admin">Operations cockpit</Link> · <Link href="/clubs/tres-palapas/leaderboards">Public leaderboard</Link>
       </article>
 
