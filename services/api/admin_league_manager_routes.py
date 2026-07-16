@@ -2,11 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException
-from pydantic import BaseModel
+from fastapi import HTTPException, Query
+from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_MATCHES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.services.admin_league_live_service import (
+    build_admin_league_live_status,
+    create_admin_league_live_session,
+    get_admin_league_live_session,
+    list_admin_league_live_sessions,
+    save_admin_league_live_round,
+    update_admin_league_live_session_snapshot,
+)
 from jupr_app.services.admin_league_manager_roster_service import update_admin_league_manager_roster_membership
 from jupr_app.services.admin_league_manager_service import (
     build_admin_league_manager_status,
@@ -36,6 +44,44 @@ class AdminLeagueManagerRosterMembershipRequest(BaseModel):
     starting_rating: float | None = None
     confirmation_text: str = ""
     source: str = "next_league_manager_roster_update"
+
+
+class AdminLeagueLiveSessionCreateRequest(BaseModel):
+    league_name: str
+    week_tag: str = "Week 1"
+    total_rounds: int = Field(default=1, ge=1, le=50)
+    current_round: int = Field(default=1, ge=1, le=50)
+    roster: list[dict[str, Any]] = Field(default_factory=list)
+    courts: list[dict[str, Any]] = Field(default_factory=list)
+    notes: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_league_live_session_create"
+
+
+class AdminLeagueLiveSessionSnapshotRequest(BaseModel):
+    status: str | None = None
+    week_tag: str | None = None
+    total_rounds: int | None = Field(default=None, ge=1, le=50)
+    current_round: int | None = Field(default=None, ge=1, le=50)
+    roster: list[dict[str, Any]] | None = None
+    courts: list[dict[str, Any]] | None = None
+    notes: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_league_live_session_snapshot"
+
+
+class AdminLeagueLiveRoundSaveRequest(BaseModel):
+    round_label: str | None = None
+    match_date: str | None = None
+    preview: dict[str, Any] | None = None
+    matches: list[dict[str, Any]] = Field(default_factory=list)
+    movement: dict[str, Any] | None = None
+    submitted_match_count: int | None = None
+    submitted_match_ids: list[Any] = Field(default_factory=list)
+    courts: list[dict[str, Any]] = Field(default_factory=list)
+    advance_after_save: bool = True
+    confirmation_text: str = ""
+    source: str = "next_league_live_round_save"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -87,6 +133,136 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     def get_admin_league_manager_status(club_id: str) -> dict[str, Any]:
         supabase = get_supabase_client() if is_admin_league_manager_enabled() else None
         return build_admin_league_manager_status(supabase, club_id=str(club_id))
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live/status")
+    def get_admin_league_live_status(club_id: str) -> dict[str, Any]:
+        supabase = get_supabase_client() if is_admin_league_manager_enabled() else None
+        return build_admin_league_live_status(supabase, club_id=str(club_id))
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live-sessions")
+    def get_admin_league_live_sessions(
+        club_id: str,
+        status: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_league_live_sessions_list")
+        try:
+            return list_admin_league_live_sessions(supabase, club_id=str(club_id), status=status, limit=limit)
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions")
+    def post_admin_league_live_session(
+        club_id: str,
+        payload: AdminLeagueLiveSessionCreateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return create_admin_league_live_session(
+                supabase,
+                club_id=str(club_id),
+                league_name=payload.league_name,
+                week_tag=payload.week_tag,
+                total_rounds=payload.total_rounds,
+                current_round=payload.current_round,
+                roster=payload.roster,
+                courts=payload.courts,
+                notes=payload.notes,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}")
+    def get_admin_league_live_session_detail(
+        club_id: str,
+        session_id: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_league_live_session_detail")
+        try:
+            return get_admin_league_live_session(supabase, club_id=str(club_id), session_id=str(session_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.patch("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot")
+    def patch_admin_league_live_session_snapshot(
+        club_id: str,
+        session_id: str,
+        payload: AdminLeagueLiveSessionSnapshotRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        patch = _dump_model(payload)
+        confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        source = str(patch.pop("source", payload.source))
+        try:
+            return update_admin_league_live_session_snapshot(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                patch=patch,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}")
+    def post_admin_league_live_round(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundSaveRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return save_admin_league_live_round(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                round_label=payload.round_label,
+                match_date=payload.match_date,
+                preview=payload.preview,
+                matches=payload.matches,
+                movement=payload.movement,
+                submitted_match_count=payload.submitted_match_count,
+                submitted_match_ids=payload.submitted_match_ids,
+                courts=payload.courts,
+                advance_after_save=payload.advance_after_save,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.get("/admin/clubs/{club_id}/league-manager/leagues")
     def get_admin_league_manager_leagues(
