@@ -12,6 +12,7 @@ class FakeQuery:
         self.storage = storage
         self.table_name = table_name
         self.filters = []
+        self.lt_filters = []
         self.insert_payload = None
         self.update_payload = None
         self.limit_value = None
@@ -23,7 +24,8 @@ class FakeQuery:
         self.filters.append((key, value))
         return self
 
-    def lt(self, *_args, **_kwargs):
+    def lt(self, key, value):
+        self.lt_filters.append((key, value))
         return self
 
     def order(self, *_args, **_kwargs):
@@ -50,6 +52,8 @@ class FakeQuery:
         scoped = list(rows)
         for key, expected in self.filters:
             scoped = [row for row in scoped if str(row.get(key)) == str(expected)]
+        for key, expected in self.lt_filters:
+            scoped = [row for row in scoped if row.get(key) is not None and str(row.get(key)) < str(expected)]
         if self.update_payload is not None:
             updated = []
             for row in rows:
