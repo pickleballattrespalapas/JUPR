@@ -1,0 +1,37 @@
+import Link from "next/link";
+import ChallengeLadderAdminPanel from "./ChallengeLadderAdminPanel";
+
+const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+
+type StatusResponse = { enabled: boolean; status: string; summary?: Record<string, number>; warnings?: string[] };
+
+function apiBase(): string | null {
+  return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
+}
+
+async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null; error: string | null }> {
+  const base = apiBase();
+  if (!base) return { data: null, error: "Missing JUPR API base URL." };
+  try {
+    const response = await fetch(`${base.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/status`, { next: { revalidate: 30 } });
+    if (!response.ok) return { data: null, error: `API error (${response.status}).` };
+    return { data: (await response.json()) as StatusResponse, error: null };
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : "Unable to reach API." };
+  }
+}
+
+export default async function ChallengeLadderAdminPage() {
+  const clubId = "tres_palapas";
+  const { data: status, error } = await loadStatus(clubId);
+  return (
+    <section>
+      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Admin Challenge Ladder</p>
+      <h1 style={{ marginTop: 0 }}>Challenge Ladder Admin</h1>
+      <p style={{ color: "#334155", maxWidth: "860px" }}>Review ladder tiers, player eligibility, challenge buckets, and resolve challenges through guarded staff actions.</p>
+      {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Challenge Ladder status unavailable. {error}</article> : null}
+      <ChallengeLadderAdminPanel apiBase={apiBase()} clubId={clubId} status={status} />
+      <p style={{ marginTop: "1rem" }}><Link href="/clubs/tres-palapas/challenge-ladder">Public ladder</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin">Operations cockpit</Link></p>
+    </section>
+  );
+}
