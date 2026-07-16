@@ -101,8 +101,8 @@ SUPABASE_SERVICE_ROLE_KEY=<staging service role key>
 SUPABASE_ANON_KEY=<staging anon key if needed>
 JUPR_API_BASE_URL=<staging FastAPI URL>
 NEXT_PUBLIC_JUPR_API_BASE_URL=<staging FastAPI URL if needed>
-JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
-NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
+JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
+NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
 ```
 
 ## 5) SaaS guardrails
@@ -169,7 +169,7 @@ Data/environment checks:
 - `SUPABASE_URL` points to staging Supabase.
 - `SUPABASE_SERVICE_ROLE_KEY` belongs to staging.
 - `SUPABASE_TEST_DATABASE_URL` is not production.
-- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` unless intentionally testing the disabled/experimental admin path.
+- `JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` only on the isolated staging API while intentionally testing the guarded admin path; keep it disabled on production API deployments.
 
 Schema checks:
 
@@ -367,6 +367,13 @@ If any secret is exposed, rotate it immediately and remove it from history where
 ## Manual staging smoke workflow
 
 Run GitHub Actions workflow `Staging Smoke` via `workflow_dispatch` to perform read-only API/web checks against staging. Configure `STAGING_JUPR_API_BASE_URL` secret (required) and `STAGING_WEB_BASE_URL` (optional).
+
+For the full Next/FastAPI admin test surface, run `Deploy FastAPI staging to
+Fly`. It uses `fly.staging.toml`, the GitHub `staging` environment, and staging
+Supabase credentials only. The workflow refuses the production Fly app name,
+verifies the expected Supabase project ref, enables every current admin feature
+flag with email delivery in dry-run mode, and fails unless the complete schema
+and admin status route inventory is available.
 
 ## 10) Production promotion readiness report
 

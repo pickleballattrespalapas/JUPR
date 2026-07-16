@@ -15,11 +15,16 @@ on:
         options:
           - dump-prod-schema-artifact
           - apply-prod-schema-to-test
+      confirmation:
+        description: "For apply mode only, type APPLY SCHEMA TO STAGING"
+        required: false
+        type: string
 
 jobs:
   schema-copy:
     name: Run schema copy mode
     runs-on: ubuntu-latest
+    environment: staging
     permissions:
       contents: read
 
@@ -27,6 +32,9 @@ jobs:
       # Secrets are injected at runtime and must never be committed.
       SUPABASE_PROD_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
       SUPABASE_TEST_DATABASE_URL: ${{ secrets.SUPABASE_TEST_DATABASE_URL }}
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      SCHEMA_COPY_MODE: ${{ inputs.mode }}
+      SCHEMA_COPY_CONFIRMATION: ${{ inputs.confirmation }}
       PG_BIN: /usr/lib/postgresql/17/bin
 
     steps:
@@ -51,8 +59,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
 
-          pg_dump --version
-          psql --version
+          echo "$PG_BIN" >> "$GITHUB_PATH"
+          "$PG_BIN/pg_dump" --version
+          "$PG_BIN/psql" --version
 
       - name: Validate required secrets
         run: |
@@ -65,27 +74,36 @@ jobs:
             echo "Missing SUPABASE_TEST_DATABASE_URL secret"
             exit 1
           fi
+          if [ "$SUPABASE_PROD_DATABASE_URL" = "$SUPABASE_TEST_DATABASE_URL" ]; then
+            echo "Production and staging database URLs must not match"
+            exit 1
+          fi
+          if [ "$SCHEMA_COPY_MODE" = "apply-prod-schema-to-test" ] && [ "$SCHEMA_COPY_CONFIRMATION" != "APPLY SCHEMA TO STAGING" ]; then
+            echo "Apply mode requires the exact confirmation: APPLY SCHEMA TO STAGING"
+            exit 1
+          fi
+          if [ "$SCHEMA_COPY_MODE" = "apply-prod-schema-to-test" ] && [ -z "${EXPECTED_SUPABASE_PROJECT_REF:-}" ]; then
+            echo "STAGING_SUPABASE_PROJECT_REF environment variable is required for apply mode"
+            exit 1
+          fi
 
-      - name: Dump production public schema to artifact file
-        if: ${{ inputs.mode == 'dump-prod-schema-artifact' }}
+      - name: Verify staging database isolation
+        if: ${{ inputs.mode == 'apply-prod-schema-to-test' }}
+        shell: bash
         run: |
           set -euo pipefail
-          pg_dump "$SUPABASE_PROD_DATABASE_URL" \
-          echo "$PG_BIN" >> "$GITHUB_PATH"
-          "$PG_BIN/pg_dump" --version
-          "$PG_BIN/psql" --version
+          python - <<'PY'
+          import os
 
-      - name: Validate required secrets
-        run: |
-          if [ -z "$SUPABASE_PROD_DATABASE_URL" ]; then
-            echo "SUPABASE_PROD_DATABASE_URL is not set."
-            exit 1
-          fi
-
-          if [ -z "$SUPABASE_TEST_DATABASE_URL" ]; then
-            echo "SUPABASE_TEST_DATABASE_URL is not set."
-            exit 1
-          fi
+          prod = os.environ["SUPABASE_PROD_DATABASE_URL"].lower()
+          staging = os.environ["SUPABASE_TEST_DATABASE_URL"].lower()
+          expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"].strip().lower()
+          if not expected or expected not in staging:
+              raise SystemExit("Staging database URL does not contain the expected staging Supabase project ref")
+          if expected in prod:
+              raise SystemExit("Production database URL unexpectedly contains the staging Supabase project ref")
+          print(f"Verified staging database target project ref: {expected}")
+          PY
 
       - name: Check production database connectivity
         run: |
@@ -93,14 +111,16 @@ jobs:
           "$PG_BIN/psql" "$SUPABASE_PROD_DATABASE_URL" -c "select current_database(), current_user, now();" >/dev/null
 
       - name: Check test database connectivity
-        if: ${{ github.event.inputs.mode == 'apply-prod-schema-to-test' }}
+        if: ${{ inputs.mode == 'apply-prod-schema-to-test' }}
         run: |
+          set -euo pipefail
           echo "Checking test database connectivity..."
           "$PG_BIN/psql" "$SUPABASE_TEST_DATABASE_URL" -c "select current_database(), current_user, now();" >/dev/null
 
       - name: Dump production public schema to artifact file
-        if: ${{ github.event.inputs.mode == 'dump-prod-schema-artifact' }}
+        if: ${{ inputs.mode == 'dump-prod-schema-artifact' }}
         run: |
+          set -euo pipefail
           "$PG_BIN/pg_dump" \
             --schema-only \
             --schema=public \
@@ -110,7 +130,7 @@ jobs:
             > prod_public_schema.sql
 
       - name: Upload production public schema artifact
-        if: ${{ github.event.inputs.mode == 'dump-prod-schema-artifact' }}
+        if: ${{ inputs.mode == 'dump-prod-schema-artifact' }}
         uses: actions/upload-artifact@v4
         with:
           name: prod-public-schema
@@ -118,8 +138,9 @@ jobs:
           if-no-files-found: error
 
       - name: Apply production public schema to Supabase Test branch
-        if: ${{ github.event.inputs.mode == 'apply-prod-schema-to-test' }}
+        if: ${{ inputs.mode == 'apply-prod-schema-to-test' }}
         run: |
+          set -euo pipefail
           # SAFETY WARNING:
           # This step must target the Supabase Test branch database only.
           # Never set SUPABASE_TEST_DATABASE_URL to a production database.

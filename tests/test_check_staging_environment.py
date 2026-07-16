@@ -37,6 +37,8 @@ def _args(**kwargs):
         "api_base_url": None,
         "require_api": False,
         "require_supabase": False,
+        "require_supabase_isolation": False,
+        "expected_supabase_project_ref": None,
         "club_slug": "tres-palapas",
         "club_id": "tres_palapas",
     }
@@ -122,6 +124,52 @@ def test_mocked_supabase_table_checks(monkeypatch):
     assert summary2["checked_tables"]["replay_jobs"]["status"] == "error"
 
 
+def test_supabase_schema_inventory_covers_full_next_workflows():
+    required = {
+        "league_live_sessions",
+        "league_live_rounds",
+        "league_live_courts",
+        "player_profile_update_subscriptions",
+        "player_profile_update_outbox",
+        "tournament_registration_settings",
+        "tournament_registration_partner_requests",
+        "tournament_registration_team_links",
+        "tournament_event_draws",
+        "tournament_games",
+        "tournament_podium",
+    }
+    assert required.issubset(set(cse.SUPABASE_OBJECTS))
+
+
+def test_required_supabase_isolation_needs_expected_project_ref(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_URL", "https://stageproject.supabase.co")
+    rc, summary = cse.run_checks(_args(require_supabase_isolation=True))
+    assert rc == 1
+    assert summary["supabase_isolation"]["verified"] is False
+    assert any("isolation verification requires" in err for err in summary["errors"])
+
+
+def test_supabase_isolation_rejects_project_mismatch(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_URL", "https://productionref.supabase.co")
+    rc, summary = cse.run_checks(
+        _args(require_supabase_isolation=True, expected_supabase_project_ref="stagingref")
+    )
+    assert rc == 1
+    assert any("project mismatch" in err for err in summary["errors"])
+
+
+def test_supabase_isolation_accepts_matching_project(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_URL", "https://stagingref.supabase.co")
+    rc, summary = cse.run_checks(
+        _args(require_supabase_isolation=True, expected_supabase_project_ref="stagingref")
+    )
+    assert rc == 0
+    assert summary["supabase_isolation"]["verified"] is True
+
+
 def test_mocked_api_checks(monkeypatch):
     monkeypatch.setenv("JUPR_ENV", "staging")
 
@@ -140,11 +188,54 @@ def test_mocked_api_checks(monkeypatch):
     assert summary["checked_endpoints"]["/health"]["status"] == "ok"
     assert "/admin/operations/status" in summary["checked_endpoints"]
     assert "/admin/clubs/tres_palapas/tools/status" in summary["checked_endpoints"]
+    assert "/admin/clubs/tres_palapas/tournaments/setup/status" in summary["checked_endpoints"]
+    assert "/admin/clubs/tres_palapas/match-canonical-audit/status" in summary["checked_endpoints"]
 
     monkeypatch.setattr(cse, "_http_get_json", lambda _url: (500, None, "HTTP 500"))
     rc2, summary2 = cse.run_checks(_args(api_base_url="https://api.example.com", require_api=True))
     assert rc2 == 1
     assert summary2["checked_endpoints"]["/health"]["status"] == "error"
+
+
+def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    for name in cse.FULL_NEXT_ADMIN_FLAGS:
+        monkeypatch.setenv(name, "1")
+
+    def fake_get(url: str):
+        if url.endswith("/health"):
+            return 200, {"ok": True}, None
+        if url.endswith("/admin/operations/status"):
+            return 200, {"environment": "staging", "write_pilot_enabled": True, "enabled_workflows": []}, None
+        if "/admin/clubs/" in url and url.endswith("/status"):
+            return 200, {"enabled": True}, None
+        if url.endswith("/leaderboards"):
+            return 200, {"club": {}, "leaderboard": []}, None
+        return 200, {"id": "1", "slug": "tres-palapas", "name": "Tres"}, None
+
+    monkeypatch.setattr(cse, "_http_get_json", fake_get)
+    rc, summary = cse.run_checks(
+        _args(api_base_url="https://api.example.com", require_api=True, expect_full_next_admin=True)
+    )
+    assert rc == 0
+    assert all(
+        summary["checked_endpoints"][template.format(club_id="tres_palapas")]["enabled"] is True
+        for template in cse.ADMIN_STATUS_PATHS
+    )
+
+    disabled_path = "/admin/clubs/tres_palapas/tournaments/setup/status"
+
+    def fake_disabled_get(url: str):
+        if url.endswith(disabled_path):
+            return 200, {"enabled": False}, None
+        return fake_get(url)
+
+    monkeypatch.setattr(cse, "_http_get_json", fake_disabled_get)
+    rc2, summary2 = cse.run_checks(
+        _args(api_base_url="https://api.example.com", require_api=True, expect_full_next_admin=True)
+    )
+    assert rc2 == 1
+    assert summary2["checked_endpoints"][disabled_path]["status"] == "error"
 
 
 def test_json_output_is_valid(monkeypatch, capsys):

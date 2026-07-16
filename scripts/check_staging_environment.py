@@ -15,14 +15,40 @@ SUPABASE_OBJECTS = (
     "players",
     "matches",
     "public_leaderboards",
+    "leagues_metadata",
+    "league_ratings",
     "admin_role_assignments",
     "admin_activity_log",
+    "admin_match_log_duplicate_resolutions",
     "replay_jobs",
     "live_sessions",
+    "league_live_sessions",
+    "league_live_rounds",
+    "league_live_courts",
     "public_support_requests",
+    "player_profile_update_subscriptions",
+    "player_profile_update_outbox",
+    "player_weekly_profile_digests",
+    "badges",
     "player_badges",
     "badge_eval_queue",
+    "badge_recompute_runs",
     "tournaments",
+    "tournament_registration_settings",
+    "tournament_registration_days",
+    "tournament_event_options",
+    "tournament_registrations",
+    "tournament_registration_selections",
+    "tournament_registration_partner_requests",
+    "tournament_registration_team_links",
+    "tournament_registration_team_members",
+    "tournament_event_draws",
+    "tournament_teams",
+    "tournament_games",
+    "tournament_podium",
+    "weekly_recaps",
+    "ladder_settings",
+    "ladder_roster",
     "ladder_challenges",
 )
 
@@ -43,11 +69,31 @@ FULL_NEXT_ADMIN_FLAGS = (
     "JUPR_ENABLE_NEXT_ADMIN_MONEYBALL",
     "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
     "JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER",
+    "JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT",
     "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
 )
 
 FULL_NEXT_STAGING_OPTIONAL_FLAGS = (
     "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS",
+)
+
+ADMIN_STATUS_PATHS = (
+    "/admin/clubs/{club_id}/match-uploader/status",
+    "/admin/clubs/{club_id}/players/editor/status",
+    "/admin/clubs/{club_id}/player-updates/status",
+    "/admin/clubs/{club_id}/verified-updates/status",
+    "/admin/clubs/{club_id}/support-requests/status",
+    "/admin/clubs/{club_id}/league-manager/status",
+    "/admin/clubs/{club_id}/league-manager/live/status",
+    "/admin/clubs/{club_id}/tournaments/admin/status",
+    "/admin/clubs/{club_id}/tournaments/setup/status",
+    "/admin/clubs/{club_id}/weekly-recap/status",
+    "/admin/clubs/{club_id}/badges/status",
+    "/admin/clubs/{club_id}/moneyball/status",
+    "/admin/clubs/{club_id}/jupr-live/status",
+    "/admin/clubs/{club_id}/challenge-ladder/status",
+    "/admin/clubs/{club_id}/match-canonical-audit/status",
+    "/admin/clubs/{club_id}/tools/status",
 )
 
 
@@ -80,6 +126,50 @@ def _looks_production(value: str | None) -> bool:
         return False
     lower = value.lower()
     return any(marker in lower for marker in PROD_MARKERS)
+
+
+def _supabase_project_ref(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    try:
+        host = (parse.urlsplit(raw).hostname or "").strip().lower()
+    except Exception:
+        return None
+    if not host.endswith(".supabase.co"):
+        return None
+    project_ref = host.split(".", 1)[0]
+    return project_ref or None
+
+
+def _check_supabase_isolation(
+    summary: dict[str, Any],
+    *,
+    expected_project_ref: str | None,
+    require_isolation: bool,
+) -> None:
+    expected = str(expected_project_ref or os.getenv("STAGING_SUPABASE_PROJECT_REF") or "").strip().lower()
+    actual = _supabase_project_ref(os.getenv("SUPABASE_URL"))
+    summary["supabase_isolation"] = {
+        "expected_project_ref": expected or None,
+        "actual_project_ref": actual,
+        "verified": bool(expected and actual and expected == actual),
+    }
+    if require_isolation and not expected:
+        summary["errors"].append(
+            "Supabase isolation verification requires --expected-supabase-project-ref or STAGING_SUPABASE_PROJECT_REF."
+        )
+    if expected and not actual:
+        summary["errors"].append("SUPABASE_URL is not a recognizable *.supabase.co project URL.")
+    elif expected and actual != expected:
+        summary["errors"].append(
+            f"Supabase staging project mismatch: expected {expected!r}, got {actual!r}."
+        )
+
+    staging_url = str(os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
+    for prod_name in ("SUPABASE_PROD_URL", "SUPABASE_PRODUCTION_URL"):
+        production_url = str(os.getenv(prod_name) or "").strip().rstrip("/")
+        if staging_url and production_url and staging_url == production_url:
+            summary["errors"].append(f"SUPABASE_URL matches {prod_name}; refusing staging verification.")
 
 
 def _flag_status(names: tuple[str, ...]) -> dict[str, bool]:
@@ -152,20 +242,24 @@ def _http_get_json(url: str) -> tuple[int, Any, str | None]:
         return 0, None, str(exc)
 
 
-def _check_api(summary: dict[str, Any], base_url: str, club_slug: str, club_id: str) -> None:
+def _check_api(
+    summary: dict[str, Any],
+    base_url: str,
+    club_slug: str,
+    club_id: str,
+    *,
+    expect_full_next_admin: bool,
+) -> None:
     base = base_url.rstrip("/")
     endpoints = {
         "/health": f"{base}/health",
         "/admin/operations/status": f"{base}/admin/operations/status",
-        f"/admin/clubs/{club_id}/match-uploader/status": f"{base}/admin/clubs/{club_id}/match-uploader/status",
-        f"/admin/clubs/{club_id}/league-manager/status": f"{base}/admin/clubs/{club_id}/league-manager/status",
-        f"/admin/clubs/{club_id}/tournaments/status": f"{base}/admin/clubs/{club_id}/tournaments/status",
-        f"/admin/clubs/{club_id}/jupr-live/status": f"{base}/admin/clubs/{club_id}/jupr-live/status",
-        f"/admin/clubs/{club_id}/challenge-ladder/status": f"{base}/admin/clubs/{club_id}/challenge-ladder/status",
-        f"/admin/clubs/{club_id}/tools/status": f"{base}/admin/clubs/{club_id}/tools/status",
         f"/clubs/{club_slug}": f"{base}/clubs/{club_slug}",
         f"/clubs/{club_slug}/leaderboards": f"{base}/clubs/{club_slug}/leaderboards",
     }
+    for template in ADMIN_STATUS_PATHS:
+        path = template.format(club_id=club_id)
+        endpoints[path] = f"{base}{path}"
     results: dict[str, dict[str, Any]] = {}
     for path, url in endpoints.items():
         status, payload, err = _http_get_json(url)
@@ -180,6 +274,20 @@ def _check_api(summary: dict[str, Any], base_url: str, club_slug: str, club_id: 
         if path == "/admin/operations/status" and isinstance(payload, dict):
             enabled = payload.get("enabled_workflows") or []
             results[path]["enabled_workflows"] = enabled
+            results[path]["environment"] = payload.get("environment")
+            results[path]["write_pilot_enabled"] = payload.get("write_pilot_enabled")
+            if expect_full_next_admin and payload.get("environment") != "staging":
+                results[path]["status"] = "error"
+                summary["errors"].append("Admin operations status is not reporting environment=staging.")
+            if expect_full_next_admin and payload.get("write_pilot_enabled") is not True:
+                results[path]["status"] = "error"
+                summary["errors"].append("Admin operations status is not reporting write_pilot_enabled=true.")
+        if path in {template.format(club_id=club_id) for template in ADMIN_STATUS_PATHS}:
+            enabled = payload.get("enabled") if isinstance(payload, dict) else None
+            results[path]["enabled"] = enabled
+            if expect_full_next_admin and enabled is not True:
+                results[path]["status"] = "error"
+                summary["errors"].append(f"Full Next admin staging requested, but API status is not enabled: {path}")
         if path.startswith("/clubs/") and path.endswith("/leaderboards"):
             if not isinstance(payload, dict) or "club" not in payload or "leaderboard" not in payload:
                 results[path]["status"] = "warning"
@@ -206,6 +314,7 @@ def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         },
         "checked_tables": {},
         "checked_endpoints": {},
+        "supabase_isolation": {},
     }
     if env == "production":
         summary["errors"].append("Refusing to run full staging verification with JUPR_ENV=production")
@@ -228,11 +337,22 @@ def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if _looks_production(api_base):
         summary["warnings"].append("JUPR_API_BASE_URL appears to include production markers.")
 
+    _check_supabase_isolation(
+        summary,
+        expected_project_ref=args.expected_supabase_project_ref,
+        require_isolation=bool(args.require_supabase_isolation),
+    )
     _check_full_next_flags(summary, expect_full_next_admin=bool(args.expect_full_next_admin))
     _check_email_mode(summary)
     _check_supabase_objects(summary, require_supabase=args.require_supabase)
     if api_base:
-        _check_api(summary, api_base, args.club_slug, args.club_id)
+        _check_api(
+            summary,
+            api_base,
+            args.club_slug,
+            args.club_id,
+            expect_full_next_admin=bool(args.expect_full_next_admin),
+        )
     elif args.require_api:
         summary["errors"].append("API checks required but no API base URL provided.")
     summary["ok"] = not summary["errors"]
@@ -246,6 +366,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-base-url")
     parser.add_argument("--require-api", action="store_true")
     parser.add_argument("--require-supabase", action="store_true")
+    parser.add_argument("--require-supabase-isolation", action="store_true")
+    parser.add_argument("--expected-supabase-project-ref")
     parser.add_argument("--club-slug", default="tres-palapas")
     parser.add_argument("--club-id", default="tres_palapas")
     return parser

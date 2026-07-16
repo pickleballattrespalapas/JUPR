@@ -103,8 +103,12 @@ JUPR_API_BASE_URL=<staging FastAPI URL>
 NEXT_PUBLIC_JUPR_API_BASE_URL=<staging FastAPI URL>
 NEXT_PUBLIC_JUPR_WEB_BASE_URL=<staging Vercel URL>
 NEXT_PUBLIC_JUPR_ENV=staging
-NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0
+NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
 ```
+
+The staging API must be the dedicated `juprleagues-api-staging` Fly app backed
+by staging Supabase. Keep the score-entry browser flag disabled in production;
+it is enabled in preview solely so the full workflow can be tested.
 
 Production web environment variables should use the primary domain after Vercel verification:
 
