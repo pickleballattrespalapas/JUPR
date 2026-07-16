@@ -128,7 +128,7 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER",
         status_when_disabled="guarded_off",
-        next_action="Pilot manual/batch plus round-robin scheduling and new-player creation, then replace token-paste UX with the real admin session shell.",
+        next_action="Pilot manual/batch, singles input, round-robin scheduling, and new-player creation; player update emails can run after finished batches when enabled.",
         safety_notes=(
             "Manual/batch and round-robin submission require Supabase JWT auth with enter_scores permission.",
             "Writes call FastAPI and the Python process_matches domain path.",
@@ -140,16 +140,33 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         label="Player Editor",
         streamlit_page_key="player_editor",
         next_route="/admin/players",
-        api_scope="player_roster_detail_create_update_foundation",
+        api_scope="player_roster_detail_create_update_merge_social",
         access="staff",
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
         status_when_disabled="streamlit_fallback",
-        next_action="Pilot player roster/detail, add-player, and basic player update through FastAPI; keep merges, league-rating edits, and social identity linking on Streamlit until replay safety is proven.",
+        next_action="Use guarded player create/update, league-rating edits, social identity linking, and high-friction merge; run Replay History ALL after production merge.",
         safety_notes=(
             "Create/update requires Supabase JWT auth with manage_players permission.",
-            "Basic player writes are audit-attributed and club-scoped.",
-            "Merge, league-rating edits, and social identity linking remain Streamlit-only in this foundation slice.",
+            "Player merge rewires match history and is audit-flagged.",
+            "Replay History ALL is required after production merge operations.",
+        ),
+    ),
+    AdminWorkflowDefinition(
+        key="player_updates",
+        label="Player Update Emails",
+        streamlit_page_key="player_updates_admin",
+        next_route="/admin/player-updates",
+        api_scope="player_update_digest_range_send",
+        access="staff",
+        risk="high",
+        env_flag="JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
+        status_when_disabled="streamlit_fallback",
+        next_action="Generate and send date-range player update email reports to verified subscribers after completed batch sessions.",
+        safety_notes=(
+            "Requires Supabase JWT auth with manage_subscriptions permission.",
+            "Uses existing SMTP_* transactional email configuration and JUPR_EMAIL_MODE safety controls.",
+            "Automatic post-batch sending is separately gated by JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS.",
         ),
     ),
     AdminWorkflowDefinition(
@@ -157,16 +174,16 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         label="League Manager",
         streamlit_page_key="league_manager",
         next_route="/admin/league-manager",
-        api_scope="league_list_detail_schedule_standings_read_foundation",
+        api_scope="league_settings_roster_membership_read_foundation",
         access="staff",
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
         status_when_disabled="streamlit_fallback",
-        next_action="Pilot read-only league list/detail, schedule preview, and standings visibility through FastAPI; keep setup, roster movement, score submission, and awards writes Streamlit-only for now.",
+        next_action="Pilot league settings and roster membership; keep live court movement, score submission, and awards staged behind explicit review/publish.",
         safety_notes=(
-            "Read foundation requires Supabase JWT auth with manage_matches permission.",
-            "No League Manager writes are enabled in this slice.",
-            "Live ladder movement, score entry, and end-of-league award workflows remain Streamlit-only until recovery paths are proven.",
+            "League Manager routes require Supabase JWT auth with manage_matches permission.",
+            "Settings and roster writes are audit-attributed and club-scoped.",
+            "Live ladder movement, score entry, and end-of-league award workflows remain next migration layers.",
         ),
     ),
     AdminWorkflowDefinition(
@@ -179,7 +196,7 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER",
         status_when_disabled="streamlit_fallback",
-        next_action="Port after core score/correction foundation or as a tightly scoped pilot for closed-club operations.",
+        next_action="Keep lowest priority until core score/correction, tournament, League Manager, player update, and email safety workflows are proven.",
         safety_notes=("Challenge completion can insert matches and move ladder ranks.",),
     ),
     AdminWorkflowDefinition(
@@ -187,13 +204,13 @@ WORKFLOWS: tuple[AdminWorkflowDefinition, ...] = (
         label="Tournament Admin / Ops",
         streamlit_page_key="tournaments",
         next_route="/admin/tournaments",
-        api_scope="teams_draws_scores_podiums_trophies",
+        api_scope="teams_draws_scores_podiums_trophies_official_publish",
         access="staff",
         risk="high",
         env_flag="JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS",
         status_when_disabled="streamlit_fallback",
-        next_action="Port after public registration intake is validated and score/correction foundations exist.",
-        safety_notes=("Draw creation, score finalization, podiums, and trophy awards are staff-controlled.",),
+        next_action="Use guarded registration, draw, scoring, podium, award, official publish, singles, and winner-bonus workflows; Tournament Live remains a separate tailored surface.",
+        safety_notes=("Draw creation, score finalization, podiums, trophy awards, and official match publish are staff-controlled.",),
     ),
     AdminWorkflowDefinition(
         key="weekly_recap_admin",
@@ -238,6 +255,9 @@ def _workflow_payload(workflow: AdminWorkflowDefinition, *, pilot_enabled: bool)
     if workflow.key == "match_log":
         payload["apply_env_flag"] = "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY"
         payload["apply_enabled"] = _truthy_env("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY")
+    if workflow.key == "player_updates":
+        payload["auto_send_env_flag"] = "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"
+        payload["auto_send_enabled"] = _truthy_env("JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS")
     return payload
 
 
@@ -265,11 +285,12 @@ def build_admin_operations_status() -> dict[str, Any]:
             "replay_history",
             "score_entry",
             "match_uploader",
+            "player_updates",
             "player_editor",
             "league_manager",
-            "challenge_ladder_admin",
             "tournament_admin",
             "weekly_recap_admin",
+            "challenge_ladder_admin",
             "admin_tools",
         ],
         "pilot_gates": list(PILOT_GATES),
