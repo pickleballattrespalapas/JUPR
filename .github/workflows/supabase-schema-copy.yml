@@ -94,10 +94,22 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os
+          from urllib.parse import unquote, urlsplit
 
           prod = os.environ["SUPABASE_PROD_DATABASE_URL"].lower()
           staging = os.environ["SUPABASE_TEST_DATABASE_URL"].lower()
           expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"].strip().lower()
+          parsed = urlsplit(staging)
+          safe_username = unquote(parsed.username or "<missing>")
+          safe_host = parsed.hostname or "<missing>"
+          safe_port = parsed.port or "<default>"
+          safe_database = (parsed.path or "/<missing>").lstrip("/")
+          print(f"Expected staging project ref: {expected}")
+          print(
+              "Parsed staging target: "
+              f"username={safe_username}, host={safe_host}, "
+              f"port={safe_port}, database={safe_database}"
+          )
           if not expected or expected not in staging:
               raise SystemExit("Staging database URL does not contain the expected staging Supabase project ref")
           if expected in prod:
