@@ -51,6 +51,7 @@ const routeGroups = [
     routes: [
       ["Operations cockpit", "/admin"],
       ["Operations guide", "/admin/guide"],
+      ["Theme QA", "/admin/theme-qa"],
       ["Staff sign-in", "/admin/login"],
       ["Reset password", "/admin/reset-password"],
       ["Match Log", "/admin/match-log"],
