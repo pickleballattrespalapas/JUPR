@@ -137,7 +137,22 @@ If the `live_sessions` migration/grants are still being applied in staging, allo
 JUPR_SMOKE_ARGS=--allow-live-unconfigured make public-web-smoke
 ```
 
-The same check is available through the manual GitHub Actions workflow `Staging Smoke`. Configure `STAGING_JUPR_API_BASE_URL` as a repository secret and optionally configure `STAGING_WEB_BASE_URL`, or provide URLs as workflow inputs.
+The same check is available through the manual GitHub Actions workflow
+`Staging Smoke`. It now treats the Vercel browser pass as part of the gate, so
+configure the following in the GitHub `staging` environment (or provide the URL
+input where supported):
+
+- `STAGING_JUPR_API_BASE_URL`: the isolated FastAPI staging origin;
+- `STAGING_WEB_BASE_URL`: the protected Vercel Preview/staging origin;
+- `STAGING_SUPABASE_URL`: the exact isolated Auth origin the Preview must report;
+- `VERCEL_AUTOMATION_BYPASS_SECRET`: Vercel Deployment Protection automation
+  bypass value used only by the browser test.
+
+The Chromium pass covers the critical public and admin shells, fails on page or
+console errors, refuses known production domains, and asserts the sanitized
+`/api/environment` contract reports Preview + staging API + staging Auth
+isolation. Browser traces, screenshots, and video are retained as GitHub
+artifacts when the gate fails.
 
 ## Guardrails and explicit warnings
 
@@ -159,7 +174,7 @@ The same check is available through the manual GitHub Actions workflow `Staging 
 6. Confirm every staging admin workflow flag is enabled on the dedicated staging API.
 7. Confirm `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1` only for Vercel staging/preview.
 8. Confirm `JUPR_EMAIL_MODE=dry_run` before write-flow testing.
-9. Validate health, full admin status routes, public API routes, and public web routes before internal staging demos.
+9. Validate health, full admin status routes, public API routes, public web routes, and the Chromium staging smoke before internal staging demos.
 
 ## Not in scope yet
 
