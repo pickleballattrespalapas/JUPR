@@ -245,6 +245,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "league_detail_endpoint": None,
             "league_settings_update_endpoint": None,
             "league_roster_update_endpoint": None,
+            "league_live_sessions_endpoint": None,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
         }
     leagues: list[dict[str, Any]] = []
@@ -255,14 +256,15 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             leagues = []
     return {
         "enabled": True,
-        "status": "ready_for_league_manager_roster_pilot",
+        "status": "ready_for_league_manager_roster_and_live_pilot",
         "leagues_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
         "league_detail_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_roster_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}",
+        "league_live_sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
-        "warnings": ["Settings and roster membership edits are enabled through guarded FastAPI. Score submission and end-of-league awards remain Streamlit-only in this slice."],
+        "warnings": ["Settings, roster membership, browser-print exports, and persisted League Live sessions are enabled through guarded FastAPI. Corrections still route through Match Log/Replay History."],
     }
 
 
