@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, parse, request
@@ -13,10 +12,42 @@ from jupr_app.data.client import make_supabase
 PROD_MARKERS = ("prod", "production", "live")
 SUPABASE_OBJECTS = (
     "clubs",
+    "players",
+    "matches",
     "public_leaderboards",
     "admin_role_assignments",
     "admin_activity_log",
     "replay_jobs",
+    "live_sessions",
+    "public_support_requests",
+    "player_badges",
+    "badge_eval_queue",
+    "tournaments",
+    "ladder_challenges",
+)
+
+FULL_NEXT_ADMIN_FLAGS = (
+    "JUPR_ENABLE_NEXT_ADMIN_SHELL",
+    "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
+    "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
+    "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
+    "JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY",
+    "JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER",
+    "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
+    "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
+    "JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS",
+    "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
+    "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS",
+    "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
+    "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
+    "JUPR_ENABLE_NEXT_ADMIN_MONEYBALL",
+    "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
+    "JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER",
+    "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
+)
+
+FULL_NEXT_STAGING_OPTIONAL_FLAGS = (
+    "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS",
 )
 
 
@@ -26,12 +57,8 @@ class CheckResult:
     detail: str
 
 
-
 def _truthy(value: str | None) -> bool:
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
 def _mask_url(raw: str | None) -> str | None:
@@ -48,13 +75,46 @@ def _mask_url(raw: str | None) -> str | None:
         return "<unparseable-url>"
 
 
-
 def _looks_production(value: str | None) -> bool:
     if not value:
         return False
     lower = value.lower()
     return any(marker in lower for marker in PROD_MARKERS)
 
+
+def _flag_status(names: tuple[str, ...]) -> dict[str, bool]:
+    return {name: _truthy(os.getenv(name)) for name in names}
+
+
+def _check_full_next_flags(summary: dict[str, Any], *, expect_full_next_admin: bool) -> None:
+    required = _flag_status(FULL_NEXT_ADMIN_FLAGS)
+    optional = _flag_status(FULL_NEXT_STAGING_OPTIONAL_FLAGS)
+    summary["next_admin_flags"] = {
+        "required": required,
+        "optional": optional,
+        "required_enabled_count": sum(1 for value in required.values() if value),
+        "required_total_count": len(required),
+    }
+    missing = [name for name, enabled in required.items() if not enabled]
+    if missing and expect_full_next_admin:
+        summary["errors"].append("Full Next admin staging requested, but these flags are disabled: " + ", ".join(missing))
+    elif missing:
+        summary["warnings"].append("Some Next admin workflow flags are disabled: " + ", ".join(missing))
+
+
+def _check_email_mode(summary: dict[str, Any]) -> None:
+    mode = os.getenv("JUPR_EMAIL_MODE", "").strip().lower()
+    redirect = os.getenv("JUPR_STAGING_EMAIL_REDIRECT_TO", "").strip()
+    summary["email"] = {
+        "JUPR_EMAIL_MODE": mode or None,
+        "JUPR_STAGING_EMAIL_REDIRECT_TO_present": bool(redirect),
+        "SMTP_HOST_present": bool(os.getenv("SMTP_HOST", "").strip()),
+        "SMTP_FROM_EMAIL_present": bool(os.getenv("SMTP_FROM_EMAIL", "").strip()),
+    }
+    if mode == "live":
+        summary["warnings"].append("JUPR_EMAIL_MODE=live. For staging validation, dry_run or staging_redirect is safer until final email approval.")
+    if mode == "staging_redirect" and not redirect:
+        summary["errors"].append("JUPR_EMAIL_MODE=staging_redirect requires JUPR_STAGING_EMAIL_REDIRECT_TO.")
 
 
 def _check_supabase_objects(summary: dict[str, Any], require_supabase: bool) -> None:
@@ -64,28 +124,25 @@ def _check_supabase_objects(summary: dict[str, Any], require_supabase: bool) -> 
         if require_supabase:
             summary["errors"].append("Supabase checks requested but SUPABASE_URL/key is missing.")
         return
-
     try:
         supabase = make_supabase(url, key)
     except Exception as exc:
         summary["errors"].append(f"Failed to initialize Supabase client: {exc}")
         return
-
     checked: dict[str, dict[str, str]] = {}
     for obj in SUPABASE_OBJECTS:
         try:
             supabase.table(obj).select("*").limit(1).execute()
             checked[obj] = {"status": "ok", "detail": "readable"}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - environment report should continue
             checked[obj] = {"status": "error", "detail": str(exc)}
             summary["errors"].append(f"Supabase object check failed: {obj}")
     summary["checked_tables"] = checked
 
 
-
 def _http_get_json(url: str) -> tuple[int, Any, str | None]:
     try:
-        req = request.Request(url, method="GET")
+        req = request.Request(url, method="GET", headers={"Accept": "application/json"})
         with request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8")
             return resp.status, json.loads(body), None
@@ -95,16 +152,21 @@ def _http_get_json(url: str) -> tuple[int, Any, str | None]:
         return 0, None, str(exc)
 
 
-
-def _check_api(summary: dict[str, Any], base_url: str, club_slug: str) -> None:
+def _check_api(summary: dict[str, Any], base_url: str, club_slug: str, club_id: str) -> None:
     base = base_url.rstrip("/")
     endpoints = {
         "/health": f"{base}/health",
+        "/admin/operations/status": f"{base}/admin/operations/status",
+        f"/admin/clubs/{club_id}/match-uploader/status": f"{base}/admin/clubs/{club_id}/match-uploader/status",
+        f"/admin/clubs/{club_id}/league-manager/status": f"{base}/admin/clubs/{club_id}/league-manager/status",
+        f"/admin/clubs/{club_id}/tournaments/status": f"{base}/admin/clubs/{club_id}/tournaments/status",
+        f"/admin/clubs/{club_id}/jupr-live/status": f"{base}/admin/clubs/{club_id}/jupr-live/status",
+        f"/admin/clubs/{club_id}/challenge-ladder/status": f"{base}/admin/clubs/{club_id}/challenge-ladder/status",
+        f"/admin/clubs/{club_id}/tools/status": f"{base}/admin/clubs/{club_id}/tools/status",
         f"/clubs/{club_slug}": f"{base}/clubs/{club_slug}",
         f"/clubs/{club_slug}/leaderboards": f"{base}/clubs/{club_slug}/leaderboards",
     }
     results: dict[str, dict[str, Any]] = {}
-
     for path, url in endpoints.items():
         status, payload, err = _http_get_json(url)
         if err:
@@ -112,20 +174,21 @@ def _check_api(summary: dict[str, Any], base_url: str, club_slug: str) -> None:
             summary["errors"].append(f"API check failed: {path}")
             continue
         results[path] = {"status": "ok", "http_status": status}
-        if path == "/health" and payload.get("ok") is not True:
+        if path == "/health" and isinstance(payload, dict) and payload.get("ok") is not True:
             results[path]["status"] = "warning"
             summary["warnings"].append("/health reachable but ok=true not present.")
+        if path == "/admin/operations/status" and isinstance(payload, dict):
+            enabled = payload.get("enabled_workflows") or []
+            results[path]["enabled_workflows"] = enabled
         if path.startswith("/clubs/") and path.endswith("/leaderboards"):
             if not isinstance(payload, dict) or "club" not in payload or "leaderboard" not in payload:
                 results[path]["status"] = "warning"
                 summary["warnings"].append("Leaderboard response missing expected keys.")
-        if path.startswith("/clubs/") and not path.endswith("/leaderboards"):
+        elif path.startswith("/clubs/"):
             if not isinstance(payload, dict) or not {"id", "slug", "name"}.issubset(payload.keys()):
                 results[path]["status"] = "warning"
                 summary["warnings"].append("Club response missing one or more of id/slug/name.")
-
     summary["checked_endpoints"] = results
-
 
 
 def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -144,12 +207,10 @@ def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "checked_tables": {},
         "checked_endpoints": {},
     }
-
     if env == "production":
-        summary["errors"].append("Refusing to run: JUPR_ENV=production")
+        summary["errors"].append("Refusing to run full staging verification with JUPR_ENV=production")
         summary["ok"] = False
         return 2, summary
-
     if env != "staging":
         summary["errors"].append("JUPR_ENV must be set to staging.")
 
@@ -157,17 +218,7 @@ def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if not os.getenv("SUPABASE_URL"):
             summary["errors"].append("SUPABASE_URL is required when --require-supabase is passed.")
         if not (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")):
-            summary["errors"].append(
-                "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY is required when --require-supabase is passed."
-            )
-
-    if not args.allow_next_admin_score_entry:
-        if _truthy(os.getenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY")):
-            summary["errors"].append("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY must be disabled for staging verification.")
-        if _truthy(os.getenv("NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY")):
-            summary["errors"].append(
-                "NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY must be disabled for staging verification."
-            )
+            summary["errors"].append("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY is required when --require-supabase is passed.")
 
     for var_name in ("SUPABASE_URL", "DATABASE_URL", "SUPABASE_TEST_DATABASE_URL"):
         value = os.getenv(var_name)
@@ -177,21 +228,20 @@ def run_checks(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if _looks_production(api_base):
         summary["warnings"].append("JUPR_API_BASE_URL appears to include production markers.")
 
+    _check_full_next_flags(summary, expect_full_next_admin=bool(args.expect_full_next_admin))
+    _check_email_mode(summary)
     _check_supabase_objects(summary, require_supabase=args.require_supabase)
-
     if api_base:
-        _check_api(summary, api_base, args.club_slug)
+        _check_api(summary, api_base, args.club_slug, args.club_id)
     elif args.require_api:
         summary["errors"].append("API checks required but no API base URL provided.")
-
     summary["ok"] = not summary["errors"]
     return (0 if summary["ok"] else 1), summary
 
 
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Read-only staging environment verification.")
-    parser.add_argument("--allow-next-admin-score-entry", action="store_true")
+    parser = argparse.ArgumentParser(description="Full Next/FastAPI staging environment verification.")
+    parser.add_argument("--expect-full-next-admin", action="store_true", help="Require every Next admin workflow flag needed for full staging validation to be enabled.")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--api-base-url")
     parser.add_argument("--require-api", action="store_true")
@@ -201,16 +251,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     rc, summary = run_checks(args)
-    if args.json:
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return rc
-
-    print("[staging-check] Verification summary")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return rc
 
