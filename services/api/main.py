@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -88,6 +89,13 @@ def get_cors_allowed_origins() -> list[str]:
     return _split_csv_env("JUPR_ALLOWED_ORIGINS") or list(DEFAULT_CORS_ALLOWED_ORIGINS)
 
 
+def get_cors_allowed_origin_regex() -> str | None:
+    value = os.getenv("JUPR_ALLOWED_ORIGIN_REGEX", "").strip()
+    if value:
+        re.compile(value)
+    return value or None
+
+
 def _log_runtime_guardrails() -> None:
     env = get_jupr_env()
     if not env:
@@ -100,7 +108,14 @@ def _log_runtime_guardrails() -> None:
 
 app = FastAPI(title="JUPR API", version="0.1.0")
 app.add_middleware(StructuredRequestLoggingMiddleware)
-app.add_middleware(CORSMiddleware, allow_origins=get_cors_allowed_origins(), allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "OPTIONS"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_allowed_origins(),
+    allow_origin_regex=get_cors_allowed_origin_regex(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 class MatchBatchRequest(BaseModel):

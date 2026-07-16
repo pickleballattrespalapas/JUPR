@@ -74,6 +74,17 @@ NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
 
 Never set `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, database URLs, or other server-only secrets in Vercel/frontend environment variables.
 
+`apps/web/next.config.js` fails closed for Git-connected Vercel previews. When
+Vercel sets `VERCEL_ENV=preview`, it forces both API base variables to the
+dedicated staging Fly API (or the public `JUPR_STAGING_API_BASE_URL` override),
+sets the staging label, and exposes the score-entry UI for isolated testing.
+Production deployments are not overridden. Check `/api/environment` on a
+preview to verify the sanitized API origin and `preview_isolation_active=true`.
+Also scope `NEXT_PUBLIC_STAGING_SUPABASE_URL` and
+`NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY` to Vercel Preview so staff sign-in uses
+the same staging Supabase project as FastAPI. `/api/environment` must report
+`preview_auth_isolation_active=true` before authenticated write-flow testing.
+
 ## Vercel staging checklist
 
 1. Create or select a staging Vercel project.

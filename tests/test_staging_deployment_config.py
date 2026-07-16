@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -28,6 +29,12 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert env["JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"] == "1"
     assert env["JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"] == "1"
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
+    assert env["JUPR_ALLOWED_ORIGIN_REGEX"].startswith("^https://jupr")
+    assert env["JUPR_ALLOWED_ORIGIN_REGEX"].endswith("vercel\\.app$")
+    assert re.fullmatch(
+        env["JUPR_ALLOWED_ORIGIN_REGEX"],
+        "https://jupr-git-example-pickleballattrespalapas1.vercel.app",
+    )
 
 
 def test_staging_deploy_workflow_has_production_and_database_guards():

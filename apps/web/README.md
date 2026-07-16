@@ -55,6 +55,8 @@ Use one of the following API base URL variables:
 - `NEXT_PUBLIC_JUPR_API_BASE_URL` (fallback and browser-visible runtime value)
 - `NEXT_PUBLIC_JUPR_ENV` (optional; set to `staging` to show a staging badge)
 - `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
+- `JUPR_STAGING_API_BASE_URL` (optional preview override; defaults to the dedicated Fly staging API)
+- `NEXT_PUBLIC_STAGING_SUPABASE_URL` and `NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY` (preview-only staging auth project; never use service-role credentials)
 
 Use this public web URL variable for metadata and sitemap generation:
 
@@ -109,6 +111,21 @@ NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
 The staging API must be the dedicated `juprleagues-api-staging` Fly app backed
 by staging Supabase. Keep the score-entry browser flag disabled in production;
 it is enabled in preview solely so the full workflow can be tested.
+
+Vercel preview deployments are isolated in `next.config.js`: when
+`VERCEL_ENV=preview`, both API base variables are forced to
+`https://juprleagues-api-staging.fly.dev`, the staging badge and score-entry UI
+are enabled, and `/api/environment` reports only the sanitized environment,
+API origin, and isolation state. Production deployments do not receive these
+overrides and retain their existing Vercel production configuration.
+
+For functional staff login in previews, scope
+`NEXT_PUBLIC_STAGING_SUPABASE_URL` and
+`NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY` to Vercel Preview. The config remaps them
+to the canonical browser auth variables only for preview builds. If they are
+missing, staging API writes still fail closed because production-project tokens
+cannot validate against the staging API project; `/api/environment` reports
+`preview_auth_isolation_active=false` until the preview auth variables are set.
 
 Production web environment variables should use the primary domain after Vercel verification:
 

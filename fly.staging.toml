@@ -33,7 +33,8 @@ primary_region = "dfw"
   JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT = "1"
   JUPR_ENABLE_NEXT_ADMIN_TOOLS = "1"
   JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS = "1"
-  JUPR_ALLOWED_ORIGINS = "https://jupr-git-test-pickleballattrespalapas1.vercel.app,https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com,http://localhost:3000,http://127.0.0.1:3000"
+  JUPR_ALLOWED_ORIGINS = "https://jupr-git-test-pickleballattrespalapas1.vercel.app,https://jupr-rho.vercel.app,https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com,http://localhost:3000,http://127.0.0.1:3000"
+  JUPR_ALLOWED_ORIGIN_REGEX = '^https://jupr(?:-[a-z0-9-]+)?-pickleballattrespalapas1\.vercel\.app$'
 
 [http_service]
   internal_port = 8080
