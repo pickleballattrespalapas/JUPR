@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Smoke-test the full staging-facing Next/FastAPI JUPR surface.
+"""Smoke-test the read-only Pickleball Club Sandwich public SaaS surface.
 
-The script is dependency-free so it can run from a laptop, GitHub Actions,
-or a deployment shell before a staging/production cutover. It checks public
-read routes, staff/admin page shells, public-safe status endpoints, and the
-critical guard that unauthenticated admin writes remain blocked.
+The script is intentionally dependency-free so it can run from a laptop,
+GitHub Actions, or a deployment shell before a Vercel/custom-domain cutover.
+It checks public/read-only routes, public-safe admin status routes, and the guard
+that unauthenticated admin writes remain blocked.
 """
 
 from __future__ import annotations
@@ -24,13 +24,8 @@ DEFAULT_CLUB_SLUG = "tres-palapas"
 DEFAULT_CLUB_ID = "tres_palapas"
 PREVIEW_BODY_BYTES = 2048
 MAX_JSON_BODY_BYTES = 10 * 1024 * 1024
+KNOWN_PUBLIC_WEB_HOSTS = {"pickleballclubsandwich.com", "www.pickleballclubsandwich.com", "juprleagues.com", "www.juprleagues.com"}
 KNOWN_FASTAPI_BASE_URL = "https://api.juprleagues.com"
-KNOWN_PUBLIC_WEB_HOSTS = {
-    "pickleballclubsandwich.com",
-    "www.pickleballclubsandwich.com",
-    "juprleagues.com",
-    "www.juprleagues.com",
-}
 API_BASE_ENV_NAMES = ("JUPR_API_BASE_URL", "STAGING_JUPR_API_BASE_URL", "NEXT_PUBLIC_JUPR_API_BASE_URL")
 WEB_BASE_ENV_NAMES = ("JUPR_WEB_BASE_URL", "STAGING_WEB_BASE_URL", "NEXT_PUBLIC_JUPR_WEB_BASE_URL")
 
@@ -66,7 +61,9 @@ def _first_env(names: Iterable[str]) -> str | None:
 
 
 def _clean_base_url(value: str | None) -> str | None:
-    cleaned = str(value or "").strip().rstrip("/")
+    if value is None:
+        return None
+    cleaned = value.strip().rstrip("/")
     return cleaned or None
 
 
@@ -97,15 +94,9 @@ def _base_url_validation_errors(api_base_url: str | None, web_base_url: str | No
     errors: list[str] = []
     api_host = _host(api_base_url).lower()
     if api_base_url and api_host in KNOWN_PUBLIC_WEB_HOSTS:
-        errors.append(
-            "STAGING_JUPR_API_BASE_URL/api_base_url points at a public Next/Vercel web domain "
-            f"({api_base_url}). Use the FastAPI origin {KNOWN_FASTAPI_BASE_URL}."
-        )
+        errors.append(f"STAGING_JUPR_API_BASE_URL/api_base_url points at a public Next/Vercel web domain ({api_base_url}). Use the FastAPI origin {KNOWN_FASTAPI_BASE_URL}.")
     if api_base_url and web_base_url and _origin(api_base_url) == _origin(web_base_url):
-        errors.append(
-            "STAGING_JUPR_API_BASE_URL/api_base_url and STAGING_WEB_BASE_URL/web_base_url have the same origin. "
-            f"Use {KNOWN_FASTAPI_BASE_URL} for the API and the public website domain for the web app."
-        )
+        errors.append(f"STAGING_JUPR_API_BASE_URL/api_base_url and STAGING_WEB_BASE_URL/web_base_url have the same origin. Use {KNOWN_FASTAPI_BASE_URL} for the API and the public website domain for the web app.")
     return errors
 
 
@@ -115,11 +106,7 @@ def _looks_like_html(body: bytes) -> bool:
 
 
 def _api_base_hint(url: str) -> str:
-    return (
-        f"{url} returned HTML instead of FastAPI JSON. The API base URL likely points at the Next/Vercel web domain. "
-        "Set STAGING_JUPR_API_BASE_URL/api_base_url to the FastAPI origin and use STAGING_WEB_BASE_URL/web_base_url "
-        "for the public website."
-    )
+    return f"{url} returned HTML instead of FastAPI JSON. The API base URL likely points at the Next/Vercel web domain. Set STAGING_JUPR_API_BASE_URL/api_base_url to the FastAPI origin, for example {KNOWN_FASTAPI_BASE_URL}, and use STAGING_WEB_BASE_URL/web_base_url for the public website."
 
 
 def _read_response_body(response: BinaryIO, *, require_json: bool) -> tuple[bytes, bool]:
@@ -132,10 +119,7 @@ def _read_response_body(response: BinaryIO, *, require_json: bool) -> tuple[byte
 def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
     started = time.perf_counter()
     data = check.body.encode("utf-8") if check.body is not None else None
-    headers = {
-        "User-Agent": "public-web-smoke/2.0",
-        "Accept": "application/json,text/html,application/xml,text/xml;q=0.9,*/*;q=0.8",
-    }
+    headers = {"User-Agent": "public-web-smoke/1.0", "Accept": "application/json,text/html,application/xml,text/xml;q=0.9,*/*;q=0.8"}
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(check.url, data=data, headers=headers, method=check.method)
@@ -148,14 +132,14 @@ def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
         status = int(exc.code)
         body, body_truncated = _read_response_body(exc, require_json=check.require_json)
         content_type = exc.headers.get("content-type", "") if exc.headers else ""
-    except Exception as exc:  # noqa: BLE001 - compact smoke reporting
+    except Exception as exc:  # noqa: BLE001 - report smoke failures compactly
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return SmokeResult(check.name, check.url, check.method, check.expected_statuses, False, elapsed_ms=elapsed_ms, error=f"{exc.__class__.__name__}: {exc}")
-
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     ok = status in check.expected_statuses
     error = None
     if ok and check.require_json:
+        looks_json = "json" in content_type.lower()
         if body_truncated:
             ok = False
             error = f"Expected JSON response, but body exceeded {MAX_JSON_BODY_BYTES} bytes"
@@ -165,8 +149,9 @@ def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
             except Exception as exc:
                 ok = False
                 error = _api_base_hint(check.url) if _looks_like_html(body) else f"Expected JSON response, but parsing failed: {exc}"
-            elif "json" not in content_type.lower():
-                error = f"JSON parsed, but content-type was {content_type!r}"
+            else:
+                if not looks_json:
+                    error = f"JSON parsed, but content-type was {content_type!r}"
     if not ok and error is None:
         preview = body.decode("utf-8", "replace").replace("\n", " ")[:240]
         error = _api_base_hint(check.url) if check.require_json and _looks_like_html(body) else f"Expected status {check.expected_statuses}, got {status}. {preview}".strip()
@@ -187,6 +172,7 @@ def _api_get_checks(api_base_url: str, club_slug: str, club_id: str, *, allow_li
         ("api: admin support requests", f"/admin/clubs/{club_id}/support-requests/status", (200,)),
         ("api: admin league manager", f"/admin/clubs/{club_id}/league-manager/status", (200,)),
         ("api: admin tournament", f"/admin/clubs/{club_id}/tournaments/status", (200,)),
+        ("api: admin tournament setup", f"/admin/clubs/{club_id}/tournaments/setup/status", (200,)),
         ("api: admin weekly recap", f"/admin/clubs/{club_id}/weekly-recap/status", (200,)),
         ("api: admin badge diagnostics", f"/admin/clubs/{club_id}/badges/status", (200,)),
         ("api: admin moneyball", f"/admin/clubs/{club_id}/moneyball/status", (200,)),
@@ -217,6 +203,7 @@ def _web_get_checks(web_base_url: str, club_slug: str) -> list[SmokeCheck]:
         ("web: site map", "/site-map"),
         ("web: admin operations", "/admin"),
         ("web: admin guide", "/admin/guide"),
+        ("web: admin theme qa", "/admin/theme-qa"),
         ("web: admin login", "/admin/login"),
         ("web: admin reset password", "/admin/reset-password"),
         ("web: admin match log", "/admin/match-log"),
@@ -231,6 +218,7 @@ def _web_get_checks(web_base_url: str, club_slug: str) -> list[SmokeCheck]:
         ("web: admin league awards", "/admin/league-manager/awards"),
         ("web: admin league print", "/admin/league-manager/print"),
         ("web: admin top players printable", "/admin/top-players-printable"),
+        ("web: admin tournament setup", "/admin/tournament-setup"),
         ("web: admin tournaments", "/admin/tournaments"),
         ("web: admin tournament bulk", "/admin/tournaments/bulk"),
         ("web: admin tournament ops", "/admin/tournaments/ops"),
@@ -277,16 +265,7 @@ def _build_checks(*, api_base_url: str | None, web_base_url: str | None, club_sl
     checks: list[SmokeCheck] = []
     if api_base_url:
         checks.extend(_api_get_checks(api_base_url, club_slug, club_id, allow_live_unconfigured=allow_live_unconfigured))
-        checks.append(
-            SmokeCheck(
-                "api: unauthenticated admin match write blocked",
-                _join_url(api_base_url, f"/admin/clubs/{club_id}/matches/batch"),
-                (401, 403),
-                method="POST",
-                body=json.dumps({"matches": [], "source": "public_smoke_guard"}),
-                require_json=True,
-            )
-        )
+        checks.append(SmokeCheck("api: unauthenticated admin match write blocked", _join_url(api_base_url, f"/admin/clubs/{club_id}/matches/batch"), (401, 403), method="POST", body=json.dumps({"matches": [], "source": "public_smoke_guard"}), require_json=True))
     if web_base_url:
         checks.extend(_web_get_checks(web_base_url, club_slug))
     return checks
@@ -327,13 +306,7 @@ def main(argv: list[str]) -> int:
         for error in config_errors:
             print(f"- {error}", file=sys.stderr)
         return 2
-    checks = _build_checks(
-        api_base_url=api_base_url,
-        web_base_url=web_base_url,
-        club_slug=str(args.club_slug).strip() or DEFAULT_CLUB_SLUG,
-        club_id=str(args.club_id).strip() or DEFAULT_CLUB_ID,
-        allow_live_unconfigured=bool(args.allow_live_unconfigured),
-    )
+    checks = _build_checks(api_base_url=api_base_url, web_base_url=web_base_url, club_slug=str(args.club_slug).strip() or DEFAULT_CLUB_SLUG, club_id=str(args.club_id).strip() or DEFAULT_CLUB_ID, allow_live_unconfigured=bool(args.allow_live_unconfigured))
     results = [_request(check, timeout_seconds=float(args.timeout_seconds)) for check in checks]
     if args.json:
         print(json.dumps([asdict(result) for result in results], indent=2, sort_keys=True))

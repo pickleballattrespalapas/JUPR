@@ -46,6 +46,7 @@ const staffRoutes = [
   "/admin/league-manager/awards",
   "/admin/league-manager/print",
   "/admin/top-players-printable",
+  "/admin/tournament-setup",
   "/admin/tournaments",
   "/admin/tournaments/bulk",
   "/admin/tournaments/ops",
