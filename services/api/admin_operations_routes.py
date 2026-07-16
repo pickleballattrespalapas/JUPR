@@ -4,6 +4,7 @@ from typing import Any
 
 from jupr_app.services.admin_operations_service import build_admin_operations_status
 from services.api.admin_badge_diagnostics_routes import install_admin_badge_diagnostics_routes
+from services.api.admin_jupr_live_routes import install_admin_jupr_live_routes
 from services.api.admin_league_manager_routes import install_admin_league_manager_routes
 from services.api.admin_match_log_routes import install_admin_match_log_routes
 from services.api.admin_match_uploader_routes import install_admin_match_uploader_routes
@@ -33,6 +34,7 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
         install_admin_verified_updates_routes(app, get_supabase_client=get_supabase_client)
         install_admin_support_requests_routes(app, get_supabase_client=get_supabase_client)
         install_admin_moneyball_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_jupr_live_routes(app, get_supabase_client=get_supabase_client)
         install_admin_league_manager_routes(app, get_supabase_client=get_supabase_client)
         install_admin_weekly_recap_routes(app, get_supabase_client=get_supabase_client)
         install_admin_badge_diagnostics_routes(app, get_supabase_client=get_supabase_client)
