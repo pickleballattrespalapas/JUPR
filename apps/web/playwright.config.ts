@@ -9,7 +9,8 @@ const productionHosts = new Set([
   "juprleagues.com",
   "www.juprleagues.com",
   "jupr-rho.vercel.app",
-  "jupr-pickleballattrespalapas1.vercel.app"
+  "jupr-pickleballattrespalapas1.vercel.app",
+  "jupr-git-rollback-feb8-pickleballattrespalapas1.vercel.app"
 ]);
 
 if (remoteBaseUrl && productionHosts.has(new URL(remoteBaseUrl).hostname.toLowerCase())) {
