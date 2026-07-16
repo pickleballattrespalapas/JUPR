@@ -31,6 +31,7 @@ const publicRoutes = [
 const staffRoutes = [
   "/admin",
   "/admin/guide",
+  "/admin/theme-qa",
   "/admin/login",
   "/admin/reset-password",
   "/admin/match-log",
