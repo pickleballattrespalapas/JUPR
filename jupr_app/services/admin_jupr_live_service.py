@@ -5,13 +5,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.live_beta_engine import create_round_robin_event, update_round_robin_score
 from jupr_app.domain.live_session_repo import abandon_expired_live_sessions
+from jupr_app.services.context import ServiceContext
+from jupr_app.services.match_service import submit_match_batch
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 SESSION_STATUSES = {"active", "completed", "abandoned", "archived"}
 CONFIRM_CREATE = "CREATE LIVE SESSION"
 CONFIRM_STATUS = "SAVE LIVE SESSION"
+CONFIRM_SCORES = "SAVE LIVE SCORES"
+CONFIRM_PUBLISH = "PUBLISH LIVE MATCHES"
+SUPPORTED_ADMIN_EVENT_TYPES = {"round_robin", "league_ladder", "league", "ladder"}
 
 
 def is_admin_jupr_live_enabled() -> bool:
@@ -42,8 +49,30 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _state(row: dict[str, Any]) -> dict[str, Any]:
+    return _as_dict(row.get("state"))
+
+
+def _event_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    page_state = _as_dict(state.get("page_state"))
+    event = page_state.get("event")
+    return dict(event) if isinstance(event, dict) else {}
+
+
+def _put_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+    next_state = dict(state or {})
+    page_state = _as_dict(next_state.get("page_state"))
+    page_state["event"] = dict(event or {})
+    page_state["event_name"] = str(event.get("name") or next_state.get("event_name") or "JUPR Live")
+    page_state["event_type"] = str(event.get("type") or next_state.get("event_type") or "round_robin")
+    next_state["page_state"] = page_state
+    next_state["event_name"] = page_state["event_name"]
+    next_state["event_type"] = page_state["event_type"]
+    return next_state
+
+
 def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
-    state = _as_dict(row.get("state"))
+    state = _state(row)
     return {
         "id": str(row.get("id") or ""),
         "club_id": str(row.get("club_id") or ""),
@@ -58,6 +87,77 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "expires_at": row.get("expires_at"),
         "event_type": state.get("event_type") or state.get("eventType"),
         "state": state,
+        "public_url_path": f"/clubs/tres-palapas/live/{row.get('session_key')}",
+    }
+
+
+def _player_rows_by_id(supabase: Any, *, club_id: str, player_ids: list[int]) -> dict[int, dict[str, Any]]:
+    wanted = {int(pid) for pid in player_ids if pid is not None}
+    if not wanted:
+        return {}
+    rows = _safe_rows(supabase.table("players").select("id,name,club_id").eq("club_id", str(club_id)).execute())
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            pid = int(row.get("id"))
+        except Exception:
+            continue
+        if pid in wanted:
+            result[pid] = row
+    return result
+
+
+def _build_round_robin_state(
+    supabase: Any,
+    *,
+    club_id: str,
+    title: str,
+    participant_names: list[str],
+    player_ids: list[int] | None,
+    source: str,
+) -> dict[str, Any]:
+    names = [_clean_text(name, limit=160) for name in (participant_names or []) if _clean_text(name, limit=160)]
+    ids = [int(pid) for pid in (player_ids or []) if pid is not None]
+    resolved_ids: dict[str, int] = {}
+    if ids:
+        players = _player_rows_by_id(supabase, club_id=str(club_id), player_ids=ids)
+        if len(ids) != len(names):
+            names = [str(players.get(pid, {}).get("name") or f"Player {pid}") for pid in ids]
+        if len(ids) != len(names):
+            raise ValueError("player_ids and participant_names must have the same length when both are supplied.")
+        for idx, pid in enumerate(ids):
+            if pid not in players:
+                raise ValueError(f"Player id {pid} was not found in this club.")
+            resolved_ids[names[idx]] = pid
+    event: dict[str, Any] = {}
+    if len(names) >= 4:
+        event = create_round_robin_event(
+            name=title,
+            participant_names=names,
+            resolved_ids=resolved_ids,
+        )
+    return {
+        "version": 1,
+        "mode": "admin_official_staging",
+        "source": source,
+        "club_id": str(club_id),
+        "event_type": "round_robin",
+        "participant_names": names,
+        "participant_player_ids": ids,
+        "rating_mode": "official_publish_required",
+        "page_state": {
+            "event": event,
+            "event_name": title,
+            "type_label": "Round Robin",
+            "participant_count": len(names),
+            "participant_text": "\n".join(names),
+            "rating_mode": "Official on publish",
+        },
+        "official_publish": {
+            "published_match_ids": [],
+            "published_at": None,
+            "publish_result": None,
+        },
     }
 
 
@@ -74,7 +174,7 @@ def build_admin_jupr_live_status(supabase: Any | None, *, club_id: str) -> dict[
                     counts[status] += 1
         except Exception:
             pass
-    return {"enabled": True, "status": "ready_for_jupr_live_admin", "counts": counts, "warnings": []}
+    return {"enabled": True, "status": "ready_for_jupr_live_admin", "counts": counts, "warnings": [], "confirmation_text": {"create": CONFIRM_CREATE, "status": CONFIRM_STATUS, "scores": CONFIRM_SCORES, "publish": CONFIRM_PUBLISH}}
 
 
 def list_admin_jupr_live_sessions(supabase: Any, *, club_id: str, status: str | None = None, limit: int = 100) -> dict[str, Any]:
@@ -119,6 +219,7 @@ def create_admin_jupr_live_session(
     title: str,
     event_type: str,
     participant_names: list[str] | None,
+    player_ids: list[int] | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
@@ -128,18 +229,31 @@ def create_admin_jupr_live_session(
         raise PermissionError("Next JUPR Live Admin is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_CREATE:
         raise ValueError(f"Type {CONFIRM_CREATE} to create a durable JUPR Live session.")
-    clean_event_type = _clean_text(event_type or "round_robin", limit=60).lower().replace(" ", "_")
-    if clean_event_type not in {"round_robin", "league_ladder", "league", "ladder", "tournament"}:
-        raise ValueError("unsupported JUPR Live event type")
+    clean_event_type = _clean_text(event_type or "round_robin", limit=60).lower().replace(" ", "_").replace("/", "_")
+    if clean_event_type not in SUPPORTED_ADMIN_EVENT_TYPES:
+        raise ValueError("unsupported JUPR Live event type; use Tournament Live for brackets/draws")
+    if clean_event_type in {"league", "ladder"}:
+        clean_event_type = "league_ladder"
     session_key = uuid4().hex
     now = _now_iso()
-    names = [_clean_text(name, limit=160) for name in (participant_names or []) if _clean_text(name, limit=160)]
-    state = {"event_type": clean_event_type, "participant_names": names, "source": source, "created_from_next_admin": True}
+    clean_title = _clean_text(title, limit=160) or "JUPR Live Session"
+    if clean_event_type == "round_robin":
+        state = _build_round_robin_state(
+            supabase,
+            club_id=str(club_id),
+            title=clean_title,
+            participant_names=list(participant_names or []),
+            player_ids=player_ids,
+            source=source,
+        )
+    else:
+        names = [_clean_text(name, limit=160) for name in (participant_names or []) if _clean_text(name, limit=160)]
+        state = {"version": 1, "mode": "admin_official_staging", "source": source, "club_id": str(club_id), "event_type": clean_event_type, "participant_names": names, "page_state": {"event": {}, "event_name": clean_title, "type_label": "League / Ladder", "participant_count": len(names)}, "official_publish": {"published_match_ids": []}}
     payload = {
         "club_id": str(club_id),
         "session_key": session_key,
         "status": "active",
-        "title": _clean_text(title, limit=160) or "JUPR Live Session",
+        "title": clean_title,
         "state": state,
         "source": "jupr_live_admin",
         "created_by_email": str(actor_email or "").strip().lower() or None,
@@ -151,6 +265,176 @@ def create_admin_jupr_live_session(
     inserted = _safe_first(supabase.table("live_sessions").insert(payload).execute()) or payload
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="create_jupr_live_session_admin", entity_id=session_key, before_json={}, after_json={"session": _session_payload(inserted)}, source=source)
     return {"ok": True, "mode": "jupr_live_admin_session_create", "session": _session_payload(inserted)}
+
+
+def _live_row(supabase: Any, *, club_id: str, session_key: str) -> dict[str, Any]:
+    row = _safe_first(supabase.table("live_sessions").select("*").eq("club_id", str(club_id)).eq("session_key", str(session_key)).limit(1).execute())
+    if row is None:
+        raise ValueError("live session not found")
+    return row
+
+
+def _update_live_row(supabase: Any, *, club_id: str, session_key: str, patch: dict[str, Any]) -> dict[str, Any]:
+    updated = _safe_first(supabase.table("live_sessions").update(patch).eq("club_id", str(club_id)).eq("session_key", str(session_key)).execute())
+    return updated or {"club_id": str(club_id), "session_key": str(session_key), **patch}
+
+
+def update_admin_jupr_live_scores(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    scores: list[dict[str, Any]],
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_jupr_live_admin_scores",
+) -> dict[str, Any]:
+    if not is_admin_jupr_live_enabled():
+        raise PermissionError("Next JUPR Live Admin is disabled.")
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SCORES:
+        raise ValueError(f"Type {CONFIRM_SCORES} to save JUPR Live scores.")
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    state = _state(before)
+    event = _event_from_state(state)
+    if str(event.get("type") or "") != "round_robin":
+        raise ValueError("Score entry currently supports JUPR Live round-robin sessions. Use League Manager Live or Tournament Live for structured events.")
+    changed = 0
+    for score in scores or []:
+        match_id = _clean_text(score.get("match_id"), limit=120)
+        if not match_id:
+            continue
+        raw_a = score.get("score_a")
+        raw_b = score.get("score_b")
+        score_a = None if raw_a in (None, "") else int(raw_a)
+        score_b = None if raw_b in (None, "") else int(raw_b)
+        if score_a is not None and (score_a < 0 or score_a > 99):
+            raise ValueError("Scores must be between 0 and 99.")
+        if score_b is not None and (score_b < 0 or score_b > 99):
+            raise ValueError("Scores must be between 0 and 99.")
+        update_round_robin_score(event, match_id, score_a, score_b)
+        changed += 1
+    next_state = _put_event(state, event)
+    patch = {"state": next_state, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
+    _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="score_jupr_live_session_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated), "changed_scores": changed}, source=source)
+    return {"ok": True, "mode": "jupr_live_admin_scores", "changed_scores": changed, "session": _session_payload(updated)}
+
+
+def _participant_map(event: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {str(p.get("id")): dict(p) for p in (event.get("participants") or []) if p.get("id")}
+
+
+def _round_robin_matches(event: dict[str, Any]) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for round_row in event.get("rounds") or []:
+        for match in (round_row or {}).get("matches") or []:
+            row = dict(match)
+            row["round"] = round_row.get("number")
+            matches.append(row)
+    return matches
+
+
+def _team_player_ids(participants: dict[str, dict[str, Any]], team: list[Any]) -> list[int]:
+    ids: list[int] = []
+    for token in team or []:
+        participant = participants.get(str(token))
+        if not participant or participant.get("player_id") is None:
+            raise ValueError("Official publish requires every JUPR Live participant to be linked to an official player id.")
+        ids.append(int(participant["player_id"]))
+    if len(ids) != 2:
+        raise ValueError("Official JUPR Live publish currently requires doubles teams with two linked players per side.")
+    return ids
+
+
+def _publish_payloads_from_event(event: dict[str, Any], *, session_key: str, published_ids: set[str], match_date: str) -> list[dict[str, Any]]:
+    participants = _participant_map(event)
+    payloads: list[dict[str, Any]] = []
+    for match in _round_robin_matches(event):
+        match_id = str(match.get("id") or "")
+        if not match_id or match_id in published_ids:
+            continue
+        if match.get("scoreA") is None or match.get("scoreB") is None:
+            continue
+        s1 = int(match.get("scoreA") or 0)
+        s2 = int(match.get("scoreB") or 0)
+        if s1 == s2:
+            raise ValueError(f"Match {match_id} is tied; official matches cannot be published with tied scores.")
+        if (s1 + s2) <= 0:
+            continue
+        team_a = _team_player_ids(participants, list(match.get("teamA") or []))
+        team_b = _team_player_ids(participants, list(match.get("teamB") or []))
+        payloads.append({
+            "date": match_date,
+            "league": "OVERALL",
+            "match_type": "JUPR Live",
+            "is_popup": False,
+            "context_type": "jupr_live",
+            "context_id": str(session_key),
+            "live_match_id": match_id,
+            "week_tag": f"JUPR Live {str(match_date)[:10]}",
+            "t1_p1": team_a[0],
+            "t1_p2": team_a[1],
+            "t2_p1": team_b[0],
+            "t2_p2": team_b[1],
+            "s1": s1,
+            "s2": s2,
+        })
+    return payloads
+
+
+def publish_admin_jupr_live_matches(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    match_date: str | None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_jupr_live_admin_publish",
+) -> dict[str, Any]:
+    if not is_admin_jupr_live_enabled():
+        raise PermissionError("Next JUPR Live Admin is disabled.")
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
+        raise ValueError(f"Type {CONFIRM_PUBLISH} to publish official JUPR Live matches.")
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    state = _state(before)
+    event = _event_from_state(state)
+    if str(event.get("type") or "") != "round_robin":
+        raise ValueError("Official JUPR Live publish currently supports round-robin sessions. Use Tournament Live/Ops for brackets and League Manager Live for structured leagues.")
+    official = _as_dict(state.get("official_publish"))
+    published_ids = {str(mid) for mid in (official.get("published_live_match_ids") or official.get("published_match_ids") or [])}
+    date_value = _clean_text(match_date, limit=80) or _now_iso()
+    payloads = _publish_payloads_from_event(event, session_key=str(session_key), published_ids=published_ids, match_date=date_value)
+    if not payloads:
+        raise ValueError("No unpublished scored JUPR Live matches are ready to publish.")
+    (
+        df_players_all,
+        _df_players_active,
+        df_leagues,
+        _df_matches,
+        df_meta,
+        _df_badges,
+        _df_player_badges,
+        name_to_id,
+        _id_to_name,
+        _schema_degraded,
+        _schema_degraded_reason,
+    ) = load_data(supabase, str(club_id), match_limit=5000)
+    service_ctx = ServiceContext(supabase=supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, source="jupr_live_admin")
+    result = submit_match_batch(service_ctx, payloads, name_to_id=name_to_id, df_players_all=df_players_all, df_leagues=df_leagues, df_meta=df_meta)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors) or "Unable to publish JUPR Live matches.")
+    newly_published = [str(payload.get("live_match_id")) for payload in payloads if payload.get("live_match_id")]
+    official["published_live_match_ids"] = sorted(published_ids | set(newly_published))
+    official["published_at"] = _now_iso()
+    official["publish_result"] = result.data if isinstance(result.data, dict) else {"result": result.data}
+    state["official_publish"] = official
+    patch = {"state": state, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
+    _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="publish_jupr_live_matches_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated), "payload_count": len(payloads), "result": official["publish_result"]}, source=source)
+    return {"ok": True, "mode": "jupr_live_admin_publish", "published_count": len(payloads), "result": official["publish_result"], "session": _session_payload(updated)}
 
 
 def update_admin_jupr_live_session_status(
@@ -172,13 +456,11 @@ def update_admin_jupr_live_session_status(
     clean_status = _clean_text(status, limit=40).lower()
     if clean_status not in SESSION_STATUSES:
         raise ValueError("unsupported live session status")
-    before = _safe_first(supabase.table("live_sessions").select("*").eq("club_id", str(club_id)).eq("session_key", str(session_key)).limit(1).execute())
-    if before is None:
-        raise ValueError("live session not found")
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
     patch: dict[str, Any] = {"status": clean_status, "updated_at": _now_iso(), "last_seen_at": _now_iso()}
     if title is not None:
         patch["title"] = _clean_text(title, limit=160) or None
-    updated = _safe_first(supabase.table("live_sessions").update(patch).eq("club_id", str(club_id)).eq("session_key", str(session_key)).execute()) or {**before, **patch}
+    updated = _update_live_row(supabase, club_id=str(club_id), session_key=str(session_key), patch=patch)
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role, action_type="update_jupr_live_session_admin", entity_id=session_key, before_json={"session": _session_payload(before)}, after_json={"session": _session_payload(updated)}, source=source)
     return {"ok": True, "mode": "jupr_live_admin_session_update", "session": _session_payload(updated)}
 
