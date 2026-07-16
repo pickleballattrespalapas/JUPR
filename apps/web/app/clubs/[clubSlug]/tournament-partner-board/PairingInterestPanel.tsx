@@ -45,7 +45,7 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
     const entryKey = String(entry.selection_id || "");
     const requesterSelectionId = selectionByEntry[entryKey] || selectionsByEvent.get(String(entry.event_option_id || ""))?.[0]?.id || "";
     if (!entryKey || !requesterSelectionId) {
-      setError("Choose one of your registrations for this division before sending interest.");
+      setError("Choose one of your registrations for this division before sending a request.");
       return;
     }
     setPendingKey(entryKey);
@@ -63,9 +63,9 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
-      setMessage(payload?.message || "Pairing interest sent.");
+      setMessage(payload?.message || "Pairing request sent. If the other player accepts, JUPR will automatically pair both registrations.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to send pairing interest.");
+      setError(err instanceof Error ? err.message : "Unable to send pairing request.");
     } finally {
       setPendingKey(null);
     }
@@ -90,7 +90,7 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
               </select>
             </label>
             <button type="button" onClick={() => sendInterest(entry)} disabled={pendingKey === entryKey} style={{ marginTop: "0.5rem", padding: "0.55rem 0.8rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
-              {pendingKey === entryKey ? "Sending…" : "Send pairing interest"}
+              {pendingKey === entryKey ? "Sending…" : "Request pairing"}
             </button>
           </div>
         );

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getClubTournamentRegistrationEdit, getClubTournamentRoster } from "@/lib/tournamentRegistrationApi";
 import type { PublicTournamentNeedsPartnerEntry } from "@/lib/tournamentRegistrationApi";
 import PairingInterestPanel from "./PairingInterestPanel";
+import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
 
 type TournamentPartnerBoardPageProps = {
   params: { clubSlug: string };
@@ -37,12 +38,13 @@ function entryAnchor(entry: PublicTournamentNeedsPartnerEntry): string {
   return `partner-${slugify(`${entry.selection_id || entry.player_id || entry.player_name || "player"}`)}`;
 }
 
-function queryFor({ tournamentId, registrationSlug, editToken, event }: { tournamentId?: string | null; registrationSlug?: string | null; editToken?: string | null; event?: string | null }): string {
+function queryFor({ tournamentId, registrationSlug, editToken, event, partnerRequestId }: { tournamentId?: string | null; registrationSlug?: string | null; editToken?: string | null; event?: string | null; partnerRequestId?: string | null }): string {
   const query = new URLSearchParams();
   if (registrationSlug) query.set("tournament", registrationSlug);
   else if (tournamentId) query.set("tournament_id", tournamentId);
   if (editToken) query.set("edit_token", editToken);
   if (event) query.set("event", event);
+  if (partnerRequestId) query.set("partner_request_id", partnerRequestId);
   const text = query.toString();
   return text ? `?${text}` : "";
 }
@@ -51,6 +53,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
   const { clubSlug } = params;
   const editToken = firstParam(searchParams, "edit_token") || "";
   const selectedEvent = firstParam(searchParams, "event");
+  const selectedPartnerRequestId = firstParam(searchParams, "partner_request_id");
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
   const [{ data, error }, editResponse] = await Promise.all([
@@ -73,7 +76,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
   const eventChoices = Array.from(new Map(partnerEntries.map((entry) => [entryEventKey(entry), entryEventLabel(entry)])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
   const visibleEntries = selectedEvent ? partnerEntries.filter((entry) => entryEventKey(entry) === selectedEvent) : partnerEntries;
   const query = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug });
-  const queryWithEdit = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null, event: selectedEvent });
+  const queryWithEdit = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null, event: selectedEvent, partnerRequestId: selectedPartnerRequestId });
   const apiBase = process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 
   return (
@@ -83,7 +86,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
       </p>
       <h1 style={{ marginTop: 0 }}>{tournament?.name ?? "Partner board"}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Public partner board for players who registered as needing a partner. Contact details are not exposed; sending pairing interest requires your secure registration edit link.
+        Public partner board for players who registered as needing a partner. Contact details are not exposed; sending or accepting pairing interest requires your secure registration edit link.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Partner board is temporarily unavailable. {error}</p> : null}
@@ -120,8 +123,19 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
         <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Open registration</Link>
           <Link href={`/clubs/${clubSlug}/tournament-roster${queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, event: selectedEvent })}`}>Open roster</Link>
-          {!editToken ? <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Request edit link to send interest</Link> : null}
+          {!editToken ? <Link href={`/clubs/${clubSlug}/tournament-registration${query}`}>Request edit link to send or accept interest</Link> : null}
         </p>
+      ) : null}
+
+      {editToken && editResponse.data && tournament ? (
+        <PartnerRequestReviewPanel
+          apiBase={apiBase}
+          clubSlug={clubSlug}
+          tournamentId={tournament.id}
+          registrationSlug={settings?.registration_slug ?? null}
+          editToken={editToken}
+          focusRequestId={selectedPartnerRequestId}
+        />
       ) : null}
 
       {partnerEntries.length ? (
@@ -130,7 +144,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
           {eventChoices.map(([key, label]) => {
             const active = key === selectedEvent;
             return (
-              <Link key={key} href={`/clubs/${clubSlug}/tournament-partner-board${queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null, event: key })}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+              <Link key={key} href={`/clubs/${clubSlug}/tournament-partner-board${queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug, editToken: editToken || null, event: key, partnerRequestId: selectedPartnerRequestId })}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
                 {label}
               </Link>
             );

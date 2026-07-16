@@ -33,10 +33,16 @@ def build_pairing_interest_html(
     target_name: str,
     board_url: str,
     recipient_kind: str,
+    accept_url: str | None = None,
 ) -> str:
     intro = "A player sent pairing interest from the public tournament board."
+    action_url = _safe_text(accept_url) or _safe_text(board_url)
+    action_label = "Open tournament board"
+    next_step = "Organizers should review pending pairing interest before final tournament operations."
     if recipient_kind == "player":
         intro = "Another player sent interest in pairing with you from the public tournament board."
+        action_label = "Review and accept request"
+        next_step = "If you accept this request, JUPR will automatically pair both registrations for that division."
     return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>Tournament pairing interest</h1>
 <p>{escape(intro)}</p>
@@ -44,8 +50,9 @@ def build_pairing_interest_html(
 <strong>Division:</strong> {escape(_safe_text(division_name))}<br>
 <strong>Interested player:</strong> {escape(_safe_text(requester_name))}<br>
 <strong>Board entry:</strong> {escape(_safe_text(target_name))}</p>
-<p><a href=\"{escape(_safe_text(board_url))}\" style=\"background:#2563eb;color:white;padding:10px 14px;text-decoration:none;border-radius:6px\">Open tournament board</a></p>
-<p>This message does not confirm a team. Organizers should review pending pairing interest before final tournament operations.</p>
+<p><a href=\"{escape(action_url)}\" style=\"background:#2563eb;color:white;padding:10px 14px;text-decoration:none;border-radius:6px\">{escape(action_label)}</a></p>
+<p>{escape(next_step)}</p>
+<p><a href=\"{escape(_safe_text(board_url))}\">Open full partner board</a></p>
 </body></html>"""
 
 
@@ -57,18 +64,23 @@ def build_pairing_interest_text(
     target_name: str,
     board_url: str,
     recipient_kind: str,
+    accept_url: str | None = None,
 ) -> str:
     intro = "A player sent pairing interest from the public tournament board."
+    action_url = _safe_text(accept_url) or _safe_text(board_url)
+    next_step = "Organizers should review pending pairing interest before final tournament operations."
     if recipient_kind == "player":
         intro = "Another player sent interest in pairing with you from the public tournament board."
+        next_step = "If you accept this request, JUPR will automatically pair both registrations for that division."
     return "\n".join([
         intro,
         f"Tournament: {_safe_text(tournament_name)}",
         f"Division: {_safe_text(division_name)}",
         f"Interested player: {_safe_text(requester_name)}",
         f"Board entry: {_safe_text(target_name)}",
+        f"Review request: {action_url}",
         f"Open tournament board: {_safe_text(board_url)}",
-        "This message does not confirm a team.",
+        next_step,
     ])
 
 
@@ -82,6 +94,7 @@ def _send_pairing_email(
     target_name: str,
     board_url: str,
     recipient_kind: str,
+    accept_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(to_email)
@@ -108,6 +121,7 @@ def _send_pairing_email(
             target_name=target_name,
             board_url=board_url,
             recipient_kind=recipient_kind,
+            accept_url=accept_url,
         ),
         text_body=build_pairing_interest_text(
             tournament_name=tournament_name,
@@ -116,6 +130,7 @@ def _send_pairing_email(
             target_name=target_name,
             board_url=board_url,
             recipient_kind=recipient_kind,
+            accept_url=accept_url,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
@@ -132,6 +147,7 @@ def send_pairing_interest_emails(
     target_email: str | None,
     organizer_to_email: str | None = None,
     board_url: str = "",
+    accept_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
 ) -> dict[str, dict[str, str]]:
     subject = build_pairing_interest_subject(tournament_name=tournament_name, division_name=division_name)
@@ -145,6 +161,7 @@ def send_pairing_interest_emails(
             requester_name=requester_name,
             target_name=target_name,
             board_url=board_url,
+            accept_url=accept_url,
             recipient_kind="player",
             smtp_config=smtp_config,
         ),
@@ -156,6 +173,7 @@ def send_pairing_interest_emails(
             requester_name=requester_name,
             target_name=target_name,
             board_url=board_url,
+            accept_url=None,
             recipient_kind="organizer",
             smtp_config=smtp_config,
         ),
