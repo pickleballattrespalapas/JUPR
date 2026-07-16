@@ -9,6 +9,7 @@ import pandas as pd
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.singles_match_processing import process_singles_matches
+from jupr_app.services.admin_player_updates_service import auto_send_player_updates_for_match_payloads
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
@@ -378,6 +379,13 @@ def publish_admin_tournament_draw_matches(
     if inserted_count != len(match_payloads):
         raise RuntimeError(f"Official match publish inserted {inserted_count} of {len(match_payloads)} tournament games.")
 
+    auto_player_updates = auto_send_player_updates_for_match_payloads(
+        supabase,
+        club_id=str(club_id),
+        match_payloads=match_payloads,
+        source=source,
+    )
+
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),
@@ -397,6 +405,7 @@ def publish_admin_tournament_draw_matches(
             "playoff_winner_bonus_elo": bonus_elo,
             "bonus_tournament_game_ids": bonus_game_ids,
             "process_result": process_result,
+            "auto_player_updates": auto_player_updates,
         },
         source_page=source,
         flagged_for_review=True,
@@ -421,5 +430,6 @@ def publish_admin_tournament_draw_matches(
         "bonus_match_count": len(bonus_game_ids),
         "bonus_tournament_game_ids": bonus_game_ids,
         "process_result": process_result,
+        "auto_player_updates": auto_player_updates,
         "warnings": warnings,
     }
