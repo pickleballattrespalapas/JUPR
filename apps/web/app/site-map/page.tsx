@@ -20,7 +20,7 @@ const routeGroups = [
       ["Badge Codex", "/clubs/tres-palapas/badge-codex"],
       ["Challenge Ladder", "/clubs/tres-palapas/challenge-ladder"],
       ["Weekly Recap", "/clubs/tres-palapas/weekly-recap"],
-      ["Live", "/clubs/tres-palapas/live"]
+      ["JUPR Live", "/clubs/tres-palapas/live"]
     ]
   },
   {
@@ -32,13 +32,16 @@ const routeGroups = [
     ]
   },
   {
-    heading: "Help and policy pages",
+    heading: "Support, privacy, and account links",
     routes: [
       ["Ratings explainer", "/how-ratings-work"],
       ["FAQ", "/faq"],
       ["Support", "/support"],
       ["Contact", "/contact"],
       ["Data corrections", "/data-corrections"],
+      ["Profile privacy request", "/profile-privacy"],
+      ["Verified updates request", "/verified-updates"],
+      ["Email preferences", "/email-preferences"],
       ["Privacy", "/privacy"],
       ["Terms", "/terms"]
     ]
@@ -47,12 +50,34 @@ const routeGroups = [
     heading: "Staff operations shell",
     routes: [
       ["Operations cockpit", "/admin"],
+      ["Operations guide", "/admin/guide"],
       ["Staff sign-in", "/admin/login"],
+      ["Reset password", "/admin/reset-password"],
       ["Match Log", "/admin/match-log"],
       ["Replay History", "/admin/replay-history"],
       ["Match Uploader", "/admin/match-uploader"],
-      ["Players", "/admin/players"],
-      ["League Manager", "/admin/league-manager"]
+      ["Player Editor", "/admin/players"],
+      ["Player Updates", "/admin/player-updates"],
+      ["Verified Requests", "/admin/player-updates/verified-requests"],
+      ["Support Requests", "/admin/support-requests"],
+      ["League Manager", "/admin/league-manager"],
+      ["League Live", "/admin/league-manager/live"],
+      ["League Awards", "/admin/league-manager/awards"],
+      ["League Print", "/admin/league-manager/print"],
+      ["Top Players Printable", "/admin/top-players-printable"],
+      ["Tournament Admin", "/admin/tournaments"],
+      ["Tournament Bulk Actions", "/admin/tournaments/bulk"],
+      ["Tournament Ops", "/admin/tournaments/ops"],
+      ["Tournament Status", "/admin/tournaments/status"],
+      ["Delete Draft Tournament", "/admin/tournaments/delete-draft"],
+      ["Tournament Live", "/admin/tournament-live"],
+      ["Weekly Recap Admin", "/admin/weekly-recap"],
+      ["Badge Diagnostics", "/admin/badges"],
+      ["Moneyball", "/admin/moneyball"],
+      ["JUPR Live Admin", "/admin/jupr-live"],
+      ["Challenge Ladder Admin", "/admin/challenge-ladder"],
+      ["Match Canonical Audit", "/admin/match-canonical-audit"],
+      ["Admin Tools", "/admin/tools"]
     ]
   }
 ];
@@ -61,11 +86,11 @@ export default function SiteMapPage() {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Public site map
+        Site map
       </p>
       <h1 style={{ marginTop: 0 }}>Pickleball Club Sandwich route map</h1>
-      <p style={{ color: "#334155", maxWidth: "780px" }}>
-        A click-through map for public pages, tournament pages, support routes, and the staff operations shell.
+      <p style={{ color: "#334155", maxWidth: "820px" }}>
+        A click-through map for public pages, tournament pages, support routes, and the full staff staging surface. Admin routes require staff sign-in and workflow-specific FastAPI authorization before writes are accepted.
       </p>
       <div style={{ display: "grid", gap: "1.25rem" }}>
         {routeGroups.map((group) => (
@@ -75,6 +100,7 @@ export default function SiteMapPage() {
               {group.routes.map(([label, href]) => (
                 <article key={href} style={cardStyle}>
                   <strong><Link href={href}>{label}</Link></strong>
+                  <p style={{ margin: "0.35rem 0 0", color: "#64748b", fontSize: "0.85rem", overflowWrap: "anywhere" }}>{href}</p>
                 </article>
               ))}
             </div>
