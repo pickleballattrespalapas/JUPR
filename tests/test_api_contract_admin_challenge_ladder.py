@@ -8,6 +8,7 @@ class FakeQuery:
         self.storage = storage
         self.table_name = table_name
         self.filters = []
+        self.insert_payload = None
         self.update_payload = None
         self.limit_value = None
 
@@ -25,12 +26,20 @@ class FakeQuery:
         self.limit_value = int(value)
         return self
 
+    def insert(self, payload):
+        self.insert_payload = dict(payload)
+        return self
+
     def update(self, payload):
         self.update_payload = dict(payload)
         return self
 
     def execute(self):
         rows = self.storage.setdefault(self.table_name, [])
+        if self.insert_payload is not None:
+            row = {"id": f"row-{len(rows) + 1}", **self.insert_payload}
+            rows.append(row)
+            return SimpleNamespace(data=[row])
         scoped = list(rows)
         for key, expected in self.filters:
             scoped = [row for row in scoped if str(row.get(key)) == str(expected)]
