@@ -51,7 +51,10 @@ class FakeSupabase:
                 {"id": "q1", "club_id": "club", "status": "pending"},
                 {"id": "q2", "club_id": "club", "status": "error"},
             ],
-            "badge_recompute_runs": [],
+            "badge_eval_runs": [
+                {"id": "run1", "status": "done", "scope_json": {"club_id": "club"}},
+                {"id": "run2", "status": "done", "scope_json": {"club_id": "other"}},
+            ],
             "admin_activity_log": [],
         }
 
@@ -64,6 +67,7 @@ def test_admin_worker_status_counts_queue(monkeypatch):
     payload = build_admin_worker_status(FakeSupabase(), club_id="club")
     assert payload["queue_counts"]["pending"]["count"] == 1
     assert payload["queue_counts"]["error"]["count"] == 1
+    assert payload["badge_recompute_run_count"]["count"] == 1
 
 
 def test_badge_queue_worker_requires_confirmation(monkeypatch):
