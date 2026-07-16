@@ -70,12 +70,12 @@ Any admin workflow may fully move off Streamlit only when:
 | `match_canonical_audit` | 🧩 Match Canonical Audit | Admin | `Not started`. | Diagnostic/write-adjacent | Admin auth + role gate | Keep Streamlit-only until replay/correction APIs exist. |
 | `challenge_ladder` | 🪜 Challenge Ladder | Public | `Partial` — public FastAPI ladder API and Next `/clubs/[clubSlug]/challenge-ladder` route exist with section/tier/player/challenge deep links, ladder search links, status legend, public rulebook copy, and eligible-opponent hints. | No | Public smoke + contract tests | Validate deep-link/public-rule parity in staging. |
 | `faqs` | ❓ FAQs | Public | `Partial` — Next `/faq` exists with public JUPR FAQ content. | No | Static content review | Validate copy against Streamlit FAQ and decide whether `/faq` or `/how-ratings-work` is canonical. |
-| `privacy_policy` | Privacy Policy | Public hidden | `Partial` — first-party Next `/privacy` placeholder exists. | No | Static/legal review | Replace placeholder with approved legal policy before broad production launch. |
+| `privacy_policy` | Privacy Policy | Public hidden | `Partial` — first-party Next `/privacy` exists with product privacy copy and links to correction/privacy requests. | No | Static/legal review | Replace or approve final legal policy before broad production launch. |
 | `terms_of_use` | Terms of Use | Public hidden | `Partial` — first-party Next `/terms` placeholder exists. | No | Static/legal review | Replace placeholder with approved legal terms before broad production launch. |
-| `contact_support` | Contact Support | Public hidden | `Partial` — Next `/support` and `/contact` support shell exists. | No | Static/support review | Confirm support address/routing and add real intake workflow if needed. |
-| `data_corrections` | Data Corrections | Public hidden | `Partial` — Next `/data-corrections` intake instructions exist with no direct data mutation. | Request intake shell only | Support/intake gate | Define durable ticket/intake backend; keep rating corrections staff-reviewed. |
-| `email_preferences` | Email Preferences | Public hidden | `Not started` in Next app. | Preference write | Auth/tokenized preference gate | Port category/global unsubscribe management after email safety is proven. |
-| `profile_privacy` | Profile Privacy | Public hidden | `Not started` in Next app. | Preference/request write TBD | Privacy workflow gate | Define admin-reviewed privacy request flow before porting. |
+| `contact_support` | Contact Support | Public hidden | `Partial` — Next `/support` and `/contact` support shell exists. | No | Static/support review | Confirm support address/routing and link intake flows. |
+| `data_corrections` | Data Corrections | Public hidden | `Partial` — Next `/data-corrections` now submits persisted staff-review records through a public FastAPI support-intake endpoint; no direct data mutation occurs. | Request intake only | Support/intake + anti-abuse gate | Validate intake queue in staging and then add staff review dashboard/status workflow. |
+| `email_preferences` | Email Preferences | Public hidden | `Partial` — Next `/email-preferences` and public FastAPI endpoints support token/sid lookup plus category/global unsubscribe for player-update emails. | Preference write | Tokenized preference gate | Validate unsubscribe links from real/staging emails and expand categories only as new email types are added. |
+| `profile_privacy` | Profile Privacy | Public hidden | `Partial` — Next `/profile-privacy` submits admin-reviewed profile privacy requests through the public support-intake queue; no immediate hiding/anonymization occurs. | Request intake only | Privacy workflow gate | Validate request handling and add staff review dashboard before any automatic public-display changes. |
 | `league_manager` | 🏟️ League Manager | Admin | `Partial` — Next `/admin/league-manager` has guarded list/detail, schedule-preview, config, standings, roster snapshot, settings editor, and roster membership editor. | Yes | Admin auth + match-write + audit gate | Validate settings and roster membership in staging, then port league score/court workflow and awards. |
 | `match_uploader` | 📝 Match Uploader | Admin | `Partial` — Next Score Entry MVP and `/admin/match-uploader` manual/batch, single round-robin preview, single-match input, singles match input, and new-player create-and-continue routes use the stored Next admin session. Player update emails can auto-send after batch completion when enabled. | Yes | Admin auth + club scope + audit + E2E | Validate manual/batch, singles, round-robin, and post-batch email summaries in staging. |
 | `match_log` | 📝 Match Log | Admin | `Partial` — Next Match Log has read/filters, duplicate scan, duplicate no-issue resolution, guided audited edits with roster picker, duplicate cleanup, Club Social edit/delete parity, bulk rated-match soft-exclude, and Quick Replay. | Yes | Admin auth + replay/correction audit gate | Validate expanded closed-club pilot in staging and production. |
@@ -103,7 +103,7 @@ Any admin workflow may fully move off Streamlit only when:
 | `player_updates_admin` | 📬 Player Updates Admin | Admin | `Partial` — Next `/admin/player-updates` and guarded FastAPI endpoints support date-range player update reports, queue-only/send-now, selected exact-range sends, and SMTP/JUPR_EMAIL_MODE safety. | Yes/email | Admin auth + email safety gate | Validate SMTP/dry-run/staging redirect, then enable automatic post-batch sends in production. |
 | `admin_login` | 🔐 Admin Login | Hidden/auth | `Partial` — Next `/admin/login` Supabase Auth shell exists, `/admin` shows the browser admin session, guarded write forms consume the stored session token, and login links to password reset. | No | Supabase Auth/session + auth E2E gate | Add staging auth E2E for sign-in/sign-out, expired token, reset-password, wrong-club, and permission-denied cases. |
 | `reset_password` | 🔐 Reset Password | Hidden/auth | `Partial` — Next `/admin/reset-password` can request a Supabase recovery email and update a password from the recovery session. | Auth write | Supabase Auth/session + staging auth E2E gate | Validate against staging Supabase redirect settings and password policy. |
-| `verified_updates_request` | 📬 Verified Updates Request | Public hidden | `Not started`. | Email/preference write | Tokenized email safety gate | Port verified update request and category/global unsubscribe preference flow. |
+| `verified_updates_request` | 📬 Verified Updates Request | Public hidden | `Not started`. | Email/preference write | Tokenized email safety gate | Port verified update request flow after unsubscribe/date-range sends are verified. |
 
 ## Recommended implementation sequence
 
@@ -117,16 +117,17 @@ Any admin workflow may fully move off Streamlit only when:
 8. Validate public Player Search/profile filters, singles fields, and deep links in staging.
 9. Review/approve static FAQ/legal/support copy and smoke the static routes.
 10. Validate public tournament registration, confirmation, edit-link, roster, and Partner Board request/accept flows in staging.
-11. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
-12. Validate Match Log guided edits, duplicate no-issue resolution, Club Social edits, bulk exclude, and Replay History in the closed-club pilot.
-13. Validate Match Uploader manual/batch, singles input, round-robin scheduling, new-player creation, and post-batch player update emails.
-14. Validate Player Updates Admin date-range reports with `JUPR_EMAIL_MODE=dry_run` or `staging_redirect` before live email.
-15. Validate Player Editor create/update, league-rating edits, social identity linking, and merge preview/execute with immediate Replay History recovery.
-16. Validate League Manager settings and roster membership in staging.
-17. Validate Tournament Admin/Ops setup/import/scoring/podium/award/official-publish workflows in staging.
-18. Validate Tournament Live runner separately as the in-play tournament draw surface.
-19. Validate admin login, password reset, sign-out, expired-token, wrong-club, and permission-denied cases in staging.
-20. Port remaining League Manager live court scoring, Weekly Recap Admin, badge diagnostics, privacy/preferences, export workflows, Moneyball, and Challenge Ladder Admin after the current write foundation is proven.
+11. Validate public data correction, profile privacy, and email preference/unsubscribe flows.
+12. Use `/admin` as the migration cockpit and enable closed-club production-write pilot mode only on the FastAPI runtime.
+13. Validate Match Log guided edits, duplicate no-issue resolution, Club Social edits, bulk exclude, and Replay History in the closed-club pilot.
+14. Validate Match Uploader manual/batch, singles input, round-robin scheduling, new-player creation, and post-batch player update emails.
+15. Validate Player Updates Admin date-range reports with `JUPR_EMAIL_MODE=dry_run` or `staging_redirect` before live email.
+16. Validate Player Editor create/update, league-rating edits, social identity linking, and merge preview/execute with immediate Replay History recovery.
+17. Validate League Manager settings and roster membership in staging.
+18. Validate Tournament Admin/Ops setup/import/scoring/podium/award/official-publish workflows in staging.
+19. Validate Tournament Live runner separately as the in-play tournament draw surface.
+20. Validate admin login, password reset, sign-out, expired-token, wrong-club, and permission-denied cases in staging.
+21. Port remaining League Manager live court scoring, Weekly Recap Admin, badge diagnostics, verified update requests, export workflows, Moneyball, and Challenge Ladder Admin after the current write foundation is proven.
 
 ## Maintenance rule
 
