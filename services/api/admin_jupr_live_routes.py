@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_jupr_live_service import (
+    advance_admin_jupr_live_league_round,
     build_admin_jupr_live_status,
     create_admin_jupr_live_session,
     get_admin_jupr_live_session,
@@ -25,6 +26,8 @@ class JuprLiveSessionCreateRequest(BaseModel):
     event_type: str = "round_robin"
     participant_names: list[str] = Field(default_factory=list)
     player_ids: list[int] = Field(default_factory=list)
+    total_rounds: int = 3
+    court_sizes: list[int] = Field(default_factory=list)
     confirmation_text: str = ""
     source: str = "next_jupr_live_admin_create"
 
@@ -52,6 +55,11 @@ class JuprLivePublishRequest(BaseModel):
     match_date: str | None = None
     confirmation_text: str = ""
     source: str = "next_jupr_live_admin_publish"
+
+
+class JuprLiveAdvanceRequest(BaseModel):
+    confirmation_text: str = ""
+    source: str = "next_jupr_live_admin_advance"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
@@ -86,12 +94,7 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
         return build_admin_jupr_live_status(supabase, club_id=str(club_id))
 
     @app.get("/admin/clubs/{club_id}/jupr-live/sessions")
-    def get_admin_jupr_live_sessions(
-        club_id: str,
-        status: str | None = Query(default=None),
-        limit: int = Query(default=100, ge=1, le=300),
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def get_admin_jupr_live_sessions(club_id: str, status: str | None = Query(default=None), limit: int = Query(default=100, ge=1, le=300), authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_jupr_live_enabled():
             raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
         supabase = get_supabase_client()
@@ -102,11 +105,7 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
             _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/jupr-live/sessions")
-    def post_admin_jupr_live_session(
-        club_id: str,
-        payload: JuprLiveSessionCreateRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def post_admin_jupr_live_session(club_id: str, payload: JuprLiveSessionCreateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_jupr_live_enabled():
             raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
         supabase = get_supabase_client()
@@ -119,6 +118,8 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
                 event_type=payload.event_type,
                 participant_names=payload.participant_names,
                 player_ids=payload.player_ids,
+                total_rounds=payload.total_rounds,
+                court_sizes=payload.court_sizes or None,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
@@ -128,11 +129,7 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
             _handle(exc)
 
     @app.get("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}")
-    def get_admin_jupr_live_session_detail(
-        club_id: str,
-        session_key: str,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def get_admin_jupr_live_session_detail(club_id: str, session_key: str, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_jupr_live_enabled():
             raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
         supabase = get_supabase_client()
@@ -145,77 +142,45 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
             _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}")
-    def patch_admin_jupr_live_session(
-        club_id: str,
-        session_key: str,
-        payload: JuprLiveSessionStatusRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def patch_admin_jupr_live_session(club_id: str, session_key: str, payload: JuprLiveSessionStatusRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_jupr_live_enabled():
             raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return update_admin_jupr_live_session_status(
-                supabase,
-                club_id=str(club_id),
-                session_key=str(session_key),
-                status=payload.status,
-                title=payload.title,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return update_admin_jupr_live_session_status(supabase, club_id=str(club_id), session_key=str(session_key), status=payload.status, title=payload.title, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except Exception as exc:
             _handle(exc)
 
     @app.patch("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/scores")
-    def patch_admin_jupr_live_scores(
-        club_id: str,
-        session_key: str,
-        payload: JuprLiveScoresRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def patch_admin_jupr_live_scores(club_id: str, session_key: str, payload: JuprLiveScoresRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_jupr_live_enabled():
             raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return update_admin_jupr_live_scores(
-                supabase,
-                club_id=str(club_id),
-                session_key=str(session_key),
-                scores=[score.dict() for score in payload.scores],
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return update_admin_jupr_live_scores(supabase, club_id=str(club_id), session_key=str(session_key), scores=[score.dict() for score in payload.scores], actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/advance")
+    def post_admin_jupr_live_advance(club_id: str, session_key: str, payload: JuprLiveAdvanceRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_jupr_live_enabled():
+            raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return advance_admin_jupr_live_league_round(supabase, club_id=str(club_id), session_key=str(session_key), actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except Exception as exc:
             _handle(exc)
 
     @app.post("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/publish")
-    def post_admin_jupr_live_publish(
-        club_id: str,
-        session_key: str,
-        payload: JuprLivePublishRequest,
-        authorization: str | None = auth_header(),
-    ) -> dict[str, Any]:
+    def post_admin_jupr_live_publish(club_id: str, session_key: str, payload: JuprLivePublishRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
         if not is_admin_jupr_live_enabled():
             raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
-            return publish_admin_jupr_live_matches(
-                supabase,
-                club_id=str(club_id),
-                session_key=str(session_key),
-                match_date=payload.match_date,
-                actor_email=actor_email,
-                actor_role=actor_role,
-                confirmation_text=payload.confirmation_text,
-                source=payload.source,
-            )
+            return publish_admin_jupr_live_matches(supabase, club_id=str(club_id), session_key=str(session_key), match_date=payload.match_date, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
         except Exception as exc:
             _handle(exc)
