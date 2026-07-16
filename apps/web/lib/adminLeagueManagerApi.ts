@@ -5,6 +5,7 @@ export type AdminLeagueManagerStatusResponse = {
   league_detail_endpoint?: string | null;
   league_settings_update_endpoint?: string | null;
   league_roster_update_endpoint?: string | null;
+  league_live_sessions_endpoint?: string | null;
   league_count?: number | null;
   active_count?: number | null;
   warnings: string[];
