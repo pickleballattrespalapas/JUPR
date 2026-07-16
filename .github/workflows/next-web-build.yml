@@ -26,5 +26,30 @@ jobs:
           node-version: "20"
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Verify Vercel preview API isolation config
+        env:
+          VERCEL_ENV: preview
+          NEXT_PUBLIC_STAGING_SUPABASE_URL: https://staging-project.supabase.co
+          NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY: public-anon-test-value
+        run: |
+          node - <<'NODE'
+          const assert = require("node:assert/strict");
+          const config = require("./next.config.js");
+          assert.equal(config.env.JUPR_API_BASE_URL, "https://juprleagues-api-staging.fly.dev");
+          assert.equal(config.env.NEXT_PUBLIC_JUPR_API_BASE_URL, "https://juprleagues-api-staging.fly.dev");
+          assert.equal(config.env.NEXT_PUBLIC_JUPR_ENV, "staging");
+          assert.equal(config.env.NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY, "1");
+          assert.equal(config.env.NEXT_PUBLIC_JUPR_PREVIEW_ISOLATION, "1");
+          assert.equal(config.env.NEXT_PUBLIC_JUPR_PREVIEW_AUTH_ISOLATION, "1");
+          assert.equal(config.env.NEXT_PUBLIC_SUPABASE_URL, "https://staging-project.supabase.co");
+          assert.equal(config.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, "public-anon-test-value");
+          delete process.env.NEXT_PUBLIC_STAGING_SUPABASE_URL;
+          delete process.env.NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY;
+          delete require.cache[require.resolve("./next.config.js")];
+          const withoutPreviewAuth = require("./next.config.js");
+          assert.equal(withoutPreviewAuth.env.NEXT_PUBLIC_JUPR_PREVIEW_AUTH_ISOLATION, "0");
+          assert.equal("NEXT_PUBLIC_SUPABASE_URL" in withoutPreviewAuth.env, false);
+          assert.equal("NEXT_PUBLIC_SUPABASE_ANON_KEY" in withoutPreviewAuth.env, false);
+          NODE
       - name: Build Next app
         run: npm run build
