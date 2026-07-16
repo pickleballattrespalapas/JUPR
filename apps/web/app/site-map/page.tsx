@@ -66,6 +66,7 @@ const routeGroups = [
       ["League Awards", "/admin/league-manager/awards"],
       ["League Print", "/admin/league-manager/print"],
       ["Top Players Printable", "/admin/top-players-printable"],
+      ["Tournament Setup", "/admin/tournament-setup"],
       ["Tournament Admin", "/admin/tournaments"],
       ["Tournament Bulk Actions", "/admin/tournaments/bulk"],
       ["Tournament Ops", "/admin/tournaments/ops"],
