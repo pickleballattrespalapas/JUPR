@@ -14,6 +14,7 @@ from services.api.public_email_preferences_routes import install_public_email_pr
 from services.api.public_support_intake_routes import install_public_support_intake_routes
 from services.api.public_tournament_pairing_routes import install_public_tournament_pairing_routes
 from services.api.public_tournament_registration_routes import install_public_tournament_registration_routes
+from services.api.public_verified_updates_routes import install_public_verified_updates_routes
 
 
 def install_public_weekly_recap_routes(
@@ -80,6 +81,12 @@ def install_public_weekly_recap_routes(
         public_club_payload=public_club_payload,
     )
     install_public_support_intake_routes(
+        app,
+        get_club=get_club,
+        get_supabase_client=get_supabase_client,
+        public_club_payload=public_club_payload,
+    )
+    install_public_verified_updates_routes(
         app,
         get_club=get_club,
         get_supabase_client=get_supabase_client,
