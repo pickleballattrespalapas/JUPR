@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
+from pydantic import BaseModel
 
-from jupr_app.domain.admin.roles import PERMISSION_VIEW_AUDIT_LOG, has_permission, resolve_admin_role
+from jupr_app.domain.admin.roles import PERMISSION_RUN_REPLAY, PERMISSION_VIEW_AUDIT_LOG, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_badge_diagnostics_service import (
     build_admin_badge_audit,
@@ -12,11 +13,45 @@ from jupr_app.services.admin_badge_diagnostics_service import (
     build_admin_badge_diagnostics_status,
     is_admin_badge_diagnostics_enabled,
     list_admin_badge_diagnostic_options,
+    revoke_admin_player_badge,
+    run_admin_badge_recompute,
 )
 from services.api.auth import authenticate_bearer, auth_header
 
 
-def _resolve_badge_diagnostics_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
+class BadgeRecomputeRequest(BaseModel):
+    mode: str = "dry-run"
+    league_id: str | None = None
+    player_id: int | None = None
+    badge_id: str | None = None
+    context_id: str | None = None
+    since: str | None = None
+    until: str | None = None
+    include_non_live: bool = False
+    match_limit: int = 5000
+    revoke_reason: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_badge_recompute"
+
+
+class BadgeRevokeRequest(BaseModel):
+    player_badge_id: str | None = None
+    player_id: int | None = None
+    badge_id: str | None = None
+    context_id: str | None = None
+    revoke_reason: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_badge_revoke"
+
+
+def _resolve_badge_diagnostics_role_or_403(
+    *,
+    supabase: Any,
+    club_id: str,
+    authorization: str | None,
+    source: str,
+    permission: str = PERMISSION_VIEW_AUDIT_LOG,
+) -> tuple[str, str]:
     user = authenticate_bearer(authorization)
     role_resolution = resolve_admin_role(
         supabase=supabase,
@@ -25,7 +60,7 @@ def _resolve_badge_diagnostics_role_or_403(*, supabase: Any, club_id: str, autho
         user_id=user.user_id,
         allowlist=set(),
     )
-    if not has_permission(role_resolution.role, PERMISSION_VIEW_AUDIT_LOG):
+    if not has_permission(role_resolution.role, permission):
         denied_payload = build_activity_payload(
             club_id=str(club_id),
             actor_email=user.email,
@@ -33,7 +68,7 @@ def _resolve_badge_diagnostics_role_or_403(*, supabase: Any, club_id: str, autho
             action_type="admin_badge_diagnostics_denied",
             entity_type="badge_diagnostics",
             entity_id="badge_diagnostics",
-            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission"},
+            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission", "required_permission": permission},
             source_page=source,
             flagged_for_review=True,
         )
@@ -53,7 +88,7 @@ def _handle_common(exc: Exception) -> None:
 
 
 def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
-    """Register read-only Badge Debug and Badge Audit routes for Next admin."""
+    """Register Badge Debug, Badge Audit, recompute, and revoke routes for Next admin."""
 
     @app.get("/admin/clubs/{club_id}/badges/status")
     def get_admin_badge_diagnostics_status(club_id: str) -> dict[str, Any]:
@@ -130,6 +165,77 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
                 include_non_live=bool(include_non_live),
                 include_revoked=bool(include_revoked),
                 match_limit=int(match_limit),
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/badges/recompute")
+    def post_admin_badge_recompute(
+        club_id: str,
+        payload: BadgeRecomputeRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_badge_diagnostics_enabled():
+            raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_badge_diagnostics_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            permission=PERMISSION_RUN_REPLAY,
+        )
+        try:
+            return run_admin_badge_recompute(
+                supabase,
+                club_id=str(club_id),
+                mode=payload.mode,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                league_id=payload.league_id,
+                player_id=payload.player_id,
+                badge_id=payload.badge_id,
+                context_id=payload.context_id,
+                since=payload.since,
+                until=payload.until,
+                include_non_live=payload.include_non_live,
+                match_limit=int(payload.match_limit or 5000),
+                revoke_reason=payload.revoke_reason,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.patch("/admin/clubs/{club_id}/badges/revoke")
+    def patch_admin_badge_revoke(
+        club_id: str,
+        payload: BadgeRevokeRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_badge_diagnostics_enabled():
+            raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_badge_diagnostics_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            permission=PERMISSION_RUN_REPLAY,
+        )
+        try:
+            return revoke_admin_player_badge(
+                supabase,
+                club_id=str(club_id),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                player_badge_id=payload.player_badge_id,
+                player_id=payload.player_id,
+                badge_id=payload.badge_id,
+                context_id=payload.context_id,
+                revoke_reason=payload.revoke_reason,
+                source=payload.source,
             )
         except Exception as exc:
             _handle_common(exc)
