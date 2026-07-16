@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from jupr_app.domain.admin.roles import (
     PERMISSION_MANAGE_ROLES,
+    PERMISSION_RUN_REPLAY,
     PERMISSION_VIEW_AUDIT_LOG,
     has_permission,
     resolve_admin_role,
@@ -15,7 +16,10 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.services.admin_tools_service import (
     build_admin_tools_overview,
     build_admin_tools_status,
+    build_admin_worker_status,
     is_admin_tools_enabled,
+    run_admin_badge_queue_worker,
+    run_admin_badge_recompute_job,
     update_admin_role_assignment,
 )
 from services.api.auth import authenticate_bearer, auth_header
@@ -28,6 +32,29 @@ class AdminRoleAssignmentRequest(BaseModel):
     action: str = "upsert"
     confirmation_text: str = ""
     source: str = "next_admin_tools_roles"
+
+
+class AdminBadgeQueueRequest(BaseModel):
+    mode: str = "batch"
+    max_jobs: int = 10
+    time_budget_seconds: float = 5.0
+    confirmation_text: str = ""
+    source: str = "next_admin_tools_workers"
+
+
+class AdminBadgeRecomputeRequest(BaseModel):
+    mode: str = "dry-run"
+    player_id: int | None = None
+    badge_id: str | None = None
+    league_id: str | None = None
+    context_id: str | None = None
+    since: str | None = None
+    until: str | None = None
+    include_non_live: bool = False
+    allow_strict_global: bool = False
+    match_limit: int = 5000
+    confirmation_text: str = ""
+    source: str = "next_admin_tools_badge_recompute"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str, permission: str) -> tuple[str, str]:
@@ -89,6 +116,20 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle(exc)
 
+    @app.get("/admin/clubs/{club_id}/tools/workers/status")
+    def get_admin_tools_worker_status(
+        club_id: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_admin_tools_workers_status", permission=PERMISSION_VIEW_AUDIT_LOG)
+        try:
+            return build_admin_worker_status(supabase, club_id=str(club_id))
+        except Exception as exc:
+            _handle(exc)
+
     @app.patch("/admin/clubs/{club_id}/tools/roles")
     def patch_admin_tools_role_assignment(
         club_id: str,
@@ -107,6 +148,63 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 target_role=payload.role,
                 user_id=payload.user_id,
                 action=payload.action,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tools/workers/badge-queue")
+    def post_admin_tools_badge_queue_worker(
+        club_id: str,
+        payload: AdminBadgeQueueRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source, permission=PERMISSION_RUN_REPLAY)
+        try:
+            return run_admin_badge_queue_worker(
+                supabase,
+                club_id=str(club_id),
+                mode=payload.mode,
+                max_jobs=payload.max_jobs,
+                time_budget_seconds=payload.time_budget_seconds,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tools/workers/badge-recompute")
+    def post_admin_tools_badge_recompute(
+        club_id: str,
+        payload: AdminBadgeRecomputeRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source, permission=PERMISSION_RUN_REPLAY)
+        try:
+            return run_admin_badge_recompute_job(
+                supabase,
+                club_id=str(club_id),
+                mode=payload.mode,
+                player_id=payload.player_id,
+                badge_id=payload.badge_id,
+                league_id=payload.league_id,
+                context_id=payload.context_id,
+                since=payload.since,
+                until=payload.until,
+                include_non_live=payload.include_non_live,
+                allow_strict_global=payload.allow_strict_global,
+                match_limit=payload.match_limit,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
