@@ -13,6 +13,8 @@ from jupr_app.services.admin_jupr_live_service import (
     get_admin_jupr_live_session,
     is_admin_jupr_live_enabled,
     list_admin_jupr_live_sessions,
+    publish_admin_jupr_live_matches,
+    update_admin_jupr_live_scores,
     update_admin_jupr_live_session_status,
 )
 from services.api.auth import authenticate_bearer, auth_header
@@ -22,6 +24,7 @@ class JuprLiveSessionCreateRequest(BaseModel):
     title: str = "JUPR Live Session"
     event_type: str = "round_robin"
     participant_names: list[str] = Field(default_factory=list)
+    player_ids: list[int] = Field(default_factory=list)
     confirmation_text: str = ""
     source: str = "next_jupr_live_admin_create"
 
@@ -31,6 +34,24 @@ class JuprLiveSessionStatusRequest(BaseModel):
     title: str | None = None
     confirmation_text: str = ""
     source: str = "next_jupr_live_admin_status"
+
+
+class JuprLiveScorePayload(BaseModel):
+    match_id: str
+    score_a: int | None = None
+    score_b: int | None = None
+
+
+class JuprLiveScoresRequest(BaseModel):
+    scores: list[JuprLiveScorePayload] = Field(default_factory=list)
+    confirmation_text: str = ""
+    source: str = "next_jupr_live_admin_scores"
+
+
+class JuprLivePublishRequest(BaseModel):
+    match_date: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_jupr_live_admin_publish"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
@@ -97,6 +118,7 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
                 title=payload.title,
                 event_type=payload.event_type,
                 participant_names=payload.participant_names,
+                player_ids=payload.player_ids,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
@@ -140,6 +162,56 @@ def install_admin_jupr_live_routes(app, *, get_supabase_client) -> None:
                 session_key=str(session_key),
                 status=payload.status,
                 title=payload.title,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.patch("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/scores")
+    def patch_admin_jupr_live_scores(
+        club_id: str,
+        session_key: str,
+        payload: JuprLiveScoresRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_jupr_live_enabled():
+            raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return update_admin_jupr_live_scores(
+                supabase,
+                club_id=str(club_id),
+                session_key=str(session_key),
+                scores=[score.dict() for score in payload.scores],
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/publish")
+    def post_admin_jupr_live_publish(
+        club_id: str,
+        session_key: str,
+        payload: JuprLivePublishRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_jupr_live_enabled():
+            raise HTTPException(status_code=403, detail="Next JUPR Live Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return publish_admin_jupr_live_matches(
+                supabase,
+                club_id=str(club_id),
+                session_key=str(session_key),
+                match_date=payload.match_date,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
