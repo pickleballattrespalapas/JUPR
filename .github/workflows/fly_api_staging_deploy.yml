@@ -1,0 +1,210 @@
+name: Deploy FastAPI staging to Fly
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Dedicated Fly staging app name"
+        required: true
+        default: "juprleagues-api-staging"
+      primary_region:
+        description: "Fly primary region"
+        required: true
+        default: "dfw"
+      fly_org:
+        description: "Optional Fly organization slug"
+        required: false
+        default: ""
+      club_slug:
+        description: "Public club slug used by staging verification"
+        required: true
+        default: "tres-palapas"
+      club_id:
+        description: "Club ID used by staging admin status verification"
+        required: true
+        default: "tres_palapas"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fly-api-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    name: Deploy and verify isolated staging API
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.STAGING_SUPABASE_PROJECT_REF }}
+      FLY_APP_NAME: ${{ inputs.app_name }}
+      FLY_PRIMARY_REGION: ${{ inputs.primary_region }}
+      FLY_ORG: ${{ inputs.fly_org }}
+      JUPR_ENV: staging
+      JUPR_EMAIL_MODE: dry_run
+      JUPR_REQUIRE_API_AUDIT_LOG: "1"
+      JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT: "1"
+      JUPR_ENABLE_NEXT_ADMIN_SHELL: "1"
+      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG: "1"
+      JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY: "1"
+      JUPR_ENABLE_NEXT_ADMIN_REPLAY: "1"
+      JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY: "1"
+      JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER: "1"
+      JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR: "1"
+      JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES: "1"
+      JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS: "1"
+      JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER: "1"
+      JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS: "1"
+      JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP: "1"
+      JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS: "1"
+      JUPR_ENABLE_NEXT_ADMIN_MONEYBALL: "1"
+      JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE: "1"
+      JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER: "1"
+      JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT: "1"
+      JUPR_ENABLE_NEXT_ADMIN_TOOLS: "1"
+      JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate staging inputs and secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in FLY_API_TOKEN SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY SUPABASE_ANON_KEY EXPECTED_SUPABASE_PROJECT_REF; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Missing staging configuration::$name is required for the staging API deploy workflow."
+              missing=1
+            fi
+          done
+          if [ "$FLY_APP_NAME" = "juprleagues-api" ]; then
+            echo "::error title=Production app rejected::The staging workflow refuses to deploy to juprleagues-api."
+            missing=1
+          fi
+          if [ "$JUPR_ENV" != "staging" ]; then
+            echo "::error title=Environment rejected::JUPR_ENV must equal staging."
+            missing=1
+          fi
+          exit "$missing"
+
+      - name: Verify staging Supabase isolation before deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+
+          host = (urlsplit(os.environ["SUPABASE_URL"]).hostname or "").lower()
+          expected = os.environ["EXPECTED_SUPABASE_PROJECT_REF"].strip().lower()
+          actual = host.split(".", 1)[0]
+          if not host.endswith(".supabase.co"):
+              raise SystemExit("STAGING_SUPABASE_URL must use a *.supabase.co host")
+          if actual != expected:
+              raise SystemExit(f"Staging Supabase project mismatch: expected {expected!r}, got {actual!r}")
+          print(f"Verified isolated staging Supabase project ref: {actual}")
+          PY
+
+      - name: Apply deployment inputs to staging config
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          app_name = os.environ["FLY_APP_NAME"].strip()
+          primary_region = os.environ["FLY_PRIMARY_REGION"].strip()
+          if not app_name or not primary_region:
+              raise SystemExit("Fly app name and primary region are required")
+          if app_name == "juprleagues-api":
+              raise SystemExit("Refusing to target the production Fly app")
+
+          path = Path("fly.staging.toml")
+          text = path.read_text(encoding="utf-8")
+          text = re.sub(r'^app\s*=\s*"[^"]+"', f'app = "{app_name}"', text, count=1, flags=re.MULTILINE)
+          text = re.sub(r'^primary_region\s*=\s*"[^"]+"', f'primary_region = "{primary_region}"', text, count=1, flags=re.MULTILINE)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Ensure dedicated Fly staging app exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if flyctl status -a "$FLY_APP_NAME" >/dev/null 2>&1; then
+            echo "Fly staging app $FLY_APP_NAME already exists."
+          elif [ -n "${FLY_ORG:-}" ]; then
+            flyctl apps create "$FLY_APP_NAME" --org "$FLY_ORG" --yes
+          else
+            flyctl apps create "$FLY_APP_NAME" --yes
+          fi
+
+      - name: Stage staging-only runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          flyctl secrets set \
+            --stage \
+            -a "$FLY_APP_NAME" \
+            SUPABASE_URL="$SUPABASE_URL" \
+            SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+            SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+
+      - name: Validate Fly staging config
+        shell: bash
+        run: flyctl config validate --config fly.staging.toml -a "$FLY_APP_NAME"
+
+      - name: Deploy staging API to Fly
+        shell: bash
+        run: flyctl deploy --remote-only -a "$FLY_APP_NAME" --config fly.staging.toml
+
+      - name: Wait for staging API health
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="https://${FLY_APP_NAME}.fly.dev"
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent --show-error "$base_url/health"; then
+              echo
+              echo "Staging API is healthy: $base_url"
+              exit 0
+            fi
+            echo "Health attempt $attempt/18 failed; retrying in 10 seconds."
+            sleep 10
+          done
+          echo "::error title=Staging API unhealthy::$base_url/health did not become healthy."
+          exit 1
+
+      - name: Install staging verifier dependencies
+        run: python -m pip install -r services/api/requirements.txt
+
+      - name: Verify full staging API, schema, and feature surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_staging_environment.py \
+            --expect-full-next-admin \
+            --require-api \
+            --require-supabase \
+            --require-supabase-isolation \
+            --expected-supabase-project-ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            --api-base-url "https://${FLY_APP_NAME}.fly.dev" \
+            --club-slug "${{ inputs.club_slug }}" \
+            --club-id "${{ inputs.club_id }}" \
+            --json

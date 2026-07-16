@@ -20,6 +20,8 @@ The repo includes Fly-ready files at the repository root:
 - `fly.toml`
 - `.dockerignore`
 - `.github/workflows/fly_api_deploy.yml`
+- `fly.staging.toml`
+- `.github/workflows/fly_api_staging_deploy.yml`
 - `docs/fly_api_deploy.md`
 
 The preferred production deploy path is online-only through GitHub Actions:
@@ -33,6 +35,12 @@ uvicorn services.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers
 ```
 
 The default Fly app name in `fly.toml` is `juprleagues-api`. The GitHub Actions workflow lets the operator override the app name and primary region at run time without editing files locally.
+
+Full migration testing uses the separate `Deploy FastAPI staging to Fly`
+workflow. It deploys `fly.staging.toml` to `juprleagues-api-staging`, validates
+the staging Supabase project ref before deploy, enables all current admin
+workflows, keeps email in dry-run mode, and runs the exhaustive staging verifier.
+It refuses the production Fly app name.
 
 ## Environment variables
 

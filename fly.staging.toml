@@ -1,0 +1,56 @@
+# Isolated Fly.io deployment config for full Next/FastAPI staging validation.
+# This app must use staging Supabase credentials only. It is deliberately
+# separate from fly.toml and the production juprleagues-api app.
+app = "juprleagues-api-staging"
+primary_region = "dfw"
+
+[build]
+  dockerfile = "Dockerfile.api"
+
+[env]
+  PORT = "8080"
+  JUPR_ENV = "staging"
+  JUPR_EMAIL_MODE = "dry_run"
+  JUPR_REQUIRE_API_AUDIT_LOG = "1"
+  JUPR_STREAMLIT_FALLBACK_URL = "https://juprtrespalapas.streamlit.app"
+  JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT = "1"
+  JUPR_ENABLE_NEXT_ADMIN_SHELL = "1"
+  JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG = "1"
+  JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY = "1"
+  JUPR_ENABLE_NEXT_ADMIN_REPLAY = "1"
+  JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY = "1"
+  JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER = "1"
+  JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR = "1"
+  JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES = "1"
+  JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS = "1"
+  JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER = "1"
+  JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS = "1"
+  JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP = "1"
+  JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS = "1"
+  JUPR_ENABLE_NEXT_ADMIN_MONEYBALL = "1"
+  JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE = "1"
+  JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER = "1"
+  JUPR_ENABLE_NEXT_ADMIN_MATCH_CANONICAL_AUDIT = "1"
+  JUPR_ENABLE_NEXT_ADMIN_TOOLS = "1"
+  JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS = "1"
+  JUPR_ALLOWED_ORIGINS = "https://jupr-git-test-pickleballattrespalapas1.vercel.app,https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com,http://localhost:3000,http://127.0.0.1:3000"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
