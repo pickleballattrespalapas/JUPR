@@ -14,6 +14,7 @@ from jupr_app.services.admin_match_uploader_service import (
     is_admin_match_uploader_enabled,
     submit_admin_match_uploader_batch,
 )
+from jupr_app.services.admin_player_updates_service import auto_send_player_updates_for_match_payloads
 from jupr_app.services.admin_singles_match_service import submit_admin_singles_match
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -209,7 +210,7 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
         )
         try:
-            return submit_admin_match_uploader_batch(
+            result = submit_admin_match_uploader_batch(
                 supabase,
                 club_id=str(club_id),
                 matches=payload.matches,
@@ -217,5 +218,12 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
             )
+            result["auto_player_updates"] = auto_send_player_updates_for_match_payloads(
+                supabase,
+                club_id=str(club_id),
+                match_payloads=payload.matches,
+                source=payload.source,
+            )
+            return result
         except Exception as exc:
             _handle_write_error(exc)
