@@ -15,6 +15,7 @@ from services.api.admin_player_editor_routes import install_admin_player_editor_
 from services.api.admin_player_updates_routes import install_admin_player_updates_routes
 from services.api.admin_replay_routes import install_admin_replay_routes
 from services.api.admin_support_requests_routes import install_admin_support_requests_routes
+from services.api.admin_tools_routes import install_admin_tools_routes
 from services.api.admin_tournament_routes import install_admin_tournament_routes
 from services.api.admin_verified_updates_routes import install_admin_verified_updates_routes
 from services.api.admin_weekly_recap_routes import install_admin_weekly_recap_routes
@@ -35,6 +36,7 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
         install_admin_player_updates_routes(app, get_supabase_client=get_supabase_client)
         install_admin_verified_updates_routes(app, get_supabase_client=get_supabase_client)
         install_admin_support_requests_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_tools_routes(app, get_supabase_client=get_supabase_client)
         install_admin_moneyball_routes(app, get_supabase_client=get_supabase_client)
         install_admin_jupr_live_routes(app, get_supabase_client=get_supabase_client)
         install_admin_challenge_ladder_routes(app, get_supabase_client=get_supabase_client)
