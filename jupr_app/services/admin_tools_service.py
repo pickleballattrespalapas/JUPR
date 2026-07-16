@@ -120,12 +120,31 @@ def _table_count(supabase: Any, table: str, *, club_id: str, status: str | None 
         return {"ok": False, "count": None, "message": str(exc)}
 
 
+def _badge_eval_run_count(supabase: Any, *, club_id: str, limit: int = 1000) -> dict[str, Any]:
+    """Count recompute runs scoped to a club in badge_eval_runs.scope_json."""
+    try:
+        rows = _safe_rows(
+            supabase.table("badge_eval_runs")
+            .select("id,status,scope_json")
+            .limit(int(limit))
+            .execute()
+        )
+        scoped_rows = [
+            row
+            for row in rows
+            if str((row.get("scope_json") or {}).get("club_id") or "") == str(club_id)
+        ]
+        return {"ok": True, "count": len(scoped_rows), "sample_limit": int(limit)}
+    except Exception as exc:  # noqa: BLE001 - diagnostics only
+        return {"ok": False, "count": None, "message": str(exc)}
+
+
 def build_admin_worker_status(supabase: Any, *, club_id: str) -> dict[str, Any]:
     queue_counts = {
         status: _table_count(supabase, "badge_eval_queue", club_id=str(club_id), status=status)
         for status in QUEUE_STATUS_VALUES
     }
-    eval_runs = _table_count(supabase, "badge_recompute_runs", club_id=str(club_id), limit=1000)
+    eval_runs = _badge_eval_run_count(supabase, club_id=str(club_id), limit=1000)
     return {
         "ok": True,
         "queue_counts": queue_counts,
