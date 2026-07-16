@@ -9,3 +9,7 @@ __pycache__/
 
 # Local scratch
 archive/
+
+# Browser test artifacts
+apps/web/playwright-report/
+apps/web/test-results/

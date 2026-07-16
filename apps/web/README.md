@@ -155,6 +155,25 @@ JUPR_SMOKE_ARGS=--allow-live-unconfigured make public-web-smoke
 
 The same check is available through the manual GitHub Actions workflow `Staging Smoke`.
 
+That workflow also runs a Chromium smoke over the critical public and admin
+shell routes, rejects production domains, fails on browser/page errors, and
+asserts `/api/environment` is an isolated Vercel Preview backed by the staging
+API and staging Supabase Auth project. Configure these `staging` environment
+secrets before using the full gate:
+
+- `STAGING_WEB_BASE_URL`: the protected Vercel Preview or staging alias;
+- `STAGING_SUPABASE_URL`: the exact staging Auth origin the Preview must report;
+- `VERCEL_AUTOMATION_BYPASS_SECRET`: the Vercel Deployment Protection
+  automation bypass value.
+
+For a local Preview-mode browser check, install Chromium once and run:
+
+```bash
+cd apps/web
+npx playwright install chromium
+npm run test:e2e:staging
+```
+
 ## Admin score-entry guard
 
 The score-entry page at `/clubs/[clubSlug]/admin/score-entry` is an MVP surface only. Rated admin writes remain blocked unless the backend feature flag is explicitly enabled and Supabase JWT role authorization succeeds.

@@ -32,14 +32,19 @@ permissions:
 
 jobs:
   public-smoke:
-    name: Public API + web smoke
+    name: API + web + browser smoke
     runs-on: ubuntu-latest
+    environment: staging
     env:
       STAGING_JUPR_API_BASE_URL: ${{ inputs.api_base_url != '' && inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
       STAGING_WEB_BASE_URL: ${{ inputs.web_base_url != '' && inputs.web_base_url || secrets.STAGING_WEB_BASE_URL }}
       JUPR_SMOKE_CLUB_SLUG: ${{ inputs.club_slug || 'tres-palapas' }}
       JUPR_SMOKE_CLUB_ID: ${{ inputs.club_id || 'tres_palapas' }}
       JUPR_SMOKE_ARGS: ${{ inputs.allow_live_unconfigured && '--allow-live-unconfigured' || '' }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      JUPR_EXPECT_PREVIEW_AUTH_ISOLATION: "1"
+      JUPR_EXPECTED_STAGING_API_ORIGIN: ${{ inputs.api_base_url != '' && inputs.api_base_url || secrets.STAGING_JUPR_API_BASE_URL }}
+      JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -49,3 +54,42 @@ jobs:
 
       - name: Run public smoke checks
         run: make public-web-smoke
+
+      - name: Require an isolated Vercel staging URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${STAGING_WEB_BASE_URL:-}" ]; then
+            echo "::error title=Missing staging web URL::Set the staging environment secret STAGING_WEB_BASE_URL or pass web_base_url."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install Next browser smoke dependencies
+        working-directory: apps/web
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser staging smoke
+        working-directory: apps/web
+        run: npm run test:e2e:staging
+
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-browser-smoke-artifacts
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 14
