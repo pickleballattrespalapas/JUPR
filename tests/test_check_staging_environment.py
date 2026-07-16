@@ -20,7 +20,7 @@ class _FakeQuery:
     def execute(self):
         if self.table_name in self.fail_tables:
             raise RuntimeError("boom")
-        return {"data": []}
+        return SimpleNamespace(data=[])
 
 
 class _FakeSupabase:
@@ -33,8 +33,7 @@ class _FakeSupabase:
 
 def _args(**kwargs):
     base = {
-        "allow_next_admin_score_entry": False,
-        "json": False,
+        "expect_full_next_admin": False,
         "api_base_url": None,
         "require_api": False,
         "require_supabase": False,
@@ -58,29 +57,52 @@ def test_production_is_rejected(monkeypatch):
     rc, summary = cse.run_checks(_args())
     assert rc == 2
     assert summary["ok"] is False
+    assert any("production" in err for err in summary["errors"])
 
 
-def test_next_admin_entry_guard(monkeypatch):
+def test_staging_allows_next_admin_score_entry_as_full_surface_flag(monkeypatch):
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "true")
     rc, summary = cse.run_checks(_args())
-    assert rc == 1
-    assert any("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY" in e for e in summary["errors"])
+    assert rc == 0
+    assert summary["ok"] is True
+    assert summary["next_admin_flags"]["required"]["JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY"] is True
+    assert summary["warnings"]
 
-    rc2, summary2 = cse.run_checks(_args(allow_next_admin_score_entry=True))
-    assert rc2 == 0
-    assert summary2["ok"] is True
+
+def test_expect_full_next_admin_flags_reports_missing(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    rc, summary = cse.run_checks(_args(expect_full_next_admin=True))
+    assert rc == 1
+    assert summary["ok"] is False
+    assert any("Full Next admin staging requested" in err for err in summary["errors"])
+
+
+def test_expect_full_next_admin_passes_when_flags_enabled(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    for name in cse.FULL_NEXT_ADMIN_FLAGS:
+        monkeypatch.setenv(name, "1")
+    rc, summary = cse.run_checks(_args(expect_full_next_admin=True))
+    assert rc == 0
+    assert summary["ok"] is True
+    assert summary["next_admin_flags"]["required_enabled_count"] == len(cse.FULL_NEXT_ADMIN_FLAGS)
+
+
+def test_staging_redirect_requires_redirect_address(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "staging_redirect")
+    rc, summary = cse.run_checks(_args())
+    assert rc == 1
+    assert any("JUPR_STAGING_EMAIL_REDIRECT_TO" in err for err in summary["errors"])
 
 
 def test_secret_values_are_not_printed(monkeypatch, capsys):
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "super-secret-value")
     monkeypatch.setenv("SUPABASE_URL", "https://user:pass@example.supabase.co/path")
-
     monkeypatch.setattr(cse, "make_supabase", lambda _u, _k: _FakeSupabase())
     rc = cse.main([])
     out = capsys.readouterr().out
-
     assert rc == 0
     assert "super-secret-value" not in out
     assert "user:pass" not in out
@@ -91,11 +113,9 @@ def test_mocked_supabase_table_checks(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
     monkeypatch.setattr(cse, "make_supabase", lambda _u, _k: _FakeSupabase())
-
     rc, summary = cse.run_checks(_args(require_supabase=True))
     assert rc == 0
     assert summary["checked_tables"]["clubs"]["status"] == "ok"
-
     monkeypatch.setattr(cse, "make_supabase", lambda _u, _k: _FakeSupabase({"replay_jobs"}))
     rc2, summary2 = cse.run_checks(_args(require_supabase=True))
     assert rc2 == 1
@@ -108,14 +128,18 @@ def test_mocked_api_checks(monkeypatch):
     def fake_get(url: str):
         if url.endswith("/health"):
             return 200, {"ok": True}, None
-        if url.endswith("/clubs/tres-palapas"):
+        if url.endswith("/leaderboards"):
+            return 200, {"club": {}, "leaderboard": []}, None
+        if "/clubs/tres-palapas" in url:
             return 200, {"id": "1", "slug": "tres-palapas", "name": "Tres"}, None
-        return 200, {"club": {}, "leaderboard": []}, None
+        return 200, {"ok": True}, None
 
     monkeypatch.setattr(cse, "_http_get_json", fake_get)
     rc, summary = cse.run_checks(_args(api_base_url="https://api.example.com", require_api=True))
     assert rc == 0
     assert summary["checked_endpoints"]["/health"]["status"] == "ok"
+    assert "/admin/operations/status" in summary["checked_endpoints"]
+    assert "/admin/clubs/tres_palapas/tools/status" in summary["checked_endpoints"]
 
     monkeypatch.setattr(cse, "_http_get_json", lambda _url: (500, None, "HTTP 500"))
     rc2, summary2 = cse.run_checks(_args(api_base_url="https://api.example.com", require_api=True))
@@ -130,4 +154,4 @@ def test_json_output_is_valid(monkeypatch, capsys):
     parsed = json.loads(out)
     assert rc == 0
     assert isinstance(parsed, dict)
-    assert "ok" in parsed
+    assert "next_admin_flags" in parsed
