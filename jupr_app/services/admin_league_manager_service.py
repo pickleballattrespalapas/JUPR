@@ -8,7 +8,7 @@ from typing import Any
 from jupr_app.domain.leagues import normalize_league_status
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
-LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
+LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,league_type,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
 LEAGUE_MANAGER_MINIMAL_SELECT = "league_name,is_active,k_factor,min_games"
 
 
@@ -110,6 +110,9 @@ def _league_row_payload(row: dict[str, Any]) -> dict[str, Any]:
     league_name = _clean_text(row.get("league_name"), limit=120)
     return {
         "league_name": league_name,
+        "league_type": _clean_text(row.get("league_type"), limit=80) or "Standard",
+        "description": _clean_text(row.get("description"), limit=2000),
+        "min_weeks": _safe_int(row.get("min_weeks")),
         "status": normalize_league_status(row),
         "is_active": bool(row.get("is_active", False)),
         "started_at": row.get("started_at"),
@@ -242,6 +245,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "enabled": False,
             "status": "guarded_off",
             "leagues_endpoint": None,
+            "league_create_endpoint": None,
             "league_detail_endpoint": None,
             "league_settings_update_endpoint": None,
             "league_roster_update_endpoint": None,
@@ -258,6 +262,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
         "enabled": True,
         "status": "ready_for_league_manager_roster_and_live_pilot",
         "leagues_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
+        "league_create_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
         "league_detail_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_roster_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}",

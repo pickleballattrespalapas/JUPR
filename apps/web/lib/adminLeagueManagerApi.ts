@@ -2,6 +2,7 @@ export type AdminLeagueManagerStatusResponse = {
   enabled: boolean;
   status: string;
   leagues_endpoint?: string | null;
+  league_create_endpoint?: string | null;
   league_detail_endpoint?: string | null;
   league_settings_update_endpoint?: string | null;
   league_roster_update_endpoint?: string | null;
@@ -13,6 +14,9 @@ export type AdminLeagueManagerStatusResponse = {
 
 export type AdminLeagueManagerLeague = {
   league_name: string;
+  league_type?: string | null;
+  description?: string | null;
+  min_weeks?: number | null;
   status: string;
   is_active?: boolean | null;
   started_at?: string | null;

@@ -97,7 +97,8 @@ def test_league_manager_status_enabled_counts_leagues(monkeypatch) -> None:
     payload = build_admin_league_manager_status(FakeSupabase(fake_storage()), club_id="club")
 
     assert payload["enabled"] is True
-    assert payload["status"] == "ready_for_league_manager_read_foundation"
+    assert payload["status"] == "ready_for_league_manager_roster_and_live_pilot"
+    assert payload["league_create_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues"
     assert payload["league_count"] == 2
     assert payload["active_count"] == 1
 

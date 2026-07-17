@@ -70,6 +70,8 @@ def _fetch_league_meta(supabase: Any, *, club_id: str, league_name: str) -> dict
 
 def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
+    if "description" in patch and patch.get("description") is not None:
+        normalized["description"] = _clean_text(patch.get("description"), limit=2000)
     if "status" in patch and patch.get("status") not in (None, ""):
         status = _clean_text(patch.get("status"), limit=40).lower()
         if status not in ALLOWED_STATUSES:
@@ -124,20 +126,17 @@ def update_admin_league_manager_settings(
         raise ValueError("league_name is required")
     normalized = _normalize_patch(dict(patch or {}))
     before = _fetch_league_meta(supabase, club_id=str(club_id), league_name=clean_league)
+    if before is None:
+        raise ValueError("league not found")
 
-    if before:
-        updated = _safe_rows(
-            supabase.table("leagues_metadata")
-            .update(normalized)
-            .eq("club_id", str(club_id))
-            .eq("league_name", clean_league)
-            .execute()
-        )
-        after = updated[0] if updated else {**before, **normalized}
-    else:
-        inserted_row = {"club_id": str(club_id), "league_name": clean_league, **normalized}
-        inserted = _safe_rows(supabase.table("leagues_metadata").insert(inserted_row).execute())
-        after = inserted[0] if inserted else inserted_row
+    updated = _safe_rows(
+        supabase.table("leagues_metadata")
+        .update(normalized)
+        .eq("club_id", str(club_id))
+        .eq("league_name", clean_league)
+        .execute()
+    )
+    after = updated[0] if updated else {**before, **normalized}
 
     audit_payload = build_activity_payload(
         club_id=str(club_id),
@@ -151,7 +150,7 @@ def update_admin_league_manager_settings(
             "source_client": "fastapi/nextjs",
             "source_page": source,
             "league_name": clean_league,
-            "created": before is None,
+            "created": False,
             "patch": normalized,
             "league": after,
         },
@@ -171,6 +170,6 @@ def update_admin_league_manager_settings(
         "mode": "league_manager_settings_update",
         "league": detail.get("league"),
         "detail": detail,
-        "created": before is None,
+        "created": False,
         "warnings": warnings,
     }

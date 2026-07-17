@@ -16,6 +16,7 @@ from jupr_app.services.admin_league_live_service import (
     save_admin_league_live_round,
     update_admin_league_live_session_snapshot,
 )
+from jupr_app.services.admin_league_manager_create_service import create_admin_league_manager_draft
 from jupr_app.services.admin_league_manager_roster_service import update_admin_league_manager_roster_membership
 from jupr_app.services.admin_league_manager_service import (
     build_admin_league_manager_status,
@@ -28,6 +29,7 @@ from services.api.auth import authenticate_bearer, auth_header
 
 
 class AdminLeagueManagerSettingsUpdateRequest(BaseModel):
+    description: str | None = Field(default=None, max_length=2000)
     status: str | None = None
     k_factor: int | None = None
     min_games: int | None = None
@@ -38,6 +40,15 @@ class AdminLeagueManagerSettingsUpdateRequest(BaseModel):
     event_tags: dict[str, Any] | None = None
     confirmation_text: str = ""
     source: str = "next_league_manager_settings_update"
+
+
+class AdminLeagueManagerCreateRequest(BaseModel):
+    league_name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    min_games: int = Field(default=6, ge=0, le=1000)
+    k_factor: int = Field(default=32, ge=1, le=128)
+    confirmation_text: str = ""
+    source: str = "next_league_manager_create"
 
 
 class AdminLeagueManagerRosterMembershipRequest(BaseModel):
@@ -287,6 +298,37 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         )
         try:
             return list_admin_league_manager_leagues(supabase, club_id=str(club_id))
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues")
+    def post_admin_league_manager_league(
+        club_id: str,
+        payload: AdminLeagueManagerCreateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return create_admin_league_manager_draft(
+                supabase,
+                club_id=str(club_id),
+                league_name=payload.league_name,
+                description=payload.description,
+                min_games=payload.min_games,
+                k_factor=payload.k_factor,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
         except Exception as exc:
             _handle_common(exc)
 

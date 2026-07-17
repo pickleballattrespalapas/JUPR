@@ -15,7 +15,7 @@ export default async function AdminLeagueManagerPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>League Manager</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Next/FastAPI read foundation for league operations: league list/detail, schedule preview, config visibility, and standings snapshots. Roster movement, scoring, setup writes, and awards remain Streamlit-only in this slice.
+        Guarded Next/FastAPI league operations: create drafts, edit settings and roster membership, run persisted live rounds with court movement, print operations sheets, and close awards. Streamlit remains the fallback while staging validation continues.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {error}</p> : null}

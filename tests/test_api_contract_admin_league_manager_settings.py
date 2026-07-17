@@ -65,6 +65,7 @@ def test_admin_league_manager_settings_update_contract(monkeypatch):
         "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
         headers={"Authorization": "Bearer local"},
         json={
+            "description": "Tuesday evening ladder",
             "status": "active",
             "k_factor": 28,
             "min_games": 4,
@@ -84,6 +85,7 @@ def test_admin_league_manager_settings_update_contract(monkeypatch):
     assert payload["league"]["k_factor"] == 28
     assert payload["detail"]["schedule_preview"][0]["date"] == "2026-01-05"
     assert tables["leagues_metadata"][0]["min_games"] == 4
+    assert tables["leagues_metadata"][0]["description"] == "Tuesday evening ladder"
     assert tables["leagues_metadata"][0]["court_board_defaults"]["max_used_courts"] == 4
     assert tables["admin_activity_log"][0]["action_type"] == "update_league_manager_settings_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
@@ -101,3 +103,19 @@ def test_admin_league_manager_settings_update_requires_confirmation(monkeypatch)
 
     assert response.status_code == 400
     assert "SAVE LEAGUE" in response.json()["detail"]
+
+
+def test_admin_league_manager_settings_update_does_not_create_missing_league(monkeypatch):
+    tables = league_manager_tables()
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Unknown",
+        headers={"Authorization": "Bearer local"},
+        json={"k_factor": 28, "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "league not found"
+    assert len(tables["leagues_metadata"]) == 1
