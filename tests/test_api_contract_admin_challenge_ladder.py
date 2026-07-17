@@ -68,7 +68,9 @@ class FakeSupabase:
                 {"club_id": "club", "id": 10, "player_id": 1, "tier_id": "ADV", "rank": 1, "is_active": True},
                 {"club_id": "club", "id": 11, "player_id": 2, "tier_id": "ADV", "rank": 2, "is_active": True},
             ],
-            "ladder_player_flags": [],
+            "ladder_player_flags": [
+                {"club_id": "club", "player_id": 2, "vacation_until": None, "reinstate_required": True, "reinstate_notes": "Contact director"},
+            ],
             "ladder_pass_usage": [],
             "ladder_challenges": [{"club_id": "club", "id": 100, "challenger_id": 2, "defender_id": 1, "tier_id": "ADV", "status": "PENDING_ACCEPTANCE", "created_at": "2026-01-01T00:00:00Z"}],
             "admin_activity_log": [],
@@ -92,6 +94,18 @@ def test_challenge_ladder_dashboard(monkeypatch):
     assert [(row["player_name"], row["tier_id"], row["rank"], row["is_active"]) for row in payload["roster_rows"]] == [
         ("Alex", "ADV", 1, True),
         ("Blair", "ADV", 2, True),
+    ]
+    assert payload["player_flags"] == [
+        {
+            "player_id": 2,
+            "player_name": "Blair",
+            "vacation_until": None,
+            "reinstate_required": True,
+            "reinstate_notes": "Contact director",
+            "tier_move_flag": False,
+            "tier_move_dest_tier": None,
+            "tier_move_count": 0,
+        }
     ]
 
 

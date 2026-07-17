@@ -15,6 +15,7 @@ from jupr_app.services.admin_challenge_ladder_service import (
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
+    save_admin_challenge_ladder_player_overrides,
 )
 from jupr_app.domain.challenge_ladder import month_key_utc
 from services.api.admin_challenge_ladder_routes import install_admin_challenge_ladder_routes
@@ -95,6 +96,7 @@ class FakeSupabase:
             ],
             "ladder_challenges": [{"club_id": "club", "id": 100, "challenger_id": 2, "defender_id": 1, "tier_id": "ADV", "status": "PENDING_ACCEPTANCE", "created_at": "2026-01-01T00:00:00Z"}],
             "ladder_pass_usage": [],
+            "ladder_player_flags": [],
             "admin_activity_log": [],
         }
 
@@ -350,6 +352,87 @@ def test_roster_move_appends_and_recompresses_previous_tier(monkeypatch):
     assert [row["rank"] for row in advanced] == [1, 2, 3, 4, 5]
 
 
+def test_player_overrides_insert_normalizes_utc_and_writes_audit(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+
+    result = save_admin_challenge_ladder_player_overrides(
+        supabase,
+        club_id="club",
+        player_id=2,
+        vacation_until="2026-08-01T12:00:00-05:00",
+        reinstate_required=True,
+        reinstate_notes="Contact ladder director",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="SAVE LADDER OVERRIDES",
+    )
+
+    assert result["player_flags"]["vacation_until"] == "2026-08-01T17:00:00+00:00"
+    assert result["player_flags"]["reinstate_required"] is True
+    assert supabase.storage["ladder_player_flags"][0]["player_id"] == 2
+    assert supabase.storage["admin_activity_log"][-1]["entity_type"] == "ladder_player_flags"
+
+
+def test_player_overrides_update_can_clear_values_without_touching_tier_flags(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_player_flags"].append(
+        {
+            "club_id": "club",
+            "player_id": 2,
+            "vacation_until": "2026-08-01T17:00:00+00:00",
+            "reinstate_required": True,
+            "reinstate_notes": "Old note",
+            "tier_move_flag": True,
+            "tier_move_dest_tier": "INT",
+            "tier_move_count": 10,
+        }
+    )
+
+    result = save_admin_challenge_ladder_player_overrides(
+        supabase,
+        club_id="club",
+        player_id=2,
+        vacation_until=None,
+        reinstate_required=False,
+        reinstate_notes="",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="SAVE LADDER OVERRIDES",
+    )
+
+    stored = supabase.storage["ladder_player_flags"][0]
+    assert stored["vacation_until"] is None
+    assert stored["reinstate_required"] is False
+    assert stored["reinstate_notes"] is None
+    assert stored["tier_move_flag"] is True
+    assert result["player_flags"]["tier_move_dest_tier"] == "INT"
+
+
+def test_player_overrides_reject_naive_date_time(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+
+    try:
+        save_admin_challenge_ladder_player_overrides(
+            supabase,
+            club_id="club",
+            player_id=2,
+            vacation_until="2026-08-01T12:00:00",
+            reinstate_required=False,
+            reinstate_notes=None,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="SAVE LADDER OVERRIDES",
+        )
+    except ValueError as exc:
+        assert "UTC offset or Z" in str(exc)
+    else:
+        raise AssertionError("expected timezone validation error")
+    assert supabase.storage["ladder_player_flags"] == []
+
+
 def test_new_ladder_operation_routes_require_authentication(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
     supabase = FakeSupabase()
@@ -363,21 +446,30 @@ def test_new_ladder_operation_routes_require_authentication(monkeypatch):
             "/admin/clubs/{club_id}/challenge-ladder/challenges/{challenge_id}/pass",
             "/admin/clubs/club/challenge-ladder/challenges/100/pass",
             {"player_id": 2, "confirmation_text": "RECORD LADDER PASS"},
+            "post",
         ),
         (
             "/admin/clubs/{club_id}/challenge-ladder/roster",
             "/admin/clubs/club/challenge-ladder/roster",
             {"player_id": 7, "tier_id": "INT", "confirmation_text": "ADD LADDER PLAYER"},
+            "post",
         ),
         (
             "/admin/clubs/{club_id}/challenge-ladder/roster/{player_id}/move",
             "/admin/clubs/club/challenge-ladder/roster/4/move",
             {"destination_tier": "INT", "confirmation_text": "MOVE LADDER PLAYER"},
+            "post",
+        ),
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/roster/{player_id}/overrides",
+            "/admin/clubs/club/challenge-ladder/roster/2/overrides",
+            {"vacation_until": None, "reinstate_required": False, "confirmation_text": "SAVE LADDER OVERRIDES"},
+            "put",
         ),
     ]
-    for contract_path, path, payload in requests:
-        assert "post" in openapi[contract_path]
-        response = TestClient(app).post(path, json=payload)
+    for contract_path, path, payload, method in requests:
+        assert method in openapi[contract_path]
+        response = TestClient(app).request(method.upper(), path, json=payload)
         assert response.status_code == 401
     assert supabase.storage == before
 

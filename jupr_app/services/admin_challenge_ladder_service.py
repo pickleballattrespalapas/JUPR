@@ -23,6 +23,7 @@ CONFIRM_ACCEPT = "ACCEPT LADDER CHALLENGE"
 CONFIRM_PASS = "RECORD LADDER PASS"
 CONFIRM_ROSTER_ADD = "ADD LADDER PLAYER"
 CONFIRM_ROSTER_MOVE = "MOVE LADDER PLAYER"
+CONFIRM_OVERRIDES = "SAVE LADDER OVERRIDES"
 
 
 def is_admin_challenge_ladder_enabled() -> bool:
@@ -144,6 +145,33 @@ def _admin_roster_row(row: dict[str, Any], names: dict[int, str]) -> dict[str, A
     }
 
 
+def _admin_player_flag_row(row: dict[str, Any], names: dict[int, str]) -> dict[str, Any]:
+    player_id = _safe_int(row.get("player_id"))
+    return {
+        "player_id": player_id,
+        "player_name": names.get(int(player_id), f"Player {player_id}") if player_id is not None else "—",
+        "vacation_until": row.get("vacation_until"),
+        "reinstate_required": bool(row.get("reinstate_required", False)),
+        "reinstate_notes": row.get("reinstate_notes"),
+        "tier_move_flag": bool(row.get("tier_move_flag", False)),
+        "tier_move_dest_tier": normalize_tier_id(str(row.get("tier_move_dest_tier") or "")) if row.get("tier_move_dest_tier") else None,
+        "tier_move_count": int(_safe_int(row.get("tier_move_count")) or 0),
+    }
+
+
+def _vacation_until_iso(value: Any) -> str | None:
+    cleaned = _clean(value, limit=80)
+    if not cleaned:
+        return None
+    try:
+        parsed = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Vacation until must be a valid ISO date-time.") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("Vacation until must include a UTC offset or Z suffix.")
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
 def _challenge(supabase: Any, *, club_id: str, challenge_id: int) -> dict[str, Any]:
     row = _first(supabase.table("ladder_challenges").select("*").eq("club_id", str(club_id)).eq("id", int(challenge_id)).limit(1).execute())
     if row is None:
@@ -175,6 +203,7 @@ def build_admin_challenge_ladder_status(supabase: Any | None, *, club_id: str) -
             "pass": CONFIRM_PASS,
             "roster_add": CONFIRM_ROSTER_ADD,
             "roster_move": CONFIRM_ROSTER_MOVE,
+            "overrides": CONFIRM_OVERRIDES,
         },
     }
 
@@ -210,6 +239,14 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
             str(row.get("player_name") or "").casefold(),
         ),
     )
+    try:
+        flag_rows = _safe_rows(supabase.table("ladder_player_flags").select("*").eq("club_id", str(club_id)).execute())
+    except Exception:
+        flag_rows = []
+    player_flags = sorted(
+        (_admin_player_flag_row(row, names) for row in flag_rows),
+        key=lambda row: (str(row.get("player_name") or "").casefold(), int(row.get("player_id") or 0)),
+    )
     return {
         "ok": True,
         "mode": "challenge_ladder_admin_dashboard",
@@ -219,6 +256,7 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         "settings_row": settings[0] if settings else {},
         "player_options": player_options,
         "roster_rows": roster_rows,
+        "player_flags": player_flags,
     }
 
 
@@ -618,6 +656,75 @@ def move_admin_challenge_ladder_roster_player(
         "roster": _admin_roster_row(saved, names),
         "previous_tier": previous_tier,
         "recompressed_count": len(recompressed_player_ids),
+        "warnings": [warning] if warning else [],
+    }
+
+
+def save_admin_challenge_ladder_player_overrides(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_id: int,
+    vacation_until: str | None,
+    reinstate_required: bool,
+    reinstate_notes: str | None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_challenge_ladder_player_overrides",
+) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    if _clean(confirmation_text, limit=80).upper() != CONFIRM_OVERRIDES:
+        raise ValueError(f"Type {CONFIRM_OVERRIDES} to save ladder overrides.")
+    safe_player_id = int(player_id)
+    active_roster = _active_roster_by_player(supabase, club_id=str(club_id))
+    if safe_player_id not in active_roster:
+        raise ValueError("Player must be active on this club's ladder.")
+    names = _player_names(supabase, club_id=str(club_id))
+    if safe_player_id not in names:
+        raise ValueError("Player must belong to this club.")
+
+    existing = _first(
+        supabase.table("ladder_player_flags")
+        .select("*")
+        .eq("club_id", str(club_id))
+        .eq("player_id", safe_player_id)
+        .limit(1)
+        .execute()
+    )
+    mutable = {
+        "vacation_until": _vacation_until_iso(vacation_until),
+        "reinstate_required": bool(reinstate_required),
+        "reinstate_notes": _clean(reinstate_notes, limit=1000) or None,
+    }
+    if existing is not None:
+        saved = _first(
+            supabase.table("ladder_player_flags")
+            .update(mutable)
+            .eq("club_id", str(club_id))
+            .eq("player_id", safe_player_id)
+            .execute()
+        ) or {**existing, **mutable}
+    else:
+        payload = {"club_id": str(club_id), "player_id": safe_player_id, **mutable}
+        saved = _first(supabase.table("ladder_player_flags").insert(payload).execute()) or payload
+    warning = _write_ladder_audit(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="flags_save",
+        entity_type="ladder_player_flags",
+        entity_id=f"{club_id}:{safe_player_id}",
+        before=existing,
+        after=saved,
+        source=source,
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_player_overrides",
+        "player_flags": _admin_player_flag_row(saved, names),
         "warnings": [warning] if warning else [],
     }
 

@@ -19,6 +19,7 @@ from jupr_app.services.admin_challenge_ladder_service import (
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
+    save_admin_challenge_ladder_player_overrides,
     start_admin_challenge_ladder_clock,
     update_admin_challenge_ladder_challenge,
 )
@@ -75,6 +76,14 @@ class ChallengeRosterMoveRequest(BaseModel):
     admin_note: str | None = None
     confirmation_text: str = ""
     source: str = "next_challenge_ladder_roster_move"
+
+
+class ChallengePlayerOverridesRequest(BaseModel):
+    vacation_until: str | None = None
+    reinstate_required: bool = False
+    reinstate_notes: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_challenge_ladder_player_overrides"
 
 
 class ChallengeResultRequest(BaseModel):
@@ -258,6 +267,28 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 destination_tier=payload.destination_tier,
                 recompress_old=payload.recompress_old,
                 admin_note=payload.admin_note,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.put("/admin/clubs/{club_id}/challenge-ladder/roster/{player_id}/overrides")
+    def put_admin_challenge_ladder_player_overrides(club_id: str, player_id: int, payload: ChallengePlayerOverridesRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return save_admin_challenge_ladder_player_overrides(
+                supabase,
+                club_id=str(club_id),
+                player_id=int(player_id),
+                vacation_until=payload.vacation_until,
+                reinstate_required=payload.reinstate_required,
+                reinstate_notes=payload.reinstate_notes,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

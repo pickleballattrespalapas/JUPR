@@ -6,10 +6,11 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 type Challenge = { id: number; tier_id: string; status: string; bucket: string; challenger_id?: number | null; defender_id?: number | null; challenger_name: string; defender_name: string; winner_name?: string | null; created_at?: string | null; accept_by?: string | null; play_by?: string | null; resolution_notes?: string | null };
 type Player = { player_id: number; player_name: string; rank?: number; status?: string; rating_jupr?: number | null };
 type RosterRow = Player & { tier_id: string; is_active: boolean; joined_at?: string | null; left_at?: string | null; notes?: string | null };
+type PlayerFlag = { player_id: number; player_name: string; vacation_until?: string | null; reinstate_required: boolean; reinstate_notes?: string | null; tier_move_flag?: boolean; tier_move_dest_tier?: string | null; tier_move_count?: number };
 type Tier = { tier_id: string; label: string; range: string; players: Player[] };
 type StatusResponse = { enabled: boolean; status: string; summary?: Record<string, number>; warnings?: string[] };
-type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[]; roster_rows?: RosterRow[] };
-type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
+type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[]; roster_rows?: RosterRow[]; player_flags?: PlayerFlag[] };
+type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; player_flags?: PlayerFlag; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
 type ResultDraft = { challenge_id: string; a_chal: string; a_def: string; b_chal: string; b_def: string; match_a_games: string; match_b_games: string; match_date: string; winner_override: string; publish_official_matches: boolean; confirmation_text: string };
 type ResultPreviewResponse = ActionResponse & { mode: "challenge_ladder_result_preview"; challenge: Challenge; preview: { final_winner_side: string; final_winner_id: number; winner_summary: Record<string, string | number>; scores: Record<string, unknown> }; partner_names: Record<string, string>; match_date: string; would_publish_official_matches: boolean; rank_result: { would_swap: boolean; reason: string } };
 
@@ -52,6 +53,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [passDraft, setPassDraft] = useState({ challenge_id: "", player_id: "", confirmation_text: "" });
   const [rosterAddDraft, setRosterAddDraft] = useState({ player_id: "", tier_id: "ADV", admin_note: "", confirmation_text: "" });
   const [rosterMoveDraft, setRosterMoveDraft] = useState({ player_id: "", destination_tier: "INT", recompress_old: true, admin_note: "", confirmation_text: "" });
+  const [overrideDraft, setOverrideDraft] = useState({ player_id: "", vacation_until: "", reinstate_required: false, reinstate_notes: "", confirmation_text: "" });
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -141,6 +143,16 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     finally { setBusy(false); }
   }
 
+  async function savePlayerOverrides() {
+    if (overrideDraft.confirmation_text.trim().toUpperCase() !== "SAVE LADDER OVERRIDES") { setMessage("Type SAVE LADDER OVERRIDES to save these overrides."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/${Number(overrideDraft.player_id)}/overrides`, { method: "PUT", body: JSON.stringify({ vacation_until: overrideDraft.vacation_until.trim() || null, reinstate_required: overrideDraft.reinstate_required, reinstate_notes: overrideDraft.reinstate_notes, confirmation_text: overrideDraft.confirmation_text }) });
+      setLastResult(payload); setOverrideDraft((current) => ({ ...current, confirmation_text: "" })); setMessage("Vacation and reinstate overrides saved."); await loadDashboard();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save ladder overrides."); }
+    finally { setBusy(false); }
+  }
+
   async function previewResult() {
     if (!resultDraft.challenge_id) { setMessage("Choose a recordable challenge before previewing a result."); return; }
     setBusy(true); setMessage(null);
@@ -175,6 +187,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const selectedPassChallenge = openChallengeOptions.find((challenge) => String(challenge.id) === passDraft.challenge_id);
   const activeRosterRows = (dashboard?.roster_rows || []).filter((row) => row.is_active);
   const inactiveRosterRows = (dashboard?.roster_rows || []).filter((row) => !row.is_active);
+  const currentOverrideRows = (dashboard?.player_flags || []).filter((flags) => flags.vacation_until || flags.reinstate_required || flags.reinstate_notes);
   const activeRosterPlayerIds = new Set(activeRosterRows.map((row) => row.player_id));
   const addRosterOptions = allPlayerOptions.filter((player) => !activeRosterPlayerIds.has(player.player_id));
   const selectedMovePlayer = activeRosterRows.find((player) => String(player.player_id) === rosterMoveDraft.player_id);
@@ -280,6 +293,19 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
           </section>
         </div>
         {inactiveRosterRows.length ? <section style={{ marginTop: "1rem" }}><h3>Inactive roster</h3><p style={{ color: "#475569" }}>{inactiveRosterRows.map((row) => `${row.player_name} (${row.tier_id}, former rank ${row.rank ?? "—"})`).join(" · ")}</p></section> : null}
+      </article> : null}
+      {dashboard ? <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Vacation and reinstate overrides</h2>
+        <p style={{ color: "#475569" }}>Vacation temporarily marks an active player unavailable. Reinstate-required takes priority in the public ladder status until an administrator clears it.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+          <label>Active player<br /><select value={overrideDraft.player_id} onChange={(e) => { const flags = dashboard.player_flags?.find((row) => String(row.player_id) === e.target.value); setOverrideDraft({ player_id: e.target.value, vacation_until: flags?.vacation_until || "", reinstate_required: Boolean(flags?.reinstate_required), reinstate_notes: flags?.reinstate_notes || "", confirmation_text: "" }); }} style={inputStyle}><option value="">Choose</option>{activeRosterRows.map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · {player.tier_id} rank {player.rank ?? "—"}</option>)}</select></label>
+          <label>Vacation until (ISO with Z/offset)<br /><input value={overrideDraft.vacation_until} onChange={(e) => setOverrideDraft((current) => ({ ...current, vacation_until: e.target.value }))} placeholder="2026-08-01T17:00:00Z" style={inputStyle} /></label>
+          <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={overrideDraft.reinstate_required} onChange={(e) => setOverrideDraft((current) => ({ ...current, reinstate_required: e.target.checked }))} /> Reinstate required</label>
+          <label>Reinstate notes<br /><input value={overrideDraft.reinstate_notes} onChange={(e) => setOverrideDraft((current) => ({ ...current, reinstate_notes: e.target.value }))} style={inputStyle} /></label>
+          <label>Confirmation<br /><input value={overrideDraft.confirmation_text} onChange={(e) => setOverrideDraft((current) => ({ ...current, confirmation_text: e.target.value }))} placeholder="SAVE LADDER OVERRIDES" style={inputStyle} /></label>
+          <button type="button" onClick={savePlayerOverrides} disabled={busy || !overrideDraft.player_id} style={buttonStyle}>Save overrides</button>
+        </div>
+        {currentOverrideRows.length ? <section style={{ marginTop: "1rem" }}><h3>Current overrides</h3><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Player</th><th align="left">Vacation until</th><th align="left">Reinstate</th><th align="left">Notes</th></tr></thead><tbody>{currentOverrideRows.map((flags) => <tr key={flags.player_id}><td>{flags.player_name}</td><td>{flags.vacation_until || "—"}</td><td>{flags.reinstate_required ? "Required" : "No"}</td><td>{flags.reinstate_notes || "—"}</td></tr>)}</tbody></table></div></section> : null}
       </article> : null}
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Summary</h2>
