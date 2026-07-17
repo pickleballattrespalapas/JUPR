@@ -6,7 +6,7 @@ from typing import Any
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.challenge_ladder import TIER_ORDER, ladder_bucket_challenge, normalize_tier_id
+from jupr_app.domain.challenge_ladder import TIER_ORDER, ladder_bucket_challenge, month_key_utc, normalize_tier_id
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_challenge_ladder_service import build_public_challenge_ladder
@@ -20,6 +20,9 @@ CONFIRM_RESULT = "PUBLISH LADDER RESULT"
 CONFIRM_FORFEIT = "RECORD LADDER FORFEIT"
 CONFIRM_CLOCK = "START LADDER CLOCK"
 CONFIRM_ACCEPT = "ACCEPT LADDER CHALLENGE"
+CONFIRM_PASS = "RECORD LADDER PASS"
+CONFIRM_ROSTER_ADD = "ADD LADDER PLAYER"
+CONFIRM_ROSTER_MOVE = "MOVE LADDER PLAYER"
 
 
 def is_admin_challenge_ladder_enabled() -> bool:
@@ -125,6 +128,22 @@ def _active_roster_by_player(supabase: Any, *, club_id: str) -> dict[int, dict[s
     return result
 
 
+def _admin_roster_row(row: dict[str, Any], names: dict[int, str]) -> dict[str, Any]:
+    player_id = _safe_int(row.get("player_id"))
+    return {
+        "id": row.get("id"),
+        "player_id": player_id,
+        "player_name": names.get(int(player_id), f"Player {player_id}") if player_id is not None else "—",
+        "tier_id": normalize_tier_id(str(row.get("tier_id") or "")),
+        "rank": _safe_int(row.get("rank")),
+        "is_active": row.get("is_active") is not False,
+        "joined_at": row.get("joined_at"),
+        "left_at": row.get("left_at"),
+        "notes": row.get("notes"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
 def _challenge(supabase: Any, *, club_id: str, challenge_id: int) -> dict[str, Any]:
     row = _first(supabase.table("ladder_challenges").select("*").eq("club_id", str(club_id)).eq("id", int(challenge_id)).limit(1).execute())
     if row is None:
@@ -141,7 +160,23 @@ def build_admin_challenge_ladder_status(supabase: Any | None, *, club_id: str) -
             summary = build_public_challenge_ladder(supabase, club_id=str(club_id)).get("summary", summary)
         except Exception:
             pass
-    return {"enabled": True, "status": "ready_for_challenge_ladder_admin", "summary": summary, "warnings": [], "confirmation_text": {"create": CONFIRM_CREATE, "update": CONFIRM, "result": CONFIRM_RESULT, "forfeit": CONFIRM_FORFEIT, "clock": CONFIRM_CLOCK, "accept": CONFIRM_ACCEPT}}
+    return {
+        "enabled": True,
+        "status": "ready_for_challenge_ladder_admin",
+        "summary": summary,
+        "warnings": [],
+        "confirmation_text": {
+            "create": CONFIRM_CREATE,
+            "update": CONFIRM,
+            "result": CONFIRM_RESULT,
+            "forfeit": CONFIRM_FORFEIT,
+            "clock": CONFIRM_CLOCK,
+            "accept": CONFIRM_ACCEPT,
+            "pass": CONFIRM_PASS,
+            "roster_add": CONFIRM_ROSTER_ADD,
+            "roster_move": CONFIRM_ROSTER_MOVE,
+        },
+    }
 
 
 def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict[str, Any]:
@@ -166,6 +201,15 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         {"player_id": player_id, "player_name": player_name}
         for player_id, player_name in sorted(names.items(), key=lambda item: (item[1].casefold(), item[0]))
     ]
+    roster_rows = sorted(
+        (_admin_roster_row(row, names) for row in _roster_rows(supabase, club_id=str(club_id))),
+        key=lambda row: (
+            not bool(row.get("is_active")),
+            TIER_ORDER.index(str(row.get("tier_id"))) if row.get("tier_id") in TIER_ORDER else len(TIER_ORDER),
+            int(row.get("rank") or 999999),
+            str(row.get("player_name") or "").casefold(),
+        ),
+    )
     return {
         "ok": True,
         "mode": "challenge_ladder_admin_dashboard",
@@ -174,10 +218,24 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         "challenges": challenges,
         "settings_row": settings[0] if settings else {},
         "player_options": player_options,
+        "roster_rows": roster_rows,
     }
 
 
-def _write_ladder_audit(supabase: Any, *, club_id: str, actor_email: str, actor_role: str, action_type: str, entity_id: str, before: Any, after: Any, source: str, note: str | None = None) -> str | None:
+def _write_ladder_audit(
+    supabase: Any,
+    *,
+    club_id: str,
+    actor_email: str,
+    actor_role: str,
+    action_type: str,
+    entity_id: str,
+    before: Any,
+    after: Any,
+    source: str,
+    note: str | None = None,
+    entity_type: str = "ladder_challenge",
+) -> str | None:
     write = write_admin_activity_log(
         supabase,
         build_activity_payload(
@@ -185,7 +243,7 @@ def _write_ladder_audit(supabase: Any, *, club_id: str, actor_email: str, actor_
             actor_email=actor_email,
             actor_role=actor_role,
             action_type=action_type,
-            entity_type="ladder_challenge",
+            entity_type=entity_type,
             entity_id=str(entity_id),
             before_json=before,
             after_json={"source_client": "fastapi/nextjs", **(after if isinstance(after, dict) else {"value": after})},
@@ -289,6 +347,279 @@ def accept_admin_challenge_ladder_challenge(supabase: Any, *, club_id: str, chal
     names = _player_names(supabase, club_id=str(club_id))
     warning = _write_ladder_audit(supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, action_type="challenge_accept", entity_id=str(challenge_id), before=before, after=updated, source=source)
     return {"ok": True, "mode": "challenge_ladder_accept", "challenge": _challenge_row(updated, names), "warnings": [warning] if warning else []}
+
+
+def record_admin_challenge_ladder_pass(
+    supabase: Any,
+    *,
+    club_id: str,
+    challenge_id: int,
+    player_id: int,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_challenge_ladder_pass",
+) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    if _clean(confirmation_text, limit=80).upper() != CONFIRM_PASS:
+        raise ValueError(f"Type {CONFIRM_PASS} to record the monthly pass.")
+    before = _challenge(supabase, club_id=str(club_id), challenge_id=int(challenge_id))
+    status = _clean(before.get("status"), limit=40).upper()
+    if status not in OPEN_STATUSES or before.get("completed_at") or before.get("winner_id"):
+        raise ValueError("Only an open, unresolved challenge can use a monthly pass.")
+    safe_player_id = int(player_id)
+    participants = {_safe_int(before.get("challenger_id")), _safe_int(before.get("defender_id"))}
+    if safe_player_id not in participants:
+        raise ValueError("Pass user must be the challenger or defender.")
+
+    now = _now()
+    month_key = month_key_utc(now)
+    existing = _first(
+        supabase.table("ladder_pass_usage")
+        .select("id,challenge_id,used_at")
+        .eq("club_id", str(club_id))
+        .eq("player_id", safe_player_id)
+        .eq("month_key", month_key)
+        .limit(1)
+        .execute()
+    )
+    if existing is not None:
+        raise ValueError(f"This player already used a ladder pass in {month_key}.")
+
+    usage_payload = {
+        "club_id": str(club_id),
+        "player_id": safe_player_id,
+        "month_key": month_key,
+        "used_at": now.isoformat(),
+        "challenge_id": int(challenge_id),
+    }
+    usage = _first(supabase.table("ladder_pass_usage").insert(usage_payload).execute()) or usage_payload
+    patch = {
+        "status": "CANCELED",
+        "pass_used_by": safe_player_id,
+        "pass_used_at": now.isoformat(),
+        "resolution_notes": "Pass used",
+        "completed_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+    updated = _first(
+        supabase.table("ladder_challenges")
+        .update(patch)
+        .eq("club_id", str(club_id))
+        .eq("id", int(challenge_id))
+        .execute()
+    ) or {**before, **patch}
+    names = _player_names(supabase, club_id=str(club_id))
+    warning = _write_ladder_audit(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="challenge_pass_used",
+        entity_id=str(challenge_id),
+        before=before,
+        after={**updated, "pass_usage_id": usage.get("id"), "month_key": month_key},
+        source=source,
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_pass",
+        "challenge": _challenge_row(updated, names),
+        "pass_usage": usage,
+        "warnings": [warning] if warning else [],
+    }
+
+
+def add_admin_challenge_ladder_roster_player(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_id: int,
+    tier_id: str,
+    admin_note: str | None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_challenge_ladder_roster_add",
+) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    if _clean(confirmation_text, limit=80).upper() != CONFIRM_ROSTER_ADD:
+        raise ValueError(f"Type {CONFIRM_ROSTER_ADD} to add the ladder player.")
+    tier = normalize_tier_id(tier_id)
+    if tier not in TIER_ORDER:
+        raise ValueError("unsupported tier")
+    safe_player_id = int(player_id)
+    names = _player_names(supabase, club_id=str(club_id))
+    if safe_player_id not in names:
+        raise ValueError("Player must belong to this club.")
+
+    rows = _roster_rows(supabase, club_id=str(club_id))
+    existing_rows = [row for row in rows if _safe_int(row.get("player_id")) == safe_player_id]
+    active = next((row for row in existing_rows if row.get("is_active") is not False), None)
+    if active is not None:
+        raise ValueError(
+            f"Player is already active in {normalize_tier_id(str(active.get('tier_id') or ''))} at rank {_safe_int(active.get('rank')) or '—'}."
+        )
+    next_rank = 1 + max(
+        [
+            int(_safe_int(row.get("rank")) or 0)
+            for row in rows
+            if row.get("is_active") is not False and normalize_tier_id(str(row.get("tier_id") or "")) == tier
+        ]
+        or [0]
+    )
+    now_iso = _now_iso()
+    before = existing_rows[0] if existing_rows else None
+    patch = {
+        "is_active": True,
+        "tier_id": tier,
+        "rank": next_rank,
+        "left_at": None,
+        "joined_at": now_iso,
+        "updated_at": now_iso,
+    }
+    if before is not None:
+        saved = _first(
+            supabase.table("ladder_roster")
+            .update(patch)
+            .eq("club_id", str(club_id))
+            .eq("player_id", safe_player_id)
+            .execute()
+        ) or {**before, **patch}
+        action_type = "roster_reactivate_append"
+    else:
+        insert_payload = {
+            "club_id": str(club_id),
+            "player_id": safe_player_id,
+            **patch,
+        }
+        saved = _first(supabase.table("ladder_roster").insert(insert_payload).execute()) or insert_payload
+        action_type = "roster_append"
+    warning = _write_ladder_audit(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type=action_type,
+        entity_type="ladder_roster",
+        entity_id=f"{club_id}:{safe_player_id}",
+        before=before,
+        after=saved,
+        source=source,
+        note=_clean(admin_note, limit=1000) or None,
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_roster_add",
+        "roster": _admin_roster_row(saved, names),
+        "reactivated": before is not None,
+        "warnings": [warning] if warning else [],
+    }
+
+
+def move_admin_challenge_ladder_roster_player(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_id: int,
+    destination_tier: str,
+    recompress_old: bool,
+    admin_note: str | None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_challenge_ladder_roster_move",
+) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    if _clean(confirmation_text, limit=80).upper() != CONFIRM_ROSTER_MOVE:
+        raise ValueError(f"Type {CONFIRM_ROSTER_MOVE} to move the ladder player.")
+    destination = normalize_tier_id(destination_tier)
+    if destination not in TIER_ORDER:
+        raise ValueError("unsupported destination tier")
+    safe_player_id = int(player_id)
+    rows = _roster_rows(supabase, club_id=str(club_id))
+    before = next(
+        (
+            row
+            for row in rows
+            if _safe_int(row.get("player_id")) == safe_player_id and row.get("is_active") is not False
+        ),
+        None,
+    )
+    if before is None:
+        raise ValueError("Player must be active on this club's ladder.")
+    previous_tier = normalize_tier_id(str(before.get("tier_id") or ""))
+    if destination == previous_tier:
+        raise ValueError("Destination tier must differ from the current tier.")
+    next_rank = 1 + max(
+        [
+            int(_safe_int(row.get("rank")) or 0)
+            for row in rows
+            if row.get("is_active") is not False and normalize_tier_id(str(row.get("tier_id") or "")) == destination
+        ]
+        or [0]
+    )
+    now_iso = _now_iso()
+    patch = {"tier_id": destination, "rank": next_rank, "updated_at": now_iso}
+    saved = _first(
+        supabase.table("ladder_roster")
+        .update(patch)
+        .eq("club_id", str(club_id))
+        .eq("player_id", safe_player_id)
+        .execute()
+    ) or {**before, **patch}
+
+    recompressed_player_ids: list[int] = []
+    if recompress_old:
+        old_tier_rows = sorted(
+            (
+                row
+                for row in _roster_rows(supabase, club_id=str(club_id))
+                if row.get("is_active") is not False
+                and _safe_int(row.get("player_id")) != safe_player_id
+                and normalize_tier_id(str(row.get("tier_id") or "")) == previous_tier
+            ),
+            key=lambda row: (int(_safe_int(row.get("rank")) or 999999), int(_safe_int(row.get("player_id")) or 999999)),
+        )
+        for expected_rank, row in enumerate(old_tier_rows, start=1):
+            roster_player_id = _safe_int(row.get("player_id"))
+            if roster_player_id is None or _safe_int(row.get("rank")) == expected_rank:
+                continue
+            supabase.table("ladder_roster").update({"rank": expected_rank, "updated_at": now_iso}).eq(
+                "club_id", str(club_id)
+            ).eq("player_id", int(roster_player_id)).execute()
+            recompressed_player_ids.append(int(roster_player_id))
+
+    names = _player_names(supabase, club_id=str(club_id))
+    audit_after = {
+        **saved,
+        "previous_tier": previous_tier,
+        "recompressed_player_ids": recompressed_player_ids,
+    }
+    warning = _write_ladder_audit(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="roster_move_tier",
+        entity_type="ladder_roster",
+        entity_id=f"{club_id}:{safe_player_id}",
+        before=before,
+        after=audit_after,
+        source=source,
+        note=_clean(admin_note, limit=1000) or None,
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_roster_move",
+        "roster": _admin_roster_row(saved, names),
+        "previous_tier": previous_tier,
+        "recompressed_count": len(recompressed_player_ids),
+        "warnings": [warning] if warning else [],
+    }
 
 
 def update_admin_challenge_ladder_challenge(

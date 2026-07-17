@@ -9,12 +9,15 @@ from jupr_app.domain.admin.roles import PERMISSION_MANAGE_MATCHES, has_permissio
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_challenge_ladder_service import (
     accept_admin_challenge_ladder_challenge,
+    add_admin_challenge_ladder_roster_player,
     build_admin_challenge_ladder_status,
     create_admin_challenge_ladder_challenge,
     get_admin_challenge_ladder_dashboard,
     is_admin_challenge_ladder_enabled,
+    move_admin_challenge_ladder_roster_player,
     preview_admin_challenge_ladder_result_for_challenge,
     record_admin_challenge_ladder_forfeit,
+    record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
     start_admin_challenge_ladder_clock,
     update_admin_challenge_ladder_challenge,
@@ -50,6 +53,28 @@ class ChallengeForfeitRequest(BaseModel):
     admin_note: str | None = None
     confirmation_text: str = ""
     source: str = "next_challenge_ladder_forfeit"
+
+
+class ChallengePassRequest(BaseModel):
+    player_id: int
+    confirmation_text: str = ""
+    source: str = "next_challenge_ladder_pass"
+
+
+class ChallengeRosterAddRequest(BaseModel):
+    player_id: int
+    tier_id: str
+    admin_note: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_challenge_ladder_roster_add"
+
+
+class ChallengeRosterMoveRequest(BaseModel):
+    destination_tier: str
+    recompress_old: bool = True
+    admin_note: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_challenge_ladder_roster_move"
 
 
 class ChallengeResultRequest(BaseModel):
@@ -175,6 +200,69 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
         actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
             return record_admin_challenge_ladder_forfeit(supabase, club_id=str(club_id), challenge_id=int(challenge_id), forfeited_by_id=payload.forfeited_by_id, admin_note=payload.admin_note, actor_email=actor_email, actor_role=actor_role, confirmation_text=payload.confirmation_text, source=payload.source)
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/challenge-ladder/challenges/{challenge_id}/pass")
+    def post_admin_challenge_ladder_pass(club_id: str, challenge_id: int, payload: ChallengePassRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return record_admin_challenge_ladder_pass(
+                supabase,
+                club_id=str(club_id),
+                challenge_id=int(challenge_id),
+                player_id=payload.player_id,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/challenge-ladder/roster")
+    def post_admin_challenge_ladder_roster(club_id: str, payload: ChallengeRosterAddRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return add_admin_challenge_ladder_roster_player(
+                supabase,
+                club_id=str(club_id),
+                player_id=payload.player_id,
+                tier_id=payload.tier_id,
+                admin_note=payload.admin_note,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/challenge-ladder/roster/{player_id}/move")
+    def post_admin_challenge_ladder_roster_move(club_id: str, player_id: int, payload: ChallengeRosterMoveRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return move_admin_challenge_ladder_roster_player(
+                supabase,
+                club_id=str(club_id),
+                player_id=int(player_id),
+                destination_tier=payload.destination_tier,
+                recompress_old=payload.recompress_old,
+                admin_note=payload.admin_note,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
         except Exception as exc:
             _handle(exc)
 

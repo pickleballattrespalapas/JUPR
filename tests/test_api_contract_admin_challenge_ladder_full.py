@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -6,12 +7,16 @@ from fastapi.testclient import TestClient
 
 from jupr_app.services.admin_challenge_ladder_service import (
     accept_admin_challenge_ladder_challenge,
+    add_admin_challenge_ladder_roster_player,
     create_admin_challenge_ladder_challenge,
+    move_admin_challenge_ladder_roster_player,
     preview_admin_challenge_ladder_result,
     preview_admin_challenge_ladder_result_for_challenge,
     record_admin_challenge_ladder_forfeit,
+    record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
 )
+from jupr_app.domain.challenge_ladder import month_key_utc
 from services.api.admin_challenge_ladder_routes import install_admin_challenge_ladder_routes
 
 
@@ -77,6 +82,7 @@ class FakeSupabase:
                 {"club_id": "club", "id": 4, "name": "Partner B"},
                 {"club_id": "club", "id": 5, "name": "Partner C"},
                 {"club_id": "club", "id": 6, "name": "Partner D"},
+                {"club_id": "club", "id": 7, "name": "Roster Candidate"},
             ],
             "ladder_settings": [{"club_id": "club", "challenge_range": 7, "accept_window_hours": 48, "play_window_days": 7}],
             "ladder_roster": [
@@ -88,6 +94,7 @@ class FakeSupabase:
                 {"club_id": "club", "id": 15, "player_id": 6, "tier_id": "ADV", "rank": 6, "is_active": True},
             ],
             "ladder_challenges": [{"club_id": "club", "id": 100, "challenger_id": 2, "defender_id": 1, "tier_id": "ADV", "status": "PENDING_ACCEPTANCE", "created_at": "2026-01-01T00:00:00Z"}],
+            "ladder_pass_usage": [],
             "admin_activity_log": [],
         }
 
@@ -218,6 +225,161 @@ def test_forfeit_swaps_rank_when_defender_forfeits(monkeypatch):
     ranks = {row["player_id"]: row["rank"] for row in supabase.storage["ladder_roster"]}
     assert ranks[2] == 1
     assert ranks[1] == 2
+
+
+def test_monthly_pass_closes_challenge_without_rank_change(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    ranks_before = {row["player_id"]: row["rank"] for row in supabase.storage["ladder_roster"]}
+
+    result = record_admin_challenge_ladder_pass(
+        supabase,
+        club_id="club",
+        challenge_id=100,
+        player_id=2,
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="RECORD LADDER PASS",
+    )
+
+    assert result["challenge"]["status"] == "CANCELED"
+    assert result["pass_usage"]["player_id"] == 2
+    assert result["pass_usage"]["month_key"] == month_key_utc(datetime.now(timezone.utc))
+    assert {row["player_id"]: row["rank"] for row in supabase.storage["ladder_roster"]} == ranks_before
+    assert supabase.storage["admin_activity_log"][-1]["action_type"] == "challenge_pass_used"
+
+
+def test_monthly_pass_rejects_duplicate_usage_in_utc_month(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_pass_usage"].append(
+        {
+            "club_id": "club",
+            "player_id": 2,
+            "month_key": month_key_utc(datetime.now(timezone.utc)),
+            "used_at": "2026-07-01T00:00:00Z",
+            "challenge_id": 99,
+        }
+    )
+
+    try:
+        record_admin_challenge_ladder_pass(
+            supabase,
+            club_id="club",
+            challenge_id=100,
+            player_id=2,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="RECORD LADDER PASS",
+        )
+    except ValueError as exc:
+        assert "already used" in str(exc)
+    else:
+        raise AssertionError("expected duplicate monthly-pass rejection")
+    assert supabase.storage["ladder_challenges"][0]["status"] == "PENDING_ACCEPTANCE"
+
+
+def test_roster_add_appends_new_player_to_selected_tier(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+
+    result = add_admin_challenge_ladder_roster_player(
+        supabase,
+        club_id="club",
+        player_id=7,
+        tier_id="INT",
+        admin_note="approved placement",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="ADD LADDER PLAYER",
+    )
+
+    assert result["reactivated"] is False
+    assert result["roster"]["player_name"] == "Roster Candidate"
+    assert result["roster"]["tier_id"] == "INT"
+    assert result["roster"]["rank"] == 1
+    assert supabase.storage["admin_activity_log"][-1]["entity_type"] == "ladder_roster"
+
+
+def test_roster_add_reactivates_at_bottom(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    inactive = supabase.storage["ladder_roster"][-1]
+    inactive.update({"is_active": False, "left_at": "2026-06-01T00:00:00Z"})
+
+    result = add_admin_challenge_ladder_roster_player(
+        supabase,
+        club_id="club",
+        player_id=6,
+        tier_id="ADV",
+        admin_note=None,
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="ADD LADDER PLAYER",
+    )
+
+    assert result["reactivated"] is True
+    assert result["roster"]["rank"] == 6
+    assert result["roster"]["is_active"] is True
+
+
+def test_roster_move_appends_and_recompresses_previous_tier(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+
+    result = move_admin_challenge_ladder_roster_player(
+        supabase,
+        club_id="club",
+        player_id=4,
+        destination_tier="INT",
+        recompress_old=True,
+        admin_note="reviewed movement",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="MOVE LADDER PLAYER",
+    )
+
+    assert result["previous_tier"] == "ADV"
+    assert result["roster"]["tier_id"] == "INT"
+    assert result["roster"]["rank"] == 1
+    assert result["recompressed_count"] == 2
+    advanced = sorted(
+        (row for row in supabase.storage["ladder_roster"] if row["tier_id"] == "ADV" and row["is_active"]),
+        key=lambda row: row["rank"],
+    )
+    assert [row["rank"] for row in advanced] == [1, 2, 3, 4, 5]
+
+
+def test_new_ladder_operation_routes_require_authentication(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    app = FastAPI()
+    install_admin_challenge_ladder_routes(app, get_supabase_client=lambda: supabase)
+    openapi = app.openapi()["paths"]
+    before = deepcopy(supabase.storage)
+
+    requests = [
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/challenges/{challenge_id}/pass",
+            "/admin/clubs/club/challenge-ladder/challenges/100/pass",
+            {"player_id": 2, "confirmation_text": "RECORD LADDER PASS"},
+        ),
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/roster",
+            "/admin/clubs/club/challenge-ladder/roster",
+            {"player_id": 7, "tier_id": "INT", "confirmation_text": "ADD LADDER PLAYER"},
+        ),
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/roster/{player_id}/move",
+            "/admin/clubs/club/challenge-ladder/roster/4/move",
+            {"destination_tier": "INT", "confirmation_text": "MOVE LADDER PLAYER"},
+        ),
+    ]
+    for contract_path, path, payload in requests:
+        assert "post" in openapi[contract_path]
+        response = TestClient(app).post(path, json=payload)
+        assert response.status_code == 401
+    assert supabase.storage == before
 
 
 def test_played_result_publishes_matches_and_swaps(monkeypatch):

@@ -5,10 +5,11 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Challenge = { id: number; tier_id: string; status: string; bucket: string; challenger_id?: number | null; defender_id?: number | null; challenger_name: string; defender_name: string; winner_name?: string | null; created_at?: string | null; accept_by?: string | null; play_by?: string | null; resolution_notes?: string | null };
 type Player = { player_id: number; player_name: string; rank?: number; status?: string; rating_jupr?: number | null };
+type RosterRow = Player & { tier_id: string; is_active: boolean; joined_at?: string | null; left_at?: string | null; notes?: string | null };
 type Tier = { tier_id: string; label: string; range: string; players: Player[] };
 type StatusResponse = { enabled: boolean; status: string; summary?: Record<string, number>; warnings?: string[] };
-type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[] };
-type ActionResponse = { ok: boolean; challenge?: Challenge; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
+type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[]; roster_rows?: RosterRow[] };
+type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
 type ResultDraft = { challenge_id: string; a_chal: string; a_def: string; b_chal: string; b_def: string; match_a_games: string; match_b_games: string; match_date: string; winner_override: string; publish_official_matches: boolean; confirmation_text: string };
 type ResultPreviewResponse = ActionResponse & { mode: "challenge_ladder_result_preview"; challenge: Challenge; preview: { final_winner_side: string; final_winner_id: number; winner_summary: Record<string, string | number>; scores: Record<string, unknown> }; partner_names: Record<string, string>; match_date: string; would_publish_official_matches: boolean; rank_result: { would_swap: boolean; reason: string } };
 
@@ -48,6 +49,9 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [resultPreview, setResultPreview] = useState<ResultPreviewResponse | null>(null);
   const [previewedDraftFingerprint, setPreviewedDraftFingerprint] = useState<string | null>(null);
   const [forfeitDraft, setForfeitDraft] = useState({ challenge_id: "", forfeited_by_id: "", admin_note: "", confirmation_text: "" });
+  const [passDraft, setPassDraft] = useState({ challenge_id: "", player_id: "", confirmation_text: "" });
+  const [rosterAddDraft, setRosterAddDraft] = useState({ player_id: "", tier_id: "ADV", admin_note: "", confirmation_text: "" });
+  const [rosterMoveDraft, setRosterMoveDraft] = useState({ player_id: "", destination_tier: "INT", recompress_old: true, admin_note: "", confirmation_text: "" });
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -107,6 +111,36 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     finally { setBusy(false); }
   }
 
+  async function recordPass() {
+    if (passDraft.confirmation_text.trim().toUpperCase() !== "RECORD LADDER PASS") { setMessage("Type RECORD LADDER PASS to record a monthly pass."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(passDraft.challenge_id)}/pass`, { method: "POST", body: JSON.stringify({ player_id: Number(passDraft.player_id), confirmation_text: passDraft.confirmation_text }) });
+      setLastResult(payload); setPassDraft({ challenge_id: "", player_id: "", confirmation_text: "" }); setMessage("Monthly pass recorded and challenge closed."); await loadDashboard();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to record monthly pass."); }
+    finally { setBusy(false); }
+  }
+
+  async function addRosterPlayer() {
+    if (rosterAddDraft.confirmation_text.trim().toUpperCase() !== "ADD LADDER PLAYER") { setMessage("Type ADD LADDER PLAYER to add or reactivate this player."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster`, { method: "POST", body: JSON.stringify({ ...rosterAddDraft, player_id: Number(rosterAddDraft.player_id) }) });
+      setLastResult(payload); setRosterAddDraft((current) => ({ ...current, player_id: "", admin_note: "", confirmation_text: "" })); setMessage("Ladder player added at the bottom of the selected tier."); await loadDashboard();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to add ladder player."); }
+    finally { setBusy(false); }
+  }
+
+  async function moveRosterPlayer() {
+    if (rosterMoveDraft.confirmation_text.trim().toUpperCase() !== "MOVE LADDER PLAYER") { setMessage("Type MOVE LADDER PLAYER to move this player."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/${Number(rosterMoveDraft.player_id)}/move`, { method: "POST", body: JSON.stringify({ destination_tier: rosterMoveDraft.destination_tier, recompress_old: rosterMoveDraft.recompress_old, admin_note: rosterMoveDraft.admin_note, confirmation_text: rosterMoveDraft.confirmation_text }) });
+      setLastResult(payload); setRosterMoveDraft((current) => ({ ...current, player_id: "", admin_note: "", confirmation_text: "" })); setMessage("Ladder player moved to the bottom of the destination tier."); await loadDashboard();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to move ladder player."); }
+    finally { setBusy(false); }
+  }
+
   async function previewResult() {
     if (!resultDraft.challenge_id) { setMessage("Choose a recordable challenge before previewing a result."); return; }
     setBusy(true); setMessage(null);
@@ -138,6 +172,12 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const recordableChallengeOptions = openChallengeOptions.filter((challenge) => RECORDABLE_STATUSES.has(challenge.status));
   const selectedResultChallenge = recordableChallengeOptions.find((challenge) => String(challenge.id) === resultDraft.challenge_id);
   const selectedForfeitChallenge = openChallengeOptions.find((challenge) => String(challenge.id) === forfeitDraft.challenge_id);
+  const selectedPassChallenge = openChallengeOptions.find((challenge) => String(challenge.id) === passDraft.challenge_id);
+  const activeRosterRows = (dashboard?.roster_rows || []).filter((row) => row.is_active);
+  const inactiveRosterRows = (dashboard?.roster_rows || []).filter((row) => !row.is_active);
+  const activeRosterPlayerIds = new Set(activeRosterRows.map((row) => row.player_id));
+  const addRosterOptions = allPlayerOptions.filter((player) => !activeRosterPlayerIds.has(player.player_id));
+  const selectedMovePlayer = activeRosterRows.find((player) => String(player.player_id) === rosterMoveDraft.player_id);
   const partnerPlayers = allPlayerOptions.filter((player) => player.player_id !== selectedResultChallenge?.challenger_id && player.player_id !== selectedResultChallenge?.defender_id);
   const currentDraftIsPreviewed = Boolean(resultPreview && previewedDraftFingerprint === resultDraftFingerprint(resultDraft));
   return (
@@ -202,6 +242,44 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
           <label>Confirmation<br /><input value={forfeitDraft.confirmation_text} onChange={(e) => setForfeitDraft((c) => ({ ...c, confirmation_text: e.target.value }))} placeholder="RECORD LADDER FORFEIT" style={inputStyle} /></label>
           <button type="button" onClick={recordForfeit} disabled={busy || !forfeitDraft.challenge_id || !forfeitDraft.forfeited_by_id} style={ghostButtonStyle}>Record forfeit</button>
         </div>
+      </article> : null}
+      {dashboard ? <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Record monthly pass</h2>
+        <p style={{ color: "#475569" }}>A pass closes the selected challenge without publishing matches or changing ranks. The server rejects a second pass for the same player in the current UTC month.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+          <label>Challenge<br /><select value={passDraft.challenge_id} onChange={(e) => setPassDraft({ challenge_id: e.target.value, player_id: "", confirmation_text: "" })} style={inputStyle}><option value="">Choose</option>{openChallengeOptions.map((ch) => <option key={ch.id} value={ch.id}>#{ch.id} {ch.challenger_name} vs {ch.defender_name}</option>)}</select></label>
+          <label>Pass used by<br /><select value={passDraft.player_id} onChange={(e) => setPassDraft((current) => ({ ...current, player_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{selectedPassChallenge?.challenger_id ? <option value={selectedPassChallenge.challenger_id}>{selectedPassChallenge.challenger_name} · challenger</option> : null}{selectedPassChallenge?.defender_id ? <option value={selectedPassChallenge.defender_id}>{selectedPassChallenge.defender_name} · defender</option> : null}</select></label>
+          <label>Confirmation<br /><input value={passDraft.confirmation_text} onChange={(e) => setPassDraft((current) => ({ ...current, confirmation_text: e.target.value }))} placeholder="RECORD LADDER PASS" style={inputStyle} /></label>
+          <button type="button" onClick={recordPass} disabled={busy || !passDraft.challenge_id || !passDraft.player_id} style={ghostButtonStyle}>Record monthly pass</button>
+        </div>
+      </article> : null}
+      {dashboard ? <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Roster operations</h2>
+        <p style={{ color: "#475569" }}>Add or reactivate a club player at the bottom of a tier, or move an active player to another tier. These actions do not replace an entire tier roster.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "1rem" }}>
+          <section style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "1rem" }}>
+            <h3 style={{ marginTop: 0 }}>Add or reactivate</h3>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <label>Club player<br /><select value={rosterAddDraft.player_id} onChange={(e) => setRosterAddDraft((current) => ({ ...current, player_id: e.target.value }))} style={inputStyle}><option value="">Choose a player not currently active</option>{addRosterOptions.map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{inactiveRosterRows.some((row) => row.player_id === player.player_id) ? " · reactivate" : ""}</option>)}</select></label>
+              <label>Tier<br /><select value={rosterAddDraft.tier_id} onChange={(e) => setRosterAddDraft((current) => ({ ...current, tier_id: e.target.value }))} style={inputStyle}>{dashboard.tiers.map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
+              <label>Audit note<br /><input value={rosterAddDraft.admin_note} onChange={(e) => setRosterAddDraft((current) => ({ ...current, admin_note: e.target.value }))} style={inputStyle} /></label>
+              <label>Confirmation<br /><input value={rosterAddDraft.confirmation_text} onChange={(e) => setRosterAddDraft((current) => ({ ...current, confirmation_text: e.target.value }))} placeholder="ADD LADDER PLAYER" style={inputStyle} /></label>
+              <button type="button" onClick={addRosterPlayer} disabled={busy || !rosterAddDraft.player_id} style={buttonStyle}>Add to bottom</button>
+            </div>
+          </section>
+          <section style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "1rem" }}>
+            <h3 style={{ marginTop: 0 }}>Move active player</h3>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <label>Active player<br /><select value={rosterMoveDraft.player_id} onChange={(e) => { const player = activeRosterRows.find((row) => String(row.player_id) === e.target.value); setRosterMoveDraft((current) => ({ ...current, player_id: e.target.value, destination_tier: player?.tier_id === current.destination_tier ? (dashboard.tiers.find((tier) => tier.tier_id !== player.tier_id)?.tier_id || current.destination_tier) : current.destination_tier })); }} style={inputStyle}><option value="">Choose</option>{activeRosterRows.map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · {player.tier_id} rank {player.rank ?? "—"}</option>)}</select></label>
+              <label>Destination tier<br /><select value={rosterMoveDraft.destination_tier} onChange={(e) => setRosterMoveDraft((current) => ({ ...current, destination_tier: e.target.value }))} style={inputStyle}>{dashboard.tiers.filter((tier) => tier.tier_id !== selectedMovePlayer?.tier_id).map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
+              <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={rosterMoveDraft.recompress_old} onChange={(e) => setRosterMoveDraft((current) => ({ ...current, recompress_old: e.target.checked }))} /> Recompress the former tier</label>
+              <label>Audit note<br /><input value={rosterMoveDraft.admin_note} onChange={(e) => setRosterMoveDraft((current) => ({ ...current, admin_note: e.target.value }))} style={inputStyle} /></label>
+              <label>Confirmation<br /><input value={rosterMoveDraft.confirmation_text} onChange={(e) => setRosterMoveDraft((current) => ({ ...current, confirmation_text: e.target.value }))} placeholder="MOVE LADDER PLAYER" style={inputStyle} /></label>
+              <button type="button" onClick={moveRosterPlayer} disabled={busy || !rosterMoveDraft.player_id || rosterMoveDraft.destination_tier === selectedMovePlayer?.tier_id} style={buttonStyle}>Move to tier bottom</button>
+            </div>
+          </section>
+        </div>
+        {inactiveRosterRows.length ? <section style={{ marginTop: "1rem" }}><h3>Inactive roster</h3><p style={{ color: "#475569" }}>{inactiveRosterRows.map((row) => `${row.player_name} (${row.tier_id}, former rank ${row.rank ?? "—"})`).join(" · ")}</p></section> : null}
       </article> : null}
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Summary</h2>

@@ -89,6 +89,10 @@ def test_challenge_ladder_dashboard(monkeypatch):
         {"player_id": 2, "player_name": "Blair"},
         {"player_id": 3, "player_name": "Casey"},
     ]
+    assert [(row["player_name"], row["tier_id"], row["rank"], row["is_active"]) for row in payload["roster_rows"]] == [
+        ("Alex", "ADV", 1, True),
+        ("Blair", "ADV", 2, True),
+    ]
 
 
 def test_challenge_ladder_update_requires_confirmation(monkeypatch):
