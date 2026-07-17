@@ -69,7 +69,7 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 12. Weekly Recap Admin.
 13. Admin Tools, workers, and backfills.
 
-Challenge Ladder Admin now includes the guarded core staging workflow: tier-aware challenge creation, accept-clock transitions, a read-only played-result preview, exact-draft browser review gating, official match publication through the Python match service, direct challenger-win rank swaps, forfeits, server-month-scoped pass resolution, roster append/reactivation, audited cross-tier moves with optional old-tier rank recompression, and vacation/reinstate overrides. Whole-tier roster replacement and the computed tier-movement review queue remain Streamlit-only. The Next workflow remains a staging pilot until exercised against isolated ladder data with Match Log and Replay History recovery checks.
+Challenge Ladder Admin now includes the guarded core staging workflow: tier-aware challenge creation, accept-clock transitions, a read-only played-result preview, exact-draft browser review gating, official match publication through the Python match service, direct challenger-win rank swaps, forfeits, server-month-scoped pass resolution, roster append/reactivation, audited cross-tier moves with optional old-tier rank recompression, vacation/reinstate overrides, and a read-only computed tier-movement review queue that hands off to the existing guarded move form. Whole-tier roster replacement remains Streamlit-only; Next ladder writes appear in the centralized Admin Tools activity viewer. The Next workflow remains a staging pilot until exercised against isolated ladder data with Match Log and Replay History recovery checks.
 
 ## Enablement checklist
 

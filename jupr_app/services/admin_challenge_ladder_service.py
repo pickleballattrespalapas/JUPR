@@ -4,9 +4,12 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pandas as pd
+
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.challenge_ladder import TIER_ORDER, ladder_bucket_challenge, month_key_utc, normalize_tier_id
+from jupr_app.domain.tier_movement import compute_out_of_tier_streak
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_challenge_ladder_service import build_public_challenge_ladder
@@ -257,6 +260,75 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         "player_options": player_options,
         "roster_rows": roster_rows,
         "player_flags": player_flags,
+    }
+
+
+def get_admin_challenge_ladder_tier_movement_review(supabase: Any, *, club_id: str) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    names = _player_names(supabase, club_id=str(club_id))
+    roster_rows = [row for row in _roster_rows(supabase, club_id=str(club_id)) if row.get("is_active") is not False]
+    try:
+        raw_matches = _safe_rows(
+            supabase.table("matches")
+            .select("*")
+            .eq("club_id", str(club_id))
+            .order("id", desc=True)
+            .limit(5000)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to load matches for tier-movement review.") from exc
+    match_rows = [row for row in raw_matches if not row.get("deleted_at")]
+    df_matches = pd.DataFrame(match_rows)
+    triggers: list[dict[str, Any]] = []
+    evaluated_player_count = 0
+    for roster_row in roster_rows:
+        player_id = _safe_int(roster_row.get("player_id"))
+        if player_id is None:
+            continue
+        evaluated_player_count += 1
+        current_tier = normalize_tier_id(str(roster_row.get("tier_id") or ""))
+        joined_at = pd.to_datetime(roster_row.get("joined_at"), utc=True, errors="coerce")
+        joined_datetime = joined_at.to_pydatetime() if pd.notna(joined_at) else None
+        streak = compute_out_of_tier_streak(
+            pid=int(player_id),
+            joined_at_utc=joined_datetime,
+            current_tier_id=current_tier,
+            df_matches=df_matches,
+        )
+        destination = normalize_tier_id(str(streak.get("dest_tier") or "")) if streak.get("dest_tier") else None
+        count = int(_safe_int(streak.get("count")) or 0)
+        if destination is None or destination == current_tier or count < 10:
+            continue
+        latest = streak.get("latest_match_at")
+        triggers.append(
+            {
+                "player_id": int(player_id),
+                "player_name": names.get(int(player_id), f"Player {player_id}"),
+                "current_tier": current_tier,
+                "destination_tier": destination,
+                "consecutive_match_count": count,
+                "latest_match_at": latest.isoformat() if isinstance(latest, datetime) else None,
+            }
+        )
+    triggers.sort(
+        key=lambda row: (
+            -int(row.get("consecutive_match_count") or 0),
+            -pd.Timestamp(row["latest_match_at"]).timestamp() if row.get("latest_match_at") else float("inf"),
+            str(row.get("player_name") or "").casefold(),
+        )
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_tier_movement_review",
+        "summary": {
+            "evaluated_player_count": evaluated_player_count,
+            "match_count": len(match_rows),
+            "trigger_count": len(triggers),
+            "required_consecutive_matches": 10,
+        },
+        "triggers": triggers,
     }
 
 

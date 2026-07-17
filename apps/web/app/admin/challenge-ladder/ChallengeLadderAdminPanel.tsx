@@ -13,6 +13,8 @@ type DashboardResponse = { ok: boolean; summary: Record<string, number>; setting
 type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; player_flags?: PlayerFlag; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
 type ResultDraft = { challenge_id: string; a_chal: string; a_def: string; b_chal: string; b_def: string; match_a_games: string; match_b_games: string; match_date: string; winner_override: string; publish_official_matches: boolean; confirmation_text: string };
 type ResultPreviewResponse = ActionResponse & { mode: "challenge_ladder_result_preview"; challenge: Challenge; preview: { final_winner_side: string; final_winner_id: number; winner_summary: Record<string, string | number>; scores: Record<string, unknown> }; partner_names: Record<string, string>; match_date: string; would_publish_official_matches: boolean; rank_result: { would_swap: boolean; reason: string } };
+type TierMovementTrigger = { player_id: number; player_name: string; current_tier: string; destination_tier: string; consecutive_match_count: number; latest_match_at?: string | null };
+type TierMovementResponse = { ok: boolean; mode: "challenge_ladder_tier_movement_review"; summary: { evaluated_player_count: number; match_count: number; trigger_count: number; required_consecutive_matches: number }; triggers: TierMovementTrigger[] };
 
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
@@ -54,6 +56,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [rosterAddDraft, setRosterAddDraft] = useState({ player_id: "", tier_id: "ADV", admin_note: "", confirmation_text: "" });
   const [rosterMoveDraft, setRosterMoveDraft] = useState({ player_id: "", destination_tier: "INT", recompress_old: true, admin_note: "", confirmation_text: "" });
   const [overrideDraft, setOverrideDraft] = useState({ player_id: "", vacation_until: "", reinstate_required: false, reinstate_notes: "", confirmation_text: "" });
+  const [tierMovementReview, setTierMovementReview] = useState<TierMovementResponse | null>(null);
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -72,6 +75,20 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     try { const payload = await requestJson<DashboardResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/dashboard`); setDashboard(payload); setMessage("Challenge Ladder dashboard loaded."); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load dashboard."); }
     finally { setBusy(false); }
+  }
+
+  async function loadTierMovementReview() {
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<TierMovementResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/tier-movement-review`);
+      setTierMovementReview(payload); setMessage(payload.triggers.length ? `${payload.triggers.length} tier-movement review item${payload.triggers.length === 1 ? "" : "s"} found.` : "No tier-movement triggers found.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load tier-movement review."); }
+    finally { setBusy(false); }
+  }
+
+  function prepareReviewedTierMove(trigger: TierMovementTrigger) {
+    setRosterMoveDraft({ player_id: String(trigger.player_id), destination_tier: trigger.destination_tier, recompress_old: true, admin_note: `Tier movement review: ${trigger.consecutive_match_count} consecutive matches toward ${trigger.destination_tier}.`, confirmation_text: "" });
+    setMessage(`Prepared the guarded move draft for ${trigger.player_name}. Review it below and type MOVE LADDER PLAYER to apply.`);
   }
 
   async function updateChallenge(challenge: Challenge, nextStatus: string) {
@@ -265,6 +282,15 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
           <label>Confirmation<br /><input value={passDraft.confirmation_text} onChange={(e) => setPassDraft((current) => ({ ...current, confirmation_text: e.target.value }))} placeholder="RECORD LADDER PASS" style={inputStyle} /></label>
           <button type="button" onClick={recordPass} disabled={busy || !passDraft.challenge_id || !passDraft.player_id} style={ghostButtonStyle}>Record monthly pass</button>
         </div>
+      </article> : null}
+      {dashboard ? <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Tier-movement review</h2>
+        <p style={{ color: "#475569" }}>Read-only review of active players with 10 consecutive rated matches whose post-match tier is the same tier above or below their assigned ladder tier.</p>
+        <button type="button" onClick={loadTierMovementReview} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Loading…" : "Evaluate tier movement"}</button>
+        {tierMovementReview ? <section style={{ marginTop: "1rem" }}>
+          <p style={{ color: "#475569" }}>Evaluated {tierMovementReview.summary.evaluated_player_count} active players across {tierMovementReview.summary.match_count} recent matches · {tierMovementReview.summary.trigger_count} trigger{tierMovementReview.summary.trigger_count === 1 ? "" : "s"}.</p>
+          {tierMovementReview.triggers.length ? <div style={{ display: "grid", gap: "0.75rem" }}>{tierMovementReview.triggers.map((trigger) => <div key={trigger.player_id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.85rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}><div><strong>{trigger.player_name}</strong><br /><span style={{ color: "#475569" }}>{trigger.current_tier} → {trigger.destination_tier} · {trigger.consecutive_match_count} consecutive matches · latest {trigger.latest_match_at || "—"}</span></div><button type="button" onClick={() => prepareReviewedTierMove(trigger)} disabled={busy} style={ghostButtonStyle}>Prepare guarded move</button></div>)}</div> : <p>No players currently meet the tier-movement trigger.</p>}
+        </section> : null}
       </article> : null}
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Roster operations</h2>

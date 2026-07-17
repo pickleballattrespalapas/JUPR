@@ -9,6 +9,7 @@ from jupr_app.services.admin_challenge_ladder_service import (
     accept_admin_challenge_ladder_challenge,
     add_admin_challenge_ladder_roster_player,
     create_admin_challenge_ladder_challenge,
+    get_admin_challenge_ladder_tier_movement_review,
     move_admin_challenge_ladder_roster_player,
     preview_admin_challenge_ladder_result,
     preview_admin_challenge_ladder_result_for_challenge,
@@ -97,6 +98,7 @@ class FakeSupabase:
             "ladder_challenges": [{"club_id": "club", "id": 100, "challenger_id": 2, "defender_id": 1, "tier_id": "ADV", "status": "PENDING_ACCEPTANCE", "created_at": "2026-01-01T00:00:00Z"}],
             "ladder_pass_usage": [],
             "ladder_player_flags": [],
+            "matches": [],
             "admin_activity_log": [],
         }
 
@@ -433,6 +435,61 @@ def test_player_overrides_reject_naive_date_time(monkeypatch):
     assert supabase.storage["ladder_player_flags"] == []
 
 
+def _tier_movement_match(match_id, date, end_rating):
+    return {
+        "club_id": "club",
+        "id": match_id,
+        "date": date,
+        "t1_p1": 2,
+        "t1_p2": 3,
+        "t2_p1": 4,
+        "t2_p2": 5,
+        "t1_p1_r_end": end_rating,
+        "t1_p2_r_end": 1600,
+        "t2_p1_r_end": 1600,
+        "t2_p2_r_end": 1600,
+        "deleted_at": None,
+    }
+
+
+def test_tier_movement_review_reports_ten_match_trigger(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["matches"] = [
+        _tier_movement_match(index, f"2026-07-{index:02d}T12:00:00Z", 1400)
+        for index in range(1, 11)
+    ]
+
+    result = get_admin_challenge_ladder_tier_movement_review(supabase, club_id="club")
+
+    assert result["summary"]["trigger_count"] == 1
+    assert result["summary"]["required_consecutive_matches"] == 10
+    assert result["triggers"] == [
+        {
+            "player_id": 2,
+            "player_name": "Challenger",
+            "current_tier": "ADV",
+            "destination_tier": "INT",
+            "consecutive_match_count": 10,
+            "latest_match_at": "2026-07-10T12:00:00+00:00",
+        }
+    ]
+
+
+def test_tier_movement_review_resets_after_current_tier_match(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["matches"] = [
+        *[_tier_movement_match(index, f"2026-07-{index:02d}T12:00:00Z", 1400) for index in range(1, 11)],
+        _tier_movement_match(11, "2026-07-11T12:00:00Z", 1600),
+    ]
+
+    result = get_admin_challenge_ladder_tier_movement_review(supabase, club_id="club")
+
+    assert result["summary"]["trigger_count"] == 0
+    assert result["triggers"] == []
+
+
 def test_new_ladder_operation_routes_require_authentication(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
     supabase = FakeSupabase()
@@ -465,6 +522,12 @@ def test_new_ladder_operation_routes_require_authentication(monkeypatch):
             "/admin/clubs/club/challenge-ladder/roster/2/overrides",
             {"vacation_until": None, "reinstate_required": False, "confirmation_text": "SAVE LADDER OVERRIDES"},
             "put",
+        ),
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/tier-movement-review",
+            "/admin/clubs/club/challenge-ladder/tier-movement-review",
+            None,
+            "get",
         ),
     ]
     for contract_path, path, payload, method in requests:

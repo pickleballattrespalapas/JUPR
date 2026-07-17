@@ -13,6 +13,7 @@ from jupr_app.services.admin_challenge_ladder_service import (
     build_admin_challenge_ladder_status,
     create_admin_challenge_ladder_challenge,
     get_admin_challenge_ladder_dashboard,
+    get_admin_challenge_ladder_tier_movement_review,
     is_admin_challenge_ladder_enabled,
     move_admin_challenge_ladder_roster_player,
     preview_admin_challenge_ladder_result_for_challenge,
@@ -152,6 +153,17 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
         _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_challenge_ladder_admin_dashboard")
         try:
             return get_admin_challenge_ladder_dashboard(supabase, club_id=str(club_id))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/challenge-ladder/tier-movement-review")
+    def get_admin_challenge_ladder_tier_movement_review_route(club_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_challenge_ladder_tier_movement_review")
+        try:
+            return get_admin_challenge_ladder_tier_movement_review(supabase, club_id=str(club_id))
         except Exception as exc:
             _handle(exc)
 
