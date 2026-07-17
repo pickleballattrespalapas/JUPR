@@ -8,7 +8,8 @@ import pandas as pd
 
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.challenge_ladder import TIER_ORDER, ladder_bucket_challenge, month_key_utc, normalize_tier_id
+from jupr_app.domain.build_challenge_notice_message import build_challenge_notice_message
+from jupr_app.domain.challenge_ladder import TIER_ORDER, ladder_bucket_challenge, ladder_compute_status_map, month_key_utc, normalize_tier_id
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.match_service import submit_match_batch
@@ -130,6 +131,44 @@ def _active_roster_by_player(supabase: Any, *, club_id: str) -> dict[int, dict[s
             continue
         result[int(pid)] = dict(row)
     return result
+
+
+def _ladder_status_map(
+    supabase: Any,
+    *,
+    club_id: str,
+    settings: dict[str, Any],
+    names: dict[int, str],
+) -> dict[int, dict[str, Any]]:
+    try:
+        roster_rows = _safe_rows(supabase.table("ladder_roster").select("*").eq("club_id", str(club_id)).execute())
+        flag_rows = _safe_rows(supabase.table("ladder_player_flags").select("*").eq("club_id", str(club_id)).execute())
+        challenge_rows = _safe_rows(supabase.table("ladder_challenges").select("*").eq("club_id", str(club_id)).execute())
+        pass_rows = _safe_rows(supabase.table("ladder_pass_usage").select("*").eq("club_id", str(club_id)).execute())
+    except Exception as exc:
+        raise RuntimeError("Unable to verify ladder player eligibility.") from exc
+    roster_frame = pd.DataFrame(roster_rows)
+    flag_frame = pd.DataFrame(flag_rows)
+    challenge_frame = pd.DataFrame(challenge_rows)
+    pass_frame = pd.DataFrame(pass_rows)
+    for column in ("vacation_until", "reinstate_required", "reinstate_notes"):
+        if column not in flag_frame.columns:
+            flag_frame[column] = None
+    for column in ("created_at", "accept_by", "accepted_at", "play_by", "completed_at", "winner_id", "status", "challenger_id", "defender_id"):
+        if column not in challenge_frame.columns:
+            challenge_frame[column] = None
+    for column in ("player_id", "used_at"):
+        if column not in pass_frame.columns:
+            pass_frame[column] = None
+    return ladder_compute_status_map(
+        roster_frame,
+        flag_frame,
+        challenge_frame,
+        pass_frame,
+        settings,
+        names,
+        now_utc=_now(),
+    )
 
 
 def _admin_roster_row(row: dict[str, Any], names: dict[int, str]) -> dict[str, Any]:
@@ -380,6 +419,7 @@ def create_admin_challenge_ladder_challenge(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    challenger_contact: str | None = None,
     source: str = "next_challenge_ladder_admin_create",
 ) -> dict[str, Any]:
     if not is_admin_challenge_ladder_enabled():
@@ -408,6 +448,20 @@ def create_admin_challenge_ladder_challenge(
         errors.append("Defender must be ranked above challenger.")
     if (chal_rank - def_rank) > int(settings.get("challenge_range") or 7):
         errors.append("Rank gap exceeds challenge range.")
+    names = _player_names(supabase, club_id=str(club_id))
+    if not override:
+        status_map = _ladder_status_map(
+            supabase,
+            club_id=str(club_id),
+            settings=settings,
+            names=names,
+        )
+        challenger_status = str(status_map.get(challenger, {}).get("status") or "Unknown")
+        defender_status = str(status_map.get(defender, {}).get("status") or "Unknown")
+        if challenger_status != "Ready to Defend":
+            errors.append(f"Challenger is not eligible to initiate (status: {challenger_status}).")
+        if defender_status not in {"Ready to Defend", "Cooldown"}:
+            errors.append(f"Defender is not eligible to be challenged (status: {defender_status}).")
     if errors and not override:
         raise ValueError("Cannot create challenge: " + "; ".join(errors))
     now = _now()
@@ -425,9 +479,24 @@ def create_admin_challenge_ladder_challenge(
         "accept_by": (now + timedelta(hours=int(settings.get("accept_window_hours") or 48))).isoformat() if start_clock else None,
     }
     created = _first(supabase.table("ladder_challenges").insert(payload).execute()) or payload
-    names = _player_names(supabase, club_id=str(club_id))
     warning = _write_ladder_audit(supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, action_type="challenge_create", entity_id=str(created.get("id") or "new"), before=None, after=created, source=source)
-    return {"ok": True, "mode": "challenge_ladder_create", "challenge": _challenge_row(created, names), "warnings": [warning] if warning else []}
+    notice = build_challenge_notice_message(
+        challenge_id=_safe_int(created.get("id")),
+        tier_id=tier,
+        challenger_name=names.get(challenger, f"Player {challenger}"),
+        defender_name=names.get(defender, f"Player {defender}"),
+        challenger_contact=_clean(challenger_contact, limit=240),
+        admin_name=_clean(os.getenv("LADDER_ADMIN_NAME", "Ladder Admin"), limit=160),
+        admin_contact=_clean(os.getenv("LADDER_ADMIN_CONTACT", ""), limit=240),
+        ledger_ref=_clean(ledger_ref, limit=500) or None,
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_create",
+        "challenge": _challenge_row(created, names),
+        "notice": notice,
+        "warnings": [warning] if warning else [],
+    }
 
 
 def start_admin_challenge_ladder_clock(supabase: Any, *, club_id: str, challenge_id: int, actor_email: str, actor_role: str, confirmation_text: str, source: str = "next_challenge_ladder_admin_clock") -> dict[str, Any]:

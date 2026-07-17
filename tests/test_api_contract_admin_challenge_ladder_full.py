@@ -119,10 +119,65 @@ def test_create_challenge_requires_confirmation(monkeypatch):
 def test_create_and_accept_challenge(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
     supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"] = []
     created = create_admin_challenge_ladder_challenge(supabase, club_id="club", challenger_id=2, defender_id=1, tier_id="ADV", ledger_ref="ledger", override=False, start_clock=True, actor_email="admin@example.com", actor_role="club_owner", confirmation_text="CREATE LADDER CHALLENGE")
     assert created["challenge"]["status"] == "PENDING_ACCEPTANCE"
     accepted = accept_admin_challenge_ladder_challenge(supabase, club_id="club", challenge_id=created["challenge"]["id"], actor_email="admin@example.com", actor_role="club_owner", confirmation_text="ACCEPT LADDER CHALLENGE")
     assert accepted["challenge"]["status"] == "ACCEPTED_SCHEDULING"
+
+
+def test_create_challenge_rejects_locked_players_without_override(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+
+    try:
+        create_admin_challenge_ladder_challenge(
+            supabase,
+            club_id="club",
+            challenger_id=2,
+            defender_id=1,
+            tier_id="ADV",
+            ledger_ref=None,
+            override=False,
+            start_clock=False,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="CREATE LADDER CHALLENGE",
+        )
+    except ValueError as exc:
+        assert "status: Locked" in str(exc)
+    else:
+        raise AssertionError("expected locked-player eligibility rejection")
+    assert len(supabase.storage["ladder_challenges"]) == 1
+
+
+def test_create_challenge_override_returns_copyable_notice(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    monkeypatch.setenv("LADDER_ADMIN_NAME", "Director Dana")
+    monkeypatch.setenv("LADDER_ADMIN_CONTACT", "dana@example.com")
+    supabase = FakeSupabase()
+
+    created = create_admin_challenge_ladder_challenge(
+        supabase,
+        club_id="club",
+        challenger_id=2,
+        defender_id=1,
+        tier_id="ADV",
+        challenger_contact="challenger@example.com",
+        ledger_ref="front desk 42",
+        override=True,
+        start_clock=False,
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="CREATE LADDER CHALLENGE",
+    )
+
+    assert created["challenge"]["id"] == 101
+    assert "challenger@example.com" in created["notice"]["email_full"]
+    assert "Director Dana" in created["notice"]["email_full"]
+    assert "dana@example.com" in created["notice"]["sms"]
+    assert "front desk 42" in created["notice"]["email_full"]
+    assert "Challenge ID: #101" in created["notice"]["email_full"]
 
 
 def test_preview_defender_holds_exact_tie():

@@ -44,7 +44,7 @@ Current working assessment for the first Pickleball Club Sandwich public website
 | Player Editor | Guarded staging pilot | Roster/detail/create/basic update, merge preview/execute, social identity, and league-rating edits exist behind authenticated FastAPI boundaries. |
 | League Manager | Guarded staging pilot | Draft creation/duplication, structured settings, lifecycle, roster, live rounds, print, and awards flows use authenticated FastAPI boundaries; Streamlit remains the production fallback. |
 | Tournament admin/ops | Guarded staging pilot | Setup, registration management, draws, scoring, podiums, awards, live operation, and official publishing exist; full staging E2E remains required. |
-| Challenge Ladder admin | Guarded staging pilot | Creation, clock/acceptance, read-only result preview, reviewed publish, official matches, rank movement, cancellation, forfeits, monthly passes, roster append/reactivation, audited tier moves, vacation/reinstate overrides, and computed tier-movement review exist. Whole-tier replacement remains Streamlit-only; centralized activity review is available in Admin Tools. |
+| Challenge Ladder admin | Guarded staging pilot | Status-eligible creation with copyable notices, clock/acceptance, read-only result preview, reviewed publish, official matches, rank movement, cancellation, forfeits, monthly passes, roster append/reactivation, audited tier moves, vacation/reinstate overrides, and computed tier-movement review exist. Whole-tier replacement remains Streamlit-only; centralized activity review is available in Admin Tools. |
 | Weekly Recap admin | Guarded staging pilot | Draft generation, edits, preview, publish, and unpublish exist behind authenticated FastAPI boundaries. |
 
 ## Decisions already encoded

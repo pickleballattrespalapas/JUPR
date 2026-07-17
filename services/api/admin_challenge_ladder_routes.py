@@ -38,6 +38,7 @@ class ChallengeCreateRequest(BaseModel):
     challenger_id: int
     defender_id: int
     tier_id: str
+    challenger_contact: str | None = None
     ledger_ref: str | None = None
     override: bool = False
     start_clock: bool = False
@@ -186,6 +187,7 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                challenger_contact=payload.challenger_contact,
                 source=payload.source,
             )
         except Exception as exc:

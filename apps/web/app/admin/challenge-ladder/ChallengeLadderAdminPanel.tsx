@@ -8,9 +8,10 @@ type Player = { player_id: number; player_name: string; rank?: number; status?: 
 type RosterRow = Player & { tier_id: string; is_active: boolean; joined_at?: string | null; left_at?: string | null; notes?: string | null };
 type PlayerFlag = { player_id: number; player_name: string; vacation_until?: string | null; reinstate_required: boolean; reinstate_notes?: string | null; tier_move_flag?: boolean; tier_move_dest_tier?: string | null; tier_move_count?: number };
 type Tier = { tier_id: string; label: string; range: string; players: Player[] };
+type ChallengeNotice = { email_full: string; sms: string };
 type StatusResponse = { enabled: boolean; status: string; summary?: Record<string, number>; warnings?: string[] };
 type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[]; roster_rows?: RosterRow[]; player_flags?: PlayerFlag[] };
-type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; player_flags?: PlayerFlag; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
+type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; player_flags?: PlayerFlag; notice?: ChallengeNotice; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
 type ResultDraft = { challenge_id: string; a_chal: string; a_def: string; b_chal: string; b_def: string; match_a_games: string; match_b_games: string; match_date: string; winner_override: string; publish_official_matches: boolean; confirmation_text: string };
 type ResultPreviewResponse = ActionResponse & { mode: "challenge_ladder_result_preview"; challenge: Challenge; preview: { final_winner_side: string; final_winner_id: number; winner_summary: Record<string, string | number>; scores: Record<string, unknown> }; partner_names: Record<string, string>; match_date: string; would_publish_official_matches: boolean; rank_result: { would_swap: boolean; reason: string } };
 type TierMovementTrigger = { player_id: number; player_name: string; current_tier: string; destination_tier: string; consecutive_match_count: number; latest_match_at?: string | null };
@@ -47,7 +48,8 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [message, setMessage] = useState<string | null>(null);
   const [confirmations, setConfirmations] = useState<Record<number, string>>({});
   const [notes, setNotes] = useState<Record<number, string>>({});
-  const [createDraft, setCreateDraft] = useState({ challenger_id: "", defender_id: "", tier_id: "ADV", ledger_ref: "", override: false, start_clock: false, confirmation_text: "" });
+  const [createDraft, setCreateDraft] = useState({ challenger_id: "", defender_id: "", tier_id: "ADV", challenger_contact: "", ledger_ref: "", override: false, start_clock: false, confirmation_text: "" });
+  const [lastNotice, setLastNotice] = useState<ChallengeNotice | null>(null);
   const [resultDraft, setResultDraft] = useState<ResultDraft>({ challenge_id: "", a_chal: "", a_def: "", b_chal: "", b_def: "", match_a_games: "11-0,11-0", match_b_games: "11-0,11-0", match_date: new Date().toISOString(), winner_override: "computed", publish_official_matches: true, confirmation_text: "" });
   const [resultPreview, setResultPreview] = useState<ResultPreviewResponse | null>(null);
   const [previewedDraftFingerprint, setPreviewedDraftFingerprint] = useState<string | null>(null);
@@ -91,6 +93,11 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     setMessage(`Prepared the guarded move draft for ${trigger.player_name}. Review it below and type MOVE LADDER PLAYER to apply.`);
   }
 
+  async function copyNotice(value: string, label: string) {
+    try { await navigator.clipboard.writeText(value); setMessage(`${label} copied.`); }
+    catch { setMessage(`Unable to copy ${label.toLowerCase()}; select the text manually.`); }
+  }
+
   async function updateChallenge(challenge: Challenge, nextStatus: string) {
     setBusy(true); setMessage(null);
     try {
@@ -115,7 +122,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges`, { method: "POST", body: JSON.stringify({ ...createDraft, challenger_id: Number(createDraft.challenger_id), defender_id: Number(createDraft.defender_id) }) });
-      setLastResult(payload); setMessage("Challenge created."); await loadDashboard();
+      setLastResult(payload); setLastNotice(payload.notice || null); setMessage("Challenge created. Copy the notice, send it, then start the acceptance clock."); await loadDashboard();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to create challenge."); }
     finally { setBusy(false); }
   }
@@ -227,12 +234,21 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
           <label>Tier<br /><select value={createDraft.tier_id} onChange={(e) => setCreateDraft((c) => ({ ...c, tier_id: e.target.value, challenger_id: "", defender_id: "" }))} style={inputStyle}>{dashboard.tiers.map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
           <label>Challenger<br /><select value={createDraft.challenger_id} onChange={(e) => setCreateDraft((c) => ({ ...c, challenger_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{createTierPlayers.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name} · rank {p.rank ?? "—"}</option>)}</select></label>
           <label>Defender<br /><select value={createDraft.defender_id} onChange={(e) => setCreateDraft((c) => ({ ...c, defender_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{createTierPlayers.filter((player) => String(player.player_id) !== createDraft.challenger_id).map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name} · rank {p.rank ?? "—"}</option>)}</select></label>
+          <label>Challenger contact (optional)<br /><input value={createDraft.challenger_contact} onChange={(e) => setCreateDraft((c) => ({ ...c, challenger_contact: e.target.value }))} placeholder="Email, text, or WhatsApp" style={inputStyle} /></label>
           <label>Ledger/ref<br /><input value={createDraft.ledger_ref} onChange={(e) => setCreateDraft((c) => ({ ...c, ledger_ref: e.target.value }))} style={inputStyle} /></label>
           <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={createDraft.override} onChange={(e) => setCreateDraft((c) => ({ ...c, override: e.target.checked }))} /> Override eligibility</label>
-          <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={createDraft.start_clock} onChange={(e) => setCreateDraft((c) => ({ ...c, start_clock: e.target.checked }))} /> Start clock now</label>
+          <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={createDraft.start_clock} onChange={(e) => setCreateDraft((c) => ({ ...c, start_clock: e.target.checked }))} /> Start clock now (notice already sent)</label>
           <label>Confirmation<br /><input value={createDraft.confirmation_text} onChange={(e) => setCreateDraft((c) => ({ ...c, confirmation_text: e.target.value }))} placeholder="CREATE LADDER CHALLENGE" style={inputStyle} /></label>
           <button type="button" onClick={createChallenge} disabled={busy || !createDraft.challenger_id || !createDraft.defender_id} style={buttonStyle}>Create challenge</button>
         </div>
+      </article> : null}
+      {lastNotice ? <article style={{ ...cardStyle, borderColor: "#86efac", background: "#f0fdf4" }}>
+        <h2 style={{ marginTop: 0 }}>Copy/paste challenge notice</h2>
+        <p style={{ color: "#475569" }}>The 48-hour window is based on the timestamp of the message you send. If you did not start the clock during creation, send the notice first and then use “Start clock” on the challenge below.</p>
+        <label>Email<br /><textarea value={lastNotice.email_full} readOnly rows={14} style={{ ...inputStyle, resize: "vertical" }} /></label>
+        <p><button type="button" onClick={() => copyNotice(lastNotice.email_full, "Email notice")} style={ghostButtonStyle}>Copy email notice</button></p>
+        <label>Text/SMS<br /><textarea value={lastNotice.sms} readOnly rows={4} style={{ ...inputStyle, resize: "vertical" }} /></label>
+        <p><button type="button" onClick={() => copyNotice(lastNotice.sms, "SMS notice")} style={ghostButtonStyle}>Copy SMS notice</button></p>
       </article> : null}
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Publish played result</h2>
