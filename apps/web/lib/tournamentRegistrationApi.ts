@@ -56,6 +56,14 @@ export type PublicRegistrationEvent = {
   selectable?: boolean | null;
 };
 
+export type PublicRegistrationPlayer = {
+  id: string;
+  display_name: string;
+  dupr_id?: string | null;
+  doubles_skill?: number | null;
+  singles_skill?: number | null;
+};
+
 export type TournamentRegistrationResponse = {
   club: { id: string; slug: string; name: string };
   available: boolean;
@@ -67,6 +75,7 @@ export type TournamentRegistrationResponse = {
   registration_closed_reason?: string | null;
   days: PublicRegistrationDay[];
   events: PublicRegistrationEvent[];
+  players: PublicRegistrationPlayer[];
   roster_summary?: {
     total_registrations?: number | null;
     total_players?: number | null;
@@ -156,6 +165,7 @@ export type PublicRegistrationSelectionPayload = {
   partner_dupr_id?: string | null;
   partner_skill?: number | null;
   partner_age?: number | null;
+  partner_gender?: string | null;
   partner_note?: string | null;
   show_on_partner_board?: boolean | null;
 };
@@ -188,6 +198,7 @@ export type PublicRegistrationEditRegistration = {
   display_name: string;
   email: string;
   phone?: string | null;
+  player_id?: string | number | null;
   dupr_id?: string | null;
   doubles_skill?: number | null;
   singles_skill?: number | null;

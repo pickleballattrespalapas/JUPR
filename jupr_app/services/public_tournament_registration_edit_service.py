@@ -9,11 +9,15 @@ from jupr_app.domain.tournament_registration_edit_tokens import build_registrati
 from jupr_app.domain.tournament_registration_repo import get_registration_by_email, get_registration_confirmation_bundle, save_registration
 from jupr_app.services.public_tournament_registration_service import (
     _clean_email,
-    _clean_selection,
     _clean_text,
+    _get_club_player,
+    _public_day,
+    _public_event,
+    _public_registration_player,
     _safe_bool,
     _safe_float,
     _safe_int,
+    build_validated_public_registration_save_payload,
     build_public_tournament_registration_page,
 )
 
@@ -26,6 +30,7 @@ def _registration_public_payload(registration: dict[str, Any]) -> dict[str, Any]
         "display_name": _clean_text(registration.get("display_name"), limit=160),
         "email": _clean_email(registration.get("email")),
         "phone": _clean_text(registration.get("phone"), limit=60),
+        "player_id": registration.get("player_id"),
         "dupr_id": _clean_text(registration.get("dupr_id"), limit=80),
         "doubles_skill": _safe_float(registration.get("doubles_skill")),
         "singles_skill": _safe_float(registration.get("singles_skill")),
@@ -118,6 +123,15 @@ def _generic_edit_link_response() -> dict[str, Any]:
     }
 
 
+def _require_token_bound_registration_slug(bundle: dict[str, Any], registration_slug: Any) -> None:
+    """Reject routing hints that do not belong to the token-bound tournament."""
+
+    supplied_slug = _clean_text(registration_slug, limit=120)
+    expected_slug = _clean_text((bundle.get("settings") or {}).get("registration_slug"), limit=120)
+    if supplied_slug and supplied_slug != expected_slug:
+        raise ValueError("Registration edit link is for a different tournament.")
+
+
 def request_public_tournament_registration_edit_link(
     supabase: Any,
     *,
@@ -184,22 +198,70 @@ def build_public_tournament_registration_edit_page(
         tournament_id=tournament_id,
     )
     tid = str(verified.get("tournament_id") or "")
+    _require_token_bound_registration_slug(bundle, registration_slug)
     page = build_public_tournament_registration_page(
         supabase,
         club_id=str(club_id),
         tournament_id=tid,
-        registration_slug=registration_slug,
+        registration_slug=None,
     )
     if not page.get("available"):
         raise ValueError(str(page.get("setup_error") or "Tournament registration is not configured."))
     if not page.get("tournament"):
         raise ValueError("Tournament registration was not found.")
+
+    registration = bundle.get("registration") or {}
+    linked_player_id = registration.get("player_id")
+    linked_player = (
+        _get_club_player(
+            supabase,
+            club_id=str(club_id),
+            player_id=linked_player_id,
+            require_active=False,
+        )
+        if linked_player_id not in (None, "")
+        else None
+    )
+    page["players"] = [_public_registration_player(linked_player)] if linked_player else []
+
+    # Existing selections remain visible and may be preserved even when an
+    # organizer safely closes or disables that division after registration.
+    # They are not made selectable for anyone else.
+    selected_event_ids = {
+        str(selection.get("event_option_id") or "")
+        for selection in (bundle.get("selections") or [])
+        if str(selection.get("event_option_id") or "")
+    }
+    page_event_ids = {str(event.get("id") or "") for event in (page.get("events") or [])}
+    missing_events = [
+        event
+        for event in (bundle.get("event_options") or [])
+        if str(event.get("id") or "") in selected_event_ids and str(event.get("id") or "") not in page_event_ids
+    ]
+    if missing_events:
+        page["events"] = [
+            *(page.get("events") or []),
+            *[_public_event(event, registration_open=bool(page.get("registration_open"))) for event in missing_events],
+        ]
+    selected_day_ids = {
+        str(event.get("registration_day_id") or "")
+        for event in (bundle.get("event_options") or [])
+        if str(event.get("id") or "") in selected_event_ids
+    }
+    page_day_ids = {str(day.get("id") or "") for day in (page.get("days") or [])}
+    missing_days = [
+        day
+        for day in (bundle.get("days") or [])
+        if str(day.get("id") or "") in selected_day_ids and str(day.get("id") or "") not in page_day_ids
+    ]
+    if missing_days:
+        page["days"] = [*(page.get("days") or []), *[_public_day(day) for day in missing_days]]
     return {
         **page,
         "edit_mode": True,
         "edit_token_valid": True,
         "edit_token_expires_at": verified.get("exp"),
-        "registration": _registration_public_payload(bundle.get("registration") or {}),
+        "registration": _registration_public_payload(registration),
         "selections": [_selection_public_payload(selection) for selection in (bundle.get("selections") or [])],
         "total_price_usd": float(bundle.get("total_price_usd") or 0),
     }
@@ -223,56 +285,40 @@ def submit_public_tournament_registration_edit(
     registration = bundle.get("registration") or {}
     tournament_id = str(verified.get("tournament_id") or "").strip()
     registration_id = str(verified.get("registration_id") or "").strip()
+    _require_token_bound_registration_slug(bundle, payload.get("registration_slug"))
     page = build_public_tournament_registration_page(
         supabase,
         club_id=str(club_id),
         tournament_id=tournament_id,
-        registration_slug=_clean_text(payload.get("registration_slug"), limit=120) or _clean_text(settings.get("registration_slug"), limit=120) or None,
+        registration_slug=None,
     )
     if not page.get("registration_open"):
         raise ValueError(str(page.get("registration_closed_reason") or "Registration is not open."))
-    selectable = {str(event.get("id")): event for event in (page.get("events") or []) if event.get("selectable")}
-    selections: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw_selection in payload.get("selections") or []:
-        if not isinstance(raw_selection, dict):
-            continue
-        clean_selection = _clean_selection(raw_selection)
-        event_option_id = str(clean_selection.get("event_option_id") or "").strip()
-        if not event_option_id or event_option_id in seen:
-            continue
-        event = selectable.get(event_option_id)
-        if not event:
-            raise ValueError("One or more selected events is no longer open for registration.")
-        clean_selection["registration_day_id"] = str(event.get("registration_day_id") or clean_selection.get("registration_day_id") or "")
-        selections.append(clean_selection)
-        seen.add(event_option_id)
-    if not selections:
-        raise ValueError("Select at least one open event.")
-
-    save_payload = {
-        "first_name": _clean_text(payload.get("first_name"), limit=80),
-        "last_name": _clean_text(payload.get("last_name"), limit=80),
-        "display_name": _clean_text(payload.get("display_name"), limit=160),
-        "email": _clean_email(registration.get("email")),
-        "phone": _clean_text(payload.get("phone"), limit=60),
-        "player_id": registration.get("player_id"),
-        "dupr_id": _clean_text(payload.get("dupr_id"), limit=80),
-        "doubles_skill": _safe_float(payload.get("doubles_skill")),
-        "singles_skill": _safe_float(payload.get("singles_skill")),
-        "age": _safe_int(payload.get("age")),
-        "gender": _clean_text(payload.get("gender"), limit=40),
-        "notes": _clean_text(payload.get("notes"), limit=800),
-        "wants_partner_board_contact": _safe_bool(payload.get("wants_partner_board_contact")),
-        "payment_status": registration.get("payment_status") or "unpaid",
-        "status": registration.get("status") or "confirmed",
-        "selections": selections,
+    existing_selected_ids = {
+        str(selection.get("event_option_id") or "")
+        for selection in (bundle.get("selections") or [])
+        if str(selection.get("event_option_id") or "")
     }
+    existing_event_options = {
+        str(event.get("id") or ""): _public_event(event, registration_open=bool(page.get("registration_open")))
+        for event in (bundle.get("event_options") or [])
+        if str(event.get("id") or "") in existing_selected_ids
+    }
+    save_payload = build_validated_public_registration_save_payload(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=tournament_id,
+        page=page,
+        payload=payload,
+        locked_registration=registration,
+        existing_event_options=existing_event_options,
+    )
     result = save_registration(
         supabase,
         tournament_id=tournament_id,
         payload=save_payload,
         expected_registration_id=registration_id,
+        allow_existing_unselectable_event_ids=existing_selected_ids,
     )
     return {
         "ok": True,

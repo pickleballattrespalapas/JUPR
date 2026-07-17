@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from jupr_app.services.public_tournament_registration_service import (
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
@@ -244,3 +246,211 @@ def test_public_tournament_registration_blocks_honeypot() -> None:
         assert "Unable to submit" in str(exc)
     else:
         raise AssertionError("Expected honeypot submission to fail")
+
+
+def test_public_registration_hides_players_and_initial_player_link_is_not_trusted() -> None:
+    storage = fake_storage()
+    storage["players"] = [
+        {"id": 10, "club_id": "club-1", "name": "Verified Avery", "email": "avery@example.com", "dupr_id": "canonical-dupr", "rating": 1600, "active": True, "inactive_at": None},
+        {"id": 11, "club_id": "other-club", "name": "Other Club", "rating": 800, "active": True, "inactive_at": None},
+        {"id": 12, "club_id": "club-1", "name": "Inactive Player", "rating": 800, "active": False, "inactive_at": "2026-01-01"},
+    ]
+    supabase = FakeSupabase(storage)
+
+    page = build_public_tournament_registration_page(supabase, club_id="club-1", registration_slug="tres-open")
+    assert page["players"] == []
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Avery",
+            "email": "avery@example.com",
+            "player_id": 10,
+            "doubles_skill": 1.0,
+            "singles_skill": 1.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+    registration = next(row for row in storage["tournament_registrations"] if row["id"] == result["registration_id"])
+    assert registration["player_id"] is None
+    assert registration["dupr_id"] is None
+    assert registration["doubles_skill"] == 1.0
+    assert registration["singles_skill"] == 1.0
+
+    untrusted = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Mallory",
+            "email": "mallory@example.com",
+            "player_id": 11,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+    untrusted_registration = next(
+        row for row in storage["tournament_registrations"] if row["id"] == untrusted["registration_id"]
+    )
+    assert untrusted_registration["player_id"] is None
+
+
+def test_public_registration_rejects_multiple_divisions_in_same_day_family() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"].append(
+        {
+            **storage["tournament_event_options"][0],
+            "id": "event2",
+            "label": "Advanced Doubles",
+            "division_name": "Advanced",
+            "sort_order": 2,
+        }
+    )
+
+    with pytest.raises(ValueError, match="only one division"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                "registration_slug": "tres-open",
+                "first_name": "Alex",
+                "email": "alex@example.com",
+                "terms_accepted": True,
+                "selections": [
+                    {"event_option_id": "event1", "partner_mode": "NONE"},
+                    {"event_option_id": "event2", "partner_mode": "NONE"},
+                ],
+            },
+        )
+
+
+def test_public_registration_enforces_division_gender_and_rating() -> None:
+    storage = fake_storage()
+    event = storage["tournament_event_options"][0]
+    event.update(
+        {
+            "event_type": "SINGLES",
+            "partner_required": False,
+            "gender_restriction": "WOMEN",
+            "skill_label": "3.5",
+            "division_name": "Women's 3.5",
+        }
+    )
+
+    with pytest.raises(ValueError, match="women's registrations"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                "registration_slug": "tres-open",
+                "first_name": "Alex",
+                "email": "alex@example.com",
+                "gender": "Men",
+                "singles_skill": 3.2,
+                "terms_accepted": True,
+                "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+            },
+        )
+
+    with pytest.raises(ValueError, match="above the 3.5 division cap"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                "registration_slug": "tres-open",
+                "first_name": "Casey",
+                "email": "casey@example.com",
+                "gender": "Women",
+                "singles_skill": 4.0,
+                "terms_accepted": True,
+                "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+            },
+        )
+
+
+def test_public_registration_enforces_partner_identity_gender_and_rating() -> None:
+    storage = fake_storage()
+    event = storage["tournament_event_options"][0]
+    event.update(
+        {
+            "event_type": "MIXED_DOUBLES",
+            "partner_required": True,
+            "gender_restriction": "MIXED",
+            "skill_label": "3.5",
+            "division_name": "Mixed 3.5",
+        }
+    )
+    base = {
+        "registration_slug": "tres-open",
+        "first_name": "Alex",
+        "email": "alex@example.com",
+        "gender": "Women",
+        "doubles_skill": 3.2,
+        "terms_accepted": True,
+    }
+
+    with pytest.raises(ValueError, match="choose whether you have or need a partner"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={**base, "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}]},
+        )
+
+    with pytest.raises(ValueError, match="their own partner"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                **base,
+                "selections": [
+                    {
+                        "event_option_id": "event1",
+                        "partner_mode": "HAS_PARTNER",
+                        "partner_name": "Alex",
+                        "partner_email": "alex@example.com",
+                        "partner_gender": "Men",
+                    }
+                ],
+            },
+        )
+
+    with pytest.raises(ValueError, match="one men's and one women's"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                **base,
+                "selections": [
+                    {
+                        "event_option_id": "event1",
+                        "partner_mode": "HAS_PARTNER",
+                        "partner_name": "Pat",
+                        "partner_email": "pat@example.com",
+                        "partner_gender": "Women",
+                        "partner_skill": 3.2,
+                    }
+                ],
+            },
+        )
+
+    with pytest.raises(ValueError, match="above the 3.5 division cap"):
+        submit_public_tournament_registration(
+            FakeSupabase(storage),
+            club_id="club-1",
+            payload={
+                **base,
+                "selections": [
+                    {
+                        "event_option_id": "event1",
+                        "partner_mode": "HAS_PARTNER",
+                        "partner_name": "Pat",
+                        "partner_email": "pat@example.com",
+                        "partner_gender": "Men",
+                        "partner_skill": 4.0,
+                    }
+                ],
+            },
+        )

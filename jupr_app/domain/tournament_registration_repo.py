@@ -1338,7 +1338,14 @@ def get_registration_by_email(supabase, tournament_id: str, email: str) -> dict[
     return _get_registration_by_email(supabase, tournament_id, email)
 
 
-def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any], expected_registration_id: str | None = None) -> dict[str, Any]:
+def save_registration(
+    supabase,
+    *,
+    tournament_id: str,
+    payload: dict[str, Any],
+    expected_registration_id: str | None = None,
+    allow_existing_unselectable_event_ids: set[str] | None = None,
+) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
         raise ValueError("Email is required.")
@@ -1402,6 +1409,7 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any], 
     day_lookup = {str(row.get("id")): row for row in days if is_day_enabled(row)}
     event_lookup = {str(row.get("id")): row for row in list_event_options(supabase, str(tournament_id))}
 
+    allowed_existing_event_ids = {str(value) for value in (allow_existing_unselectable_event_ids or set())}
     rows: list[dict[str, Any]] = []
     for index, selection in enumerate(payload.get("selections") or []):
         if not selection.get("event_option_id"):
@@ -1411,11 +1419,11 @@ def save_registration(supabase, *, tournament_id: str, payload: dict[str, Any], 
         event = event_lookup.get(event_option_id)
         if not event:
             raise ValueError(f"Selected division {event_option_id} is no longer available.")
-        if str(event.get("registration_day_id") or "") not in day_lookup:
+        if str(event.get("registration_day_id") or "") not in day_lookup and event_option_id not in allowed_existing_event_ids:
             raise ValueError("Selected division is not on an enabled registration day.")
 
         visibility = public_event_option_visibility(event)
-        if visibility != "selectable":
+        if visibility != "selectable" and event_option_id not in allowed_existing_event_ids:
             status_label = str(event.get("status") or "draft").lower()
             division_label = str(event.get("division_name") or event.get("label") or event_option_id)
             raise ValueError(
