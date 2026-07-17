@@ -14,6 +14,7 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - League status, K-factor, min-games, schedule preview, court-board/rules/awards configuration visibility, and standings snapshot.
 - Guarded draft creation and configuration-only duplication. Duplication never copies roster membership, standings, results, lifecycle dates, or issued awards.
 - Guarded start, pause, resume, end, and archive transitions. Generic settings writes cannot change lifecycle status.
+- State-aware settings locks: full configuration in draft, description-only while active/paused, and read-only after ended/archived.
 - Stored Supabase admin session for the closed-club staging pilot.
 
 ## Runtime flag
@@ -40,8 +41,9 @@ No browser-side code writes directly to Supabase tables and no league movement, 
 - Duplication copies only whitelisted league configuration and never roster, result, lifecycle-date, or issued-award data.
 - Lifecycle actions enforce `draft → active`, `active → paused|ended`, `paused → active|ended`, and `ended → archived` transitions and require an action-specific confirmation phrase.
 - Ending a league freezes its lifecycle state; award preview, overrides, and optional badge minting remain in the separate Awards workflow.
+- Settings writes are checked against the current lifecycle state on FastAPI, not only disabled in the browser. Stale saves are rejected.
 - Mutations require explicit confirmation text and an authorized club-scoped admin session.
-- Staging requires successful API audit logging. A lifecycle transition is rolled back if its required audit write fails; Streamlit remains the production fallback.
+- Staging requires successful API audit logging. Lifecycle and settings mutations are rolled back if their required audit write fails; Streamlit remains the production fallback.
 - Rating, match, movement, and award calculations remain in Python services.
 
 ## Follow-up slices

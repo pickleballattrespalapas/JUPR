@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from jupr_app.domain.admin_activity_log import ActivityLogWriteResult
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_log_service import FakeSupabase
 
@@ -58,6 +61,7 @@ def _install_env(monkeypatch, supabase):
 
 def test_admin_league_manager_settings_update_contract(monkeypatch):
     tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": "draft", "is_active": False})
     supabase = FakeSupabase(tables)
     _install_env(monkeypatch, supabase)
 
@@ -90,6 +94,60 @@ def test_admin_league_manager_settings_update_contract(monkeypatch):
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
 
 
+@pytest.mark.parametrize("status", ["active", "paused"])
+def test_admin_league_manager_settings_allows_description_only_while_running(monkeypatch, status):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": status, "is_active": status == "active"})
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"description": f"Safe {status} description", "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["league"]["description"] == f"Safe {status} description"
+    assert tables["leagues_metadata"][0]["k_factor"] == 32
+    assert tables["admin_activity_log"][0]["after_json"]["edit_policy_status"] == status
+
+
+@pytest.mark.parametrize("status", ["active", "paused"])
+def test_admin_league_manager_settings_blocks_configuration_while_running(monkeypatch, status):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": status, "is_active": status == "active"})
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"k_factor": 28, "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert f"Only description can be edited while a league is {status}" in response.json()["detail"]
+    assert tables["leagues_metadata"][0]["k_factor"] == 32
+    assert tables["admin_activity_log"] == []
+
+
+@pytest.mark.parametrize("status", ["ended", "archived"])
+def test_admin_league_manager_settings_are_read_only_after_close(monkeypatch, status):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": status, "is_active": False})
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"description": "Should not save", "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert f"read-only after a league is {status}" in response.json()["detail"]
+    assert "description" not in tables["leagues_metadata"][0]
+    assert tables["admin_activity_log"] == []
+
+
 def test_admin_league_manager_settings_update_requires_confirmation(monkeypatch):
     supabase = FakeSupabase(league_manager_tables())
     _install_env(monkeypatch, supabase)
@@ -117,6 +175,48 @@ def test_admin_league_manager_settings_update_rejects_status_bypass(monkeypatch)
     assert response.status_code == 400
     assert "lifecycle action" in response.json()["detail"]
     assert tables["leagues_metadata"][0]["status"] == "active"
+
+
+def test_admin_league_manager_settings_required_audit_failure_rolls_back(monkeypatch):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": "draft", "is_active": False})
+    _install_env(monkeypatch, FakeSupabase(tables))
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_manager_update_service.write_admin_activity_log",
+        lambda *_args, **_kwargs: ActivityLogWriteResult(ok=False, warning="audit unavailable"),
+    )
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"k_factor": 28, "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 500
+    assert "audit log write required" in response.json()["detail"]
+    assert tables["leagues_metadata"][0]["k_factor"] == 32
+
+
+def test_admin_league_manager_settings_rejects_stale_status(monkeypatch):
+    tables = league_manager_tables()
+    _install_env(monkeypatch, FakeSupabase(tables))
+    before = {**tables["leagues_metadata"][0], "status": "draft", "is_active": False}
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_manager_update_service._fetch_league_meta",
+        lambda *_args, **_kwargs: before,
+    )
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"k_factor": 28, "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert "changed before this save completed" in response.json()["detail"]
+    assert tables["leagues_metadata"][0]["k_factor"] == 32
+    assert tables["admin_activity_log"] == []
 
 
 def test_admin_league_manager_settings_update_does_not_create_missing_league(monkeypatch):
