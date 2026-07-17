@@ -11,11 +11,13 @@ type Tier = { tier_id: string; label: string; range: string; players: Player[] }
 type ChallengeNotice = { email_full: string; sms: string };
 type StatusResponse = { enabled: boolean; status: string; summary?: Record<string, number>; warnings?: string[] };
 type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[]; roster_rows?: RosterRow[]; player_flags?: PlayerFlag[] };
-type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow; player_flags?: PlayerFlag; notice?: ChallengeNotice; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
+type ActionResponse = { ok: boolean; challenge?: Challenge; roster?: RosterRow | RosterRow[]; player_flags?: PlayerFlag; notice?: ChallengeNotice; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
 type ResultDraft = { challenge_id: string; a_chal: string; a_def: string; b_chal: string; b_def: string; match_a_games: string; match_b_games: string; match_date: string; winner_override: string; publish_official_matches: boolean; confirmation_text: string };
 type ResultPreviewResponse = ActionResponse & { mode: "challenge_ladder_result_preview"; challenge: Challenge; preview: { final_winner_side: string; final_winner_id: number; winner_summary: Record<string, string | number>; scores: Record<string, unknown> }; partner_names: Record<string, string>; match_date: string; would_publish_official_matches: boolean; rank_result: { would_swap: boolean; reason: string } };
 type TierMovementTrigger = { player_id: number; player_name: string; current_tier: string; destination_tier: string; consecutive_match_count: number; latest_match_at?: string | null };
 type TierMovementResponse = { ok: boolean; mode: "challenge_ladder_tier_movement_review"; summary: { evaluated_player_count: number; match_count: number; trigger_count: number; required_consecutive_matches: number }; triggers: TierMovementTrigger[] };
+type TierRosterPreviewPlayer = { rank: number; player_id: number; player_name: string; previous_tier?: string | null; previous_rank?: number | null; change?: string };
+type TierRosterReplacePreview = { ok: boolean; mode: "challenge_ladder_roster_replace_preview"; tier_id: string; can_apply: boolean; preview_fingerprint: string; summary: Record<string, number>; current_roster: TierRosterPreviewPlayer[]; proposed_roster: TierRosterPreviewPlayer[]; removed_players: TierRosterPreviewPlayer[]; moved_from_other_tiers: TierRosterPreviewPlayer[]; source_tier_recompressions: Array<{ tier_id: string; player_id: number; player_name: string; old_rank: number; new_rank: number }>; open_challenge_blockers: Array<{ challenge_id: number; status: string; affected_player_names: string[] }>; warnings: string[] };
 
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
@@ -30,6 +32,7 @@ function Pre({ value }: { value: unknown }) { return <pre style={{ whiteSpace: "
 function parseGames(raw: string): number[][] { return raw.split(/[|,;]/).map((part) => part.trim()).filter(Boolean).map((part) => { const bits = part.split(/[-–—:\/]/).map((x) => Number(x.trim())); if (bits.length !== 2 || !Number.isFinite(bits[0]) || !Number.isFinite(bits[1])) throw new Error(`Invalid score: ${part}`); return [bits[0], bits[1]]; }); }
 function activePlayers(tiers: Tier[] | undefined): Player[] { const rows: Player[] = []; for (const tier of tiers || []) for (const player of tier.players || []) rows.push(player); return rows; }
 function resultDraftFingerprint(draft: ResultDraft): string { const { confirmation_text: _confirmationText, ...reviewedFields } = draft; return JSON.stringify(reviewedFields); }
+function tierRosterDraftFingerprint(draft: { tier_id: string; ranked_names: string }): string { return JSON.stringify({ tier_id: draft.tier_id, ranked_names: draft.ranked_names }); }
 function resultPayload(draft: ResultDraft, includeConfirmation = false): Record<string, unknown> {
   return {
     partner_a_challenger_id: Number(draft.a_chal), partner_a_defender_id: Number(draft.a_def), partner_b_challenger_id: Number(draft.b_chal), partner_b_defender_id: Number(draft.b_def),
@@ -57,6 +60,9 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [passDraft, setPassDraft] = useState({ challenge_id: "", player_id: "", confirmation_text: "" });
   const [rosterAddDraft, setRosterAddDraft] = useState({ player_id: "", tier_id: "ADV", admin_note: "", confirmation_text: "" });
   const [rosterMoveDraft, setRosterMoveDraft] = useState({ player_id: "", destination_tier: "INT", recompress_old: true, admin_note: "", confirmation_text: "" });
+  const [rosterReplaceDraft, setRosterReplaceDraft] = useState({ tier_id: "ADV", ranked_names: "", admin_note: "", confirmation_text: "" });
+  const [rosterReplacePreview, setRosterReplacePreview] = useState<TierRosterReplacePreview | null>(null);
+  const [previewedRosterDraftFingerprint, setPreviewedRosterDraftFingerprint] = useState<string | null>(null);
   const [overrideDraft, setOverrideDraft] = useState({ player_id: "", vacation_until: "", reinstate_required: false, reinstate_notes: "", confirmation_text: "" });
   const [tierMovementReview, setTierMovementReview] = useState<TierMovementResponse | null>(null);
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
@@ -167,6 +173,42 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     finally { setBusy(false); }
   }
 
+  function loadCurrentTierRosterForReplacement() {
+    const names = (dashboard?.roster_rows || [])
+      .filter((row) => row.is_active && row.tier_id === rosterReplaceDraft.tier_id)
+      .sort((a, b) => (a.rank ?? 999999) - (b.rank ?? 999999))
+      .map((row) => row.player_name)
+      .join("\n");
+    setRosterReplaceDraft((current) => ({ ...current, ranked_names: names, confirmation_text: "" }));
+    setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null);
+    setMessage(names ? "Loaded the current tier order. Edit it, then preview the complete replacement." : "This tier currently has no active roster players.");
+  }
+
+  async function previewRosterReplacement() {
+    const rankedNames = rosterReplaceDraft.ranked_names.split("\n").map((name) => name.trim()).filter(Boolean);
+    if (!rankedNames.length) { setMessage("Paste at least one player name before previewing the tier replacement."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<TierRosterReplacePreview>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/replace-tier/preview`, { method: "POST", body: JSON.stringify({ tier_id: rosterReplaceDraft.tier_id, ranked_names: rankedNames }) });
+      setRosterReplacePreview(payload); setPreviewedRosterDraftFingerprint(tierRosterDraftFingerprint(rosterReplaceDraft));
+      setMessage(payload.can_apply ? "Tier replacement preview is ready. Review every change before applying." : "Preview found blockers. Resolve them and preview again before applying.");
+    } catch (error) {
+      setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); setMessage(error instanceof Error ? error.message : "Unable to preview the tier replacement.");
+    } finally { setBusy(false); }
+  }
+
+  async function applyRosterReplacement() {
+    if (!rosterReplacePreview || previewedRosterDraftFingerprint !== tierRosterDraftFingerprint(rosterReplaceDraft)) { setMessage("Preview the current ranked list before applying it."); return; }
+    if (!rosterReplacePreview.can_apply) { setMessage("Resolve open challenge blockers and preview the roster again before applying it."); return; }
+    if (rosterReplaceDraft.confirmation_text.trim().toUpperCase() !== "REPLACE LADDER TIER") { setMessage("Type REPLACE LADDER TIER to apply the reviewed replacement."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/roster/replace-tier`, { method: "POST", body: JSON.stringify({ tier_id: rosterReplaceDraft.tier_id, ranked_player_ids: rosterReplacePreview.proposed_roster.map((row) => row.player_id), preview_fingerprint: rosterReplacePreview.preview_fingerprint, admin_note: rosterReplaceDraft.admin_note, confirmation_text: rosterReplaceDraft.confirmation_text }) });
+      setLastResult(payload); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); setRosterReplaceDraft((current) => ({ ...current, admin_note: "", confirmation_text: "" })); setMessage("Reviewed tier roster replacement applied and audited."); await loadDashboard();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply the tier replacement."); }
+    finally { setBusy(false); }
+  }
+
   async function savePlayerOverrides() {
     if (overrideDraft.confirmation_text.trim().toUpperCase() !== "SAVE LADDER OVERRIDES") { setMessage("Type SAVE LADDER OVERRIDES to save these overrides."); return; }
     setBusy(true); setMessage(null);
@@ -217,6 +259,7 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const selectedMovePlayer = activeRosterRows.find((player) => String(player.player_id) === rosterMoveDraft.player_id);
   const partnerPlayers = allPlayerOptions.filter((player) => player.player_id !== selectedResultChallenge?.challenger_id && player.player_id !== selectedResultChallenge?.defender_id);
   const currentDraftIsPreviewed = Boolean(resultPreview && previewedDraftFingerprint === resultDraftFingerprint(resultDraft));
+  const currentRosterReplacementIsPreviewed = Boolean(rosterReplacePreview && previewedRosterDraftFingerprint === tierRosterDraftFingerprint(rosterReplaceDraft));
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -334,6 +377,31 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
             </div>
           </section>
         </div>
+        <section style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "1rem", marginTop: "1rem", background: "#fffbeb" }}>
+          <h3 style={{ marginTop: 0 }}>Initialize or replace a complete tier</h3>
+          <p style={{ color: "#475569" }}>Paste exact club player names, one per line, in rank order. Preview is read-only. Apply preserves removed players as inactive, recompresses any source tiers, blocks affected open challenges, and rejects the operation if the live roster changed after preview.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+            <label>Tier<br /><select value={rosterReplaceDraft.tier_id} onChange={(e) => { setRosterReplaceDraft((current) => ({ ...current, tier_id: e.target.value, confirmation_text: "" })); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); }} style={inputStyle}>{dashboard.tiers.map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
+            <button type="button" onClick={loadCurrentTierRosterForReplacement} disabled={busy} style={ghostButtonStyle}>Load current tier order</button>
+          </div>
+          <label style={{ display: "block", marginTop: "0.75rem" }}>Ranked names (top to bottom)<br /><textarea value={rosterReplaceDraft.ranked_names} onChange={(e) => { setRosterReplaceDraft((current) => ({ ...current, ranked_names: e.target.value, confirmation_text: "" })); setRosterReplacePreview(null); setPreviewedRosterDraftFingerprint(null); }} rows={10} placeholder={"Player One\nPlayer Two\nPlayer Three"} style={{ ...inputStyle, resize: "vertical" }} /></label>
+          <p><button type="button" onClick={previewRosterReplacement} disabled={busy || !rosterReplaceDraft.ranked_names.trim()} style={ghostButtonStyle}>Preview complete replacement</button></p>
+          {rosterReplacePreview && currentRosterReplacementIsPreviewed ? <div style={{ borderTop: "1px solid #fcd34d", paddingTop: "1rem", marginTop: "1rem" }}>
+            <h4 style={{ marginTop: 0 }}>Reviewed change set</h4>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "0.5rem" }}>{Object.entries(rosterReplacePreview.summary).map(([key, value]) => <div key={key} style={{ background: "white", border: "1px solid #fde68a", borderRadius: "8px", padding: "0.55rem" }}><strong>{key.replace(/_/g, " ")}</strong><br />{value}</div>)}</div>
+            {rosterReplacePreview.warnings.map((warning) => <p key={warning} style={{ color: "#92400e", fontWeight: 700 }}>{warning}</p>)}
+            {rosterReplacePreview.open_challenge_blockers.length ? <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "0.75rem" }}><strong>Blocking open challenges</strong><ul>{rosterReplacePreview.open_challenge_blockers.map((blocker) => <li key={blocker.challenge_id}>#{blocker.challenge_id} · {blocker.status} · {blocker.affected_player_names.join(", ")}</li>)}</ul></div> : null}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginTop: "0.75rem" }}>
+              <div><strong>Proposed order</strong><ol>{rosterReplacePreview.proposed_roster.map((row) => <li key={row.player_id}>{row.player_name} · {row.change}{row.previous_tier && row.previous_tier !== rosterReplacePreview.tier_id ? ` from ${row.previous_tier} rank ${row.previous_rank ?? "—"}` : ""}</li>)}</ol></div>
+              <div><strong>Players made inactive</strong>{rosterReplacePreview.removed_players.length ? <ul>{rosterReplacePreview.removed_players.map((row) => <li key={row.player_id}>{row.player_name} · former rank {row.rank}</li>)}</ul> : <p>None.</p>}<strong>Source-tier rank updates</strong>{rosterReplacePreview.source_tier_recompressions.length ? <ul>{rosterReplacePreview.source_tier_recompressions.map((row) => <li key={row.player_id}>{row.player_name} · {row.tier_id} {row.old_rank} → {row.new_rank}</li>)}</ul> : <p>None.</p>}</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+              <label>Audit note<br /><input value={rosterReplaceDraft.admin_note} onChange={(e) => setRosterReplaceDraft((current) => ({ ...current, admin_note: e.target.value }))} style={inputStyle} /></label>
+              <label>Confirmation<br /><input value={rosterReplaceDraft.confirmation_text} onChange={(e) => setRosterReplaceDraft((current) => ({ ...current, confirmation_text: e.target.value }))} placeholder="REPLACE LADDER TIER" style={inputStyle} /></label>
+              <button type="button" onClick={applyRosterReplacement} disabled={busy || !rosterReplacePreview.can_apply} style={buttonStyle}>Apply reviewed replacement</button>
+            </div>
+          </div> : null}
+        </section>
         {inactiveRosterRows.length ? <section style={{ marginTop: "1rem" }}><h3>Inactive roster</h3><p style={{ color: "#475569" }}>{inactiveRosterRows.map((row) => `${row.player_name} (${row.tier_id}, former rank ${row.rank ?? "—"})`).join(" · ")}</p></section> : null}
       </article> : null}
       {dashboard ? <article style={cardStyle}>

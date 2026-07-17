@@ -13,9 +13,11 @@ from jupr_app.services.admin_challenge_ladder_service import (
     move_admin_challenge_ladder_roster_player,
     preview_admin_challenge_ladder_result,
     preview_admin_challenge_ladder_result_for_challenge,
+    preview_admin_challenge_ladder_tier_roster_replacement,
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
+    replace_admin_challenge_ladder_tier_roster,
     save_admin_challenge_ladder_player_overrides,
 )
 from jupr_app.domain.challenge_ladder import month_key_utc
@@ -28,6 +30,7 @@ class FakeQuery:
         self.table_name = table_name
         self.filters = []
         self.insert_payload = None
+        self.upsert_payload = None
         self.update_payload = None
         self.limit_value = None
 
@@ -49,6 +52,10 @@ class FakeQuery:
         self.insert_payload = dict(payload)
         return self
 
+    def upsert(self, payload, **_kwargs):
+        self.upsert_payload = deepcopy(payload)
+        return self
+
     def update(self, payload):
         self.update_payload = dict(payload)
         return self
@@ -62,6 +69,26 @@ class FakeQuery:
             row = {"id": len(rows) + 100, **self.insert_payload}
             rows.append(row)
             return SimpleNamespace(data=[dict(row)])
+        if self.upsert_payload is not None:
+            payloads = self.upsert_payload if isinstance(self.upsert_payload, list) else [self.upsert_payload]
+            saved = []
+            for payload in payloads:
+                existing = next(
+                    (
+                        row
+                        for row in rows
+                        if str(row.get("club_id")) == str(payload.get("club_id"))
+                        and str(row.get("player_id")) == str(payload.get("player_id"))
+                    ),
+                    None,
+                )
+                if existing is None:
+                    existing = {"id": len(rows) + 100, **payload}
+                    rows.append(existing)
+                else:
+                    existing.update(payload)
+                saved.append(dict(existing))
+            return SimpleNamespace(data=saved)
         if self.update_payload is not None:
             updated = []
             for row in rows:
@@ -382,6 +409,124 @@ def test_roster_add_reactivates_at_bottom(monkeypatch):
     assert result["roster"]["is_active"] is True
 
 
+def test_tier_roster_replacement_preview_is_read_only_and_blocks_open_challenges(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    before = deepcopy(supabase.storage)
+
+    result = preview_admin_challenge_ladder_tier_roster_replacement(
+        supabase,
+        club_id="club",
+        tier_id="ADV",
+        ranked_names=["Challenger", "Defender", "Roster Candidate"],
+    )
+
+    assert result["can_apply"] is False
+    assert result["summary"]["current_count"] == 6
+    assert result["summary"]["proposed_count"] == 3
+    assert result["summary"]["removed_count"] == 4
+    assert [row["player_id"] for row in result["proposed_roster"]] == [2, 1, 7]
+    assert result["open_challenge_blockers"][0]["challenge_id"] == 100
+    assert supabase.storage == before
+
+
+def test_tier_roster_replacement_preview_rejects_duplicate_and_missing_names(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+
+    for ranked_names, expected in [
+        (["Defender", "Defender"], "Duplicate names"),
+        (["Defender", "Not A Club Player"], "Create these club players"),
+    ]:
+        try:
+            preview_admin_challenge_ladder_tier_roster_replacement(
+                supabase,
+                club_id="club",
+                tier_id="ADV",
+                ranked_names=ranked_names,
+            )
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("expected replacement roster name validation error")
+
+
+def test_tier_roster_replacement_rejects_stale_preview(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"] = []
+    preview = preview_admin_challenge_ladder_tier_roster_replacement(
+        supabase,
+        club_id="club",
+        tier_id="ADV",
+        ranked_names=["Defender", "Challenger", "Partner A", "Partner B", "Partner C", "Partner D"],
+    )
+    supabase.storage["ladder_roster"][0]["rank"] = 2
+
+    try:
+        replace_admin_challenge_ladder_tier_roster(
+            supabase,
+            club_id="club",
+            tier_id="ADV",
+            ranked_player_ids=[row["player_id"] for row in preview["proposed_roster"]],
+            preview_fingerprint=preview["preview_fingerprint"],
+            admin_note=None,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="REPLACE LADDER TIER",
+        )
+    except ValueError as exc:
+        assert "changed after preview" in str(exc)
+    else:
+        raise AssertionError("expected stale tier-roster preview rejection")
+    assert supabase.storage["admin_activity_log"] == []
+
+
+def test_tier_roster_replacement_applies_reviewed_order_and_recompresses_source(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"] = []
+    supabase.storage["ladder_roster"][-1].update({"tier_id": "INT", "rank": 2})
+    supabase.storage["ladder_roster"].append(
+        {"club_id": "club", "id": 16, "player_id": 7, "tier_id": "INT", "rank": 1, "is_active": True}
+    )
+    preview = preview_admin_challenge_ladder_tier_roster_replacement(
+        supabase,
+        club_id="club",
+        tier_id="ADV",
+        ranked_names=["Challenger", "Defender", "Roster Candidate"],
+    )
+
+    result = replace_admin_challenge_ladder_tier_roster(
+        supabase,
+        club_id="club",
+        tier_id="ADV",
+        ranked_player_ids=[row["player_id"] for row in preview["proposed_roster"]],
+        preview_fingerprint=preview["preview_fingerprint"],
+        admin_note="annual roster reset",
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+        confirmation_text="REPLACE LADDER TIER",
+    )
+
+    assert [(row["player_id"], row["rank"]) for row in result["roster"]] == [(2, 1), (1, 2), (7, 3)]
+    assert result["summary"]["moved_from_other_tier_count"] == 1
+    assert result["recompressed_player_ids"] == [6]
+    inactive_ids = {
+        row["player_id"]
+        for row in supabase.storage["ladder_roster"]
+        if row.get("is_active") is False
+    }
+    assert {3, 4, 5}.issubset(inactive_ids)
+    source_player = next(row for row in supabase.storage["ladder_roster"] if row["player_id"] == 6)
+    assert source_player["tier_id"] == "INT"
+    assert source_player["rank"] == 1
+    audit = supabase.storage["admin_activity_log"][-1]
+    assert audit["action_type"] == "roster_replace_tier"
+    assert audit["before_json"]["rows"]
+    assert audit["after_json"]["preview_fingerprint"] == preview["preview_fingerprint"]
+
+
 def test_roster_move_appends_and_recompresses_previous_tier(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
     supabase = FakeSupabase()
@@ -570,6 +715,23 @@ def test_new_ladder_operation_routes_require_authentication(monkeypatch):
             "/admin/clubs/{club_id}/challenge-ladder/roster/{player_id}/move",
             "/admin/clubs/club/challenge-ladder/roster/4/move",
             {"destination_tier": "INT", "confirmation_text": "MOVE LADDER PLAYER"},
+            "post",
+        ),
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/roster/replace-tier/preview",
+            "/admin/clubs/club/challenge-ladder/roster/replace-tier/preview",
+            {"tier_id": "ADV", "ranked_names": ["Defender"]},
+            "post",
+        ),
+        (
+            "/admin/clubs/{club_id}/challenge-ladder/roster/replace-tier",
+            "/admin/clubs/club/challenge-ladder/roster/replace-tier",
+            {
+                "tier_id": "ADV",
+                "ranked_player_ids": [1],
+                "preview_fingerprint": "not-a-real-preview",
+                "confirmation_text": "REPLACE LADDER TIER",
+            },
             "post",
         ),
         (

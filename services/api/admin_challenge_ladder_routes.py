@@ -17,9 +17,11 @@ from jupr_app.services.admin_challenge_ladder_service import (
     is_admin_challenge_ladder_enabled,
     move_admin_challenge_ladder_roster_player,
     preview_admin_challenge_ladder_result_for_challenge,
+    preview_admin_challenge_ladder_tier_roster_replacement,
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_pass,
     record_admin_challenge_ladder_result,
+    replace_admin_challenge_ladder_tier_roster,
     save_admin_challenge_ladder_player_overrides,
     start_admin_challenge_ladder_clock,
     update_admin_challenge_ladder_challenge,
@@ -78,6 +80,21 @@ class ChallengeRosterMoveRequest(BaseModel):
     admin_note: str | None = None
     confirmation_text: str = ""
     source: str = "next_challenge_ladder_roster_move"
+
+
+class ChallengeRosterReplacePreviewRequest(BaseModel):
+    tier_id: str
+    ranked_names: list[str] = Field(default_factory=list)
+    source: str = "next_challenge_ladder_roster_replace_preview"
+
+
+class ChallengeRosterReplaceRequest(BaseModel):
+    tier_id: str
+    ranked_player_ids: list[int] = Field(default_factory=list)
+    preview_fingerprint: str = ""
+    admin_note: str | None = None
+    confirmation_text: str = ""
+    source: str = "next_challenge_ladder_roster_replace"
 
 
 class ChallengePlayerOverridesRequest(BaseModel):
@@ -280,6 +297,44 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 player_id=int(player_id),
                 destination_tier=payload.destination_tier,
                 recompress_old=payload.recompress_old,
+                admin_note=payload.admin_note,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/challenge-ladder/roster/replace-tier/preview")
+    def post_admin_challenge_ladder_roster_replace_preview(club_id: str, payload: ChallengeRosterReplacePreviewRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return preview_admin_challenge_ladder_tier_roster_replacement(
+                supabase,
+                club_id=str(club_id),
+                tier_id=payload.tier_id,
+                ranked_names=payload.ranked_names,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/challenge-ladder/roster/replace-tier")
+    def post_admin_challenge_ladder_roster_replace(club_id: str, payload: ChallengeRosterReplaceRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return replace_admin_challenge_ladder_tier_roster(
+                supabase,
+                club_id=str(club_id),
+                tier_id=payload.tier_id,
+                ranked_player_ids=payload.ranked_player_ids,
+                preview_fingerprint=payload.preview_fingerprint,
                 admin_note=payload.admin_note,
                 actor_email=actor_email,
                 actor_role=actor_role,

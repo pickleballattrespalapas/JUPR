@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -27,6 +29,7 @@ CONFIRM_ACCEPT = "ACCEPT LADDER CHALLENGE"
 CONFIRM_PASS = "RECORD LADDER PASS"
 CONFIRM_ROSTER_ADD = "ADD LADDER PLAYER"
 CONFIRM_ROSTER_MOVE = "MOVE LADDER PLAYER"
+CONFIRM_ROSTER_REPLACE = "REPLACE LADDER TIER"
 CONFIRM_OVERRIDES = "SAVE LADDER OVERRIDES"
 
 
@@ -245,6 +248,7 @@ def build_admin_challenge_ladder_status(supabase: Any | None, *, club_id: str) -
             "pass": CONFIRM_PASS,
             "roster_add": CONFIRM_ROSTER_ADD,
             "roster_move": CONFIRM_ROSTER_MOVE,
+            "roster_replace": CONFIRM_ROSTER_REPLACE,
             "overrides": CONFIRM_OVERRIDES,
         },
     }
@@ -694,6 +698,388 @@ def add_admin_challenge_ladder_roster_player(
         "mode": "challenge_ladder_roster_add",
         "roster": _admin_roster_row(saved, names),
         "reactivated": before is not None,
+        "warnings": [warning] if warning else [],
+    }
+
+
+def _build_admin_challenge_ladder_tier_roster_preview(
+    supabase: Any,
+    *,
+    club_id: str,
+    tier_id: str,
+    ranked_player_ids: list[int],
+) -> dict[str, Any]:
+    tier = normalize_tier_id(tier_id)
+    if tier not in TIER_ORDER:
+        raise ValueError("unsupported tier")
+    player_ids = [int(player_id) for player_id in ranked_player_ids]
+    if not player_ids:
+        raise ValueError("Provide at least one player for the replacement roster.")
+    if len(player_ids) > 200:
+        raise ValueError("A tier replacement is limited to 200 players.")
+    if len(set(player_ids)) != len(player_ids):
+        raise ValueError("The replacement roster cannot contain duplicate players.")
+
+    names = _player_names(supabase, club_id=str(club_id))
+    missing_player_ids = [player_id for player_id in player_ids if player_id not in names]
+    if missing_player_ids:
+        raise ValueError("Every replacement player must belong to this club.")
+    try:
+        roster_rows = _safe_rows(
+            supabase.table("ladder_roster").select("*").eq("club_id", str(club_id)).execute()
+        )
+        challenge_rows = _safe_rows(
+            supabase.table("ladder_challenges").select("*").eq("club_id", str(club_id)).execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to build a safe tier-roster replacement preview.") from exc
+
+    active_rows = [row for row in roster_rows if row.get("is_active") is not False]
+    active_by_player: dict[int, dict[str, Any]] = {}
+    for row in active_rows:
+        player_id = _safe_int(row.get("player_id"))
+        if player_id is not None:
+            active_by_player[int(player_id)] = dict(row)
+    existing_player_ids = {
+        int(player_id)
+        for player_id in (_safe_int(row.get("player_id")) for row in roster_rows)
+        if player_id is not None
+    }
+    current_rows = sorted(
+        (
+            row
+            for row in active_rows
+            if normalize_tier_id(str(row.get("tier_id") or "")) == tier
+        ),
+        key=lambda row: (
+            int(_safe_int(row.get("rank")) or 999999),
+            int(_safe_int(row.get("player_id")) or 999999),
+        ),
+    )
+    current_player_ids = [
+        int(player_id)
+        for player_id in (_safe_int(row.get("player_id")) for row in current_rows)
+        if player_id is not None
+    ]
+    proposed_id_set = set(player_ids)
+    removed_player_ids = [player_id for player_id in current_player_ids if player_id not in proposed_id_set]
+
+    proposed_roster: list[dict[str, Any]] = []
+    moved_from_other_tiers: list[dict[str, Any]] = []
+    reordered_count = 0
+    retained_count = 0
+    added_count = 0
+    reactivated_count = 0
+    affected_player_ids = set(removed_player_ids)
+    moved_source_tiers: set[str] = set()
+    for new_rank, player_id in enumerate(player_ids, start=1):
+        active = active_by_player.get(player_id)
+        previous_tier = normalize_tier_id(str(active.get("tier_id") or "")) if active else None
+        previous_rank = _safe_int(active.get("rank")) if active else None
+        if active is None:
+            change = "reactivated" if player_id in existing_player_ids else "added"
+            if change == "reactivated":
+                reactivated_count += 1
+            else:
+                added_count += 1
+            affected_player_ids.add(player_id)
+        elif previous_tier != tier:
+            change = "moved"
+            moved_source_tiers.add(str(previous_tier))
+            affected_player_ids.add(player_id)
+        elif previous_rank != new_rank:
+            change = "reordered"
+            reordered_count += 1
+            affected_player_ids.add(player_id)
+        else:
+            change = "retained"
+            retained_count += 1
+        proposed = {
+            "rank": new_rank,
+            "player_id": player_id,
+            "player_name": names[player_id],
+            "previous_tier": previous_tier,
+            "previous_rank": previous_rank,
+            "change": change,
+        }
+        proposed_roster.append(proposed)
+        if change == "moved":
+            moved_from_other_tiers.append(dict(proposed))
+
+    source_tier_recompressions: list[dict[str, Any]] = []
+    for source_tier in sorted(moved_source_tiers):
+        remaining_rows = sorted(
+            (
+                row
+                for row in active_rows
+                if normalize_tier_id(str(row.get("tier_id") or "")) == source_tier
+                and int(_safe_int(row.get("player_id")) or -1) not in proposed_id_set
+            ),
+            key=lambda row: (
+                int(_safe_int(row.get("rank")) or 999999),
+                int(_safe_int(row.get("player_id")) or 999999),
+            ),
+        )
+        for expected_rank, row in enumerate(remaining_rows, start=1):
+            player_id = _safe_int(row.get("player_id"))
+            old_rank = _safe_int(row.get("rank"))
+            if player_id is None or old_rank == expected_rank:
+                continue
+            affected_player_ids.add(int(player_id))
+            source_tier_recompressions.append(
+                {
+                    "tier_id": source_tier,
+                    "player_id": int(player_id),
+                    "player_name": names.get(int(player_id), f"Player {player_id}"),
+                    "old_rank": old_rank,
+                    "new_rank": expected_rank,
+                }
+            )
+
+    open_challenge_blockers: list[dict[str, Any]] = []
+    for challenge in challenge_rows:
+        if str(challenge.get("status") or "").upper() not in OPEN_STATUSES:
+            continue
+        participants = {
+            int(player_id)
+            for player_id in (
+                _safe_int(challenge.get("challenger_id")),
+                _safe_int(challenge.get("defender_id")),
+            )
+            if player_id is not None
+        }
+        blocked_ids = sorted(participants.intersection(affected_player_ids))
+        if not blocked_ids:
+            continue
+        open_challenge_blockers.append(
+            {
+                "challenge_id": _safe_int(challenge.get("id")),
+                "status": str(challenge.get("status") or ""),
+                "affected_player_ids": blocked_ids,
+                "affected_player_names": [names.get(player_id, f"Player {player_id}") for player_id in blocked_ids],
+            }
+        )
+
+    active_snapshot = sorted(
+        (
+            {
+                "player_id": int(player_id),
+                "tier_id": normalize_tier_id(str(row.get("tier_id") or "")),
+                "rank": _safe_int(row.get("rank")),
+            }
+            for row in active_rows
+            for player_id in [_safe_int(row.get("player_id"))]
+            if player_id is not None
+        ),
+        key=lambda row: (int(row["player_id"]), str(row["tier_id"]), int(row["rank"] or 999999)),
+    )
+    fingerprint_payload = {
+        "club_id": str(club_id),
+        "tier_id": tier,
+        "ranked_player_ids": player_ids,
+        "active_roster": active_snapshot,
+    }
+    preview_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    warnings: list[str] = []
+    if moved_from_other_tiers:
+        warnings.append("Players moved from other tiers will be removed from those tiers, and their former tiers will be recompressed.")
+    if open_challenge_blockers:
+        warnings.append("Resolve the listed open challenges before replacing this tier roster.")
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_roster_replace_preview",
+        "tier_id": tier,
+        "can_apply": not open_challenge_blockers,
+        "preview_fingerprint": preview_fingerprint,
+        "summary": {
+            "current_count": len(current_player_ids),
+            "proposed_count": len(player_ids),
+            "retained_count": retained_count,
+            "reordered_count": reordered_count,
+            "added_count": added_count,
+            "reactivated_count": reactivated_count,
+            "removed_count": len(removed_player_ids),
+            "moved_from_other_tier_count": len(moved_from_other_tiers),
+            "source_tier_recompression_count": len(source_tier_recompressions),
+        },
+        "current_roster": [
+            {
+                "rank": _safe_int(row.get("rank")),
+                "player_id": _safe_int(row.get("player_id")),
+                "player_name": names.get(int(_safe_int(row.get("player_id")) or -1), "Unknown player"),
+            }
+            for row in current_rows
+        ],
+        "proposed_roster": proposed_roster,
+        "removed_players": [
+            {
+                "rank": _safe_int(row.get("rank")),
+                "player_id": _safe_int(row.get("player_id")),
+                "player_name": names.get(int(_safe_int(row.get("player_id")) or -1), "Unknown player"),
+            }
+            for row in current_rows
+            if int(_safe_int(row.get("player_id")) or -1) in set(removed_player_ids)
+        ],
+        "moved_from_other_tiers": moved_from_other_tiers,
+        "source_tier_recompressions": source_tier_recompressions,
+        "open_challenge_blockers": open_challenge_blockers,
+        "warnings": warnings,
+    }
+
+
+def preview_admin_challenge_ladder_tier_roster_replacement(
+    supabase: Any,
+    *,
+    club_id: str,
+    tier_id: str,
+    ranked_names: list[str],
+) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    cleaned_names = [_clean(name, limit=160) for name in ranked_names]
+    cleaned_names = [name for name in cleaned_names if name]
+    if not cleaned_names:
+        raise ValueError("Paste at least one player name.")
+    if len(cleaned_names) > 200:
+        raise ValueError("A tier replacement is limited to 200 players.")
+    duplicates = sorted({name for name in cleaned_names if cleaned_names.count(name) > 1})
+    if duplicates:
+        raise ValueError("Duplicate names are not allowed: " + ", ".join(duplicates))
+    names = _player_names(supabase, club_id=str(club_id))
+    player_ids_by_name: dict[str, list[int]] = {}
+    for player_id, player_name in names.items():
+        player_ids_by_name.setdefault(player_name, []).append(int(player_id))
+    missing = [name for name in cleaned_names if name not in player_ids_by_name]
+    if missing:
+        raise ValueError("Create these club players before replacing the tier: " + ", ".join(missing))
+    ambiguous = [name for name in cleaned_names if len(player_ids_by_name[name]) != 1]
+    if ambiguous:
+        raise ValueError("These names are ambiguous in the club player list: " + ", ".join(ambiguous))
+    return _build_admin_challenge_ladder_tier_roster_preview(
+        supabase,
+        club_id=str(club_id),
+        tier_id=tier_id,
+        ranked_player_ids=[player_ids_by_name[name][0] for name in cleaned_names],
+    )
+
+
+def replace_admin_challenge_ladder_tier_roster(
+    supabase: Any,
+    *,
+    club_id: str,
+    tier_id: str,
+    ranked_player_ids: list[int],
+    preview_fingerprint: str,
+    admin_note: str | None,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_challenge_ladder_roster_replace",
+) -> dict[str, Any]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    if _clean(confirmation_text, limit=80).upper() != CONFIRM_ROSTER_REPLACE:
+        raise ValueError(f"Type {CONFIRM_ROSTER_REPLACE} to replace the tier roster.")
+    preview = _build_admin_challenge_ladder_tier_roster_preview(
+        supabase,
+        club_id=str(club_id),
+        tier_id=tier_id,
+        ranked_player_ids=ranked_player_ids,
+    )
+    if _clean(preview_fingerprint, limit=128) != str(preview["preview_fingerprint"]):
+        raise ValueError("The tier roster changed after preview. Preview the replacement again before applying it.")
+    if not preview["can_apply"]:
+        raise ValueError("Resolve open challenges involving affected players before replacing the tier roster.")
+
+    tier = str(preview["tier_id"])
+    proposed_ids = [int(row["player_id"]) for row in preview["proposed_roster"]]
+    affected_ids = set(proposed_ids)
+    affected_ids.update(int(row["player_id"]) for row in preview["removed_players"])
+    affected_ids.update(int(row["player_id"]) for row in preview["source_tier_recompressions"])
+    before_rows = [
+        row
+        for row in _roster_rows(supabase, club_id=str(club_id))
+        if int(_safe_int(row.get("player_id")) or -1) in affected_ids
+    ]
+    now_iso = _now_iso()
+    upsert_rows = [
+        {
+            "club_id": str(club_id),
+            "player_id": int(row["player_id"]),
+            "tier_id": tier,
+            "rank": int(row["rank"]),
+            "is_active": True,
+            "joined_at": now_iso,
+            "left_at": None,
+            "updated_at": now_iso,
+        }
+        for row in preview["proposed_roster"]
+    ]
+    supabase.table("ladder_roster").upsert(upsert_rows, on_conflict="club_id,player_id").execute()
+    for removed in preview["removed_players"]:
+        supabase.table("ladder_roster").update(
+            {"is_active": False, "left_at": now_iso, "updated_at": now_iso}
+        ).eq("club_id", str(club_id)).eq("player_id", int(removed["player_id"])).execute()
+    recompressed_player_ids: list[int] = []
+    for recompression in preview["source_tier_recompressions"]:
+        player_id = int(recompression["player_id"])
+        supabase.table("ladder_roster").update(
+            {"rank": int(recompression["new_rank"]), "updated_at": now_iso}
+        ).eq("club_id", str(club_id)).eq("player_id", player_id).execute()
+        recompressed_player_ids.append(player_id)
+
+    final_rows = _roster_rows(supabase, club_id=str(club_id))
+    final_target = sorted(
+        (
+            row
+            for row in final_rows
+            if row.get("is_active") is not False
+            and normalize_tier_id(str(row.get("tier_id") or "")) == tier
+        ),
+        key=lambda row: int(_safe_int(row.get("rank")) or 999999),
+    )
+    final_signature = [
+        (int(_safe_int(row.get("player_id")) or -1), int(_safe_int(row.get("rank")) or -1))
+        for row in final_target
+    ]
+    expected_signature = list(zip(proposed_ids, range(1, len(proposed_ids) + 1)))
+    if final_signature != expected_signature:
+        raise RuntimeError("Tier roster replacement did not persist the reviewed player order. Review ladder activity before retrying.")
+
+    names = _player_names(supabase, club_id=str(club_id))
+    after_rows = [
+        row
+        for row in final_rows
+        if int(_safe_int(row.get("player_id")) or -1) in affected_ids
+    ]
+    warning = _write_ladder_audit(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="roster_replace_tier",
+        entity_type="ladder_roster",
+        entity_id=f"{club_id}:{tier}",
+        before={"tier_id": tier, "rows": before_rows},
+        after={
+            "tier_id": tier,
+            "rows": after_rows,
+            "summary": preview["summary"],
+            "preview_fingerprint": preview["preview_fingerprint"],
+            "recompressed_player_ids": recompressed_player_ids,
+        },
+        source=source,
+        note=_clean(admin_note, limit=1000) or None,
+    )
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_roster_replace",
+        "tier_id": tier,
+        "roster": [_admin_roster_row(row, names) for row in final_target],
+        "summary": preview["summary"],
+        "recompressed_player_ids": recompressed_player_ids,
         "warnings": [warning] if warning else [],
     }
 
