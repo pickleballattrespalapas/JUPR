@@ -19,14 +19,14 @@ TOURNAMENT_MINIMAL_SELECT = "id,club_id,name,status"
 REGISTRATION_SETTINGS_SELECT = "id,tournament_id,registration_slug,registration_status,registration_open_at,registration_close_at,waitlist_enabled,partner_board_enabled,updated_at"
 REGISTRATION_SELECT = (
     "id,tournament_id,player_id,first_name,last_name,display_name,email,phone,"
-    "status,payment_status,notes,wants_partner_board_contact,created_at,updated_at"
+    "status,payment_status,notes,wants_partner_board_contact,submitted_at,updated_at"
 )
 REGISTRATION_LEGACY_SELECT = (
     "id,tournament_id,player_id,first_name,last_name,display_name,email,phone,"
-    "registration_status,payment_status,wants_partner_board_contact,created_at,updated_at"
+    "registration_status,payment_status,wants_partner_board_contact,submitted_at,updated_at"
 )
-REGISTRATION_MINIMAL_SELECT = "id,tournament_id,display_name,email,status,payment_status,created_at,updated_at"
-REGISTRATION_LEGACY_MINIMAL_SELECT = "id,tournament_id,display_name,email,registration_status,payment_status,created_at,updated_at"
+REGISTRATION_MINIMAL_SELECT = "id,tournament_id,display_name,email,status,payment_status,submitted_at,updated_at"
+REGISTRATION_LEGACY_MINIMAL_SELECT = "id,tournament_id,display_name,email,registration_status,payment_status,submitted_at,updated_at"
 SELECTION_SELECT = (
     "id,tournament_id,registration_id,registration_day_id,event_option_id,partner_mode,"
     "partner_name,partner_email,partner_phone,partner_note,show_on_partner_board,created_at,updated_at"
@@ -35,7 +35,7 @@ EVENT_OPTION_SELECT = (
     "id,tournament_id,registration_day_id,event_family_label,division_name,event_format_default,"
     "scoring_default,skill_mode,age_mode,status,enabled,waitlist_enabled,partner_board_enabled,sort_order"
 )
-DAY_SELECT = "id,tournament_id,label,date,start_date,end_date,enabled,sort_order"
+DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,created_at"
 CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
 CONFIRM_SELECTION_UPDATE = "SAVE SELECTION"
 
@@ -127,7 +127,7 @@ def _registration_rows(supabase: Any, *, tournament_id: str, limit: int = 500) -
                 supabase.table("tournament_registrations")
                 .select(select_expr)
                 .eq("tournament_id", str(tournament_id))
-                .order("created_at", desc=True)
+                .order("submitted_at", desc=True)
                 .limit(int(limit))
             )
         except Exception:
@@ -159,7 +159,7 @@ def _registration_payload(row: dict[str, Any], *, selection_count: int = 0) -> d
         "notes": _clean_text(row.get("notes"), limit=1000),
         "wants_partner_board_contact": _safe_bool(row.get("wants_partner_board_contact"), default=False),
         "selection_count": int(selection_count),
-        "created_at": row.get("created_at"),
+        "created_at": row.get("submitted_at") or row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
 
@@ -267,6 +267,8 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
             "tournament_detail_endpoint": None,
             "registration_update_endpoint": None,
             "selection_update_endpoint": None,
+            "registration_export_endpoint": None,
+            "broadcast_preview_endpoint": None,
             "warnings": ["Next Tournament Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS on FastAPI for a closed-club pilot."],
         }
     tournament_count = None
@@ -281,6 +283,8 @@ def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict
         "tournament_detail_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}",
         "registration_update_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}",
         "selection_update_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}",
+        "registration_export_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/export.csv",
+        "broadcast_preview_endpoint": "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcast-preview",
         "tournament_count": tournament_count,
         "warnings": warnings,
     }

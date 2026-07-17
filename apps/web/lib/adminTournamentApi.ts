@@ -6,6 +6,8 @@ export type AdminTournamentStatusResponse = {
   registration_update_endpoint?: string | null;
   selection_update_endpoint?: string | null;
   bulk_registration_update_endpoint?: string | null;
+  registration_export_endpoint?: string | null;
+  broadcast_preview_endpoint?: string | null;
   tournament_count?: number | null;
   warnings: string[];
 };
@@ -165,6 +167,31 @@ export type AdminTournamentWriteResponse = {
   updated_count?: number;
   registration_ids?: string[];
   skipped?: string[];
+  warnings?: string[];
+};
+
+export type AdminTournamentBroadcastRecipient = {
+  name: string;
+  email: string;
+  registration_status: string;
+  payment_status: string;
+};
+
+export type AdminTournamentBroadcastPreviewResponse = {
+  ok: boolean;
+  mode: "tournament_broadcast_preview";
+  dry_run: true;
+  send_available: false;
+  recipient_count: number;
+  recipients: AdminTournamentBroadcastRecipient[];
+  recipient_csv: string;
+  preview: {
+    to_name: string;
+    to_email: string;
+    subject: string;
+    text: string;
+    html: string;
+  };
   warnings?: string[];
 };
 

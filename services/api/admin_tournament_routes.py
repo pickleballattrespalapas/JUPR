@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permission, resolve_admin_role
@@ -18,6 +18,10 @@ from jupr_app.services.admin_tournament_ops_service import get_admin_tournament_
 from jupr_app.services.admin_tournament_playoff_service import generate_admin_tournament_playoff_games
 from jupr_app.services.admin_tournament_podium_service import generate_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_registration_import_service import import_admin_tournament_registrations_to_draw
+from jupr_app.services.admin_tournament_registration_reporting_service import (
+    build_admin_tournament_broadcast_preview,
+    build_admin_tournament_registration_export,
+)
 from jupr_app.services.admin_tournament_score_service import update_admin_tournament_game_score
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_status,
@@ -38,6 +42,18 @@ class AdminTournamentRegistrationUpdateRequest(BaseModel):
     notes: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_registration_update"
+
+
+class AdminTournamentBroadcastPreviewRequest(BaseModel):
+    subject: str = ""
+    message: str = ""
+    include_cancelled: bool = False
+    registration_status: str | None = None
+    payment_status: str | None = None
+    partner_mode: str | None = None
+    registration_day_id: str | None = None
+    event_option_id: str | None = None
+    search: str | None = None
 
 
 class AdminTournamentRegistrationBulkUpdateRequest(BaseModel):
@@ -351,6 +367,90 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             return get_admin_tournament_detail(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/export.csv")
+    def get_admin_tournament_registration_export(
+        club_id: str,
+        tournament_id: str,
+        registration_status: str | None = Query(default=None),
+        payment_status: str | None = Query(default=None),
+        partner_mode: str | None = Query(default=None),
+        registration_day_id: str | None = Query(default=None),
+        event_option_id: str | None = Query(default=None),
+        search: str | None = Query(default=None),
+        authorization: str | None = auth_header(),
+    ) -> Response:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_tournament_admin_registration_export",
+        )
+        try:
+            export = build_admin_tournament_registration_export(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                registration_status=registration_status,
+                payment_status=payment_status,
+                partner_mode=partner_mode,
+                registration_day_id=registration_day_id,
+                event_option_id=event_option_id,
+                search=search,
+            )
+            safe_id = "".join(
+                character
+                for character in str(tournament_id)
+                if character.isalnum() or character in {"-", "_"}
+            ) or "tournament"
+            return Response(
+                content=str(export["csv"]),
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Cache-Control": "private, no-store, max-age=0",
+                    "Pragma": "no-cache",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Disposition": (
+                        f'attachment; filename="{safe_id}-registrations.csv"'
+                    ),
+                    "X-JUPR-Export-Row-Count": str(export["row_count"]),
+                },
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcast-preview")
+    def post_admin_tournament_broadcast_preview(
+        club_id: str,
+        tournament_id: str,
+        payload: AdminTournamentBroadcastPreviewRequest,
+        response: Response,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_tournament_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_tournament_admin_broadcast_preview",
+        )
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        try:
+            return build_admin_tournament_broadcast_preview(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                **_dump_model(payload),
+            )
         except Exception as exc:
             _handle(exc)
 

@@ -45,7 +45,7 @@ def tournament_tables():
             }
         ],
         "tournament_registration_days": [
-            {"id": "day_1", "tournament_id": "tour_1", "label": "Friday", "date": "2026-04-10", "enabled": True, "sort_order": 1}
+            {"id": "day_1", "tournament_id": "tour_1", "label": "Friday", "event_date": "2026-04-10", "enabled": True, "sort_order": 1}
         ],
         "tournament_event_options": [
             {
@@ -84,7 +84,7 @@ def tournament_tables():
                 "payment_status": "paid",
                 "notes": "Original note",
                 "wants_partner_board_contact": True,
-                "created_at": "2026-03-03T00:00:00Z",
+                "submitted_at": "2026-03-03T00:00:00Z",
             }
         ],
         "tournament_registration_selections": [
@@ -138,6 +138,27 @@ def test_admin_tournament_status_disabled_contract(monkeypatch):
     assert payload["enabled"] is False
     assert payload["status"] == "guarded_off"
     assert payload["tournaments_endpoint"] is None
+    assert payload["registration_export_endpoint"] is None
+    assert payload["broadcast_preview_endpoint"] is None
+
+
+def test_admin_tournament_status_advertises_reporting_endpoints(monkeypatch):
+    supabase = FakeSupabase(tournament_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+
+    response = TestClient(app).get("/admin/clubs/club/tournaments/admin/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["registration_export_endpoint"].endswith(
+        "/registrations/export.csv"
+    )
+    assert payload["broadcast_preview_endpoint"].endswith(
+        "/registrations/broadcast-preview"
+    )
 
 
 def test_admin_tournament_list_contract(monkeypatch):
@@ -187,6 +208,7 @@ def test_admin_tournament_detail_contract(monkeypatch):
     assert payload["summary"]["by_payment_status"] == {"paid": 1}
     assert payload["registrations"][0]["display_name"] == "Alex Example"
     assert payload["registrations"][0]["notes"] == "Original note"
+    assert payload["registrations"][0]["created_at"] == "2026-03-03T00:00:00Z"
     assert payload["event_options"][0]["division_name"] == "3.5"
     assert payload["selections"][0]["event_label"] == "Gender Doubles / 3.5"
 
@@ -319,3 +341,119 @@ def test_admin_tournament_bulk_registration_update_contract(monkeypatch):
     assert tables["tournament_registrations"][0]["notes"] == "Original note\nBulk cancellation."
     assert tables["admin_activity_log"][0]["action_type"] == "bulk_update_tournament_registrations_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_tournament_registration_filtered_csv_export_contract(monkeypatch):
+    supabase = FakeSupabase(tournament_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/export.csv",
+        params={"partner_mode": "NEEDS_PARTNER", "search": "alex"},
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-jupr-export-row-count"] == "1"
+    assert "registration_id,selection_id" in response.text
+    assert "registration_1,selection_1" in response.text
+    assert "Alex Example" in response.text
+    assert "Gender Doubles / 3.5" in response.text
+
+
+def test_admin_tournament_broadcast_preview_is_dry_run_only(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_registrations"].append(
+        {
+            "id": "registration_cancelled",
+            "tournament_id": "tour_1",
+            "display_name": "Cancelled Player",
+            "email": "cancelled@example.com",
+            "status": "cancelled",
+            "payment_status": "refunded",
+            "submitted_at": "2026-03-02T00:00:00Z",
+        }
+    )
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/broadcast-preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "subject": "Court update",
+            "message": "Check in at 8:00.",
+            "include_cancelled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    payload = response.json()
+    assert payload["mode"] == "tournament_broadcast_preview"
+    assert payload["dry_run"] is True
+    assert payload["send_available"] is False
+    assert payload["recipient_count"] == 1
+    assert payload["recipients"][0]["email"] == "alex@example.com"
+    assert "cancelled@example.com" not in payload["recipient_csv"]
+    assert payload["preview"]["subject"] == "Spring Classic: Court update"
+    assert "Check in at 8:00." in payload["preview"]["text"]
+    assert payload["warnings"] == ["Preview only. This endpoint never sends email."]
+
+
+def test_admin_tournament_registration_export_rejects_cross_club(monkeypatch):
+    supabase = FakeSupabase(tournament_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).get(
+        "/admin/clubs/another-club/tournaments/admin/tournaments/tour_1/registrations/export.csv",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "tournament not found"
+
+
+def test_admin_tournament_registration_export_requires_manage_permission(monkeypatch):
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(
+            email="readonly@example.com",
+            user_id="user-readonly",
+        ),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="read_only"),
+    )
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/export.csv",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "insufficient permission"
+    assert tables["admin_activity_log"][-1]["action_type"] == "admin_tournament_denied"
