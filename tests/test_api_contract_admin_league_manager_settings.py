@@ -94,6 +94,169 @@ def test_admin_league_manager_settings_update_contract(monkeypatch):
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
 
 
+def test_admin_league_manager_structured_draft_settings_are_normalized_and_preserve_extensions(monkeypatch):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update(
+        {
+            "status": "draft",
+            "is_active": False,
+            "schedule_config": {"extension_mode": "keep"},
+            "court_board_defaults": {"extension_court": True},
+            "rules_config": {"legacy_format": "keep"},
+            "awards_config": {"legacy_award": True},
+            "event_tags": {"skill_levels": ["3.5"], "date_tags": ["Old"]},
+        }
+    )
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "description": "<b>Structured</b> draft",
+            "k_factor": 24,
+            "min_games": 6,
+            "schedule_config": {
+                "extension_mode": "keep",
+                "start_date": "2026-01-05",
+                "weeks": 8,
+                "end_date": "",
+                "weekday": 0,
+                "time_start": "18:15",
+                "time_end": "20:45",
+                "timezone": "America/Chicago",
+                "blackout_dates": ["2026-01-19", "2026-01-19"],
+                "session_capacity": 32,
+            },
+            "court_board_defaults": {
+                "extension_court": True,
+                "total_courts": 6,
+                "court_identifiers": ["1", "2", "2"],
+                "max_used_courts": 4,
+                "players_per_court": "5",
+                "rotation_mode": "queue",
+                "game_format_points": 15,
+                "game_format_time": 20,
+            },
+            "rules_config": {
+                "legacy_format": "keep",
+                "overview": {"league_type": "Ladder", "divisions": ["Open", "Open", "Advanced"], "summary": "Weekly play"},
+                "competition": {
+                    "scoring_rules": "Win by two",
+                    "match_format": "Round robin",
+                    "tie_break_rules": "Point differential",
+                    "dispute_window": "24 hours",
+                    "dispute_policy": "Captains",
+                },
+            },
+            "awards_config": {
+                "legacy_award": True,
+                "default_min_games": 6,
+                "default_depth": 3,
+                "categories": {
+                    "highest_rating": {"enabled": True, "min_games": 6, "depth": 3},
+                    "most_improved": {"enabled": False, "min_games": 4, "depth": 1},
+                },
+            },
+            "confirmation_text": "SAVE LEAGUE",
+        },
+    )
+
+    assert response.status_code == 200
+    saved = tables["leagues_metadata"][0]
+    assert saved["description"] == "bStructured/b draft"
+    assert saved["schedule_config"]["extension_mode"] == "keep"
+    assert saved["schedule_config"]["blackout_dates"] == ["2026-01-19"]
+    assert saved["court_board_defaults"]["extension_court"] is True
+    assert saved["court_board_defaults"]["court_identifiers"] == ["1", "2"]
+    assert saved["rules_config"]["legacy_format"] == "keep"
+    assert saved["rules_config"]["overview"]["divisions"] == ["Open", "Advanced"]
+    assert saved["awards_config"]["legacy_award"] is True
+    assert saved["awards_config"]["categories"]["most_improved"]["enabled"] is False
+    assert saved["event_tags"]["skill_levels"] == ["3.5"]
+    assert "January 2026" in saved["event_tags"]["date_tags"]
+    assert tables["admin_activity_log"][0]["after_json"]["patch"]["schedule_config"]["timezone"] == "America/Chicago"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("schedule_config", {"weekday": 7}, "weekday must be at most 6"),
+        ("schedule_config", {"start_date": "01/05/2026"}, "YYYY-MM-DD"),
+        ("schedule_config", {"time_start": "20:00", "time_end": "18:00"}, "time_end must be after"),
+        ("schedule_config", {"timezone": "America/Chicago\nBAD"}, "unsupported characters"),
+        ("court_board_defaults", {"total_courts": 3, "max_used_courts": 4}, "cannot exceed total_courts"),
+        ("court_board_defaults", {"players_per_court": "8"}, "must be 4, 5, or 6+"),
+        ("rules_config", {"overview": {"divisions": "Open"}}, "divisions must be a list"),
+        ("awards_config", {"default_depth": 2}, "must be 1 or 3"),
+        ("awards_config", {"categories": {"most_wins": {"enabled": "yes"}}}, "must be true or false"),
+        ("rules_config", {"extension": "x" * 5001}, "longer than 5000"),
+    ],
+)
+def test_admin_league_manager_structured_settings_reject_invalid_config(monkeypatch, field, value, message):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": "draft", "is_active": False})
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={field: value, "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert message in response.json()["detail"]
+    assert tables["leagues_metadata"][0][field] == {}
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_league_manager_schedule_preview_is_read_only(monkeypatch):
+    tables = league_manager_tables()
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder/schedule/preview",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "schedule_config": {
+                "start_date": "2026-01-05",
+                "weekday": 0,
+                "weeks": 3,
+                "time_start": "18:00",
+                "time_end": "20:00",
+                "timezone": "America/Chicago",
+                "blackout_dates": ["2026-01-12"],
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "league_manager_schedule_preview"
+    assert len(payload["schedule_preview"]) == 2
+    assert payload["schedule_preview"][1]["date"] == "2026-01-19"
+    assert payload["schedule_ics"].count("BEGIN:VEVENT") == 2
+    assert tables["leagues_metadata"][0]["schedule_config"] == {}
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_league_manager_schedule_preview_requires_authentication(monkeypatch):
+    tables = league_manager_tables()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(tables))
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder/schedule/preview",
+        json={"schedule_config": {"start_date": "2026-01-05", "weekday": 0, "weeks": 1}},
+    )
+
+    assert response.status_code == 401
+    assert tables["leagues_metadata"][0]["schedule_config"] == {}
+    assert tables["admin_activity_log"] == []
+
+
 @pytest.mark.parametrize("status", ["active", "paused"])
 def test_admin_league_manager_settings_allows_description_only_while_running(monkeypatch, status):
     tables = league_manager_tables()

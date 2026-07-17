@@ -7,10 +7,12 @@ import type {
   AdminLeagueManagerLeague,
   AdminLeagueManagerListResponse,
   AdminLeagueManagerRosterRow,
+  AdminLeagueManagerSchedulePreviewResponse,
   AdminLeagueManagerStatusResponse,
   AdminLeagueManagerWriteResponse
 } from "@/lib/adminLeagueManagerApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { GuidedLeagueSettingsEditor } from "./GuidedLeagueSettingsEditor";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
 type LifecycleAction = "start" | "pause" | "resume" | "end" | "archive";
@@ -39,8 +41,6 @@ function apiUrl(apiBase: string, path: string): string { return `${apiBase.repla
 function juprLabel(value?: number | null): string { return value == null ? "—" : Number(value).toFixed(2); }
 function statusChipStyle(status: string) { if (status === "active") return { background: "#dcfce7", borderColor: "#bbf7d0" }; if (status === "ended" || status === "archived") return { background: "#f1f5f9", borderColor: "#cbd5e1" }; return { background: "#fef3c7", borderColor: "#fde68a" }; }
 function compactJson(value: unknown): string { if (!value || (typeof value === "object" && Object.keys(value as Record<string, unknown>).length === 0)) return "—"; return JSON.stringify(value, null, 2); }
-function jsonText(value: unknown): string { return JSON.stringify(value && typeof value === "object" ? value : {}, null, 2); }
-function parseJsonObject(label: string, value: string): Record<string, unknown> { const text = value.trim(); if (!text) return {}; const parsed = JSON.parse(text) as unknown; if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label} must be a JSON object.`); return parsed as Record<string, unknown>; }
 function downloadTextFile(filename: string, content: string, mediaType: string) { const blob = new Blob([content], { type: mediaType }); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url); }
 function rosterActionFor(row?: AdminLeagueManagerRosterRow | null): "activate" | "deactivate" { return row?.in_league ? "deactivate" : "activate"; }
 function startingJuprFor(row?: AdminLeagueManagerRosterRow | null): string { return row?.rating_jupr == null ? "3.5" : Number(row.rating_jupr).toFixed(2); }
@@ -70,25 +70,12 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   const [duplicateConfirm, setDuplicateConfirm] = useState("");
   const [lifecycleConfirm, setLifecycleConfirm] = useState("");
 
-  const [settingsDescription, setSettingsDescription] = useState("");
-  const [settingsKFactor, setSettingsKFactor] = useState("32");
-  const [settingsMinGames, setSettingsMinGames] = useState("3");
-  const [scheduleConfigText, setScheduleConfigText] = useState("{}");
-  const [courtDefaultsText, setCourtDefaultsText] = useState("{}");
-  const [rulesConfigText, setRulesConfigText] = useState("{}");
-  const [awardsConfigText, setAwardsConfigText] = useState("{}");
-  const [eventTagsText, setEventTagsText] = useState("{}");
-  const [settingsConfirm, setSettingsConfirm] = useState("");
-
   const [rosterPlayerId, setRosterPlayerId] = useState("");
   const [rosterAction, setRosterAction] = useState<"activate" | "deactivate">("activate");
   const [rosterStartingJupr, setRosterStartingJupr] = useState("3.5");
   const [rosterConfirm, setRosterConfirm] = useState("");
 
   const selectedRosterRow = detail?.roster?.find((row) => String(row.player_id) === rosterPlayerId) || null;
-  const settingsStatus = detail?.league.status || "";
-  const settingsDraft = settingsStatus === "draft";
-  const settingsClosed = settingsStatus === "ended" || settingsStatus === "archived";
 
   function requireReady(): boolean {
     if (!apiBase) { setMessage("API base URL is not configured."); return false; }
@@ -107,19 +94,6 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     return payload as T;
   }
 
-  function hydrateSettings(payload: AdminLeagueManagerDetailResponse) {
-    const league = payload.league;
-    setSettingsDescription(String(league.description || ""));
-    setSettingsKFactor(league.k_factor == null ? "32" : String(league.k_factor));
-    setSettingsMinGames(league.min_games == null ? "3" : String(league.min_games));
-    setScheduleConfigText(jsonText(league.schedule_config));
-    setCourtDefaultsText(jsonText(league.court_board_defaults));
-    setRulesConfigText(jsonText(league.rules_config));
-    setAwardsConfigText(jsonText(league.awards_config));
-    setEventTagsText(jsonText(league.event_tags));
-    setSettingsConfirm("");
-  }
-
   function hydrateRoster(payload: AdminLeagueManagerDetailResponse) {
     const current = payload.roster?.find((row) => String(row.player_id) === rosterPlayerId) || payload.roster?.[0] || null;
     if (current) {
@@ -134,7 +108,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     setRosterConfirm("");
   }
 
-  function hydrateAll(payload: AdminLeagueManagerDetailResponse) { hydrateSettings(payload); hydrateRoster(payload); }
+  function hydrateAll(payload: AdminLeagueManagerDetailResponse) { hydrateRoster(payload); }
 
   async function loadLeagues() {
     setMessage(null); setDetail(null);
@@ -210,33 +184,27 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     finally { setSaving(false); }
   }
 
-  async function saveLeagueSettings() {
-    if (!selectedLeague || !detail) { setMessage("Select a league before saving settings."); return; }
-    if (!requireReady()) return;
-    if (settingsClosed) { setMessage(`League settings are read-only after a league is ${settingsStatus}.`); return; }
-    const settingsPatch: Record<string, unknown> = { description: settingsDescription };
-    if (settingsDraft) {
-      const kFactor = Number(settingsKFactor); const minGames = Number(settingsMinGames);
-      if (!Number.isInteger(kFactor) || kFactor < 1 || kFactor > 128) { setMessage("K-factor must be a whole number from 1 to 128."); return; }
-      if (!Number.isInteger(minGames) || minGames < 0 || minGames > 1000) { setMessage("Minimum games must be a whole number from 0 to 1000."); return; }
-      try {
-        Object.assign(settingsPatch, {
-          k_factor: kFactor,
-          min_games: minGames,
-          schedule_config: parseJsonObject("Schedule config", scheduleConfigText),
-          court_board_defaults: parseJsonObject("Court board defaults", courtDefaultsText),
-          rules_config: parseJsonObject("Rules config", rulesConfigText),
-          awards_config: parseJsonObject("Awards config", awardsConfigText),
-          event_tags: parseJsonObject("Event tags", eventTagsText)
-        });
-      } catch (error) { setMessage(error instanceof Error ? error.message : "Invalid JSON settings."); return; }
-    }
+  async function saveLeagueSettings(settingsPatch: Record<string, unknown>, confirmationText: string): Promise<boolean> {
+    if (!selectedLeague || !detail) { setMessage("Select a league before saving settings."); return false; }
+    if (!requireReady()) return false;
+    if (detail.league.status === "ended" || detail.league.status === "archived") { setMessage(`League settings are read-only after a league is ${detail.league.status}.`); return false; }
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`, { method: "PATCH", body: JSON.stringify({ ...settingsPatch, confirmation_text: settingsConfirm, source: "next_league_manager_settings_editor" }) });
-      if (payload.detail) { setDetail(payload.detail); hydrateSettings(payload.detail); } else { await loadDetail(selectedLeague); }
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`, { method: "PATCH", body: JSON.stringify({ ...settingsPatch, confirmation_text: confirmationText, source: "next_league_manager_guided_settings" }) });
+      if (payload.detail) { setDetail(payload.detail); } else { await loadDetail(selectedLeague); }
       setMessage(`Saved settings for ${payload.league?.league_name || selectedLeague}.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save league settings."); }
+      return true;
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save league settings."); return false; }
+    finally { setSaving(false); }
+  }
+
+  async function previewLeagueSchedule(scheduleConfig: Record<string, unknown>): Promise<AdminLeagueManagerSchedulePreviewResponse | null> {
+    if (!selectedLeague || !detail) { setMessage("Select a league before previewing its schedule."); return null; }
+    if (!requireReady()) return null;
+    setSaving(true); setMessage(null);
+    try {
+      return await requestJson<AdminLeagueManagerSchedulePreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/schedule/preview`, { method: "POST", body: JSON.stringify({ schedule_config: scheduleConfig }) });
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to preview league schedule."); return null; }
     finally { setSaving(false); }
   }
 
@@ -302,18 +270,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
           </div>
         </article>
 
-        <article style={{ ...cardStyle, background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0 }}>Guided settings editor</h2>
-          <p style={{ color: settingsClosed ? "#92400e" : "#475569" }}>{settingsDraft ? <>Draft leagues allow description, ratings, schedule, court, rules, awards, and event-tag configuration.</> : settingsClosed ? <>This league is {settingsStatus}; settings are read-only. Use the separate Awards workflow for award review.</> : <>This league is {settingsStatus}; only its description is a safe edit. Pause/end/resume actions remain in the lifecycle controls.</>} {!settingsClosed ? <>Type <code>SAVE LEAGUE</code> before saving.</> : null}</p>
-          <label><strong>Description</strong><br /><textarea value={settingsDescription} onChange={(event) => setSettingsDescription(event.target.value)} disabled={settingsClosed} maxLength={2000} rows={3} style={inputStyle} /></label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>K-factor</strong><br /><input type="number" value={settingsKFactor} onChange={(event) => setSettingsKFactor(event.target.value)} disabled={!settingsDraft} min={1} max={128} style={inputStyle} /></label>
-            <label><strong>Min games</strong><br /><input type="number" value={settingsMinGames} onChange={(event) => setSettingsMinGames(event.target.value)} disabled={!settingsDraft} min={0} max={1000} style={inputStyle} /></label>
-            <label><strong>Type SAVE LEAGUE</strong><br /><input value={settingsConfirm} onChange={(event) => setSettingsConfirm(event.target.value)} disabled={settingsClosed} style={inputStyle} /></label>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}><label><strong>Schedule config JSON</strong><br /><textarea value={scheduleConfigText} onChange={(event) => setScheduleConfigText(event.target.value)} disabled={!settingsDraft} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Court board defaults JSON</strong><br /><textarea value={courtDefaultsText} onChange={(event) => setCourtDefaultsText(event.target.value)} disabled={!settingsDraft} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Rules config JSON</strong><br /><textarea value={rulesConfigText} onChange={(event) => setRulesConfigText(event.target.value)} disabled={!settingsDraft} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Awards config JSON</strong><br /><textarea value={awardsConfigText} onChange={(event) => setAwardsConfigText(event.target.value)} disabled={!settingsDraft} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Event tags JSON</strong><br /><textarea value={eventTagsText} onChange={(event) => setEventTagsText(event.target.value)} disabled={!settingsDraft} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label></div>
-          <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={saveLeagueSettings} disabled={saving || settingsClosed || !accessToken || settingsConfirm.trim().toUpperCase() !== "SAVE LEAGUE"} style={buttonStyle}>{saving ? "Saving…" : settingsDraft ? "Save draft settings" : "Save description"}</button><button type="button" onClick={() => hydrateSettings(detail)} disabled={saving} style={ghostButtonStyle}>Reset from loaded league</button></p>
-        </article>
+        <GuidedLeagueSettingsEditor detail={detail} saving={saving} canWrite={Boolean(accessToken)} onSave={saveLeagueSettings} onPreview={previewLeagueSchedule} />
 
         <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Roster membership editor</h2><p style={{ color: "#475569" }}>Activate a player into this league with a starting JUPR/Elo seed, or deactivate an existing league row without deleting history. Type <code>SAVE ROSTER</code> before saving.</p>{detail.roster?.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) minmax(140px, 180px) minmax(180px, 220px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Player</strong><br /><select value={rosterPlayerId} onChange={(event) => { const next = detail.roster?.find((row) => String(row.player_id) === event.target.value) || null; setRosterPlayerId(event.target.value); setRosterAction(rosterActionFor(next)); setRosterStartingJupr(startingJuprFor(next)); }} style={inputStyle}><option value="">Choose player…</option>{detail.roster.map((row) => <option key={row.player_id} value={String(row.player_id)}>{row.player_name} · {row.in_league ? "in league" : "not in league"}</option>)}</select></label><label><strong>Action</strong><br /><select value={rosterAction} onChange={(event) => setRosterAction(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Activate/add to league</option><option value="deactivate">Deactivate from league</option></select></label><label><strong>Starting JUPR/Elo</strong><br /><input value={rosterStartingJupr} onChange={(event) => setRosterStartingJupr(event.target.value)} disabled={rosterAction === "deactivate"} style={inputStyle} /></label><label><strong>Type SAVE ROSTER</strong><br /><input value={rosterConfirm} onChange={(event) => setRosterConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={saveRosterMembership} disabled={saving || !accessToken || !rosterPlayerId || rosterConfirm.trim().toUpperCase() !== "SAVE ROSTER"} style={buttonStyle}>{saving ? "Saving…" : "Save roster"}</button></div> : <p style={{ color: "#64748b" }}>Load a roster snapshot before editing membership.</p>}{selectedRosterRow ? <p style={{ color: "#475569" }}>Selected: <strong>{selectedRosterRow.player_name}</strong> · {selectedRosterRow.in_league ? "currently in league" : "not yet in league"} · current league JUPR {juprLabel(selectedRosterRow.rating_jupr)}</p> : null}</article>
 

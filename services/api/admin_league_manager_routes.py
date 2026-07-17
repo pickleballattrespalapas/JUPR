@@ -24,11 +24,15 @@ from jupr_app.services.admin_league_manager_lifecycle_service import transition_
 from jupr_app.services.admin_league_manager_roster_service import update_admin_league_manager_roster_membership
 from jupr_app.services.admin_league_manager_service import (
     build_admin_league_manager_status,
+    build_admin_league_schedule_preview,
     get_admin_league_manager_detail,
     is_admin_league_manager_enabled,
     list_admin_league_manager_leagues,
 )
-from jupr_app.services.admin_league_manager_update_service import update_admin_league_manager_settings
+from jupr_app.services.admin_league_manager_update_service import (
+    normalize_admin_league_schedule_config,
+    update_admin_league_manager_settings,
+)
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -65,6 +69,10 @@ class AdminLeagueManagerLifecycleRequest(BaseModel):
     action: str = Field(min_length=1, max_length=40)
     confirmation_text: str = ""
     source: str = "next_league_manager_lifecycle"
+
+
+class AdminLeagueManagerSchedulePreviewRequest(BaseModel):
+    schedule_config: dict[str, Any]
 
 
 class AdminLeagueManagerRosterMembershipRequest(BaseModel):
@@ -427,6 +435,28 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             return get_admin_league_manager_detail(supabase, club_id=str(club_id), league_name=str(league_name))
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/schedule/preview")
+    def post_admin_league_manager_schedule_preview(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueManagerSchedulePreviewRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_manager_schedule_preview",
+        )
+        try:
+            schedule_config = normalize_admin_league_schedule_config(payload.schedule_config)
+            return build_admin_league_schedule_preview(schedule_config, league_name=str(league_name))
         except Exception as exc:
             _handle_common(exc)
 

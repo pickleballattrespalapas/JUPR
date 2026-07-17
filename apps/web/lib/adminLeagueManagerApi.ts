@@ -7,6 +7,7 @@ export type AdminLeagueManagerStatusResponse = {
   league_lifecycle_endpoint?: string | null;
   league_detail_endpoint?: string | null;
   league_settings_update_endpoint?: string | null;
+  league_schedule_preview_endpoint?: string | null;
   league_roster_update_endpoint?: string | null;
   league_live_sessions_endpoint?: string | null;
   league_count?: number | null;
@@ -88,6 +89,16 @@ export type AdminLeagueManagerDetailResponse = {
   roster?: AdminLeagueManagerRosterRow[];
   roster_count?: number | null;
   league_roster_count?: number | null;
+};
+
+export type AdminLeagueManagerSchedulePreviewResponse = {
+  ok: boolean;
+  mode?: string;
+  league_name: string;
+  schedule_config: Record<string, unknown>;
+  schedule_preview: AdminLeagueManagerSchedulePreviewRow[];
+  schedule_ics?: string;
+  schedule_ics_filename?: string;
 };
 
 export type AdminLeagueManagerWriteResponse = {

@@ -183,6 +183,20 @@ def build_league_schedule_ics(schedule_config: Any, *, league_name: Any) -> str:
     return "\r\n".join(lines) + "\r\n"
 
 
+def build_admin_league_schedule_preview(schedule_config: Any, *, league_name: Any) -> dict[str, Any]:
+    clean_league = _clean_text(league_name, limit=120) or "League"
+    preview = _schedule_preview(schedule_config)
+    return {
+        "ok": True,
+        "mode": "league_manager_schedule_preview",
+        "league_name": clean_league,
+        "schedule_config": _json_value(schedule_config, {}) or {},
+        "schedule_preview": preview,
+        "schedule_ics": build_league_schedule_ics(schedule_config, league_name=clean_league),
+        "schedule_ics_filename": league_schedule_ics_filename(clean_league),
+    }
+
+
 def _league_row_payload(row: dict[str, Any]) -> dict[str, Any]:
     league_name = _clean_text(row.get("league_name"), limit=120)
     return {
@@ -327,6 +341,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "league_lifecycle_endpoint": None,
             "league_detail_endpoint": None,
             "league_settings_update_endpoint": None,
+            "league_schedule_preview_endpoint": None,
             "league_roster_update_endpoint": None,
             "league_live_sessions_endpoint": None,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
@@ -346,6 +361,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
         "league_lifecycle_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/lifecycle",
         "league_detail_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
+        "league_schedule_preview_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/schedule/preview",
         "league_roster_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}",
         "league_live_sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
         "league_count": len(leagues),

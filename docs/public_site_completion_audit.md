@@ -42,7 +42,7 @@ Current working assessment for the first Pickleball Club Sandwich public website
 | Replay History | Partial | Guarded replay foundation exists. |
 | Match Uploader | Partial/strong pilot | Manual batch, round-robin preview, new-player continue flow exist. |
 | Player Editor | Foundation | Roster/detail/create/basic update exist; merge/social/league edits remain out of scope. |
-| League Manager | Read foundation | List/detail/schedule/standings visibility exists; writes remain Streamlit-only. |
+| League Manager | Guarded staging pilot | Draft creation/duplication, structured settings, lifecycle, roster, live rounds, print, and awards flows use authenticated FastAPI boundaries; Streamlit remains the production fallback. |
 | Tournament admin/ops | Not started in Next | Still Streamlit/admin future work. |
 | Challenge Ladder admin | Not started in Next | Future guarded admin workflow. |
 | Weekly Recap admin | Not started in Next | Future guarded admin workflow. |
