@@ -20,6 +20,7 @@ from jupr_app.services.admin_league_manager_create_service import (
     create_admin_league_manager_draft,
     duplicate_admin_league_manager_draft,
 )
+from jupr_app.services.admin_league_manager_lifecycle_service import transition_admin_league_manager_lifecycle
 from jupr_app.services.admin_league_manager_roster_service import update_admin_league_manager_roster_membership
 from jupr_app.services.admin_league_manager_service import (
     build_admin_league_manager_status,
@@ -58,6 +59,12 @@ class AdminLeagueManagerDuplicateRequest(BaseModel):
     target_league_name: str = Field(min_length=1, max_length=120)
     confirmation_text: str = ""
     source: str = "next_league_manager_duplicate"
+
+
+class AdminLeagueManagerLifecycleRequest(BaseModel):
+    action: str = Field(min_length=1, max_length=40)
+    confirmation_text: str = ""
+    source: str = "next_league_manager_lifecycle"
 
 
 class AdminLeagueManagerRosterMembershipRequest(BaseModel):
@@ -363,6 +370,36 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 club_id=str(club_id),
                 source_league_name=str(league_name),
                 target_league_name=payload.target_league_name,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/lifecycle")
+    def post_admin_league_manager_league_lifecycle(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueManagerLifecycleRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return transition_admin_league_manager_lifecycle(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                action=payload.action,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

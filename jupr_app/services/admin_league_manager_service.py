@@ -247,6 +247,7 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "leagues_endpoint": None,
             "league_create_endpoint": None,
             "league_duplicate_endpoint": None,
+            "league_lifecycle_endpoint": None,
             "league_detail_endpoint": None,
             "league_settings_update_endpoint": None,
             "league_roster_update_endpoint": None,
@@ -265,13 +266,14 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
         "leagues_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
         "league_create_endpoint": "/admin/clubs/{club_id}/league-manager/leagues",
         "league_duplicate_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/duplicate",
+        "league_lifecycle_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/lifecycle",
         "league_detail_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_settings_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}",
         "league_roster_update_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}",
         "league_live_sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
-        "warnings": ["Settings, roster membership, browser-print exports, and persisted League Live sessions are enabled through guarded FastAPI. Corrections still route through Match Log/Replay History."],
+        "warnings": ["Settings, explicit lifecycle actions, roster membership, browser-print exports, and persisted League Live sessions are enabled through guarded FastAPI. Corrections still route through Match Log/Replay History."],
     }
 
 

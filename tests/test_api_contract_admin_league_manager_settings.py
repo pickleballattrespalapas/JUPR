@@ -66,7 +66,6 @@ def test_admin_league_manager_settings_update_contract(monkeypatch):
         headers={"Authorization": "Bearer local"},
         json={
             "description": "Tuesday evening ladder",
-            "status": "active",
             "k_factor": 28,
             "min_games": 4,
             "schedule_config": {"start_date": "2026-01-05", "weekday": 0, "weeks": 2, "time_start": "18:00", "time_end": "20:00"},
@@ -103,6 +102,21 @@ def test_admin_league_manager_settings_update_requires_confirmation(monkeypatch)
 
     assert response.status_code == 400
     assert "SAVE LEAGUE" in response.json()["detail"]
+
+
+def test_admin_league_manager_settings_update_rejects_status_bypass(monkeypatch):
+    tables = league_manager_tables()
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"status": "ended", "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert "lifecycle action" in response.json()["detail"]
+    assert tables["leagues_metadata"][0]["status"] == "active"
 
 
 def test_admin_league_manager_settings_update_does_not_create_missing_league(monkeypatch):

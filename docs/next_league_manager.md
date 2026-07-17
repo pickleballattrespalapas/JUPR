@@ -8,10 +8,12 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - FastAPI league list endpoint: `GET /admin/clubs/{club_id}/league-manager/leagues`.
 - FastAPI league draft creation endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues`.
 - FastAPI configuration-only duplication endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues/{league_name}/duplicate`.
+- FastAPI lifecycle endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues/{league_name}/lifecycle`.
 - FastAPI league detail endpoint: `GET /admin/clubs/{club_id}/league-manager/leagues/{league_name}`.
 - Next route: `/admin/league-manager`.
 - League status, K-factor, min-games, schedule preview, court-board/rules/awards configuration visibility, and standings snapshot.
 - Guarded draft creation and configuration-only duplication. Duplication never copies roster membership, standings, results, lifecycle dates, or issued awards.
+- Guarded start, pause, resume, end, and archive transitions. Generic settings writes cannot change lifecycle status.
 - Stored Supabase admin session for the closed-club staging pilot.
 
 ## Runtime flag
@@ -36,11 +38,12 @@ No browser-side code writes directly to Supabase tables and no league movement, 
 
 - Create and duplicate operations always produce inactive drafts.
 - Duplication copies only whitelisted league configuration and never roster, result, lifecycle-date, or issued-award data.
+- Lifecycle actions enforce `draft → active`, `active → paused|ended`, `paused → active|ended`, and `ended → archived` transitions and require an action-specific confirmation phrase.
+- Ending a league freezes its lifecycle state; award preview, overrides, and optional badge minting remain in the separate Awards workflow.
 - Mutations require explicit confirmation text and an authorized club-scoped admin session.
-- Staging requires successful API audit logging; Streamlit remains the production fallback.
+- Staging requires successful API audit logging. A lifecycle transition is rolled back if its required audit write fails; Streamlit remains the production fallback.
 - Rating, match, movement, and award calculations remain in Python services.
 
 ## Follow-up slices
 
-- Add explicit start, pause, resume, end, and archive lifecycle actions instead of relying on a general settings status selector.
 - Validate draft create/duplicate, live rounds, court movement, awards close, and Match Log/Replay recovery against isolated staging data.

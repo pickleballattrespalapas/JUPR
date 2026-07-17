@@ -101,6 +101,7 @@ def test_league_manager_status_enabled_counts_leagues(monkeypatch) -> None:
     assert payload["status"] == "ready_for_league_manager_roster_and_live_pilot"
     assert payload["league_create_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues"
     assert payload["league_duplicate_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/duplicate"
+    assert payload["league_lifecycle_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/lifecycle"
     assert payload["league_count"] == 2
     assert payload["active_count"] == 1
 

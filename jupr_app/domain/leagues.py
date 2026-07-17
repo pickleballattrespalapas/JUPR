@@ -20,6 +20,7 @@ from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 _COMPLETED_STATUSES = {"archived", "completed", "complete", "done", "ended"}
 _ACTIVE_STATUSES = {"active", "running", "live"}
 _DRAFT_STATUSES = {"draft", "planned"}
+_PAUSED_STATUSES = {"paused"}
 _ARCHIVED_STATUSES = {"archived"}
 _ENDED_STATUSES = {"ended", "completed", "complete", "done"}
 
@@ -54,6 +55,8 @@ def normalize_league_status(meta_row: Mapping[str, Any] | None) -> str:
             return "ended"
         if status in _ACTIVE_STATUSES:
             return "active"
+        if status in _PAUSED_STATUSES:
+            return "paused"
         if status in _DRAFT_STATUSES:
             return "draft"
     ended_at = meta_row.get("ended_at")

@@ -12,7 +12,6 @@ from jupr_app.services.admin_league_manager_service import (
 
 CONFIRM_SAVE_LEAGUE = "SAVE LEAGUE"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
-ALLOWED_STATUSES = {"draft", "active", "paused", "ended", "archived"}
 
 
 def _truthy_env(name: str) -> bool:
@@ -73,16 +72,7 @@ def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
     if "description" in patch and patch.get("description") is not None:
         normalized["description"] = _clean_text(patch.get("description"), limit=2000)
     if "status" in patch and patch.get("status") not in (None, ""):
-        status = _clean_text(patch.get("status"), limit=40).lower()
-        if status not in ALLOWED_STATUSES:
-            raise ValueError("status must be one of draft, active, paused, ended, or archived.")
-        normalized["status"] = status
-        normalized["is_active"] = status == "active"
-        if status == "ended":
-            normalized.setdefault("ended_at", _now_iso())
-        elif status == "active":
-            normalized["ended_at"] = None
-            normalized["ended_by"] = None
+        raise ValueError("Use the guarded league lifecycle action to change status.")
 
     if "k_factor" in patch:
         value = _safe_int(patch.get("k_factor"), field="k_factor", minimum=1, maximum=128)

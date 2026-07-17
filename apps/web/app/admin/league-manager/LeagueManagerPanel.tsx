@@ -13,6 +13,22 @@ import type {
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
+type LifecycleAction = "start" | "pause" | "resume" | "end" | "archive";
+
+const lifecycleConfirmations: Record<LifecycleAction, string> = {
+  start: "START LEAGUE",
+  pause: "PAUSE LEAGUE",
+  resume: "RESUME LEAGUE",
+  end: "END LEAGUE",
+  archive: "ARCHIVE LEAGUE"
+};
+const lifecycleLabels: Record<LifecycleAction, string> = {
+  start: "Start league",
+  pause: "Pause league",
+  resume: "Resume league",
+  end: "End league",
+  archive: "Archive league"
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -27,6 +43,13 @@ function jsonText(value: unknown): string { return JSON.stringify(value && typeo
 function parseJsonObject(label: string, value: string): Record<string, unknown> { const text = value.trim(); if (!text) return {}; const parsed = JSON.parse(text) as unknown; if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${label} must be a JSON object.`); return parsed as Record<string, unknown>; }
 function rosterActionFor(row?: AdminLeagueManagerRosterRow | null): "activate" | "deactivate" { return row?.in_league ? "deactivate" : "activate"; }
 function startingJuprFor(row?: AdminLeagueManagerRosterRow | null): string { return row?.rating_jupr == null ? "3.5" : Number(row.rating_jupr).toFixed(2); }
+function lifecycleActionsFor(status: string): LifecycleAction[] {
+  if (status === "draft") return ["start"];
+  if (status === "active") return ["pause", "end"];
+  if (status === "paused") return ["resume", "end"];
+  if (status === "ended") return ["archive"];
+  return [];
+}
 
 export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
@@ -44,9 +67,9 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
 
   const [duplicateName, setDuplicateName] = useState("");
   const [duplicateConfirm, setDuplicateConfirm] = useState("");
+  const [lifecycleConfirm, setLifecycleConfirm] = useState("");
 
   const [settingsDescription, setSettingsDescription] = useState("");
-  const [settingsStatus, setSettingsStatus] = useState("draft");
   const [settingsKFactor, setSettingsKFactor] = useState("32");
   const [settingsMinGames, setSettingsMinGames] = useState("3");
   const [scheduleConfigText, setScheduleConfigText] = useState("{}");
@@ -83,7 +106,6 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   function hydrateSettings(payload: AdminLeagueManagerDetailResponse) {
     const league = payload.league;
     setSettingsDescription(String(league.description || ""));
-    setSettingsStatus(String(league.status || "draft"));
     setSettingsKFactor(league.k_factor == null ? "32" : String(league.k_factor));
     setSettingsMinGames(league.min_games == null ? "3" : String(league.min_games));
     setScheduleConfigText(jsonText(league.schedule_config));
@@ -123,7 +145,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     setSelectedLeague(leagueName); setDetail(null); setMessage(null);
     if (!leagueName || !requireReady()) return;
     setSaving(true);
-    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`); setDuplicateConfirm(""); }
+    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`); setDuplicateConfirm(""); setLifecycleConfirm(""); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load league detail."); }
     finally { setSaving(false); }
   }
@@ -169,6 +191,21 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     finally { setSaving(false); }
   }
 
+  async function transitionLeagueLifecycle(action: LifecycleAction) {
+    if (!selectedLeague || !detail) { setMessage("Select a league before changing its lifecycle."); return; }
+    if (!requireReady()) return;
+    setSaving(true); setMessage(null);
+    try {
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/lifecycle`, { method: "POST", body: JSON.stringify({ action, confirmation_text: lifecycleConfirm, source: "next_league_manager_lifecycle_controls" }) });
+      const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      setLeagues(listing.leagues || []);
+      if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
+      setLifecycleConfirm("");
+      setMessage(`${lifecycleLabels[action]} completed: ${payload.previous_status || detail.league.status} → ${payload.new_status || payload.league?.status || "updated"}.`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to change league lifecycle."); }
+    finally { setSaving(false); }
+  }
+
   async function saveLeagueSettings() {
     if (!selectedLeague || !detail) { setMessage("Select a league before saving settings."); return; }
     if (!requireReady()) return;
@@ -177,7 +214,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     catch (error) { setMessage(error instanceof Error ? error.message : "Invalid JSON settings."); return; }
     setSaving(true); setMessage(null);
     try {
-      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`, { method: "PATCH", body: JSON.stringify({ description: settingsDescription, status: settingsStatus, k_factor: Number(settingsKFactor), min_games: Number(settingsMinGames), schedule_config: scheduleConfig, court_board_defaults: courtDefaults, rules_config: rulesConfig, awards_config: awardsConfig, event_tags: eventTags, confirmation_text: settingsConfirm, source: "next_league_manager_settings_editor" }) });
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}`, { method: "PATCH", body: JSON.stringify({ description: settingsDescription, k_factor: Number(settingsKFactor), min_games: Number(settingsMinGames), schedule_config: scheduleConfig, court_board_defaults: courtDefaults, rules_config: rulesConfig, awards_config: awardsConfig, event_tags: eventTags, confirmation_text: settingsConfirm, source: "next_league_manager_settings_editor" }) });
       if (payload.detail) { setDetail(payload.detail); hydrateSettings(payload.detail); } else { await loadDetail(selectedLeague); }
       setMessage(`Saved settings for ${payload.league?.league_name || selectedLeague}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save league settings."); }
@@ -225,7 +262,16 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select league</h2><select value={selectedLeague} onChange={(event) => loadDetail(event.target.value)} style={inputStyle} disabled={!accessToken}><option value="">Choose a league</option>{leagues.map((league) => <option key={league.league_name} value={league.league_name}>{league.league_name} · {league.status}</option>)}</select>{leagues.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}>{leagues.map((league) => <button key={league.league_name} type="button" onClick={() => loadDetail(league.league_name)} disabled={!accessToken} style={{ ...cardStyle, textAlign: "left", cursor: "pointer" }}><strong>{league.league_name}</strong><br /><span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem", ...statusChipStyle(league.status) }}>{league.status}</span></button>)}</div> : null}</article>
 
       {detail ? <>
-        <article style={cardStyle}><h2 style={{ marginTop: 0 }}>{detail.league.league_name}</h2>{detail.league.description ? <p style={{ color: "#475569" }}>{detail.league.description}</p> : null}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem" }}><div><strong>Status</strong><br />{detail.league.status}</div><div><strong>K-factor</strong><br />{detail.league.k_factor ?? "—"}</div><div><strong>Min games</strong><br />{detail.league.min_games ?? "—"}</div><div><strong>Standings rows</strong><br />{detail.standings_count}</div><div><strong>League roster</strong><br />{detail.league_roster_count ?? 0} / {detail.roster_count ?? detail.roster?.length ?? 0}</div></div></article>
+        <article style={cardStyle}><h2 style={{ marginTop: 0 }}>{detail.league.league_name}</h2>{detail.league.description ? <p style={{ color: "#475569" }}>{detail.league.description}</p> : null}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem" }}><div><strong>Status</strong><br />{detail.league.status}</div><div><strong>K-factor</strong><br />{detail.league.k_factor ?? "—"}</div><div><strong>Min games</strong><br />{detail.league.min_games ?? "—"}</div><div><strong>Started</strong><br />{detail.league.started_at ? String(detail.league.started_at).slice(0, 10) : "—"}</div><div><strong>Ended</strong><br />{detail.league.ended_at ? String(detail.league.ended_at).slice(0, 10) : "—"}</div><div><strong>Standings rows</strong><br />{detail.standings_count}</div><div><strong>League roster</strong><br />{detail.league_roster_count ?? 0} / {detail.roster_count ?? detail.roster?.length ?? 0}</div></div></article>
+
+        <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
+          <h2 style={{ marginTop: 0 }}>League lifecycle</h2>
+          <p style={{ color: "#7c2d12" }}>Lifecycle changes are separate from settings. Only legal transitions are shown, and each action requires its exact phrase. Ending freezes the league; award calculation and badge minting remain in the Awards workflow.</p>
+          {lifecycleActionsFor(detail.league.status).length ? <>
+            <label><strong>Confirmation phrase</strong><br /><input value={lifecycleConfirm} onChange={(event) => setLifecycleConfirm(event.target.value)} placeholder={lifecycleActionsFor(detail.league.status).map((action) => lifecycleConfirmations[action]).join(" or ")} style={inputStyle} /></label>
+            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{lifecycleActionsFor(detail.league.status).map((action) => <button key={action} type="button" onClick={() => transitionLeagueLifecycle(action)} disabled={saving || !accessToken || lifecycleConfirm.trim().toUpperCase() !== lifecycleConfirmations[action]} style={action === "end" || action === "archive" ? { ...buttonStyle, background: "#9a3412", borderColor: "#9a3412" } : buttonStyle}>{lifecycleLabels[action]} · type {lifecycleConfirmations[action]}</button>)}</p>
+          </> : <p style={{ color: "#64748b" }}>Archived leagues have no further lifecycle actions.</p>}
+        </article>
 
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Duplicate this league as a draft</h2>
@@ -237,7 +283,18 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
           </div>
         </article>
 
-        <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Guided settings editor</h2><p style={{ color: "#475569" }}>Edit metadata used by league schedule previews, score-entry defaults, court-board setup, rules, and awards. Type <code>SAVE LEAGUE</code> before saving.</p><label><strong>Description</strong><br /><textarea value={settingsDescription} onChange={(event) => setSettingsDescription(event.target.value)} maxLength={2000} rows={3} style={inputStyle} /></label><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Status</strong><br /><select value={settingsStatus} onChange={(event) => setSettingsStatus(event.target.value)} style={inputStyle}><option value="draft">draft</option><option value="active">active</option><option value="paused">paused</option><option value="ended">ended</option><option value="archived">archived</option></select></label><label><strong>K-factor</strong><br /><input type="number" value={settingsKFactor} onChange={(event) => setSettingsKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label><label><strong>Min games</strong><br /><input type="number" value={settingsMinGames} onChange={(event) => setSettingsMinGames(event.target.value)} min={0} max={1000} style={inputStyle} /></label><label><strong>Type SAVE LEAGUE</strong><br /><input value={settingsConfirm} onChange={(event) => setSettingsConfirm(event.target.value)} style={inputStyle} /></label></div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}><label><strong>Schedule config JSON</strong><br /><textarea value={scheduleConfigText} onChange={(event) => setScheduleConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Court board defaults JSON</strong><br /><textarea value={courtDefaultsText} onChange={(event) => setCourtDefaultsText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Rules config JSON</strong><br /><textarea value={rulesConfigText} onChange={(event) => setRulesConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Awards config JSON</strong><br /><textarea value={awardsConfigText} onChange={(event) => setAwardsConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Event tags JSON</strong><br /><textarea value={eventTagsText} onChange={(event) => setEventTagsText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label></div><p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={saveLeagueSettings} disabled={saving || !accessToken || settingsConfirm.trim().toUpperCase() !== "SAVE LEAGUE"} style={buttonStyle}>{saving ? "Saving…" : "Save league settings"}</button><button type="button" onClick={() => hydrateSettings(detail)} disabled={saving} style={ghostButtonStyle}>Reset from loaded league</button></p></article>
+        <article style={{ ...cardStyle, background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>Guided settings editor</h2>
+          <p style={{ color: "#475569" }}>Edit configuration without changing lifecycle state. Use the lifecycle controls above for start, pause, resume, end, or archive. Type <code>SAVE LEAGUE</code> before saving.</p>
+          <label><strong>Description</strong><br /><textarea value={settingsDescription} onChange={(event) => setSettingsDescription(event.target.value)} maxLength={2000} rows={3} style={inputStyle} /></label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+            <label><strong>K-factor</strong><br /><input type="number" value={settingsKFactor} onChange={(event) => setSettingsKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label>
+            <label><strong>Min games</strong><br /><input type="number" value={settingsMinGames} onChange={(event) => setSettingsMinGames(event.target.value)} min={0} max={1000} style={inputStyle} /></label>
+            <label><strong>Type SAVE LEAGUE</strong><br /><input value={settingsConfirm} onChange={(event) => setSettingsConfirm(event.target.value)} style={inputStyle} /></label>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}><label><strong>Schedule config JSON</strong><br /><textarea value={scheduleConfigText} onChange={(event) => setScheduleConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Court board defaults JSON</strong><br /><textarea value={courtDefaultsText} onChange={(event) => setCourtDefaultsText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Rules config JSON</strong><br /><textarea value={rulesConfigText} onChange={(event) => setRulesConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Awards config JSON</strong><br /><textarea value={awardsConfigText} onChange={(event) => setAwardsConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Event tags JSON</strong><br /><textarea value={eventTagsText} onChange={(event) => setEventTagsText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label></div>
+          <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={saveLeagueSettings} disabled={saving || !accessToken || settingsConfirm.trim().toUpperCase() !== "SAVE LEAGUE"} style={buttonStyle}>{saving ? "Saving…" : "Save league settings"}</button><button type="button" onClick={() => hydrateSettings(detail)} disabled={saving} style={ghostButtonStyle}>Reset from loaded league</button></p>
+        </article>
 
         <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Roster membership editor</h2><p style={{ color: "#475569" }}>Activate a player into this league with a starting JUPR/Elo seed, or deactivate an existing league row without deleting history. Type <code>SAVE ROSTER</code> before saving.</p>{detail.roster?.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px) minmax(140px, 180px) minmax(180px, 220px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Player</strong><br /><select value={rosterPlayerId} onChange={(event) => { const next = detail.roster?.find((row) => String(row.player_id) === event.target.value) || null; setRosterPlayerId(event.target.value); setRosterAction(rosterActionFor(next)); setRosterStartingJupr(startingJuprFor(next)); }} style={inputStyle}><option value="">Choose player…</option>{detail.roster.map((row) => <option key={row.player_id} value={String(row.player_id)}>{row.player_name} · {row.in_league ? "in league" : "not in league"}</option>)}</select></label><label><strong>Action</strong><br /><select value={rosterAction} onChange={(event) => setRosterAction(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Activate/add to league</option><option value="deactivate">Deactivate from league</option></select></label><label><strong>Starting JUPR/Elo</strong><br /><input value={rosterStartingJupr} onChange={(event) => setRosterStartingJupr(event.target.value)} disabled={rosterAction === "deactivate"} style={inputStyle} /></label><label><strong>Type SAVE ROSTER</strong><br /><input value={rosterConfirm} onChange={(event) => setRosterConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={saveRosterMembership} disabled={saving || !accessToken || !rosterPlayerId || rosterConfirm.trim().toUpperCase() !== "SAVE ROSTER"} style={buttonStyle}>{saving ? "Saving…" : "Save roster"}</button></div> : <p style={{ color: "#64748b" }}>Load a roster snapshot before editing membership.</p>}{selectedRosterRow ? <p style={{ color: "#475569" }}>Selected: <strong>{selectedRosterRow.player_name}</strong> · {selectedRosterRow.in_league ? "currently in league" : "not yet in league"} · current league JUPR {juprLabel(selectedRosterRow.rating_jupr)}</p> : null}</article>
 
