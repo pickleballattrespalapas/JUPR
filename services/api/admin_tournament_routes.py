@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_TOURNAMENTS, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_registration_repo import StaleTournamentRegistrationSelectionError
 from jupr_app.services.admin_tournament_award_service import award_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
 from jupr_app.services.admin_tournament_bulk_team_import_service import import_admin_tournament_bulk_teams
@@ -147,6 +148,7 @@ class AdminTournamentGameScoreRequest(BaseModel):
 
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
+    expected_updated_at: str
     event_option_id: str | None = None
     partner_mode: str | None = None
     partner_name: str | None = None
@@ -184,6 +186,8 @@ def _resolve_tournament_role_or_403(*, supabase: Any, club_id: str, authorizatio
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, StaleTournamentRegistrationSelectionError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -492,7 +496,19 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         patch = _dump_model(payload)
         source = str(patch.pop("source", payload.source))
         confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
+        expected_updated_at = str(patch.pop("expected_updated_at", payload.expected_updated_at))
         try:
-            return update_admin_tournament_selection(supabase, club_id=str(club_id), tournament_id=str(tournament_id), selection_id=str(selection_id), patch=patch, actor_email=actor_email, actor_role=actor_role, confirmation_text=confirmation_text, source=source)
+            return update_admin_tournament_selection(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=str(tournament_id),
+                selection_id=str(selection_id),
+                patch=patch,
+                expected_updated_at=expected_updated_at,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=confirmation_text,
+                source=source,
+            )
         except Exception as exc:
             _handle(exc)

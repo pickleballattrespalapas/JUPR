@@ -29,16 +29,14 @@ type RegistrationEdit = {
 type SelectionEdit = {
   eventOptionId: string;
   partnerMode: string;
-  partnerName: string;
-  partnerEmail: string;
-  partnerPhone: string;
   partnerNote: string;
+  expectedUpdatedAt: string;
   confirm: string;
 };
 
 const REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"];
 const PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"];
-const PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"];
+const EDITABLE_PARTNER_MODE_OPTIONS = ["NONE", "NEEDS_PARTNER"];
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
@@ -46,6 +44,16 @@ const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a"
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
+}
+
+class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
 }
 
 function dateLabel(value?: string | null): string {
@@ -89,10 +97,8 @@ function editStateFromSelection(row: AdminTournamentSelection | null): Selection
   return {
     eventOptionId: row?.event_option_id || "",
     partnerMode: row?.partner_mode || "NONE",
-    partnerName: row?.partner_name || "",
-    partnerEmail: row?.partner_email || "",
-    partnerPhone: row?.partner_phone || "",
     partnerNote: row?.partner_note || "",
+    expectedUpdatedAt: row?.updated_at || "",
     confirm: ""
   };
 }
@@ -121,7 +127,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) throw new ApiRequestError(String(payload?.detail || `API error (${response.status})`), response.status);
     return payload as T;
   }
 
@@ -219,6 +225,10 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setMessage("Select an event entry before saving.");
       return;
     }
+    if (!selectionEdit.expectedUpdatedAt) {
+      setMessage("Unable to save: this event entry has no version timestamp. Reload the tournament and try again.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -229,10 +239,8 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
           body: JSON.stringify({
             event_option_id: selectionEdit.eventOptionId,
             partner_mode: selectionEdit.partnerMode,
-            partner_name: selectionEdit.partnerName,
-            partner_email: selectionEdit.partnerEmail,
-            partner_phone: selectionEdit.partnerPhone,
             partner_note: selectionEdit.partnerNote,
+            expected_updated_at: selectionEdit.expectedUpdatedAt,
             confirmation_text: selectionEdit.confirm,
             source: "next_tournament_admin_selection_editor"
           })
@@ -244,7 +252,21 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setSelectionEdit(editStateFromSelection(payload.selection || selectedSelection));
       setMessage("Event entry saved and audit-flagged for review.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save event entry.");
+      if (error instanceof ApiRequestError && error.status === 409) {
+        try {
+          const refreshed = await refreshDetail(detail.tournament.id);
+          const latestSelection = refreshed.selections.find((row) => row.id === selectedSelection.id) || null;
+          setDetail(refreshed);
+          setSelectedSelectionId(latestSelection?.id || "");
+          setSelectionEdit(editStateFromSelection(latestSelection));
+          setMessage("Unable to save: this event entry changed after you loaded it. The latest values were reloaded; review them before saving again.");
+        } catch (refreshError) {
+          setSelectionEdit((current) => ({ ...current, expectedUpdatedAt: "" }));
+          setMessage(refreshError instanceof Error ? `Unable to reload the changed event entry: ${refreshError.message}` : "Unable to reload the changed event entry.");
+        }
+      } else {
+        setMessage(error instanceof Error ? error.message : "Unable to save event entry.");
+      }
     } finally {
       setBusy(false);
     }
@@ -353,7 +375,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             <article style={{ ...cardStyle, background: "#f8fafc" }}>
               <h2 style={{ marginTop: 0 }}>Edit event entry / partner</h2>
               <p style={{ color: "#475569" }}>
-                Move the selected registration entry to another division or update partner-board fields. Type <code>SAVE SELECTION</code> to confirm. Entries already imported into a draw cannot be moved.
+                Move the selected registration entry to another division or update its partner-board mode and note. Linked partner identity is read-only here. Type <code>SAVE SELECTION</code> to confirm. Entries already imported into a draw cannot be moved.
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
                 <label><strong>Event entry</strong><br />
@@ -370,21 +392,22 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
                 </label>
                 <label><strong>Partner mode</strong><br />
                   <select value={selectionEdit.partnerMode} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerMode: event.target.value }))} style={inputStyle}>
-                    {PARTNER_MODE_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
+                    {(selectedSelection?.partner_mode === "HAS_PARTNER" ? ["HAS_PARTNER", ...EDITABLE_PARTNER_MODE_OPTIONS] : EDITABLE_PARTNER_MODE_OPTIONS).map((value) => <option key={value} value={value}>{value}</option>)}
                   </select>
                 </label>
                 <label><strong>Type SAVE SELECTION</strong><br />
                   <input value={selectionEdit.confirm} onChange={(event) => setSelectionEdit((current) => ({ ...current, confirm: event.target.value }))} style={inputStyle} />
                 </label>
-                <label><strong>Partner name</strong><br /><input value={selectionEdit.partnerName} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerName: event.target.value }))} style={inputStyle} /></label>
-                <label><strong>Partner email</strong><br /><input value={selectionEdit.partnerEmail} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerEmail: event.target.value }))} style={inputStyle} /></label>
-                <label><strong>Partner phone</strong><br /><input value={selectionEdit.partnerPhone} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerPhone: event.target.value }))} style={inputStyle} /></label>
+                <div><strong>Partner name</strong><br /><span>{selectedSelection?.partner_name || "—"}</span></div>
+                <div><strong>Partner email</strong><br /><span>{selectedSelection?.partner_email || "—"}</span></div>
+                <div><strong>Partner phone</strong><br /><span>{selectedSelection?.partner_phone || "—"}</span></div>
               </div>
               <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Partner note</strong><br />
                 <textarea value={selectionEdit.partnerNote} onChange={(event) => setSelectionEdit((current) => ({ ...current, partnerNote: event.target.value }))} rows={3} style={inputStyle} />
               </label>
+              {!selectionEdit.expectedUpdatedAt ? <p style={{ color: "#b91c1c" }}>This entry is missing a version timestamp. Reload the tournament before attempting to save.</p> : null}
               <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <button type="button" onClick={saveSelectionEdit} disabled={busy || !accessToken || !selectedSelection || selectionEdit.confirm.trim().toUpperCase() !== "SAVE SELECTION"} style={buttonStyle}>{busy ? "Saving…" : "Save event entry"}</button>
+                <button type="button" onClick={saveSelectionEdit} disabled={busy || !accessToken || !selectedSelection || !selectionEdit.expectedUpdatedAt || selectionEdit.confirm.trim().toUpperCase() !== "SAVE SELECTION"} style={buttonStyle}>{busy ? "Saving…" : "Save event entry"}</button>
                 <button type="button" onClick={() => selectedSelection ? setSelectionEdit(editStateFromSelection(selectedSelection)) : undefined} disabled={busy} style={ghostButtonStyle}>Reset fields</button>
               </p>
             </article>

@@ -20,6 +20,15 @@ from jupr_app.domain.tournament_registration_repo import (
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_PUBLIC_SELECTIONS = 8
+_PARTNER_IDENTITY_RATING_AGE_FIELDS = (
+    "partner_name",
+    "partner_email",
+    "partner_phone",
+    "partner_dupr_id",
+    "partner_skill",
+    "partner_age",
+    "partner_gender",
+)
 
 _WOMEN_GENDERS = {"f", "female", "woman", "women", "womens", "girl", "girls"}
 _MEN_GENDERS = {"m", "male", "man", "men", "mens", "boy", "boys"}
@@ -417,6 +426,48 @@ def _validated_age(value: Any, *, label: str) -> int | None:
     return age
 
 
+def build_tournament_registration_player_profile(
+    supabase: Any,
+    *,
+    club_id: str,
+    registration: dict[str, Any],
+    require_active_link: bool = False,
+) -> dict[str, Any]:
+    """Build the canonical eligibility profile for an existing registration."""
+
+    player_id = registration.get("player_id")
+    linked_player = (
+        _get_club_player(
+            supabase,
+            club_id=str(club_id),
+            player_id=player_id,
+            require_active=require_active_link,
+        )
+        if player_id not in (None, "")
+        else None
+    )
+    doubles_skill = _validated_rating(registration.get("doubles_skill"), label="Doubles skill")
+    singles_skill = _validated_rating(registration.get("singles_skill"), label="Singles skill")
+    gender = _clean_text(registration.get("gender"), limit=40)
+    age = _validated_age(registration.get("age"), label="Age")
+    if linked_player:
+        canonical_doubles, canonical_singles = _canonical_player_skills(linked_player)
+        doubles_skill = canonical_doubles if canonical_doubles is not None else doubles_skill
+        singles_skill = canonical_singles if canonical_singles is not None else singles_skill
+        gender = _clean_text(linked_player.get("gender") or gender, limit=40)
+        if linked_player.get("age") not in (None, ""):
+            age = _validated_age(linked_player.get("age"), label="Age")
+
+    return {
+        "email": _clean_email(registration.get("email")),
+        "player_id": linked_player.get("id") if linked_player else player_id,
+        "doubles_skill": doubles_skill,
+        "singles_skill": singles_skill,
+        "gender": gender,
+        "age": age,
+    }
+
+
 def _registered_partner_profile(
     supabase: Any,
     *,
@@ -452,6 +503,117 @@ def _registered_partner_profile(
     return profile
 
 
+def validate_and_clean_tournament_selection(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    event: dict[str, Any],
+    raw_selection: dict[str, Any],
+    player_profile: dict[str, Any],
+    settings: dict[str, Any],
+    primary_registration_id: str | None = None,
+) -> dict[str, Any]:
+    """Validate and canonicalize one tournament event selection.
+
+    The caller remains responsible for deciding whether ``event`` is currently
+    selectable and for enforcing cross-selection day/family uniqueness.
+    """
+
+    if not isinstance(raw_selection, dict):
+        raise ValueError("Each event selection must be an object.")
+    raw_mode = _clean_text(raw_selection.get("partner_mode") or "NONE", limit=40).upper()
+    if raw_mode not in {"NONE", "HAS_PARTNER", "NEEDS_PARTNER"}:
+        raise ValueError("Invalid partner status in event selection.")
+
+    clean_selection = _clean_selection(raw_selection)
+    event_option_id = str(clean_selection.get("event_option_id") or "").strip()
+    if not event_option_id:
+        raise ValueError("Each event selection must identify a division.")
+
+    partner_required = _safe_bool(event.get("partner_required"))
+    event_type = _clean_text(event.get("event_type"), limit=40).upper()
+    singles_event = event_type == "SINGLES"
+    partner_mode = str(clean_selection.get("partner_mode") or "NONE")
+    if partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
+        raise ValueError(f"{_event_label(event)}: choose whether you have or need a partner.")
+    if singles_event and partner_mode != "NONE":
+        raise ValueError(f"{_event_label(event)} does not accept partner information.")
+
+    partner_profile: dict[str, Any] | None = None
+    partner_gender = clean_selection.get("partner_gender")
+    if partner_mode == "HAS_PARTNER":
+        partner_name = _clean_text(clean_selection.get("partner_name"), limit=160)
+        partner_email = _clean_email(clean_selection.get("partner_email"))
+        if not partner_name:
+            raise ValueError(f"{_event_label(event)}: partner name is required.")
+        if not partner_email or not _EMAIL_RE.match(partner_email):
+            raise ValueError(f"{_event_label(event)}: a valid partner email is required.")
+        if partner_email == _clean_email(player_profile.get("email")):
+            raise ValueError("A player cannot register themselves as their own partner.")
+
+        registered_partner = _registered_partner_profile(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament_id),
+            partner_email=partner_email,
+            primary_registration_id=primary_registration_id,
+            primary_player_id=player_profile.get("player_id"),
+        )
+        if registered_partner:
+            partner_profile = {
+                "doubles_skill": _safe_float(registered_partner.get("doubles_skill")),
+                "singles_skill": _safe_float(registered_partner.get("singles_skill")),
+            }
+            partner_gender = registered_partner.get("gender") or partner_gender
+            clean_selection["partner_skill"] = (
+                partner_profile.get("doubles_skill")
+                if partner_profile.get("doubles_skill") is not None
+                else partner_profile.get("singles_skill")
+            )
+            clean_selection["partner_age"] = _safe_int(registered_partner.get("age"))
+        else:
+            partner_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
+            partner_profile = {"doubles_skill": partner_skill, "singles_skill": partner_skill}
+        clean_selection["show_on_partner_board"] = False
+    elif partner_mode == "NEEDS_PARTNER":
+        if _safe_bool(clean_selection.get("show_on_partner_board")):
+            if not _safe_bool(settings.get("partner_board_enabled")) or not _safe_bool(
+                event.get("partner_board_enabled")
+            ):
+                raise ValueError(f"{_event_label(event)}: the public partner board is not enabled.")
+        for key in _PARTNER_IDENTITY_RATING_AGE_FIELDS:
+            clean_selection[key] = None if key in {"partner_skill", "partner_age"} else ""
+        partner_gender = ""
+    else:
+        clean_selection["show_on_partner_board"] = False
+        for key in _PARTNER_IDENTITY_RATING_AGE_FIELDS:
+            clean_selection[key] = None if key in {"partner_skill", "partner_age"} else ""
+        partner_gender = ""
+
+    _validate_gender_eligibility(
+        event=event,
+        player_gender=player_profile.get("gender"),
+        partner_mode=partner_mode,
+        partner_gender=partner_gender,
+    )
+    eligible, message = validate_selection_against_skill(
+        event=event,
+        selection=clean_selection,
+        player=player_profile,
+        partner=partner_profile,
+        allow_missing_partner_for_preview=False,
+    )
+    if not eligible:
+        raise ValueError(f"{_event_label(event)}: {message or 'Skill eligibility requirements were not met.'}")
+
+    clean_selection["registration_day_id"] = str(event.get("registration_day_id") or "")
+    # This field is intentionally validation-only and is not part of the
+    # established tournament_registration_selections schema.
+    clean_selection.pop("partner_gender", None)
+    return clean_selection
+
+
 def _validate_and_clean_selections(
     supabase: Any,
     *,
@@ -476,8 +638,7 @@ def _validate_and_clean_selections(
         raw_mode = _clean_text(raw_selection.get("partner_mode") or "NONE", limit=40).upper()
         if raw_mode not in {"NONE", "HAS_PARTNER", "NEEDS_PARTNER"}:
             raise ValueError("Invalid partner status in event selection.")
-        clean_selection = _clean_selection(raw_selection)
-        event_option_id = str(clean_selection.get("event_option_id") or "").strip()
+        event_option_id = _clean_text(raw_selection.get("event_option_id"), limit=160)
         if not event_option_id:
             raise ValueError("Each event selection must identify a division.")
         if event_option_id in seen_events:
@@ -491,80 +652,16 @@ def _validate_and_clean_selections(
             family = _clean_text(event.get("event_family_label") or event.get("label") or "Event", limit=160)
             raise ValueError(f"Choose only one division for {family} on the same registration day.")
 
-        partner_required = _safe_bool(event.get("partner_required"))
-        event_type = _clean_text(event.get("event_type"), limit=40).upper()
-        singles_event = event_type == "SINGLES"
-        partner_mode = str(clean_selection.get("partner_mode") or "NONE")
-        if partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
-            raise ValueError(f"{_event_label(event)}: choose whether you have or need a partner.")
-        if singles_event and partner_mode != "NONE":
-            raise ValueError(f"{_event_label(event)} does not accept partner information.")
-
-        partner_profile: dict[str, Any] | None = None
-        partner_gender = clean_selection.get("partner_gender")
-        if partner_mode == "HAS_PARTNER":
-            partner_name = _clean_text(clean_selection.get("partner_name"), limit=160)
-            partner_email = _clean_email(clean_selection.get("partner_email"))
-            if not partner_name:
-                raise ValueError(f"{_event_label(event)}: partner name is required.")
-            if not partner_email or not _EMAIL_RE.match(partner_email):
-                raise ValueError(f"{_event_label(event)}: a valid partner email is required.")
-            if partner_email == _clean_email(player_profile.get("email")):
-                raise ValueError("A player cannot register themselves as their own partner.")
-
-            registered_partner = _registered_partner_profile(
-                supabase,
-                club_id=str(club_id),
-                tournament_id=str(tournament_id),
-                partner_email=partner_email,
-                primary_registration_id=primary_registration_id,
-                primary_player_id=player_profile.get("player_id"),
-            )
-            if registered_partner:
-                partner_profile = {
-                    "doubles_skill": _safe_float(registered_partner.get("doubles_skill")),
-                    "singles_skill": _safe_float(registered_partner.get("singles_skill")),
-                }
-                partner_gender = registered_partner.get("gender") or partner_gender
-                clean_selection["partner_skill"] = (
-                    partner_profile.get("doubles_skill")
-                    if partner_profile.get("doubles_skill") is not None
-                    else partner_profile.get("singles_skill")
-                )
-                clean_selection["partner_age"] = _safe_int(registered_partner.get("age"))
-            else:
-                partner_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
-                partner_profile = {"doubles_skill": partner_skill, "singles_skill": partner_skill}
-            clean_selection["show_on_partner_board"] = False
-        elif partner_mode == "NEEDS_PARTNER":
-            if _safe_bool(clean_selection.get("show_on_partner_board")):
-                if not _safe_bool(settings.get("partner_board_enabled")) or not _safe_bool(event.get("partner_board_enabled")):
-                    raise ValueError(f"{_event_label(event)}: the public partner board is not enabled.")
-            for key in ("partner_name", "partner_email", "partner_phone", "partner_dupr_id", "partner_skill", "partner_age", "partner_gender"):
-                clean_selection[key] = None if key in {"partner_skill", "partner_age"} else ""
-        else:
-            clean_selection["show_on_partner_board"] = False
-
-        _validate_gender_eligibility(
+        clean_selection = validate_and_clean_tournament_selection(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament_id),
             event=event,
-            player_gender=player_profile.get("gender"),
-            partner_mode=partner_mode,
-            partner_gender=partner_gender,
+            raw_selection=raw_selection,
+            player_profile=player_profile,
+            settings=settings,
+            primary_registration_id=primary_registration_id,
         )
-        eligible, message = validate_selection_against_skill(
-            event=event,
-            selection=clean_selection,
-            player=player_profile,
-            partner=partner_profile,
-            allow_missing_partner_for_preview=False,
-        )
-        if not eligible:
-            raise ValueError(f"{_event_label(event)}: {message or 'Skill eligibility requirements were not met.'}")
-
-        clean_selection["registration_day_id"] = str(event.get("registration_day_id") or "")
-        # This field is intentionally validation-only and is not part of the
-        # established tournament_registration_selections schema.
-        clean_selection.pop("partner_gender", None)
         selections.append(clean_selection)
         seen_events.add(event_option_id)
         seen_families.add(family_key)

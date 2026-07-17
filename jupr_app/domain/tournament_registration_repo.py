@@ -17,6 +17,11 @@ PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
 ADMIN_REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"]
 ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 
+
+class StaleTournamentRegistrationSelectionError(RuntimeError):
+    """Raised when a selection changed after an admin loaded it."""
+
+
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
     "migrations/20261010_tournament_builder_refactor.sql",
     "migrations/20261018_tournament_registration_schema_contract.sql",
@@ -1156,33 +1161,47 @@ def update_admin_registration_selection(
     tournament_id: str,
     selection_id: str,
     payload: dict[str, Any],
+    expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
-    update_payload = {
-        "registration_day_id": str(payload.get("registration_day_id") or "").strip() or None,
-        "event_option_id": str(payload.get("event_option_id") or "").strip() or None,
-        "partner_mode": str(payload.get("partner_mode") or "").strip().upper() or None,
-        "partner_name": str(payload.get("partner_name") or "").strip() or None,
-        "partner_email": _normalize_email(payload.get("partner_email")) or None,
-        "partner_phone": str(payload.get("partner_phone") or "").strip() or None,
-        "partner_dupr_id": str(payload.get("partner_dupr_id") or "").strip() or None,
-        "partner_skill": payload.get("partner_skill"),
-        "partner_age": payload.get("partner_age"),
-        "partner_note": str(payload.get("partner_note") or "").strip() or None,
-        "show_on_partner_board": _coerce_bool(payload.get("show_on_partner_board", False)),
-    }
-    clean_payload = {k: v for k, v in update_payload.items() if v is not None or k == "show_on_partner_board"}
+    clean_payload: dict[str, Any] = {}
+    for field in ("registration_day_id", "event_option_id"):
+        if field in payload:
+            value = str(payload.get(field) or "").strip() or None
+            if value is not None:
+                clean_payload[field] = value
+    if "partner_mode" in payload:
+        partner_mode = str(payload.get("partner_mode") or "").strip().upper() or None
+        if partner_mode is not None:
+            clean_payload["partner_mode"] = partner_mode
+    for field in ("partner_name", "partner_phone", "partner_dupr_id", "partner_note"):
+        if field in payload:
+            clean_payload[field] = str(payload.get(field) or "").strip() or None
+    if "partner_email" in payload:
+        clean_payload["partner_email"] = _normalize_email(payload.get("partner_email")) or None
+    for field in ("partner_skill", "partner_age"):
+        if field in payload:
+            clean_payload[field] = payload.get(field)
+    if "show_on_partner_board" in payload:
+        clean_payload["show_on_partner_board"] = _coerce_bool(payload.get("show_on_partner_board"))
     if clean_payload.get("partner_mode") and clean_payload["partner_mode"] not in PARTNER_MODE_OPTIONS:
         raise ValueError(f"Invalid partner mode: {clean_payload['partner_mode']}")
 
-    resp = (
+    clean_payload["updated_at"] = _now_iso()
+    query = (
         supabase.table("tournament_registration_selections")
         .update(clean_payload)
         .eq("tournament_id", str(tournament_id))
         .eq("id", str(selection_id))
-        .execute()
     )
+    if expected_updated_at is not None:
+        query = query.eq("updated_at", str(expected_updated_at))
+    resp = query.execute()
     updated = _safe_first(resp)
     if not updated:
+        if expected_updated_at is not None:
+            raise StaleTournamentRegistrationSelectionError(
+                "Registration selection changed after it was loaded. Refresh and try again."
+            )
         raise ValueError("Registration selection not found for this tournament.")
     return updated
 

@@ -52,8 +52,14 @@ def tournament_tables():
                 "id": "event_1",
                 "tournament_id": "tour_1",
                 "registration_day_id": "day_1",
+                "label": "3.5",
                 "event_family_label": "Gender Doubles",
                 "division_name": "3.5",
+                "event_type": "DOUBLES",
+                "gender_restriction": "ANY",
+                "skill_label": "Open",
+                "partner_required": False,
+                "partner_board_enabled": True,
                 "event_format_default": "round_robin",
                 "scoring_default": "one_game_to_11",
                 "status": "open",
@@ -64,8 +70,14 @@ def tournament_tables():
                 "id": "event_2",
                 "tournament_id": "tour_1",
                 "registration_day_id": "day_1",
+                "label": "4.0",
                 "event_family_label": "Gender Doubles",
                 "division_name": "4.0",
+                "event_type": "DOUBLES",
+                "gender_restriction": "ANY",
+                "skill_label": "Open",
+                "partner_required": False,
+                "partner_board_enabled": True,
                 "event_format_default": "round_robin",
                 "scoring_default": "one_game_to_11",
                 "status": "open",
@@ -80,6 +92,10 @@ def tournament_tables():
                 "display_name": "Alex Example",
                 "email": "alex@example.com",
                 "phone": "555-0100",
+                "doubles_skill": 3.5,
+                "singles_skill": 3.5,
+                "gender": "Men",
+                "age": 35,
                 "status": "confirmed",
                 "payment_status": "paid",
                 "notes": "Original note",
@@ -96,6 +112,8 @@ def tournament_tables():
                 "event_option_id": "event_1",
                 "partner_mode": "NEEDS_PARTNER",
                 "show_on_partner_board": True,
+                "created_at": "2026-03-03T00:00:00Z",
+                "updated_at": "2026-03-03T00:00:00Z",
             }
         ],
         "tournament_event_draws": [
@@ -272,6 +290,7 @@ def test_admin_tournament_registration_update_contract(monkeypatch):
 
 def test_admin_tournament_selection_update_contract(monkeypatch):
     tables = tournament_tables()
+    original_updated_at = tables["tournament_registration_selections"][0]["updated_at"]
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
@@ -284,11 +303,9 @@ def test_admin_tournament_selection_update_contract(monkeypatch):
         headers={"Authorization": "Bearer local"},
         json={
             "event_option_id": "event_2",
-            "partner_mode": "HAS_PARTNER",
-            "partner_name": "Blair Partner",
-            "partner_email": "blair@example.com",
-            "partner_phone": "555-0101",
-            "partner_note": "Confirmed partner.",
+            "partner_mode": "NEEDS_PARTNER",
+            "partner_note": "Still looking for a partner.",
+            "expected_updated_at": original_updated_at,
             "confirmation_text": "SAVE SELECTION",
         },
     )
@@ -299,12 +316,306 @@ def test_admin_tournament_selection_update_contract(monkeypatch):
     assert payload["mode"] == "tournament_selection_update"
     assert payload["selection"]["event_option_id"] == "event_2"
     assert payload["selection"]["event_label"] == "Gender Doubles / 4.0"
-    assert payload["selection"]["partner_mode"] == "HAS_PARTNER"
-    assert payload["selection"]["partner_name"] == "Blair Partner"
+    assert payload["selection"]["partner_mode"] == "NEEDS_PARTNER"
+    assert payload["selection"]["partner_note"] == "Still looking for a partner."
+    assert payload["selection"]["updated_at"] != original_updated_at
     assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_2"
     assert tables["tournament_registration_selections"][0]["registration_day_id"] == "day_1"
     assert tables["admin_activity_log"][0]["action_type"] == "update_tournament_registration_selection_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_tournament_selection_update_requires_version_token(monkeypatch):
+    supabase = FakeSupabase(tournament_tables())
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_note": "No version token.",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_admin_tournament_selection_update_rejects_stale_version_without_mutation(monkeypatch):
+    tables = tournament_tables()
+    before = dict(tables["tournament_registration_selections"][0])
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_note": "Stale edit.",
+            "expected_updated_at": "2026-03-02T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "changed after it was loaded" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0] == before
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_tournament_selection_update_rejects_closed_destination(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_event_options"][1]["status"] = "closed"
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_option_id": "event_2",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Selected division is not open for registration."
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_1"
+
+
+def test_admin_tournament_selection_update_rejects_duplicate_family(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_event_options"].append(
+        {
+            **tables["tournament_event_options"][1],
+            "id": "event_3",
+            "division_name": "4.5",
+            "label": "4.5",
+            "sort_order": 3,
+        }
+    )
+    tables["tournament_registration_selections"].append(
+        {
+            **tables["tournament_registration_selections"][0],
+            "id": "selection_2",
+            "event_option_id": "event_2",
+        }
+    )
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_option_id": "event_3",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Choose only one division" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_1"
+
+
+def test_admin_tournament_selection_update_clears_stale_partner_identity(monkeypatch):
+    tables = tournament_tables()
+    selection = tables["tournament_registration_selections"][0]
+    selection.update(
+        {
+            "partner_mode": "HAS_PARTNER",
+            "partner_name": "Legacy Partner",
+            "partner_email": "legacy@example.com",
+            "partner_phone": "555-0199",
+            "partner_dupr_id": "legacy-dupr",
+            "partner_skill": 3.5,
+            "partner_age": 40,
+        }
+    )
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_mode": "NEEDS_PARTNER",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 200
+    updated = tables["tournament_registration_selections"][0]
+    assert updated["partner_mode"] == "NEEDS_PARTNER"
+    assert updated["partner_name"] is None
+    assert updated["partner_email"] is None
+    assert updated["partner_phone"] is None
+    assert updated["partner_dupr_id"] is None
+    assert updated["partner_skill"] is None
+    assert updated["partner_age"] is None
+
+
+def test_admin_tournament_selection_update_rejects_free_text_partner_creation(monkeypatch):
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_mode": "HAS_PARTNER",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "canonical partner-link workflow" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0]["partner_mode"] == "NEEDS_PARTNER"
+
+
+def test_admin_tournament_selection_update_enforces_skill_eligibility(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_event_options"][1]["skill_label"] = "3.5"
+    tables["tournament_registrations"][0]["doubles_skill"] = 4.0
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_option_id": "event_2",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "above the 3.5 division cap" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_1"
+
+
+def test_admin_tournament_selection_update_enforces_gender_eligibility(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_event_options"][1]["gender_restriction"] = "WOMEN"
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_option_id": "event_2",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "limited to women's registrations" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_1"
+
+
+def test_admin_tournament_selection_update_blocks_pending_partner_request_change(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_registration_partner_requests"] = [
+        {
+            "id": "request_1",
+            "tournament_id": "tour_1",
+            "requester_selection_id": "selection_1",
+            "target_selection_id": None,
+            "status": "PENDING",
+        }
+    ]
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_mode": "NONE",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "pending partner request" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0]["partner_mode"] == "NEEDS_PARTNER"
+
+
+def test_admin_tournament_selection_update_blocks_confirmed_team_change(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_registration_team_members"] = [
+        {
+            "id": "member_1",
+            "tournament_id": "tour_1",
+            "selection_id": "selection_1",
+            "status": "ACTIVE",
+        }
+    ]
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_mode": "NONE",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "confirmed partner team" in response.json()["detail"]
+    assert tables["tournament_registration_selections"][0]["partner_mode"] == "NEEDS_PARTNER"
 
 
 def test_admin_tournament_bulk_registration_update_contract(monkeypatch):

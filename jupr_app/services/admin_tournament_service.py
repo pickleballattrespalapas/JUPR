@@ -8,9 +8,15 @@ from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
     PARTNER_MODE_OPTIONS,
+    is_day_enabled,
+    public_event_option_visibility,
     registration_is_imported_to_draw,
     update_admin_registration,
     update_admin_registration_selection,
+)
+from jupr_app.services.public_tournament_registration_service import (
+    build_tournament_registration_player_profile,
+    validate_and_clean_tournament_selection,
 )
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
@@ -19,6 +25,7 @@ TOURNAMENT_MINIMAL_SELECT = "id,club_id,name,status"
 REGISTRATION_SETTINGS_SELECT = "id,tournament_id,registration_slug,registration_status,registration_open_at,registration_close_at,waitlist_enabled,partner_board_enabled,updated_at"
 REGISTRATION_SELECT = (
     "id,tournament_id,player_id,first_name,last_name,display_name,email,phone,"
+    "dupr_id,doubles_skill,singles_skill,age,age_bracket,gender,"
     "status,payment_status,notes,wants_partner_board_contact,submitted_at,updated_at"
 )
 REGISTRATION_LEGACY_SELECT = (
@@ -29,11 +36,14 @@ REGISTRATION_MINIMAL_SELECT = "id,tournament_id,display_name,email,status,paymen
 REGISTRATION_LEGACY_MINIMAL_SELECT = "id,tournament_id,display_name,email,registration_status,payment_status,submitted_at,updated_at"
 SELECTION_SELECT = (
     "id,tournament_id,registration_id,registration_day_id,event_option_id,partner_mode,"
-    "partner_name,partner_email,partner_phone,partner_note,show_on_partner_board,created_at,updated_at"
+    "partner_name,partner_email,partner_phone,partner_dupr_id,partner_skill,partner_age,"
+    "partner_note,show_on_partner_board,created_at,updated_at"
 )
 EVENT_OPTION_SELECT = (
-    "id,tournament_id,registration_day_id,event_family_label,division_name,event_format_default,"
-    "scoring_default,skill_mode,age_mode,status,enabled,waitlist_enabled,partner_board_enabled,sort_order"
+    "id,tournament_id,registration_day_id,label,event_family_label,division_name,event_type,"
+    "gender_restriction,skill_label,age_label,partner_required,capacity_teams,public_partner_board,"
+    "event_format_default,scoring_default,skill_mode,age_mode,status,enabled,waitlist_enabled,"
+    "partner_board_enabled,sort_order"
 )
 DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,created_at"
 CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
@@ -177,6 +187,16 @@ def _event_option_map(event_options: list[dict[str, Any]]) -> dict[str, dict[str
     return {_clean_text(row.get("id"), limit=120): row for row in event_options if _clean_text(row.get("id"), limit=120)}
 
 
+def _event_family_key(event: dict[str, Any]) -> tuple[str, str]:
+    day_id = _clean_text(event.get("registration_day_id"), limit=120)
+    family = " ".join(
+        _clean_text(event.get("event_family_label") or event.get("label") or "Event", limit=160)
+        .lower()
+        .split()
+    )
+    return day_id, family
+
+
 def _selection_payload(row: dict[str, Any], *, event_options: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     event_options_by_id = _event_option_map(event_options or [])
     event_option_id = _clean_text(row.get("event_option_id"), limit=120)
@@ -251,11 +271,98 @@ def _selection_count_for_registration(supabase: Any, *, tournament_id: str, regi
     return len([row for row in rows if _clean_text(row.get("registration_id"), limit=120) == str(registration_id)])
 
 
-def _event_option_by_id(supabase: Any, *, tournament_id: str, event_option_id: str) -> dict[str, Any] | None:
-    for row in _table_rows_for_tournament(supabase, "tournament_event_options", EVENT_OPTION_SELECT, tournament_id=str(tournament_id)):
-        if _clean_text(row.get("id"), limit=120) == str(event_option_id):
-            return row
+def _required_relation_rows(
+    supabase: Any,
+    table_name: str,
+    select_expr: str,
+    *,
+    tournament_id: str,
+    field_name: str,
+    field_value: str,
+) -> list[dict[str, Any]]:
+    try:
+        return _query_rows(
+            supabase.table(table_name)
+            .select(select_expr)
+            .eq("tournament_id", str(tournament_id))
+            .eq(str(field_name), str(field_value))
+            .limit(100)
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not verify tournament selection relationships: {table_name}") from exc
+
+
+def _selection_relationship_lock_reason(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    selection_id: str,
+) -> str | None:
+    active_members = _required_relation_rows(
+        supabase,
+        "tournament_registration_team_members",
+        "id,selection_id,status",
+        tournament_id=tournament_id,
+        field_name="selection_id",
+        field_value=selection_id,
+    )
+    if any(
+        _clean_text(row.get("status"), limit=40).upper() == "ACTIVE"
+        for row in active_members
+    ):
+        return "This event entry belongs to a confirmed partner team. Change the canonical team link first."
+
+    team_links: list[dict[str, Any]] = []
+    for field_name in ("selection1_id", "selection2_id"):
+        team_links.extend(
+            _required_relation_rows(
+                supabase,
+                "tournament_registration_team_links",
+                "id,selection1_id,selection2_id,status",
+                tournament_id=tournament_id,
+                field_name=field_name,
+                field_value=selection_id,
+            )
+        )
+    if any(
+        _clean_text(row.get("status"), limit=40).upper() in {"CONFIRMED", "ADMIN_CONFIRMED"}
+        for row in team_links
+    ):
+        return "This event entry belongs to a confirmed partner team. Change the canonical team link first."
+
+    partner_requests: list[dict[str, Any]] = []
+    for field_name in ("requester_selection_id", "target_selection_id"):
+        partner_requests.extend(
+            _required_relation_rows(
+                supabase,
+                "tournament_registration_partner_requests",
+                "id,requester_selection_id,target_selection_id,status",
+                tournament_id=tournament_id,
+                field_name=field_name,
+                field_value=selection_id,
+            )
+        )
+    if any(
+        _clean_text(row.get("status"), limit=40).upper() == "PENDING"
+        for row in partner_requests
+    ):
+        return "This event entry has a pending partner request. Resolve or cancel the request first."
     return None
+
+
+def _required_registration_settings(supabase: Any, *, tournament_id: str) -> dict[str, Any]:
+    try:
+        rows = _query_rows(
+            supabase.table("tournament_registration_settings")
+            .select(REGISTRATION_SETTINGS_SELECT)
+            .eq("tournament_id", str(tournament_id))
+            .limit(1)
+        )
+    except Exception as exc:
+        raise RuntimeError("Could not verify tournament registration settings.") from exc
+    if not rows:
+        raise RuntimeError("Tournament registration settings are required before editing event entries.")
+    return rows[0]
 
 
 def build_admin_tournament_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
@@ -418,6 +525,7 @@ def update_admin_tournament_selection(
     tournament_id: str,
     selection_id: str,
     patch: dict[str, Any],
+    expected_updated_at: str,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
@@ -429,6 +537,9 @@ def update_admin_tournament_selection(
         raise ValueError(f"Type {CONFIRM_SELECTION_UPDATE} to confirm event-entry changes.")
     clean_tournament_id = _clean_text(tournament_id, limit=120)
     clean_selection_id = _clean_text(selection_id, limit=120)
+    clean_expected_updated_at = _clean_text(expected_updated_at, limit=120)
+    if not clean_expected_updated_at:
+        raise ValueError("expected_updated_at is required for event-entry changes.")
     tournament = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id)
     if not tournament or str(tournament.get("club_id") or "") != str(club_id):
         raise ValueError("tournament not found")
@@ -436,31 +547,162 @@ def update_admin_tournament_selection(
     if before is None:
         raise ValueError("selection not found")
 
+    registration_id = _clean_text(before.get("registration_id"), limit=120)
+    registration = _fetch_registration_by_id(
+        supabase,
+        tournament_id=clean_tournament_id,
+        registration_id=registration_id,
+    )
+    if registration is None:
+        raise ValueError("registration not found for this event entry")
+
+    event_options = _table_rows_for_tournament(
+        supabase,
+        "tournament_event_options",
+        EVENT_OPTION_SELECT,
+        tournament_id=clean_tournament_id,
+    )
+    events_by_id = _event_option_map(event_options)
+    current_event_id = _clean_text(before.get("event_option_id"), limit=120)
+    next_event_id = _clean_text(patch.get("event_option_id"), limit=120) if "event_option_id" in patch else current_event_id
+    if not next_event_id:
+        raise ValueError("Each event entry must identify a division.")
+    event = events_by_id.get(next_event_id)
+    if not event:
+        raise ValueError("event option not found for this tournament")
+    event_changed = next_event_id != current_event_id
+
+    days = _table_rows_for_tournament(
+        supabase,
+        "tournament_registration_days",
+        DAY_SELECT,
+        tournament_id=clean_tournament_id,
+    )
+    day_id = _clean_text(event.get("registration_day_id"), limit=120)
+    day = next((row for row in days if _clean_text(row.get("id"), limit=120) == day_id), None)
+    if day is None:
+        raise ValueError("Selected division is not attached to a registration day for this tournament.")
+    if event_changed:
+        if not is_day_enabled(day):
+            raise ValueError("Selected division is not on an enabled registration day.")
+        if public_event_option_visibility(event) != "selectable":
+            raise ValueError("Selected division is not open for registration.")
+
+        target_family = _event_family_key(event)
+        sibling_rows = _table_rows_for_tournament(
+            supabase,
+            "tournament_registration_selections",
+            SELECTION_SELECT,
+            tournament_id=clean_tournament_id,
+        )
+        for sibling in sibling_rows:
+            if _clean_text(sibling.get("id"), limit=120) == clean_selection_id:
+                continue
+            if _clean_text(sibling.get("registration_id"), limit=120) != registration_id:
+                continue
+            sibling_event_id = _clean_text(sibling.get("event_option_id"), limit=120)
+            if sibling_event_id == next_event_id:
+                raise ValueError("The same division cannot be selected more than once.")
+            sibling_event = events_by_id.get(sibling_event_id)
+            if sibling_event and _event_family_key(sibling_event) == target_family:
+                family = _clean_text(event.get("event_family_label") or event.get("label") or "Event", limit=160)
+                raise ValueError(f"Choose only one division for {family} on the same registration day.")
+
+    current_partner_mode = _clean_text(before.get("partner_mode") or "NONE", limit=40).upper() or "NONE"
+    next_partner_mode = (
+        _clean_text(patch.get("partner_mode"), limit=40).upper() or "NONE"
+        if "partner_mode" in patch
+        else current_partner_mode
+    )
+    if next_partner_mode not in PARTNER_MODE_OPTIONS:
+        raise ValueError(f"Invalid partner mode: {patch.get('partner_mode')}")
+
+    for field, limit in [("partner_name", 160), ("partner_email", 180), ("partner_phone", 80)]:
+        if field not in patch:
+            continue
+        before_value = _clean_text(before.get(field), limit=limit)
+        next_value = _clean_text(patch.get(field), limit=limit)
+        if field == "partner_email":
+            before_value = before_value.lower()
+            next_value = next_value.lower()
+        if next_value != before_value:
+            raise ValueError("Partner identity is read-only in this editor. Use the canonical partner-link workflow.")
+
+    partner_mode_changed = next_partner_mode != current_partner_mode
+    relationship_sensitive_change = event_changed or partner_mode_changed
+    if relationship_sensitive_change:
+        relationship_lock = _selection_relationship_lock_reason(
+            supabase,
+            tournament_id=clean_tournament_id,
+            selection_id=clean_selection_id,
+        )
+        if relationship_lock:
+            raise ValueError(relationship_lock)
+    if event_changed and registration_is_imported_to_draw(
+        supabase,
+        tournament_id=clean_tournament_id,
+        selection_id=clean_selection_id,
+    ):
+        raise ValueError("This event entry is already imported into a draw. Remove the draw team before moving divisions.")
+    if next_partner_mode == "HAS_PARTNER" and current_partner_mode != "HAS_PARTNER":
+        raise ValueError("Creating a partner link requires the canonical partner-link workflow.")
+    if event_changed and next_partner_mode == "HAS_PARTNER":
+        raise ValueError("Move or remove the canonical partner link before changing this division.")
+
+    settings = _required_registration_settings(supabase, tournament_id=clean_tournament_id)
+    candidate = dict(before)
+    candidate["event_option_id"] = next_event_id
+    candidate["registration_day_id"] = day_id
+    candidate["partner_mode"] = next_partner_mode
+    if "partner_note" in patch:
+        candidate["partner_note"] = _clean_text(patch.get("partner_note"), limit=500)
+    if next_partner_mode == "NEEDS_PARTNER":
+        event_board_enabled = _safe_bool(
+            event.get("partner_board_enabled", event.get("public_partner_board")),
+            default=True,
+        )
+        candidate["show_on_partner_board"] = _safe_bool(settings.get("partner_board_enabled"), default=False) and event_board_enabled
+    elif next_partner_mode == "NONE":
+        candidate["show_on_partner_board"] = False
+
+    validated: dict[str, Any] | None = None
+    if event_changed or partner_mode_changed or ("partner_mode" in patch and next_partner_mode != "HAS_PARTNER"):
+        player_profile = build_tournament_registration_player_profile(
+            supabase,
+            club_id=str(club_id),
+            registration=registration,
+            require_active_link=False,
+        )
+        validated = validate_and_clean_tournament_selection(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            event=event,
+            raw_selection=candidate,
+            player_profile=player_profile,
+            settings=settings,
+            primary_registration_id=registration_id,
+        )
+
     update_payload: dict[str, Any] = {}
-    if "event_option_id" in patch and _clean_text(patch.get("event_option_id"), limit=120):
-        next_event_id = _clean_text(patch.get("event_option_id"), limit=120)
-        current_event_id = _clean_text(before.get("event_option_id"), limit=120)
-        event = _event_option_by_id(supabase, tournament_id=clean_tournament_id, event_option_id=next_event_id)
-        if not event:
-            raise ValueError("event option not found for this tournament")
-        if next_event_id != current_event_id and registration_is_imported_to_draw(supabase, tournament_id=clean_tournament_id, selection_id=clean_selection_id):
-            raise ValueError("This event entry is already imported into a draw. Remove the draw team before moving divisions.")
+    if "event_option_id" in patch or event_changed:
         update_payload["event_option_id"] = next_event_id
-        update_payload["registration_day_id"] = _clean_text(event.get("registration_day_id"), limit=120)
-    if "partner_mode" in patch:
-        partner_mode = _clean_text(patch.get("partner_mode"), limit=40).upper() or "NONE"
-        if partner_mode not in PARTNER_MODE_OPTIONS:
-            raise ValueError(f"Invalid partner mode: {patch.get('partner_mode')}")
-        update_payload["partner_mode"] = partner_mode
-        update_payload["show_on_partner_board"] = partner_mode == "NEEDS_PARTNER"
-    for field, limit in [
-        ("partner_name", 160),
-        ("partner_email", 180),
-        ("partner_phone", 80),
-        ("partner_note", 500),
-    ]:
-        if field in patch:
-            update_payload[field] = _clean_text(patch.get(field), limit=limit)
+        update_payload["registration_day_id"] = day_id
+    if "partner_mode" in patch or event_changed or partner_mode_changed:
+        canonical = validated or candidate
+        for field in [
+            "partner_mode",
+            "partner_name",
+            "partner_email",
+            "partner_phone",
+            "partner_dupr_id",
+            "partner_skill",
+            "partner_age",
+            "show_on_partner_board",
+        ]:
+            update_payload[field] = canonical.get(field)
+    if "partner_note" in patch:
+        update_payload["partner_note"] = _clean_text(patch.get("partner_note"), limit=500)
     if not update_payload:
         raise ValueError("No supported event-entry fields were provided.")
 
@@ -469,8 +711,8 @@ def update_admin_tournament_selection(
         tournament_id=clean_tournament_id,
         selection_id=clean_selection_id,
         payload=update_payload,
+        expected_updated_at=clean_expected_updated_at,
     )
-    event_options = _table_rows_for_tournament(supabase, "tournament_event_options", EVENT_OPTION_SELECT, tournament_id=clean_tournament_id)
     selection = _selection_payload(updated, event_options=event_options)
     audit_payload = build_activity_payload(
         club_id=str(club_id),
