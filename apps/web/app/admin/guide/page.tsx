@@ -30,6 +30,138 @@ const workflowNotes = [
   ["Communications", "Player update date ranges, verified update requests, unsubscribe/preference controls."],
 ];
 
+type Runbook = {
+  label: string;
+  useWhen: string;
+  href: string;
+  linkLabel: string;
+  steps: string[];
+  completeWhen: string;
+  stopWhen: string;
+};
+
+const dayOfRunbooks: Runbook[] = [
+  {
+    label: "League night",
+    useWhen: "A scheduled ladder or league session needs courts, rounds, movement, and official results.",
+    href: "/admin/league-manager",
+    linkLabel: "Open League Manager",
+    steps: [
+      "Confirm the club, league, week, total rounds, settings, and active roster before starting a live session.",
+      "Review or print the roster/schedule, then create or resume the persisted live session for the correct league week.",
+      "Confirm every court assignment before entering scores; submit one reviewed round at a time.",
+      "Review automatic movement before advancing. Use an override only when the intended next court order is explicit.",
+      "After the final round, verify Match Log rows, end the league when appropriate, and complete awards/closeout separately.",
+    ],
+    completeWhen: "Every expected round is submitted once, public results agree with Match Log, and the live session has the intended final state.",
+    stopWhen: "The selected league/week is wrong, a player or court assignment is missing, a round looks duplicated, or the submitted match count differs from the preview.",
+  },
+  {
+    label: "Quick, paper-sheet, or pop-up scoring",
+    useWhen: "Staff need to enter manual, batch, singles, or round-robin results outside a persisted league-night session.",
+    href: "/admin/match-uploader",
+    linkLabel: "Open Match Uploader",
+    steps: [
+      "Choose the smallest matching input mode: single match, batch, singles, or round-robin preview.",
+      "Confirm all player identities and create a missing player only when the identity and starting rating are known.",
+      "Review scores, league/event attribution, rated status, and projected row count before submission.",
+      "Submit once, record returned IDs/counts, and verify the new rows in Match Log before sending player updates.",
+    ],
+    completeWhen: "The expected matches appear once in Match Log with correct players, scores, format, attribution, and snapshots.",
+    stopWhen: "A player is ambiguous, a preview count is unexpected, the event should not affect ratings, or similar matches may already exist.",
+  },
+  {
+    label: "Match correction and replay",
+    useWhen: "A saved match is wrong, duplicated, or should be excluded from ratings/history.",
+    href: "/admin/match-log",
+    linkLabel: "Open Match Log",
+    steps: [
+      "Filter to the exact match and capture its ID, current values, and affected player IDs before changing anything.",
+      "Use the narrow correction, duplicate-resolution, cleanup, or soft-exclude action and review its exact draft/preview.",
+      "Confirm the activity entry and the remaining Match Log rows before running replay.",
+      "Run Replay History with the smallest safe scope; use ALL when the operation or runbook explicitly requires it.",
+      "Recheck affected player profiles, leaderboards, league results, and snapshot fields after replay.",
+    ],
+    completeWhen: "The canonical Match Log is correct, replay succeeds, and all affected read models agree.",
+    stopWhen: "The target cannot be uniquely identified, the change affects more rows than previewed, replay scope is unclear, or public results diverge after replay.",
+  },
+  {
+    label: "Player maintenance or merge",
+    useWhen: "Staff need to correct a player record, league rating, social identity, or duplicate-player relationship.",
+    href: "/admin/players",
+    linkLabel: "Open Player Editor",
+    steps: [
+      "Confirm club scope and player identity using IDs plus match/rating context, not name alone.",
+      "For ordinary edits, change only the required fields and verify the saved detail before continuing.",
+      "For merges, review the survivor/loser direction, reference counts, and every affected table in the merge preview.",
+      "Apply the reviewed merge once, capture the activity result, then run Replay History ALL.",
+      "Verify the survivor profile, ratings, match history, and that the duplicate no longer appears in public search.",
+    ],
+    completeWhen: "The intended player is canonical, references and ratings are consistent, and post-merge replay/public checks pass.",
+    stopWhen: "Identity is uncertain, the merge direction is wrong, affected references are unexpected, or Replay History is unavailable.",
+  },
+  {
+    label: "Challenge Ladder administration",
+    useWhen: "Staff need to create/resolve challenges, administer passes/holds, or change ladder tiers and ranks.",
+    href: "/admin/challenge-ladder",
+    linkLabel: "Open Challenge Ladder Admin",
+    steps: [
+      "Load the dashboard and confirm player status, tier, rank, and any open challenge before preparing a change.",
+      "For a new challenge, review eligibility, copy/send the generated notice, then start the acceptance clock based on the sent message.",
+      "For a played result, review partners, games, winner, official-match count, and proposed rank movement before publishing.",
+      "For whole-tier replacement, load/paste exact names, review removals/moves/recompression, resolve blockers, and apply only the current fingerprinted preview.",
+      "Verify the updated ladder, official matches when applicable, and the centralized Admin Tools activity record.",
+    ],
+    completeWhen: "Challenge state, notices/deadlines, rank order, official matches, and activity records all agree.",
+    stopWhen: "Eligibility requires an unexplained override, an open challenge blocks a roster change, a preview is stale, or the final persisted order differs from review.",
+  },
+  {
+    label: "Tournament setup through publish",
+    useWhen: "A tournament needs registration management, draws, live scoring, podiums, awards, or official match publication.",
+    href: "/admin/tournaments",
+    linkLabel: "Open Tournament Admin",
+    steps: [
+      "Confirm tournament, registration status, selections/divisions, and partner/team integrity before importing into a draw.",
+      "Create/review the draw, import teams once, generate games, and verify expected team/game counts.",
+      "Use Tournament Live for in-play scoring; confirm round-robin and playoff progression before advancing stages.",
+      "Review podiums, awards, singles/doubles format, publish preview, and official match count before publishing.",
+      "Verify Match Log/tournament_game_id links and affected player profiles before enabling player-update email handoff.",
+    ],
+    completeWhen: "Draw state, scores, podiums, awards, official matches, and public tournament pages are mutually consistent.",
+    stopWhen: "Teams are duplicated, draw counts differ from preview, a playoff/podium is unresolved, or official matches may already have been published.",
+  },
+  {
+    label: "Player communications",
+    useWhen: "Staff are ready to send player updates or process verified update requests/preferences.",
+    href: "/admin/player-updates",
+    linkLabel: "Open Player Updates",
+    steps: [
+      "Finish and verify all underlying score, rating, tournament, or roster work before generating a report.",
+      "Choose the exact date range and recipients, then inspect the report and exclusion/reason counts.",
+      "Test using dry_run or staging_redirect; confirm destination rewriting and message content.",
+      "Send only the reviewed range/selection, record delivery results, and honor unsubscribe/preference status.",
+    ],
+    completeWhen: "The reviewed recipients receive the intended content once and delivery/preference records reflect the run.",
+    stopWhen: "Data verification is incomplete, live email mode is unexpected, recipients differ from preview, or staging redirects are not active during testing.",
+  },
+];
+
+const globalStopConditions = [
+  "The browser session, club, environment, or selected entity does not match the intended staging task.",
+  "A feature flag, JWT verification, service role, strict audit, or required recovery route is unavailable.",
+  "A preview is stale, row/count scope grows unexpectedly, or the response cannot be reconciled with the reviewed draft.",
+  "A write succeeds partially or the public/read model disagrees afterward—capture IDs and stop additional writes.",
+  "Email mode or recipients are not visibly safe for the current test.",
+];
+
+const recoverySequence = [
+  "Stop additional writes and capture the route, club/entity IDs, timestamp, response, and operator account.",
+  "Review Admin Tools activity and the affected source table/read model before attempting another action.",
+  "Correct match data through Match Log when applicable; do not patch ratings or snapshots directly.",
+  "Run Replay History using the smallest safe scope, then verify affected public and admin views.",
+  "Use Streamlit production/fallback only for the established recovery workflow; do not copy staging-only data into production.",
+];
+
 export default function AdminGuidePage() {
   return (
     <section>
@@ -57,6 +189,34 @@ export default function AdminGuidePage() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
         {workflowNotes.map(([label, note]) => <article key={label} style={cardStyle}><h3 style={{ marginTop: 0 }}>{label}</h3><p style={{ color: "#475569" }}>{note}</p></article>)}
       </div>
+
+      <h2>Day-of operations runbooks</h2>
+      <p style={{ color: "#475569", maxWidth: "900px" }}>Choose the runbook that matches the source of truth for the task. A green completion check never overrides a red stop condition.</p>
+      <div style={{ display: "grid", gap: "1rem" }}>
+        {dayOfRunbooks.map((runbook) => (
+          <article key={runbook.label} style={cardStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}><h3 style={{ margin: "0 0 0.35rem" }}>{runbook.label}</h3><p style={{ color: "#475569", margin: 0 }}>{runbook.useWhen}</p></div>
+              <Link href={runbook.href}>{runbook.linkLabel}</Link>
+            </div>
+            <ol style={{ color: "#334155", paddingLeft: "1.25rem" }}>{runbook.steps.map((step) => <li key={step} style={{ marginBottom: "0.45rem" }}>{step}</li>)}</ol>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem" }}>
+              <div style={{ border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: "10px", padding: "0.75rem" }}><strong style={{ color: "#166534" }}>Complete when</strong><p style={{ color: "#166534", marginBottom: 0 }}>{runbook.completeWhen}</p></div>
+              <div style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: "10px", padding: "0.75rem" }}><strong style={{ color: "#991b1b" }}>Stop when</strong><p style={{ color: "#991b1b", marginBottom: 0 }}>{runbook.stopWhen}</p></div>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <h2>Global stop conditions</h2>
+      <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
+        <ul style={{ color: "#991b1b", margin: 0, paddingLeft: "1.25rem" }}>{globalStopConditions.map((condition) => <li key={condition} style={{ marginBottom: "0.5rem" }}>{condition}</li>)}</ul>
+      </article>
+
+      <h2>Recovery sequence</h2>
+      <article style={cardStyle}>
+        <ol style={{ color: "#334155", margin: 0, paddingLeft: "1.25rem" }}>{recoverySequence.map((step) => <li key={step} style={{ marginBottom: "0.5rem" }}>{step}</li>)}</ol>
+      </article>
 
       <h2>Emergency fallback paths</h2>
       <article style={cardStyle}>
