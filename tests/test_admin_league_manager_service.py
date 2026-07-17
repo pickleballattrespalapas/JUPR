@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 from jupr_app.services.admin_league_manager_service import (
     build_admin_league_manager_status,
+    build_league_schedule_ics,
     get_admin_league_manager_detail,
+    league_schedule_ics_filename,
     list_admin_league_manager_leagues,
 )
 
@@ -117,6 +119,9 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     assert listing["leagues"][1]["league_name"] == "Open"
     assert detail["league"]["status"] == "active"
     assert len(detail["schedule_preview"]) == 3
+    assert detail["schedule_ics"].count("BEGIN:VEVENT") == 3
+    assert "DTSTART;TZID=UTC:20260701T180000" in detail["schedule_ics"]
+    assert detail["schedule_ics_filename"] == "open-schedule.ics"
     assert detail["standings"][0]["player_name"] == "Alex"
     assert detail["standings"][0]["rank"] == 1
     assert detail["standings"][0]["rating_jupr"] == 3.75
@@ -125,3 +130,41 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     assert detail["roster"][0]["player_name"] == "Alex"
     assert detail["roster"][2]["player_name"] == "Casey"
     assert detail["roster"][2]["in_league"] is False
+
+
+def test_league_schedule_ics_matches_preview_blackouts_and_escapes_text() -> None:
+    content = build_league_schedule_ics(
+        {
+            "start_date": "2026-07-01",
+            "weekday": 2,
+            "weeks": 3,
+            "time_start": "18:15",
+            "time_end": "20:45",
+            "timezone": "America/Chicago",
+            "blackout_dates": ["2026-07-08"],
+        },
+        league_name="Open, Summer; Night\nLeague",
+    )
+
+    assert content.count("BEGIN:VEVENT") == 2
+    assert "20260708" not in content
+    assert "DTSTAMP:" in content
+    assert "DTSTART;TZID=America/Chicago:20260701T181500" in content
+    assert "DTEND;TZID=America/Chicago:20260715T204500" in content
+    assert "SUMMARY:Open\\, Summer\\; Night\\nLeague" in content
+    assert "\r\n" in content
+    assert league_schedule_ics_filename("Open / Summer") == "open-summer-schedule.ics"
+
+
+def test_league_schedule_ics_is_empty_without_a_preview() -> None:
+    assert build_league_schedule_ics({}, league_name="Open") == ""
+
+
+def test_league_schedule_ics_rejects_an_invalid_timezone_token() -> None:
+    content = build_league_schedule_ics(
+        {"start_date": "2026-07-01", "weekday": 2, "weeks": 1, "timezone": "America/Chicago\r\nBAD:TOKEN"},
+        league_name="Open",
+    )
+
+    assert "DTSTART;TZID=UTC:20260701T180000" in content
+    assert "BAD" not in content

@@ -92,4 +92,6 @@ def test_league_manager_list_and_detail_contract(monkeypatch):
     detail = detail_response.json()
     assert detail["league"]["league_name"] == "Open"
     assert len(detail["schedule_preview"]) == 3
+    assert detail["schedule_ics"].count("BEGIN:VEVENT") == 3
+    assert detail["schedule_ics_filename"] == "open-schedule.ics"
     assert detail["standings"][0]["player_name"] == "Alex"

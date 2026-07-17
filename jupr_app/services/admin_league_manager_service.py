@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from jupr_app.domain.leagues import normalize_league_status
@@ -104,6 +104,83 @@ def _schedule_preview(schedule_config: Any) -> list[dict[str, Any]]:
             continue
         preview.append({"session": session, "date": day.isoformat(), "start": time_start, "end": time_end})
     return preview
+
+
+def _ical_escape(value: Any) -> str:
+    text = str(value or "").replace("\\", "\\\\").replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
+
+
+def _ical_token(value: Any, *, fallback: str) -> str:
+    token = "".join(char for char in str(value or "") if char.isalnum() or char in {"/", "_", "+", "-"})
+    return token or fallback
+
+
+def _ical_timezone(value: Any) -> str:
+    raw_timezone = str(value or "UTC").strip()
+    timezone_name = _ical_token(raw_timezone, fallback="UTC")
+    if timezone_name != raw_timezone or len(timezone_name) > 80:
+        return "UTC"
+    return timezone_name
+
+
+def _ical_time(value: Any, *, fallback: str) -> str:
+    try:
+        hour_text, minute_text = str(value or "").strip().split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}{minute:02d}00"
+    except Exception:
+        pass
+    return fallback
+
+
+def league_schedule_ics_filename(league_name: Any) -> str:
+    stem = "".join(char.lower() if char.isalnum() else "-" for char in str(league_name or ""))
+    stem = "-".join(part for part in stem.split("-") if part)[:80]
+    return f"{stem or 'league'}-schedule.ics"
+
+
+def build_league_schedule_ics(schedule_config: Any, *, league_name: Any) -> str:
+    preview = _schedule_preview(schedule_config)
+    if not preview:
+        return ""
+    cfg = _json_value(schedule_config, {}) or {}
+    timezone_name = _ical_timezone(cfg.get("timezone"))
+    summary = _ical_escape(league_name or "League Session")
+    uid_stem = league_schedule_ics_filename(league_name).removesuffix("-schedule.ics")
+    generated_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "PRODID:-//JUPR//League Schedule//EN",
+        f"X-WR-CALNAME:{summary}",
+        f"X-WR-TIMEZONE:{timezone_name}",
+    ]
+    for row in preview:
+        date_token = str(row.get("date") or "").replace("-", "")
+        if len(date_token) != 8 or not date_token.isdigit():
+            continue
+        session = int(row.get("session") or 0)
+        start_time = _ical_time(row.get("start"), fallback="180000")
+        end_time = _ical_time(row.get("end"), fallback="200000")
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:{uid_stem}-{session}-{date_token}@jupr",
+                f"DTSTAMP:{generated_at}",
+                f"DTSTART;TZID={timezone_name}:{date_token}T{start_time}",
+                f"DTEND;TZID={timezone_name}:{date_token}T{end_time}",
+                f"SUMMARY:{summary}",
+                f"DESCRIPTION:JUPR league session {session}",
+                "END:VEVENT",
+            ]
+        )
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
 
 
 def _league_row_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -294,11 +371,14 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
         raise ValueError("league not found")
     standings = _league_standings(supabase, club_id=str(club_id), league_name=clean_league)
     roster = _league_roster(supabase, club_id=str(club_id), league_name=clean_league, standings=standings)
+    schedule_config = league.get("schedule_config")
     return {
         "ok": True,
         "mode": "league_manager_detail",
         "league": league,
-        "schedule_preview": _schedule_preview(league.get("schedule_config")),
+        "schedule_preview": _schedule_preview(schedule_config),
+        "schedule_ics": build_league_schedule_ics(schedule_config, league_name=clean_league),
+        "schedule_ics_filename": league_schedule_ics_filename(clean_league),
         "standings": standings,
         "standings_count": len(standings),
         "roster": roster,

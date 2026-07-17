@@ -15,6 +15,7 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - Guarded draft creation and configuration-only duplication. Duplication never copies roster membership, standings, results, lifecycle dates, or issued awards.
 - Guarded start, pause, resume, end, and archive transitions. Generic settings writes cannot change lifecycle status.
 - State-aware settings locks: full configuration in draft, description-only while active/paused, and read-only after ended/archived.
+- Authenticated league detail includes a calendar-safe ICS export that matches the schedule preview and omits blackout dates.
 - Stored Supabase admin session for the closed-club staging pilot.
 
 ## Runtime flag

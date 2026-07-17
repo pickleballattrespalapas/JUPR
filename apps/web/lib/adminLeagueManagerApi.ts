@@ -81,6 +81,8 @@ export type AdminLeagueManagerDetailResponse = {
   mode?: string;
   league: AdminLeagueManagerLeague;
   schedule_preview: AdminLeagueManagerSchedulePreviewRow[];
+  schedule_ics?: string;
+  schedule_ics_filename?: string;
   standings: AdminLeagueManagerStanding[];
   standings_count: number;
   roster?: AdminLeagueManagerRosterRow[];
