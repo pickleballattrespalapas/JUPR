@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from jupr_app.domain.tournament_registration_repo import (
+    ADMIN_SELECTION_UPDATE_RPC,
+    StaleTournamentRegistrationSelectionError,
+    update_admin_registration_selection,
+)
 from tests.conftest import require_api_dependency
-from tests.test_admin_match_log_service import FakeSupabase
+from tests.test_admin_match_log_service import FakeSupabase as TableFakeSupabase
 
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
@@ -11,6 +18,65 @@ require_api_dependency("supabase")
 from fastapi.testclient import TestClient
 
 from services.api.main import app
+
+
+_DEFAULT_RPC_RESULT = object()
+
+
+class _FakeRpcQuery:
+    def __init__(self, client, name: str, params: dict):
+        self.client = client
+        self.name = str(name)
+        self.params = dict(params or {})
+
+    def execute(self):
+        self.client.rpc_calls.append((self.name, self.params))
+        if self.client.rpc_error is not None:
+            raise self.client.rpc_error
+        if self.client.rpc_result is not _DEFAULT_RPC_RESULT:
+            return SimpleNamespace(data=self.client.rpc_result)
+        if self.name != ADMIN_SELECTION_UPDATE_RPC:
+            raise RuntimeError(f"unsupported fake RPC: {self.name}")
+
+        rows = self.client.tables.setdefault("tournament_registration_selections", [])
+        selection = next(
+            (
+                row
+                for row in rows
+                if str(row.get("tournament_id")) == str(self.params.get("p_tournament_id"))
+                and str(row.get("id")) == str(self.params.get("p_selection_id"))
+            ),
+            None,
+        )
+        if selection is None:
+            return SimpleNamespace(data={"ok": False, "code": "SELECTION_NOT_FOUND"})
+        if str(selection.get("updated_at") or "") != str(self.params.get("p_expected_updated_at") or ""):
+            return SimpleNamespace(
+                data={
+                    "ok": False,
+                    "code": "SELECTION_WRITE_CONFLICT",
+                    "reason": "stale_version",
+                }
+            )
+
+        selection.update(dict(self.params.get("p_patch") or {}))
+        self.client.rpc_update_counter += 1
+        selection["updated_at"] = f"2026-03-03T00:00:{self.client.rpc_update_counter:02d}Z"
+        return SimpleNamespace(data={"ok": True, "selection": dict(selection)})
+
+
+class FakeSupabase(TableFakeSupabase):
+    """File-local RPC-capable fake; shared table fakes remain unchanged."""
+
+    def __init__(self, tables, *, rpc_error=None, rpc_result=_DEFAULT_RPC_RESULT):
+        super().__init__(tables)
+        self.rpc_error = rpc_error
+        self.rpc_result = rpc_result
+        self.rpc_calls: list[tuple[str, dict]] = []
+        self.rpc_update_counter = 0
+
+    def rpc(self, name, params):
+        return _FakeRpcQuery(self, name, params)
 
 
 def tournament_tables():
@@ -323,6 +389,14 @@ def test_admin_tournament_selection_update_contract(monkeypatch):
     assert tables["tournament_registration_selections"][0]["registration_day_id"] == "day_1"
     assert tables["admin_activity_log"][0]["action_type"] == "update_tournament_registration_selection_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+    assert len(supabase.rpc_calls) == 1
+    rpc_name, rpc_params = supabase.rpc_calls[0]
+    assert rpc_name == ADMIN_SELECTION_UPDATE_RPC
+    assert rpc_params["p_tournament_id"] == "tour_1"
+    assert rpc_params["p_selection_id"] == "selection_1"
+    assert rpc_params["p_expected_updated_at"] == original_updated_at
+    assert rpc_params["p_patch"]["event_option_id"] == "event_2"
+    assert "updated_at" not in rpc_params["p_patch"]
 
 
 def test_admin_tournament_selection_update_requires_version_token(monkeypatch):
@@ -369,6 +443,125 @@ def test_admin_tournament_selection_update_rejects_stale_version_without_mutatio
     assert "changed after it was loaded" in response.json()["detail"]
     assert tables["tournament_registration_selections"][0] == before
     assert tables["admin_activity_log"] == []
+
+
+def test_admin_selection_repo_maps_stable_database_conflict_marker():
+    tables = tournament_tables()
+    before = dict(tables["tournament_registration_selections"][0])
+    supabase = FakeSupabase(
+        tables,
+        rpc_error=Exception(
+            {
+                "code": "P0001",
+                "message": "JUPR_SELECTION_WRITE_CONFLICT: relationship_changed",
+            }
+        ),
+    )
+
+    with pytest.raises(StaleTournamentRegistrationSelectionError, match="Refresh and try again"):
+        update_admin_registration_selection(
+            supabase,
+            tournament_id="tour_1",
+            selection_id="selection_1",
+            payload={"partner_note": "Concurrent edit."},
+            expected_updated_at="2026-03-03T00:00:00Z",
+        )
+
+    assert tables["tournament_registration_selections"][0] == before
+    assert len(supabase.rpc_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected_detail"),
+    [
+        ("JUPR_SELECTION_INVALID_TARGET", "Registration selection target is invalid."),
+        ("JUPR_SELECTION_INVALID_PATCH", "Registration selection update is invalid."),
+        ("JUPR_RELATION_SELECTION_NOT_FOUND", "Registration selection not found for this tournament."),
+    ],
+)
+def test_admin_selection_api_maps_database_validation_markers_to_safe_400(
+    monkeypatch,
+    marker,
+    expected_detail,
+):
+    tables = tournament_tables()
+    before = dict(tables["tournament_registration_selections"][0])
+    supabase = FakeSupabase(
+        tables,
+        rpc_error=Exception({"code": "P0001", "message": f"{marker}: private database detail"}),
+    )
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/selections/selection_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "partner_note": "Database-validated edit.",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE SELECTION",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == expected_detail
+    assert "private database detail" not in response.text
+    assert tables["tournament_registration_selections"][0] == before
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_selection_repo_resolves_version_for_legacy_streamlit_caller():
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+
+    updated = update_admin_registration_selection(
+        supabase,
+        tournament_id="tour_1",
+        selection_id="selection_1",
+        payload={"partner_note": "Legacy admin edit."},
+    )
+
+    assert updated["partner_note"] == "Legacy admin edit."
+    assert len(supabase.rpc_calls) == 1
+    assert supabase.rpc_calls[0][1]["p_expected_updated_at"] == "2026-03-03T00:00:00Z"
+
+
+def test_admin_selection_repo_fails_closed_when_rpc_is_unavailable():
+    tables = tournament_tables()
+    before = dict(tables["tournament_registration_selections"][0])
+    supabase = FakeSupabase(tables, rpc_error=Exception("RPC is unavailable"))
+
+    with pytest.raises(RuntimeError, match="Registration selection update failed"):
+        update_admin_registration_selection(
+            supabase,
+            tournament_id="tour_1",
+            selection_id="selection_1",
+            payload={"partner_note": "Must not fall back."},
+            expected_updated_at="2026-03-03T00:00:00Z",
+        )
+
+    assert tables["tournament_registration_selections"][0] == before
+    assert len(supabase.rpc_calls) == 1
+
+
+def test_admin_selection_repo_rejects_malformed_rpc_response_without_mutation():
+    tables = tournament_tables()
+    before = dict(tables["tournament_registration_selections"][0])
+    supabase = FakeSupabase(tables, rpc_result=[])
+
+    with pytest.raises(RuntimeError, match="invalid response"):
+        update_admin_registration_selection(
+            supabase,
+            tournament_id="tour_1",
+            selection_id="selection_1",
+            payload={"partner_note": "Must not be accepted."},
+            expected_updated_at="2026-03-03T00:00:00Z",
+        )
+
+    assert tables["tournament_registration_selections"][0] == before
 
 
 def test_admin_tournament_selection_update_rejects_closed_destination(monkeypatch):

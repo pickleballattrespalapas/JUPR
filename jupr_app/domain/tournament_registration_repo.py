@@ -18,8 +18,21 @@ ADMIN_REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"]
 ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"]
 
 
-class StaleTournamentRegistrationSelectionError(RuntimeError):
-    """Raised when a selection changed after an admin loaded it."""
+class SelectionWriteConflict(RuntimeError):
+    """Raised when a concurrent selection change makes an admin write unsafe."""
+
+
+class StaleTournamentRegistrationSelectionError(SelectionWriteConflict):
+    """Backward-compatible name for an admin selection write conflict."""
+
+
+ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
+SELECTION_WRITE_CONFLICT_CODE = "SELECTION_WRITE_CONFLICT"
+SELECTION_WRITE_CONFLICT_MARKER = "JUPR_SELECTION_WRITE_CONFLICT"
+SELECTION_NOT_FOUND_CODE = "SELECTION_NOT_FOUND"
+RELATION_SELECTION_NOT_FOUND_MARKER = "JUPR_RELATION_SELECTION_NOT_FOUND"
+SELECTION_INVALID_TARGET_MARKER = "JUPR_SELECTION_INVALID_TARGET"
+SELECTION_INVALID_PATCH_MARKER = "JUPR_SELECTION_INVALID_PATCH"
 
 
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
@@ -157,6 +170,31 @@ def _safe_data(resp: Any) -> list[dict[str, Any]]:
 def _safe_first(resp: Any) -> dict[str, Any] | None:
     rows = _safe_data(resp)
     return rows[0] if rows else None
+
+
+def _rpc_object(resp: Any) -> dict[str, Any] | None:
+    """Return one JSON object from a PostgREST RPC response."""
+    data = getattr(resp, "data", None)
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+        return data[0]
+    return None
+
+
+def _database_error_contains(exc: Exception, marker: str) -> bool:
+    """Match a stable marker across postgrest-py exception representations."""
+    values: list[str] = [str(exc or "")]
+    for attr in ("code", "message", "details", "hint"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            values.append(str(value))
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, dict):
+            values.extend(str(value) for value in arg.values() if value is not None)
+        elif arg is not None:
+            values.append(str(arg))
+    return str(marker).upper() in "\n".join(values).upper()
 
 
 def _normalize_email(value: Any) -> str:
@@ -1186,23 +1224,64 @@ def update_admin_registration_selection(
     if clean_payload.get("partner_mode") and clean_payload["partner_mode"] not in PARTNER_MODE_OPTIONS:
         raise ValueError(f"Invalid partner mode: {clean_payload['partner_mode']}")
 
-    clean_payload["updated_at"] = _now_iso()
-    query = (
-        supabase.table("tournament_registration_selections")
-        .update(clean_payload)
-        .eq("tournament_id", str(tournament_id))
-        .eq("id", str(selection_id))
-    )
-    if expected_updated_at is not None:
-        query = query.eq("updated_at", str(expected_updated_at))
-    resp = query.execute()
-    updated = _safe_first(resp)
-    if not updated:
-        if expected_updated_at is not None:
+    # Older Streamlit callers do not yet send the row version. Resolve it before
+    # invoking the transactional RPC so those callers remain functional while
+    # every mutation still uses database-side compare-and-swap semantics.
+    rpc_expected_updated_at = expected_updated_at
+    if rpc_expected_updated_at is None:
+        current_resp = (
+            supabase.table("tournament_registration_selections")
+            .select("updated_at")
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", str(selection_id))
+            .limit(1)
+            .execute()
+        )
+        current = _safe_first(current_resp)
+        if not current:
+            raise ValueError("Registration selection not found for this tournament.")
+        rpc_expected_updated_at = str(current.get("updated_at") or "").strip()
+        if not rpc_expected_updated_at:
+            raise RuntimeError("Registration selection is missing its write version.")
+
+    params = {
+        "p_tournament_id": str(tournament_id),
+        "p_selection_id": str(selection_id),
+        "p_expected_updated_at": str(rpc_expected_updated_at),
+        "p_patch": clean_payload,
+    }
+    try:
+        resp = supabase.rpc(ADMIN_SELECTION_UPDATE_RPC, params).execute()
+    except Exception as exc:
+        if _database_error_contains(exc, SELECTION_WRITE_CONFLICT_MARKER) or _database_error_contains(
+            exc, SELECTION_WRITE_CONFLICT_CODE
+        ):
             raise StaleTournamentRegistrationSelectionError(
                 "Registration selection changed after it was loaded. Refresh and try again."
-            )
+            ) from exc
+        if _database_error_contains(exc, SELECTION_NOT_FOUND_CODE) or _database_error_contains(
+            exc, RELATION_SELECTION_NOT_FOUND_MARKER
+        ):
+            raise ValueError("Registration selection not found for this tournament.") from exc
+        if _database_error_contains(exc, SELECTION_INVALID_TARGET_MARKER):
+            raise ValueError("Registration selection target is invalid.") from exc
+        if _database_error_contains(exc, SELECTION_INVALID_PATCH_MARKER):
+            raise ValueError("Registration selection update is invalid.") from exc
+        raise RuntimeError("Registration selection update failed.") from exc
+
+    result = _rpc_object(resp)
+    if result is None:
+        raise RuntimeError("Registration selection update returned an invalid response.")
+    code = str(result.get("code") or "").strip().upper()
+    if code == SELECTION_WRITE_CONFLICT_CODE:
+        raise StaleTournamentRegistrationSelectionError(
+            "Registration selection changed after it was loaded. Refresh and try again."
+        )
+    if code == SELECTION_NOT_FOUND_CODE:
         raise ValueError("Registration selection not found for this tournament.")
+    updated = result.get("selection")
+    if result.get("ok") is not True or not isinstance(updated, dict):
+        raise RuntimeError("Registration selection update returned an invalid response.")
     return updated
 
 
