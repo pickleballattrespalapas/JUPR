@@ -7,8 +7,10 @@ type Challenge = { id: number; tier_id: string; status: string; bucket: string; 
 type Player = { player_id: number; player_name: string; rank?: number; status?: string; rating_jupr?: number | null };
 type Tier = { tier_id: string; label: string; range: string; players: Player[] };
 type StatusResponse = { enabled: boolean; status: string; summary?: Record<string, number>; warnings?: string[] };
-type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number> };
+type DashboardResponse = { ok: boolean; summary: Record<string, number>; settings: Record<string, unknown>; settings_row?: Record<string, unknown>; tiers: Tier[]; challenges: Challenge[]; bucket_counts: Record<string, number>; player_options?: Player[] };
 type ActionResponse = { ok: boolean; challenge?: Challenge; warnings?: string[]; rank_result?: Record<string, unknown>; official_matches?: Record<string, unknown>; preview?: Record<string, unknown> };
+type ResultDraft = { challenge_id: string; a_chal: string; a_def: string; b_chal: string; b_def: string; match_a_games: string; match_b_games: string; match_date: string; winner_override: string; publish_official_matches: boolean; confirmation_text: string };
+type ResultPreviewResponse = ActionResponse & { mode: "challenge_ladder_result_preview"; challenge: Challenge; preview: { final_winner_side: string; final_winner_id: number; winner_summary: Record<string, string | number>; scores: Record<string, unknown> }; partner_names: Record<string, string>; match_date: string; would_publish_official_matches: boolean; rank_result: { would_swap: boolean; reason: string } };
 
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
@@ -22,6 +24,17 @@ async function apiError(response: Response): Promise<string> { const text = awai
 function Pre({ value }: { value: unknown }) { return <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto", fontSize: "0.82rem" }}>{JSON.stringify(value, null, 2)}</pre>; }
 function parseGames(raw: string): number[][] { return raw.split(/[|,;]/).map((part) => part.trim()).filter(Boolean).map((part) => { const bits = part.split(/[-–—:\/]/).map((x) => Number(x.trim())); if (bits.length !== 2 || !Number.isFinite(bits[0]) || !Number.isFinite(bits[1])) throw new Error(`Invalid score: ${part}`); return [bits[0], bits[1]]; }); }
 function activePlayers(tiers: Tier[] | undefined): Player[] { const rows: Player[] = []; for (const tier of tiers || []) for (const player of tier.players || []) rows.push(player); return rows; }
+function resultDraftFingerprint(draft: ResultDraft): string { const { confirmation_text: _confirmationText, ...reviewedFields } = draft; return JSON.stringify(reviewedFields); }
+function resultPayload(draft: ResultDraft, includeConfirmation = false): Record<string, unknown> {
+  return {
+    partner_a_challenger_id: Number(draft.a_chal), partner_a_defender_id: Number(draft.a_def), partner_b_challenger_id: Number(draft.b_chal), partner_b_defender_id: Number(draft.b_def),
+    match_a_games: parseGames(draft.match_a_games), match_b_games: parseGames(draft.match_b_games), match_date: draft.match_date, winner_override: draft.winner_override, publish_official_matches: draft.publish_official_matches,
+    ...(includeConfirmation ? { confirmation_text: draft.confirmation_text } : {}),
+  };
+}
+
+const RECORDABLE_STATUSES = new Set(["ACCEPTED_SCHEDULING", "ACCEPTED", "IN_PROGRESS", "AWAITING_VERIFICATION", "OVERDUE_PLAY"]);
+const OPEN_STATUSES = new Set(["PENDING_ACCEPTANCE", ...RECORDABLE_STATUSES]);
 
 export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
@@ -31,7 +44,9 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
   const [confirmations, setConfirmations] = useState<Record<number, string>>({});
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [createDraft, setCreateDraft] = useState({ challenger_id: "", defender_id: "", tier_id: "ADV", ledger_ref: "", override: false, start_clock: false, confirmation_text: "" });
-  const [resultDraft, setResultDraft] = useState({ challenge_id: "", a_chal: "", a_def: "", b_chal: "", b_def: "", match_a_games: "11-0,11-0", match_b_games: "11-0,11-0", match_date: new Date().toISOString(), winner_override: "computed", publish_official_matches: true, confirmation_text: "" });
+  const [resultDraft, setResultDraft] = useState<ResultDraft>({ challenge_id: "", a_chal: "", a_def: "", b_chal: "", b_def: "", match_a_games: "11-0,11-0", match_b_games: "11-0,11-0", match_date: new Date().toISOString(), winner_override: "computed", publish_official_matches: true, confirmation_text: "" });
+  const [resultPreview, setResultPreview] = useState<ResultPreviewResponse | null>(null);
+  const [previewedDraftFingerprint, setPreviewedDraftFingerprint] = useState<string | null>(null);
   const [forfeitDraft, setForfeitDraft] = useState({ challenge_id: "", forfeited_by_id: "", admin_note: "", confirmation_text: "" });
   const [lastResult, setLastResult] = useState<ActionResponse | null>(null);
 
@@ -92,23 +107,39 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
     finally { setBusy(false); }
   }
 
+  async function previewResult() {
+    if (!resultDraft.challenge_id) { setMessage("Choose a recordable challenge before previewing a result."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<ResultPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(resultDraft.challenge_id)}/result/preview`, { method: "POST", body: JSON.stringify(resultPayload(resultDraft)) });
+      setResultPreview(payload); setPreviewedDraftFingerprint(resultDraftFingerprint(resultDraft)); setMessage("Result preview is ready. Review it before publishing.");
+    } catch (error) {
+      setResultPreview(null); setPreviewedDraftFingerprint(null); setMessage(error instanceof Error ? error.message : "Unable to preview ladder result.");
+    } finally { setBusy(false); }
+  }
+
   async function publishResult() {
+    if (!resultPreview || previewedDraftFingerprint !== resultDraftFingerprint(resultDraft)) { setMessage("Preview the current result draft before publishing it."); return; }
     if (resultDraft.confirmation_text.trim().toUpperCase() !== "PUBLISH LADDER RESULT") { setMessage("Type PUBLISH LADDER RESULT to publish the ladder result."); return; }
     setBusy(true); setMessage(null);
     try {
-      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(resultDraft.challenge_id)}/result`, { method: "POST", body: JSON.stringify({
-        partner_a_challenger_id: Number(resultDraft.a_chal), partner_a_defender_id: Number(resultDraft.a_def), partner_b_challenger_id: Number(resultDraft.b_chal), partner_b_defender_id: Number(resultDraft.b_def),
-        match_a_games: parseGames(resultDraft.match_a_games), match_b_games: parseGames(resultDraft.match_b_games), match_date: resultDraft.match_date, winner_override: resultDraft.winner_override, publish_official_matches: resultDraft.publish_official_matches, confirmation_text: resultDraft.confirmation_text
-      }) });
-      setLastResult(payload); setMessage("Ladder result published."); await loadDashboard();
+      const payload = await requestJson<ActionResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/challenge-ladder/challenges/${Number(resultDraft.challenge_id)}/result`, { method: "POST", body: JSON.stringify(resultPayload(resultDraft, true)) });
+      setLastResult(payload); setResultPreview(null); setPreviewedDraftFingerprint(null); setMessage("Ladder result published."); await loadDashboard();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to publish ladder result."); }
     finally { setBusy(false); }
   }
 
   if (!status?.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Challenge Ladder Admin is disabled</h2><p>{status?.warnings?.[0] || "Enable JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER on FastAPI."}</p></article>;
 
-  const players = activePlayers(dashboard?.tiers);
-  const openChallengeOptions = dashboard?.challenges || [];
+  const rosterPlayers = activePlayers(dashboard?.tiers);
+  const createTierPlayers = dashboard?.tiers.find((tier) => tier.tier_id === createDraft.tier_id)?.players || [];
+  const allPlayerOptions = dashboard?.player_options?.length ? dashboard.player_options : rosterPlayers;
+  const openChallengeOptions = (dashboard?.challenges || []).filter((challenge) => OPEN_STATUSES.has(challenge.status));
+  const recordableChallengeOptions = openChallengeOptions.filter((challenge) => RECORDABLE_STATUSES.has(challenge.status));
+  const selectedResultChallenge = recordableChallengeOptions.find((challenge) => String(challenge.id) === resultDraft.challenge_id);
+  const selectedForfeitChallenge = openChallengeOptions.find((challenge) => String(challenge.id) === forfeitDraft.challenge_id);
+  const partnerPlayers = allPlayerOptions.filter((player) => player.player_id !== selectedResultChallenge?.challenger_id && player.player_id !== selectedResultChallenge?.defender_id);
+  const currentDraftIsPreviewed = Boolean(resultPreview && previewedDraftFingerprint === resultDraftFingerprint(resultDraft));
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -123,42 +154,53 @@ export default function ChallengeLadderAdminPanel({ apiBase, clubId, status }: P
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Create challenge</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Tier<br /><select value={createDraft.tier_id} onChange={(e) => setCreateDraft((c) => ({ ...c, tier_id: e.target.value }))} style={inputStyle}>{dashboard.tiers.map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
-          <label>Challenger<br /><select value={createDraft.challenger_id} onChange={(e) => setCreateDraft((c) => ({ ...c, challenger_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{players.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name} #{p.player_id}</option>)}</select></label>
-          <label>Defender<br /><select value={createDraft.defender_id} onChange={(e) => setCreateDraft((c) => ({ ...c, defender_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{players.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name} #{p.player_id}</option>)}</select></label>
+          <label>Tier<br /><select value={createDraft.tier_id} onChange={(e) => setCreateDraft((c) => ({ ...c, tier_id: e.target.value, challenger_id: "", defender_id: "" }))} style={inputStyle}>{dashboard.tiers.map((tier) => <option key={tier.tier_id} value={tier.tier_id}>{tier.label}</option>)}</select></label>
+          <label>Challenger<br /><select value={createDraft.challenger_id} onChange={(e) => setCreateDraft((c) => ({ ...c, challenger_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{createTierPlayers.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name} · rank {p.rank ?? "—"}</option>)}</select></label>
+          <label>Defender<br /><select value={createDraft.defender_id} onChange={(e) => setCreateDraft((c) => ({ ...c, defender_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{createTierPlayers.filter((player) => String(player.player_id) !== createDraft.challenger_id).map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name} · rank {p.rank ?? "—"}</option>)}</select></label>
           <label>Ledger/ref<br /><input value={createDraft.ledger_ref} onChange={(e) => setCreateDraft((c) => ({ ...c, ledger_ref: e.target.value }))} style={inputStyle} /></label>
           <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={createDraft.override} onChange={(e) => setCreateDraft((c) => ({ ...c, override: e.target.checked }))} /> Override eligibility</label>
           <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={createDraft.start_clock} onChange={(e) => setCreateDraft((c) => ({ ...c, start_clock: e.target.checked }))} /> Start clock now</label>
           <label>Confirmation<br /><input value={createDraft.confirmation_text} onChange={(e) => setCreateDraft((c) => ({ ...c, confirmation_text: e.target.value }))} placeholder="CREATE LADDER CHALLENGE" style={inputStyle} /></label>
-          <button type="button" onClick={createChallenge} disabled={busy} style={buttonStyle}>Create challenge</button>
+          <button type="button" onClick={createChallenge} disabled={busy || !createDraft.challenger_id || !createDraft.defender_id} style={buttonStyle}>Create challenge</button>
         </div>
       </article> : null}
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Publish played result</h2>
         <p style={{ color: "#475569" }}>Played ladder results insert two official rated matches and apply direct rank swap when the challenger wins. Forfeits do not create match rows.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Challenge<br /><select value={resultDraft.challenge_id} onChange={(e) => setResultDraft((c) => ({ ...c, challenge_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{openChallengeOptions.map((ch) => <option key={ch.id} value={ch.id}>#{ch.id} {ch.challenger_name} vs {ch.defender_name} ({ch.status})</option>)}</select></label>
-          <label>A challenger partner<br /><select value={resultDraft.a_chal} onChange={(e) => setResultDraft((c) => ({ ...c, a_chal: e.target.value }))} style={inputStyle}><option value="">Choose</option>{players.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
-          <label>A defender partner<br /><select value={resultDraft.a_def} onChange={(e) => setResultDraft((c) => ({ ...c, a_def: e.target.value }))} style={inputStyle}><option value="">Choose</option>{players.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
-          <label>B challenger partner<br /><select value={resultDraft.b_chal} onChange={(e) => setResultDraft((c) => ({ ...c, b_chal: e.target.value }))} style={inputStyle}><option value="">Choose</option>{players.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
-          <label>B defender partner<br /><select value={resultDraft.b_def} onChange={(e) => setResultDraft((c) => ({ ...c, b_def: e.target.value }))} style={inputStyle}><option value="">Choose</option>{players.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
+          <label>Challenge<br /><select value={resultDraft.challenge_id} onChange={(e) => setResultDraft((c) => ({ ...c, challenge_id: e.target.value, a_chal: "", a_def: "", b_chal: "", b_def: "", confirmation_text: "" }))} style={inputStyle}><option value="">Choose</option>{recordableChallengeOptions.map((ch) => <option key={ch.id} value={ch.id}>#{ch.id} {ch.challenger_name} vs {ch.defender_name} ({ch.status})</option>)}</select></label>
+          <label>A challenger partner<br /><select value={resultDraft.a_chal} onChange={(e) => setResultDraft((c) => ({ ...c, a_chal: e.target.value }))} style={inputStyle}><option value="">Choose</option>{partnerPlayers.map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
+          <label>A defender partner<br /><select value={resultDraft.a_def} onChange={(e) => setResultDraft((c) => ({ ...c, a_def: e.target.value }))} style={inputStyle}><option value="">Choose</option>{partnerPlayers.filter((player) => String(player.player_id) !== resultDraft.a_chal).map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
+          <label>B challenger partner<br /><select value={resultDraft.b_chal} onChange={(e) => setResultDraft((c) => ({ ...c, b_chal: e.target.value }))} style={inputStyle}><option value="">Choose</option>{partnerPlayers.filter((player) => String(player.player_id) !== resultDraft.a_chal).map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
+          <label>B defender partner<br /><select value={resultDraft.b_def} onChange={(e) => setResultDraft((c) => ({ ...c, b_def: e.target.value }))} style={inputStyle}><option value="">Choose</option>{partnerPlayers.filter((player) => String(player.player_id) !== resultDraft.a_def && String(player.player_id) !== resultDraft.b_chal).map((p) => <option key={p.player_id} value={p.player_id}>{p.player_name}</option>)}</select></label>
           <label>Match A games<br /><input value={resultDraft.match_a_games} onChange={(e) => setResultDraft((c) => ({ ...c, match_a_games: e.target.value }))} placeholder="11-7,8-11,11-6" style={inputStyle} /></label>
           <label>Match B games<br /><input value={resultDraft.match_b_games} onChange={(e) => setResultDraft((c) => ({ ...c, match_b_games: e.target.value }))} placeholder="11-7,8-11,11-6" style={inputStyle} /></label>
           <label>Winner override<br /><select value={resultDraft.winner_override} onChange={(e) => setResultDraft((c) => ({ ...c, winner_override: e.target.value }))} style={inputStyle}><option value="computed">Computed</option><option value="challenger">Challenger</option><option value="defender">Defender</option></select></label>
           <label>Match date ISO<br /><input value={resultDraft.match_date} onChange={(e) => setResultDraft((c) => ({ ...c, match_date: e.target.value }))} style={inputStyle} /></label>
           <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={resultDraft.publish_official_matches} onChange={(e) => setResultDraft((c) => ({ ...c, publish_official_matches: e.target.checked }))} /> Publish official matches</label>
           <label>Confirmation<br /><input value={resultDraft.confirmation_text} onChange={(e) => setResultDraft((c) => ({ ...c, confirmation_text: e.target.value }))} placeholder="PUBLISH LADDER RESULT" style={inputStyle} /></label>
-          <button type="button" onClick={publishResult} disabled={busy} style={buttonStyle}>Publish result</button>
+          <button type="button" onClick={previewResult} disabled={busy || !resultDraft.challenge_id || !resultDraft.a_chal || !resultDraft.a_def || !resultDraft.b_chal || !resultDraft.b_def} style={ghostButtonStyle}>Preview result</button>
+          <button type="button" onClick={publishResult} disabled={busy || !currentDraftIsPreviewed || resultDraft.confirmation_text.trim().toUpperCase() !== "PUBLISH LADDER RESULT"} style={buttonStyle}>Publish reviewed result</button>
         </div>
+        {resultPreview ? <section style={{ border: `1px solid ${currentDraftIsPreviewed ? "#86efac" : "#fbbf24"}`, borderRadius: "12px", padding: "1rem", marginTop: "1rem", background: currentDraftIsPreviewed ? "#f0fdf4" : "#fffbeb" }}>
+          <h3 style={{ marginTop: 0 }}>{currentDraftIsPreviewed ? "Reviewed result preview" : "Preview is out of date"}</h3>
+          {currentDraftIsPreviewed ? <>
+            <p><strong>Winner:</strong> {resultPreview.preview.final_winner_side === "challenger" ? resultPreview.challenge.challenger_name : resultPreview.challenge.defender_name} ({resultPreview.preview.final_winner_side})</p>
+            <p><strong>Rank movement:</strong> {resultPreview.rank_result.would_swap ? "Challenger and defender ranks will swap." : "Defender holds; no rank swap."}</p>
+            <p><strong>Official matches:</strong> {resultPreview.would_publish_official_matches ? "Two rated Challenge Ladder matches will be submitted." : "No official match rows will be submitted."}</p>
+            <p style={{ color: "#475569" }}>Any change to the challenge, partners, scores, date, winner choice, or publish setting invalidates this review.</p>
+            <Pre value={{ partners: resultPreview.partner_names, winner: resultPreview.preview.winner_summary, scores: resultPreview.preview.scores, match_date: resultPreview.match_date }} />
+          </> : <p>Preview the edited draft again before publishing.</p>}
+        </section> : null}
       </article> : null}
       {dashboard ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Record forfeit</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Challenge<br /><select value={forfeitDraft.challenge_id} onChange={(e) => setForfeitDraft((c) => ({ ...c, challenge_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{openChallengeOptions.map((ch) => <option key={ch.id} value={ch.id}>#{ch.id} {ch.challenger_name} vs {ch.defender_name}</option>)}</select></label>
-          <label>Forfeited by player ID<br /><input value={forfeitDraft.forfeited_by_id} onChange={(e) => setForfeitDraft((c) => ({ ...c, forfeited_by_id: e.target.value }))} style={inputStyle} /></label>
+          <label>Challenge<br /><select value={forfeitDraft.challenge_id} onChange={(e) => setForfeitDraft((c) => ({ ...c, challenge_id: e.target.value, forfeited_by_id: "", confirmation_text: "" }))} style={inputStyle}><option value="">Choose</option>{openChallengeOptions.map((ch) => <option key={ch.id} value={ch.id}>#{ch.id} {ch.challenger_name} vs {ch.defender_name}</option>)}</select></label>
+          <label>Forfeited by<br /><select value={forfeitDraft.forfeited_by_id} onChange={(e) => setForfeitDraft((c) => ({ ...c, forfeited_by_id: e.target.value }))} style={inputStyle}><option value="">Choose</option>{selectedForfeitChallenge?.challenger_id ? <option value={selectedForfeitChallenge.challenger_id}>{selectedForfeitChallenge.challenger_name} · challenger</option> : null}{selectedForfeitChallenge?.defender_id ? <option value={selectedForfeitChallenge.defender_id}>{selectedForfeitChallenge.defender_name} · defender</option> : null}</select></label>
           <label>Note<br /><input value={forfeitDraft.admin_note} onChange={(e) => setForfeitDraft((c) => ({ ...c, admin_note: e.target.value }))} style={inputStyle} /></label>
           <label>Confirmation<br /><input value={forfeitDraft.confirmation_text} onChange={(e) => setForfeitDraft((c) => ({ ...c, confirmation_text: e.target.value }))} placeholder="RECORD LADDER FORFEIT" style={inputStyle} /></label>
-          <button type="button" onClick={recordForfeit} disabled={busy} style={ghostButtonStyle}>Record forfeit</button>
+          <button type="button" onClick={recordForfeit} disabled={busy || !forfeitDraft.challenge_id || !forfeitDraft.forfeited_by_id} style={ghostButtonStyle}>Record forfeit</button>
         </div>
       </article> : null}
       {dashboard ? <article style={cardStyle}>

@@ -162,7 +162,19 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         settings = _safe_rows(supabase.table("ladder_settings").select("*").eq("club_id", str(club_id)).limit(1).execute())
     except Exception:
         settings = []
-    return {"ok": True, "mode": "challenge_ladder_admin_dashboard", **public_payload, "bucket_counts": bucket_counts, "challenges": challenges, "settings_row": settings[0] if settings else {}}
+    player_options = [
+        {"player_id": player_id, "player_name": player_name}
+        for player_id, player_name in sorted(names.items(), key=lambda item: (item[1].casefold(), item[0]))
+    ]
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_admin_dashboard",
+        **public_payload,
+        "bucket_counts": bucket_counts,
+        "challenges": challenges,
+        "settings_row": settings[0] if settings else {},
+        "player_options": player_options,
+    }
 
 
 def _write_ladder_audit(supabase: Any, *, club_id: str, actor_email: str, actor_role: str, action_type: str, entity_id: str, before: Any, after: Any, source: str, note: str | None = None) -> str | None:
@@ -410,6 +422,97 @@ def preview_admin_challenge_ladder_result(
     return {"ok": True, "winner_summary": winner, "final_winner_side": final_side, "final_winner_id": final_winner_id, "scores": {"match_a": {"score_t1": a_s1, "score_t2": a_s2, "games": a_games}, "match_b": {"score_t1": b_s1, "score_t2": b_s2, "games": b_games}}}
 
 
+def _prepare_admin_challenge_ladder_result(
+    supabase: Any,
+    *,
+    club_id: str,
+    challenge_id: int,
+    partner_a_challenger_id: int,
+    partner_a_defender_id: int,
+    partner_b_challenger_id: int,
+    partner_b_defender_id: int,
+    match_a_games: list[list[int]],
+    match_b_games: list[list[int]],
+    winner_override: str,
+) -> tuple[dict[str, Any], dict[int, str], dict[str, int], dict[str, Any]]:
+    if not is_admin_challenge_ladder_enabled():
+        raise PermissionError("Next Challenge Ladder Admin is disabled.")
+    challenge = _challenge(supabase, club_id=str(club_id), challenge_id=int(challenge_id))
+    if str(challenge.get("status") or "") not in {"ACCEPTED_SCHEDULING", "ACCEPTED", "IN_PROGRESS", "AWAITING_VERIFICATION", "OVERDUE_PLAY"}:
+        raise ValueError("Challenge must be accepted/in progress before previewing a result.")
+    if challenge.get("completed_at") or challenge.get("winner_id"):
+        raise ValueError("Challenge already has a recorded result.")
+
+    partners = {
+        "a_chal": int(partner_a_challenger_id),
+        "a_def": int(partner_a_defender_id),
+        "b_chal": int(partner_b_challenger_id),
+        "b_def": int(partner_b_defender_id),
+    }
+    names = _player_names(supabase, club_id=str(club_id))
+    missing_partner_ids = sorted({player_id for player_id in partners.values() if player_id not in names})
+    if missing_partner_ids:
+        raise ValueError("All partners must be players in this club.")
+
+    preview = preview_admin_challenge_ladder_result(
+        challenger_id=int(challenge["challenger_id"]),
+        defender_id=int(challenge["defender_id"]),
+        partner_a_challenger_id=partners["a_chal"],
+        partner_a_defender_id=partners["a_def"],
+        partner_b_challenger_id=partners["b_chal"],
+        partner_b_defender_id=partners["b_def"],
+        match_a_games=match_a_games,
+        match_b_games=match_b_games,
+        winner_override=winner_override,
+    )
+    return challenge, names, partners, preview
+
+
+def preview_admin_challenge_ladder_result_for_challenge(
+    supabase: Any,
+    *,
+    club_id: str,
+    challenge_id: int,
+    partner_a_challenger_id: int,
+    partner_a_defender_id: int,
+    partner_b_challenger_id: int,
+    partner_b_defender_id: int,
+    match_a_games: list[list[int]],
+    match_b_games: list[list[int]],
+    match_date: str,
+    winner_override: str,
+    publish_official_matches: bool,
+) -> dict[str, Any]:
+    """Validate and preview a played result without writing matches, ranks, or audit rows."""
+
+    challenge, names, partners, preview = _prepare_admin_challenge_ladder_result(
+        supabase,
+        club_id=str(club_id),
+        challenge_id=int(challenge_id),
+        partner_a_challenger_id=partner_a_challenger_id,
+        partner_a_defender_id=partner_a_defender_id,
+        partner_b_challenger_id=partner_b_challenger_id,
+        partner_b_defender_id=partner_b_defender_id,
+        match_a_games=match_a_games,
+        match_b_games=match_b_games,
+        winner_override=winner_override,
+    )
+    final_winner_id = int(preview["final_winner_id"])
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_result_preview",
+        "challenge": _challenge_row(challenge, names),
+        "preview": preview,
+        "partner_names": {key: names[player_id] for key, player_id in partners.items()},
+        "match_date": _clean(match_date, limit=80) or _now_iso(),
+        "would_publish_official_matches": bool(publish_official_matches),
+        "rank_result": {
+            "would_swap": final_winner_id == int(challenge["challenger_id"]),
+            "reason": "challenger win" if final_winner_id == int(challenge["challenger_id"]) else "defender held",
+        },
+    }
+
+
 def _load_match_context(supabase: Any, club_id: str) -> tuple[Any, Any, Any, Any]:
     df_players_all, _df_players_active, df_leagues, _df_matches, df_meta, _df_badges, _df_player_badges, name_to_id, _id_to_name, _schema_degraded, _schema_degraded_reason = load_data(supabase, str(club_id), match_limit=5000)
     return df_players_all, df_leagues, df_meta, name_to_id
@@ -471,19 +574,14 @@ def record_admin_challenge_ladder_result(
         raise PermissionError("Next Challenge Ladder Admin is disabled.")
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_RESULT:
         raise ValueError(f"Type {CONFIRM_RESULT} to publish a ladder result.")
-    challenge = _challenge(supabase, club_id=str(club_id), challenge_id=int(challenge_id))
-    if str(challenge.get("status") or "") not in {"ACCEPTED_SCHEDULING", "ACCEPTED", "IN_PROGRESS", "AWAITING_VERIFICATION", "OVERDUE_PLAY"}:
-        raise ValueError("Challenge must be accepted/in progress before recording a result.")
-    if challenge.get("completed_at") or challenge.get("winner_id"):
-        raise ValueError("Challenge already has a recorded result.")
-    partners = {"a_chal": int(partner_a_challenger_id), "a_def": int(partner_a_defender_id), "b_chal": int(partner_b_challenger_id), "b_def": int(partner_b_defender_id)}
-    preview = preview_admin_challenge_ladder_result(
-        challenger_id=int(challenge["challenger_id"]),
-        defender_id=int(challenge["defender_id"]),
-        partner_a_challenger_id=partners["a_chal"],
-        partner_a_defender_id=partners["a_def"],
-        partner_b_challenger_id=partners["b_chal"],
-        partner_b_defender_id=partners["b_def"],
+    challenge, _names, partners, preview = _prepare_admin_challenge_ladder_result(
+        supabase,
+        club_id=str(club_id),
+        challenge_id=int(challenge_id),
+        partner_a_challenger_id=partner_a_challenger_id,
+        partner_a_defender_id=partner_a_defender_id,
+        partner_b_challenger_id=partner_b_challenger_id,
+        partner_b_defender_id=partner_b_defender_id,
         match_a_games=match_a_games,
         match_b_games=match_b_games,
         winner_override=winner_override,

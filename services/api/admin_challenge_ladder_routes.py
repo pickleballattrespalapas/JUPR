@@ -13,6 +13,7 @@ from jupr_app.services.admin_challenge_ladder_service import (
     create_admin_challenge_ladder_challenge,
     get_admin_challenge_ladder_dashboard,
     is_admin_challenge_ladder_enabled,
+    preview_admin_challenge_ladder_result_for_challenge,
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_result,
     start_admin_challenge_ladder_clock,
@@ -63,6 +64,19 @@ class ChallengeResultRequest(BaseModel):
     publish_official_matches: bool = True
     confirmation_text: str = ""
     source: str = "next_challenge_ladder_result"
+
+
+class ChallengeResultPreviewRequest(BaseModel):
+    partner_a_challenger_id: int
+    partner_a_defender_id: int
+    partner_b_challenger_id: int
+    partner_b_defender_id: int
+    match_a_games: list[list[int]] = Field(default_factory=list)
+    match_b_games: list[list[int]] = Field(default_factory=list)
+    match_date: str = ""
+    winner_override: str = "computed"
+    publish_official_matches: bool = True
+    source: str = "next_challenge_ladder_result_preview"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
@@ -188,6 +202,30 @@ def install_admin_challenge_ladder_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/challenge-ladder/challenges/{challenge_id}/result/preview")
+    def post_admin_challenge_ladder_result_preview(club_id: str, challenge_id: int, payload: ChallengeResultPreviewRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_challenge_ladder_enabled():
+            raise HTTPException(status_code=403, detail="Next Challenge Ladder Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        try:
+            return preview_admin_challenge_ladder_result_for_challenge(
+                supabase,
+                club_id=str(club_id),
+                challenge_id=int(challenge_id),
+                partner_a_challenger_id=payload.partner_a_challenger_id,
+                partner_a_defender_id=payload.partner_a_defender_id,
+                partner_b_challenger_id=payload.partner_b_challenger_id,
+                partner_b_defender_id=payload.partner_b_defender_id,
+                match_a_games=payload.match_a_games,
+                match_b_games=payload.match_b_games,
+                match_date=payload.match_date,
+                winner_override=payload.winner_override,
+                publish_official_matches=payload.publish_official_matches,
             )
         except Exception as exc:
             _handle(exc)

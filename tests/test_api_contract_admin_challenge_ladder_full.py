@@ -1,12 +1,18 @@
+from copy import deepcopy
 from types import SimpleNamespace
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from jupr_app.services.admin_challenge_ladder_service import (
     accept_admin_challenge_ladder_challenge,
     create_admin_challenge_ladder_challenge,
     preview_admin_challenge_ladder_result,
+    preview_admin_challenge_ladder_result_for_challenge,
     record_admin_challenge_ladder_forfeit,
     record_admin_challenge_ladder_result,
 )
+from services.api.admin_challenge_ladder_routes import install_admin_challenge_ladder_routes
 
 
 class FakeQuery:
@@ -120,6 +126,88 @@ def test_preview_defender_holds_exact_tie():
         match_b_games=[[9, 11], [11, 7]],
     )
     assert preview["final_winner_id"] == 1
+
+
+def test_challenge_result_preview_is_read_only_and_reports_rank_effect(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"][0]["status"] = "ACCEPTED_SCHEDULING"
+    before = deepcopy(supabase.storage)
+
+    result = preview_admin_challenge_ladder_result_for_challenge(
+        supabase,
+        club_id="club",
+        challenge_id=100,
+        partner_a_challenger_id=3,
+        partner_a_defender_id=4,
+        partner_b_challenger_id=5,
+        partner_b_defender_id=6,
+        match_a_games=[[11, 5], [11, 6]],
+        match_b_games=[[11, 4], [11, 6]],
+        match_date="2026-01-02T00:00:00Z",
+        winner_override="computed",
+        publish_official_matches=True,
+    )
+
+    assert result["mode"] == "challenge_ladder_result_preview"
+    assert result["preview"]["final_winner_id"] == 2
+    assert result["rank_result"] == {"would_swap": True, "reason": "challenger win"}
+    assert result["partner_names"]["a_chal"] == "Partner A"
+    assert result["would_publish_official_matches"] is True
+    assert supabase.storage == before
+
+
+def test_challenge_result_preview_rejects_player_from_another_club(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"][0]["status"] = "ACCEPTED_SCHEDULING"
+
+    try:
+        preview_admin_challenge_ladder_result_for_challenge(
+            supabase,
+            club_id="club",
+            challenge_id=100,
+            partner_a_challenger_id=3,
+            partner_a_defender_id=4,
+            partner_b_challenger_id=5,
+            partner_b_defender_id=999,
+            match_a_games=[[11, 5], [11, 6]],
+            match_b_games=[[11, 4], [11, 6]],
+            match_date="2026-01-02T00:00:00Z",
+            winner_override="computed",
+            publish_official_matches=True,
+        )
+    except ValueError as exc:
+        assert "players in this club" in str(exc)
+    else:
+        raise AssertionError("expected club-scoped partner validation")
+
+
+def test_challenge_result_preview_route_requires_authentication(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER", "1")
+    supabase = FakeSupabase()
+    supabase.storage["ladder_challenges"][0]["status"] = "ACCEPTED_SCHEDULING"
+    app = FastAPI()
+    install_admin_challenge_ladder_routes(app, get_supabase_client=lambda: supabase)
+
+    contract_path = "/admin/clubs/{club_id}/challenge-ladder/challenges/{challenge_id}/result/preview"
+    path = "/admin/clubs/club/challenge-ladder/challenges/100/result/preview"
+    assert "post" in app.openapi()["paths"][contract_path]
+    response = TestClient(app).post(
+        path,
+        json={
+            "partner_a_challenger_id": 3,
+            "partner_a_defender_id": 4,
+            "partner_b_challenger_id": 5,
+            "partner_b_defender_id": 6,
+            "match_a_games": [[11, 5], [11, 6]],
+            "match_b_games": [[11, 4], [11, 6]],
+            "match_date": "2026-01-02T00:00:00Z",
+        },
+    )
+
+    assert response.status_code == 401
+    assert supabase.storage["admin_activity_log"] == []
 
 
 def test_forfeit_swaps_rank_when_defender_forfeits(monkeypatch):

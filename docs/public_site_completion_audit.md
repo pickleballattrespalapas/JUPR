@@ -6,7 +6,7 @@ Current working assessment for the first Pickleball Club Sandwich public website
 
 - First working public website draft: approximately 90% complete.
 - Custom-domain launch readiness from the repository side: approximately 80% complete.
-- Full Streamlit replacement: approximately 60% complete because several admin workflows intentionally remain guarded, foundation-only, or Streamlit-backed.
+- Full Streamlit replacement: approximately 80% complete. Feature implementation is further ahead than operational readiness; guarded admin workflows still require isolated staging pilots before cutover.
 
 ## Public website coverage
 
@@ -30,7 +30,7 @@ Current working assessment for the first Pickleball Club Sandwich public website
 | Tournament board | Draft | Public-safe board plus token-gated interest flow exists. |
 | Player directory/profile/history | Complete draft | Public player and match surfaces exist. |
 | Support/contact | Complete draft | Routes to `joe@juprleagues.com`. |
-| Privacy/Terms | Complete draft | Formal first-party copy is present; review may still revise language. |
+| Privacy/Terms | Partial | First-party privacy copy exists; Terms remains a placeholder pending owner/legal approval. |
 | Data corrections | Complete draft | Staff-reviewed intake instructions exist; no public mutation. |
 
 ## Admin migration coverage
@@ -41,11 +41,11 @@ Current working assessment for the first Pickleball Club Sandwich public website
 | Match Log | Partial | Read, duplicate scan, guarded apply/cleanup exist. |
 | Replay History | Partial | Guarded replay foundation exists. |
 | Match Uploader | Partial/strong pilot | Manual batch, round-robin preview, new-player continue flow exist. |
-| Player Editor | Foundation | Roster/detail/create/basic update exist; merge/social/league edits remain out of scope. |
+| Player Editor | Guarded staging pilot | Roster/detail/create/basic update, merge preview/execute, social identity, and league-rating edits exist behind authenticated FastAPI boundaries. |
 | League Manager | Guarded staging pilot | Draft creation/duplication, structured settings, lifecycle, roster, live rounds, print, and awards flows use authenticated FastAPI boundaries; Streamlit remains the production fallback. |
-| Tournament admin/ops | Not started in Next | Still Streamlit/admin future work. |
-| Challenge Ladder admin | Not started in Next | Future guarded admin workflow. |
-| Weekly Recap admin | Not started in Next | Future guarded admin workflow. |
+| Tournament admin/ops | Guarded staging pilot | Setup, registration management, draws, scoring, podiums, awards, live operation, and official publishing exist; full staging E2E remains required. |
+| Challenge Ladder admin | Guarded staging pilot | Creation, clock/acceptance, read-only result preview, reviewed publish, official matches, rank movement, cancellation, and forfeits exist. |
+| Weekly Recap admin | Guarded staging pilot | Draft generation, edits, preview, publish, and unpublish exist behind authenticated FastAPI boundaries. |
 
 ## Decisions already encoded
 
@@ -60,7 +60,7 @@ Current working assessment for the first Pickleball Club Sandwich public website
 
 - Continue copy cleanup away from legacy public naming where it appears in user-facing pages.
 - Add deeper browser/E2E tests after staging URLs are stable.
-- Add organizer-facing registration management and public board moderation in later admin slices.
+- Validate organizer registration management and Partner Board review/accept/cancel behavior end to end in staging.
 - Continue replacing public-facing naming while keeping internal package/env/table names stable until a separate technical rename plan exists.
 
 ## Remaining deployment validation

@@ -69,6 +69,8 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 12. Weekly Recap Admin.
 13. Admin Tools, workers, and backfills.
 
+Challenge Ladder Admin now includes the full guarded staging workflow: tier-aware challenge creation, accept-clock transitions, a read-only played-result preview, exact-draft browser review gating, official match publication through the Python match service, direct challenger-win rank swaps, and forfeits. It remains a staging pilot until exercised against isolated ladder data with Match Log and Replay History recovery checks.
+
 ## Enablement checklist
 
 Before enabling a write workflow for staff use:

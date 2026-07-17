@@ -61,6 +61,7 @@ class FakeSupabase:
             "players": [
                 {"club_id": "club", "id": 1, "name": "Alex", "rating": 1600, "active": True},
                 {"club_id": "club", "id": 2, "name": "Blair", "rating": 1500, "active": True},
+                {"club_id": "club", "id": 3, "name": "Casey", "rating": 1450, "active": True},
             ],
             "ladder_settings": [{"club_id": "club", "challenge_range": 7, "accept_window_hours": 48, "play_window_days": 7, "cooldown_hours": 72, "protected_hours": 72, "pass_hold_hours": 72}],
             "ladder_roster": [
@@ -83,6 +84,11 @@ def test_challenge_ladder_dashboard(monkeypatch):
     assert payload["ok"] is True
     assert payload["summary"]["active_player_count"] == 2
     assert payload["challenges"][0]["challenger_name"] == "Blair"
+    assert payload["player_options"] == [
+        {"player_id": 1, "player_name": "Alex"},
+        {"player_id": 2, "player_name": "Blair"},
+        {"player_id": 3, "player_name": "Casey"},
+    ]
 
 
 def test_challenge_ladder_update_requires_confirmation(monkeypatch):
