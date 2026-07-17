@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -11,6 +12,7 @@ from jupr_app.services.admin_league_manager_service import (
 )
 
 CONFIRM_CREATE_LEAGUE = "CREATE LEAGUE"
+CONFIRM_DUPLICATE_LEAGUE = "DUPLICATE LEAGUE"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 
 
@@ -56,6 +58,52 @@ def _existing_league_names(supabase: Any, *, club_id: str) -> set[str]:
 def _is_unique_violation(exc: Exception) -> bool:
     code = str(getattr(exc, "code", "") or "")
     return code == "23505" or "duplicate key" in str(exc).lower()
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if value in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _find_league_row(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any] | None:
+    normalized_name = _clean_text(league_name, limit=120).casefold()
+    rows = _safe_rows(
+        supabase.table("leagues_metadata")
+        .select("*")
+        .eq("club_id", str(club_id))
+        .execute()
+    )
+    return next(
+        (
+            row
+            for row in rows
+            if _clean_text(row.get("league_name"), limit=120).casefold() == normalized_name
+        ),
+        None,
+    )
+
+
+def _cleanup_unaudited_draft(supabase: Any, *, club_id: str, league_name: str) -> None:
+    """Best-effort compensation if a newly inserted draft cannot be audited."""
+
+    try:
+        (
+            supabase.table("leagues_metadata")
+            .delete()
+            .eq("club_id", str(club_id))
+            .eq("league_name", str(league_name))
+            .eq("status", "draft")
+            .execute()
+        )
+    except Exception:
+        pass
 
 
 def create_admin_league_manager_draft(
@@ -139,6 +187,128 @@ def create_admin_league_manager_draft(
         "ok": True,
         "mode": "league_manager_draft_create",
         "created": True,
+        "league": detail.get("league"),
+        "detail": detail,
+        "warnings": warnings,
+    }
+
+
+def duplicate_admin_league_manager_draft(
+    supabase: Any,
+    *,
+    club_id: str,
+    source_league_name: str,
+    target_league_name: str,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_league_manager_duplicate",
+) -> dict[str, Any]:
+    if not is_admin_league_manager_enabled():
+        raise PermissionError("Next League Manager is disabled.")
+    if str(confirmation_text or "").strip().upper() != CONFIRM_DUPLICATE_LEAGUE:
+        raise ValueError(f"Type {CONFIRM_DUPLICATE_LEAGUE} to duplicate the league as a draft.")
+
+    clean_club_id = _clean_text(club_id, limit=120)
+    clean_source_name = _clean_text(source_league_name, limit=120)
+    clean_target_name = _clean_text(target_league_name, limit=120)
+    if not clean_club_id:
+        raise ValueError("club_id is required")
+    if not clean_source_name:
+        raise ValueError("source_league_name is required")
+    if not clean_target_name:
+        raise ValueError("target_league_name is required")
+
+    source_league = _find_league_row(
+        supabase,
+        club_id=clean_club_id,
+        league_name=clean_source_name,
+    )
+    if source_league is None:
+        raise ValueError("source league not found")
+    if clean_target_name.casefold() in _existing_league_names(supabase, club_id=clean_club_id):
+        raise ValueError("A league with that name already exists for this club.")
+
+    insert_payload = {
+        "club_id": clean_club_id,
+        "league_name": clean_target_name,
+        "description": _clean_text(source_league.get("description"), limit=2000),
+        "min_games": _bounded_int(
+            source_league.get("min_games") if source_league.get("min_games") is not None else 0,
+            field="min_games",
+            minimum=0,
+            maximum=1000,
+        ),
+        "k_factor": _bounded_int(
+            source_league.get("k_factor") if source_league.get("k_factor") is not None else 32,
+            field="k_factor",
+            minimum=1,
+            maximum=128,
+        ),
+        "is_active": False,
+        "status": "draft",
+        "schedule_config": _json_object(source_league.get("schedule_config")),
+        "court_board_defaults": _json_object(source_league.get("court_board_defaults")),
+        "rules_config": _json_object(source_league.get("rules_config")),
+        "awards_config": _json_object(source_league.get("awards_config")),
+        "event_tags": normalize_event_tags(source_league.get("event_tags")),
+    }
+    try:
+        inserted = _safe_rows(supabase.table("leagues_metadata").insert(insert_payload).execute())
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise ValueError("A league with that name already exists for this club.") from exc
+        raise
+    created = inserted[0] if inserted else insert_payload
+
+    audit_payload = build_activity_payload(
+        club_id=clean_club_id,
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="duplicate_league_manager_draft_admin",
+        entity_type="leagues_metadata",
+        entity_id=clean_target_name,
+        before_json={
+            "source_league_name": clean_source_name,
+            "source_league": source_league,
+        },
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "source_league_name": clean_source_name,
+            "league": created,
+            "roster_copied": False,
+        },
+        source_page=source,
+        flagged_for_review=True,
+    )
+    try:
+        audit_write = write_admin_activity_log(supabase, audit_payload)
+        warnings: list[str] = []
+        if audit_write.warning:
+            warnings.append(audit_write.warning)
+        if not audit_write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+            raise RuntimeError("audit log write required but unavailable")
+    except Exception:
+        _cleanup_unaudited_draft(
+            supabase,
+            club_id=clean_club_id,
+            league_name=clean_target_name,
+        )
+        raise
+
+    detail = get_admin_league_manager_detail(
+        supabase,
+        club_id=clean_club_id,
+        league_name=clean_target_name,
+    )
+    return {
+        "ok": True,
+        "mode": "league_manager_draft_duplicate",
+        "created": True,
+        "league_name": clean_target_name,
+        "source_league_name": clean_source_name,
+        "roster_copied": False,
         "league": detail.get("league"),
         "detail": detail,
         "warnings": warnings,

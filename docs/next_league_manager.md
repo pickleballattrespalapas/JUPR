@@ -6,10 +6,13 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 
 - FastAPI status endpoint: `GET /admin/clubs/{club_id}/league-manager/status`.
 - FastAPI league list endpoint: `GET /admin/clubs/{club_id}/league-manager/leagues`.
+- FastAPI league draft creation endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues`.
+- FastAPI configuration-only duplication endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues/{league_name}/duplicate`.
 - FastAPI league detail endpoint: `GET /admin/clubs/{club_id}/league-manager/leagues/{league_name}`.
 - Next route: `/admin/league-manager`.
-- Read-only league status, K-factor, min-games, schedule preview, court-board/rules/awards configuration visibility, and standings snapshot.
-- Supabase access token entry for the closed-club pilot.
+- League status, K-factor, min-games, schedule preview, court-board/rules/awards configuration visibility, and standings snapshot.
+- Guarded draft creation and configuration-only duplication. Duplication never copies roster membership, standings, results, lifecycle dates, or issued awards.
+- Stored Supabase admin session for the closed-club staging pilot.
 
 ## Runtime flag
 
@@ -21,27 +24,23 @@ JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1
 
 ## Authorization
 
-When enabled, league list/detail reads require a Supabase access token whose resolved role has `manage_matches` permission. Role lookup uses `admin_role_assignments` through FastAPI.
+When enabled, League Manager reads and writes require a stored Supabase admin session whose resolved role has `manage_matches` permission. Role lookup uses `admin_role_assignments` through FastAPI.
 
 ## Data path
 
-The browser sends admin reads to FastAPI. FastAPI keeps club scope, permission checks, and league read-model normalization in Python.
+The browser sends admin reads and guarded writes to FastAPI. FastAPI keeps club scope, permission checks, audit attribution, and league read-model normalization in Python.
 
 No browser-side code writes directly to Supabase tables and no league movement, schedule generation, score submission, award minting, or rating logic is implemented in TypeScript.
 
-## Explicitly out of scope for this foundation slice
+## Current safety boundaries
 
-- League setup or metadata writes.
-- Court-board roster movement.
-- Live ladder round generation or movement.
-- League-night score submission.
-- End-of-league awards and badge minting.
-
-Those remain Streamlit-only until Match Log, Replay History, Match Uploader, and Player Editor foundations are proven in staging and the operator recovery path is clear.
+- Create and duplicate operations always produce inactive drafts.
+- Duplication copies only whitelisted league configuration and never roster, result, lifecycle-date, or issued-award data.
+- Mutations require explicit confirmation text and an authorized club-scoped admin session.
+- Staging requires successful API audit logging; Streamlit remains the production fallback.
+- Rating, match, movement, and award calculations remain in Python services.
 
 ## Follow-up slices
 
-- Add guarded league setup/edit APIs after schema and audit contracts are reviewed.
-- Add roster/court-board dry-run previews before any roster movement write path.
-- Add live ladder round planning as a preview-only API before score writes.
-- Replace token-paste UX with real Next admin session/auth once the auth shell is ready.
+- Add explicit start, pause, resume, end, and archive lifecycle actions instead of relying on a general settings status selector.
+- Validate draft create/duplicate, live rounds, court movement, awards close, and Match Log/Replay recovery against isolated staging data.

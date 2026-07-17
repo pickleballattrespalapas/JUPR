@@ -37,6 +37,7 @@ def test_league_manager_status_disabled_contract(monkeypatch):
     assert payload["enabled"] is False
     assert payload["leagues_endpoint"] is None
     assert payload["league_create_endpoint"] is None
+    assert payload["league_duplicate_endpoint"] is None
 
 
 def test_league_manager_list_disabled_before_auth(monkeypatch):
@@ -68,6 +69,7 @@ def test_league_manager_status_enabled_contract(monkeypatch):
     assert payload["enabled"] is True
     assert payload["leagues_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues"
     assert payload["league_create_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues"
+    assert payload["league_duplicate_endpoint"] == "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/duplicate"
     assert payload["league_count"] == 2
 
 

@@ -42,6 +42,9 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
   const [createKFactor, setCreateKFactor] = useState("32");
   const [createConfirm, setCreateConfirm] = useState("");
 
+  const [duplicateName, setDuplicateName] = useState("");
+  const [duplicateConfirm, setDuplicateConfirm] = useState("");
+
   const [settingsDescription, setSettingsDescription] = useState("");
   const [settingsStatus, setSettingsStatus] = useState("draft");
   const [settingsKFactor, setSettingsKFactor] = useState("32");
@@ -120,7 +123,7 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
     setSelectedLeague(leagueName); setDetail(null); setMessage(null);
     if (!leagueName || !requireReady()) return;
     setSaving(true);
-    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); }
+    try { const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`); setDetail(payload); hydrateAll(payload); setDuplicateName(`${leagueName} Copy`); setDuplicateConfirm(""); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load league detail."); }
     finally { setSaving(false); }
   }
@@ -140,9 +143,29 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
       setLeagues(listing.leagues || []);
       setSelectedLeague(payload.league?.league_name || name);
       if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
+      setDuplicateName(`${payload.league?.league_name || name} Copy`); setDuplicateConfirm("");
       setCreateName(""); setCreateDescription(""); setCreateMinGames("6"); setCreateKFactor("32"); setCreateConfirm("");
       setMessage(`Created draft league ${payload.league?.league_name || name}.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to create league draft."); }
+    finally { setSaving(false); }
+  }
+
+  async function duplicateLeagueDraft() {
+    if (!selectedLeague || !detail) { setMessage("Select a league before duplicating it."); return; }
+    if (!requireReady()) return;
+    const targetName = duplicateName.trim();
+    if (!targetName) { setMessage("New draft name is required."); return; }
+    setSaving(true); setMessage(null);
+    try {
+      const payload = await requestJson<AdminLeagueManagerWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(selectedLeague)}/duplicate`, { method: "POST", body: JSON.stringify({ target_league_name: targetName, confirmation_text: duplicateConfirm, source: "next_league_manager_duplicate_form" }) });
+      const listing = await requestJson<AdminLeagueManagerListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues`);
+      const createdName = payload.league?.league_name || payload.league_name || targetName;
+      setLeagues(listing.leagues || []);
+      setSelectedLeague(createdName);
+      if (payload.detail) { setDetail(payload.detail); hydrateAll(payload.detail); }
+      setDuplicateName(`${createdName} Copy`); setDuplicateConfirm("");
+      setMessage(`Duplicated ${payload.source_league_name || selectedLeague} as draft ${createdName}. Roster and results were not copied.`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to duplicate league draft."); }
     finally { setSaving(false); }
   }
 
@@ -203,6 +226,16 @@ export default function LeagueManagerPanel({ apiBase, clubId, status }: Props) {
 
       {detail ? <>
         <article style={cardStyle}><h2 style={{ marginTop: 0 }}>{detail.league.league_name}</h2>{detail.league.description ? <p style={{ color: "#475569" }}>{detail.league.description}</p> : null}<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem" }}><div><strong>Status</strong><br />{detail.league.status}</div><div><strong>K-factor</strong><br />{detail.league.k_factor ?? "—"}</div><div><strong>Min games</strong><br />{detail.league.min_games ?? "—"}</div><div><strong>Standings rows</strong><br />{detail.standings_count}</div><div><strong>League roster</strong><br />{detail.league_roster_count ?? 0} / {detail.roster_count ?? detail.roster?.length ?? 0}</div></div></article>
+
+        <article style={{ ...cardStyle, background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0 }}>Duplicate this league as a draft</h2>
+          <p style={{ color: "#475569" }}>Copies the description, schedule, court, rules, awards, ratings, and event-tag configuration. It does not copy roster membership, standings, results, start/end dates, or awards already issued.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+            <label><strong>New draft name</strong><br /><input value={duplicateName} onChange={(event) => setDuplicateName(event.target.value)} maxLength={120} style={inputStyle} /></label>
+            <label><strong>Type DUPLICATE LEAGUE</strong><br /><input value={duplicateConfirm} onChange={(event) => setDuplicateConfirm(event.target.value)} placeholder="DUPLICATE LEAGUE" style={inputStyle} /></label>
+            <button type="button" onClick={duplicateLeagueDraft} disabled={saving || !accessToken || !duplicateName.trim() || duplicateConfirm.trim().toUpperCase() !== "DUPLICATE LEAGUE"} style={buttonStyle}>{saving ? "Duplicating…" : "Duplicate draft"}</button>
+          </div>
+        </article>
 
         <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Guided settings editor</h2><p style={{ color: "#475569" }}>Edit metadata used by league schedule previews, score-entry defaults, court-board setup, rules, and awards. Type <code>SAVE LEAGUE</code> before saving.</p><label><strong>Description</strong><br /><textarea value={settingsDescription} onChange={(event) => setSettingsDescription(event.target.value)} maxLength={2000} rows={3} style={inputStyle} /></label><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Status</strong><br /><select value={settingsStatus} onChange={(event) => setSettingsStatus(event.target.value)} style={inputStyle}><option value="draft">draft</option><option value="active">active</option><option value="paused">paused</option><option value="ended">ended</option><option value="archived">archived</option></select></label><label><strong>K-factor</strong><br /><input type="number" value={settingsKFactor} onChange={(event) => setSettingsKFactor(event.target.value)} min={1} max={128} style={inputStyle} /></label><label><strong>Min games</strong><br /><input type="number" value={settingsMinGames} onChange={(event) => setSettingsMinGames(event.target.value)} min={0} max={1000} style={inputStyle} /></label><label><strong>Type SAVE LEAGUE</strong><br /><input value={settingsConfirm} onChange={(event) => setSettingsConfirm(event.target.value)} style={inputStyle} /></label></div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}><label><strong>Schedule config JSON</strong><br /><textarea value={scheduleConfigText} onChange={(event) => setScheduleConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Court board defaults JSON</strong><br /><textarea value={courtDefaultsText} onChange={(event) => setCourtDefaultsText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Rules config JSON</strong><br /><textarea value={rulesConfigText} onChange={(event) => setRulesConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Awards config JSON</strong><br /><textarea value={awardsConfigText} onChange={(event) => setAwardsConfigText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label><label><strong>Event tags JSON</strong><br /><textarea value={eventTagsText} onChange={(event) => setEventTagsText(event.target.value)} rows={8} style={{ ...inputStyle, fontFamily: "monospace" }} /></label></div><p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={saveLeagueSettings} disabled={saving || !accessToken || settingsConfirm.trim().toUpperCase() !== "SAVE LEAGUE"} style={buttonStyle}>{saving ? "Saving…" : "Save league settings"}</button><button type="button" onClick={() => hydrateSettings(detail)} disabled={saving} style={ghostButtonStyle}>Reset from loaded league</button></p></article>
 
