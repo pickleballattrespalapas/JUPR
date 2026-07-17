@@ -1,6 +1,7 @@
 -- Serialize tournament registration selection edits with partner relationship
 -- mutations. The public RPC is server-only and is the only supported path for
 -- moving an existing selection between event options/days.
+-- The filename version matches the applied staging migration ledger.
 
 do $migration_preflight$
 begin

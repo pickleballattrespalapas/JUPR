@@ -3,10 +3,10 @@ from pathlib import Path
 
 
 MIGRATION = Path(
-    "supabase/migrations/20260717133729_selection_update_transaction_guards.sql"
+    "supabase/migrations/20260717141224_selection_update_transaction_guards.sql"
 )
 RELATIONSHIP_LOCK_SCOPE_FOLLOW_UP = Path(
-    "supabase/migrations/20260717141502_selection_relationship_update_lock_scope.sql"
+    "supabase/migrations/20260717142402_selection_relationship_update_lock_scope.sql"
 )
 
 
@@ -45,7 +45,7 @@ def test_selection_transaction_guard_uses_canonical_supabase_migration():
     assert MIGRATION.is_file()
     assert MIGRATION.parent.as_posix() == "supabase/migrations"
     assert not Path(
-        "migrations/20260717133729_selection_update_transaction_guards.sql"
+        "migrations/20260717141224_selection_update_transaction_guards.sql"
     ).exists()
 
 

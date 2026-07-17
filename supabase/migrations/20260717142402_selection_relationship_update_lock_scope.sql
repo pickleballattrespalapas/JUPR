@@ -1,4 +1,4 @@
--- Follow-up to 20260717133729_selection_update_transaction_guards.sql.
+-- Follow-up to 20260717141224_selection_update_transaction_guards.sql.
 -- UPDATE triggers lock only the selections referenced by NEW. This preserves
 -- ON DELETE SET NULL cascades, where the OLD selection may already be gone.
 
