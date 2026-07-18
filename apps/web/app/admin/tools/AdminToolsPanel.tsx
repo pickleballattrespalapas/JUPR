@@ -7,6 +7,7 @@ type StatusResponse = { enabled: boolean; status: string; roles?: string[]; rete
 type OverviewResponse = { ok: boolean; roles: Array<Record<string, unknown>>; activity: Array<Record<string, unknown>>; activity_warning?: string | null; health: Record<string, unknown>; role_options: string[]; retention_days: number; retention_cutoff: string };
 type RoleResponse = { ok: boolean; roles: Array<Record<string, unknown>>; audit_warning?: string | null };
 type WorkerResponse = { ok: boolean; mode?: string; result?: Record<string, unknown>; summary?: Record<string, unknown>; worker_status?: Record<string, unknown>; audit_warning?: string | null };
+type TournamentBackfillPreviewResponse = { ok: boolean; mode: "tournament_match_backfill_preview"; read_only: true; summary: Record<string, unknown>; candidates: Array<Record<string, unknown>>; warnings: string[] };
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -43,6 +44,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [recomputeStrictGlobal, setRecomputeStrictGlobal] = useState(false);
   const [recomputeConfirmation, setRecomputeConfirmation] = useState("");
   const [lastWorkerResult, setLastWorkerResult] = useState<WorkerResponse | null>(null);
+  const [tournamentBackfillPreview, setTournamentBackfillPreview] = useState<TournamentBackfillPreviewResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -98,6 +100,16 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     finally { setBusy(false); }
   }
 
+  async function loadTournamentBackfillPreview() {
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<TournamentBackfillPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/preview?limit=500`);
+      setTournamentBackfillPreview(payload);
+      setMessage(`Tournament backfill preview found ${String(payload.summary.ready_count ?? 0)} ready and ${String(payload.summary.blocked_count ?? 0)} blocked missing match candidate(s). No rows were written.`);
+    } catch (error) { setTournamentBackfillPreview(null); setMessage(error instanceof Error ? error.message : "Unable to preview missing tournament matches."); }
+    finally { setBusy(false); }
+  }
+
   async function runBadgeRecompute() {
     if (recomputeMode !== "dry-run" && recomputeConfirmation.trim().toUpperCase() !== "RUN BADGE RECOMPUTE") { setMessage("Type RUN BADGE RECOMPUTE to apply badge recompute changes."); return; }
     setBusy(true); setMessage(null);
@@ -141,8 +153,18 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>System health</h2><Pre value={health} /></article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Workers and backfills</h2>
-        <p style={{ color: "#475569" }}>These controls are for staging/full-workflow validation. They still run through FastAPI/Python and remain guarded by super-admin style permissions.</p>
+        <p style={{ color: "#475569" }}>Badge worker/recompute controls run through FastAPI/Python with <code>run_replay</code> permission. Tournament match backfill is preview-only in Next; use it to inventory candidates without writing matches or ratings.</p>
         {workerStatus ? <Pre value={workerStatus} /> : null}
+        <section style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: "12px", padding: "1rem", margin: "1rem 0" }}>
+          <h3 style={{ marginTop: 0 }}>Tournament match backfill preview</h3>
+          <p style={{ color: "#475569" }}>Read-only scan for finalized tournament games that have no club-scoped official match with the same <code>tournament_game_id</code>. The preview classifies ready and blocked games; it cannot apply a backfill.</p>
+          <button type="button" onClick={loadTournamentBackfillPreview} disabled={busy} style={ghostButtonStyle}>Preview missing tournament matches</button>
+          {tournamentBackfillPreview ? <div style={{ marginTop: "1rem" }}>
+            <Pre value={tournamentBackfillPreview.summary} />
+            {tournamentBackfillPreview.warnings.map((warning) => <p key={warning} style={{ color: "#92400e" }}>{warning}</p>)}
+            {table(tournamentBackfillPreview.candidates, ["tournament_name", "game_id", "score_a", "score_b", "status", "reason"])}
+          </div> : null}
+        </section>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label>Queue mode<br /><select value={workerMode} onChange={(event) => setWorkerMode(event.target.value)} style={inputStyle}><option value="batch">Batch</option><option value="drain">Drain until empty / limit</option></select></label>
           <label>Max jobs<br /><input value={workerMaxJobs} onChange={(event) => setWorkerMaxJobs(event.target.value)} style={inputStyle} /></label>

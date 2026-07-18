@@ -16,6 +16,7 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.services.admin_tools_service import (
     build_admin_tools_overview,
     build_admin_tools_status,
+    build_admin_tournament_match_backfill_preview,
     build_admin_worker_status,
     is_admin_tools_enabled,
     run_admin_badge_queue_worker,
@@ -127,6 +128,31 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
         _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_admin_tools_workers_status", permission=PERMISSION_VIEW_AUDIT_LOG)
         try:
             return build_admin_worker_status(supabase, club_id=str(club_id))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/tools/backfills/tournament-matches/preview")
+    def get_admin_tools_tournament_match_backfill_preview(
+        club_id: str,
+        limit: int = Query(default=500, ge=1, le=1000),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_admin_tools_tournament_match_backfill_preview",
+            permission=PERMISSION_VIEW_AUDIT_LOG,
+        )
+        try:
+            return build_admin_tournament_match_backfill_preview(
+                supabase,
+                club_id=str(club_id),
+                candidate_limit=int(limit),
+            )
         except Exception as exc:
             _handle(exc)
 

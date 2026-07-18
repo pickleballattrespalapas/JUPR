@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 from tests.conftest import require_api_dependency
@@ -5,8 +6,10 @@ from tests.conftest import require_api_dependency
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from services.api.admin_tools_routes import install_admin_tools_routes
 from services.api.main import app
 
 
@@ -122,6 +125,21 @@ def test_admin_tools_status_disabled(monkeypatch):
     response = TestClient(app).get("/admin/clubs/club/tools/status")
     assert response.status_code == 200
     assert response.json()["enabled"] is False
+
+
+def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    supabase = FakeSupabase()
+    local_app = FastAPI()
+    install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
+    contract_path = "/admin/clubs/{club_id}/tools/backfills/tournament-matches/preview"
+    assert set(local_app.openapi()["paths"][contract_path]) == {"get"}
+    before = deepcopy(supabase.storage)
+
+    response = TestClient(local_app).get("/admin/clubs/club/tools/backfills/tournament-matches/preview")
+
+    assert response.status_code == 401
+    assert supabase.storage == before
 
 
 def test_admin_tools_overview_and_role_update(monkeypatch):

@@ -71,6 +71,8 @@ JUPR_ENABLE_NEXT_ADMIN_TOOLS=1
 
 Challenge Ladder Admin now includes the guarded core staging workflow: tier-aware challenge creation with server-side player-status eligibility and explicit override, domain-built email/SMS notice copy, accept-clock transitions, a read-only played-result preview, exact-draft browser review gating, official match publication through the Python match service, direct challenger-win rank swaps, forfeits, server-month-scoped pass resolution, roster append/reactivation, audited cross-tier moves with optional old-tier rank recompression, stale-safe whole-tier roster replacement preview/apply, vacation/reinstate overrides, and a read-only computed tier-movement review queue that hands off to the existing guarded move form. Whole-tier replacement resolves exact club names, blocks affected open challenges, preserves removed rows as inactive, recompresses affected source tiers, and records the reviewed before/after set in centralized Admin Tools activity. The Next workflow remains a staging pilot until exercised against isolated ladder data with Match Log and Replay History recovery checks.
 
+Admin Tools now exposes authenticated activity/role administration, badge queue status/processing, scoped badge recompute with dry-run, and a read-only tournament-match backfill inventory. The tournament preview identifies finalized games missing a club-scoped official match and classifies ready versus blocked candidates without writing matches, ratings, snapshots, badges, or tournament rows. Applying that backfill and remaining one-time maintenance migrations stay on Streamlit fallback until reviewed apply/recovery contracts are added.
+
 ## Enablement checklist
 
 Before enabling a write workflow for staff use:

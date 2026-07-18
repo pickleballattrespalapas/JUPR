@@ -23,6 +23,7 @@ from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue_until_empty,
 )
 from jupr_app.domain.gamification.recompute import run_badge_recompute
+from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM_ROLE = "SAVE ROLE"
@@ -62,6 +63,7 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "overview": "view_audit_log",
             "roles": "manage_roles",
             "workers": "run_replay",
+            "tournament_backfill_preview": "view_audit_log",
         },
         "confirmation_text": {
             "save": CONFIRM_ROLE,
@@ -107,6 +109,19 @@ def _safe_rows(resp: Any) -> list[dict[str, Any]]:
         return [dict(row) for row in (resp.data or [])]
     except Exception:
         return []
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _chunks(values: list[str], size: int = 100) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
 
 
 def _table_count(supabase: Any, table: str, *, club_id: str, status: str | None = None, limit: int = 10000) -> dict[str, Any]:
@@ -156,6 +171,193 @@ def build_admin_worker_status(supabase: Any, *, club_id: str) -> dict[str, Any]:
             "drain": CONFIRM_QUEUE_DRAIN,
             "badge_recompute": CONFIRM_BADGE_RECOMPUTE,
         },
+    }
+
+
+def build_admin_tournament_match_backfill_preview(
+    supabase: Any,
+    *,
+    club_id: str,
+    candidate_limit: int = 500,
+) -> dict[str, Any]:
+    """Read-only inventory of finalized tournament games missing official matches."""
+    if not is_admin_tools_enabled():
+        raise PermissionError("Next Admin Tools are disabled.")
+    safe_candidate_limit = max(1, min(int(candidate_limit or 500), 1000))
+    try:
+        tournaments = _safe_rows(
+            supabase.table("tournaments")
+            .select("id,name,club_id")
+            .eq("club_id", str(club_id))
+            .limit(1001)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to inspect club tournaments for backfill preview.") from exc
+    tournaments_truncated = len(tournaments) > 1000
+    tournaments = tournaments[:1000]
+    tournaments_by_id = {
+        str(row.get("id")): row
+        for row in tournaments
+        if str(row.get("id") or "").strip()
+    }
+    tournament_ids = sorted(tournaments_by_id)
+    if not tournament_ids:
+        return {
+            "ok": True,
+            "mode": "tournament_match_backfill_preview",
+            "read_only": True,
+            "summary": {
+                "tournament_count": 0,
+                "finalized_game_count": 0,
+                "already_published_count": 0,
+                "missing_match_count": 0,
+                "ready_count": 0,
+                "blocked_count": 0,
+                "candidate_count": 0,
+                "candidate_limit": safe_candidate_limit,
+                "truncated": tournaments_truncated,
+            },
+            "candidates": [],
+            "warnings": ["Tournament scan reached its 1,000-row safety limit."] if tournaments_truncated else [],
+        }
+
+    games: list[dict[str, Any]] = []
+    teams: list[dict[str, Any]] = []
+    scan_truncated = tournaments_truncated
+    try:
+        for tournament_chunk in _chunks(tournament_ids):
+            game_chunk = _safe_rows(
+                supabase.table("tournament_games")
+                .select("id,tournament_id,team_a_id,team_b_id,score_a,score_b,finalized_at")
+                .in_("tournament_id", tournament_chunk)
+                .limit(5001)
+                .execute()
+            )
+            team_chunk = _safe_rows(
+                supabase.table("tournament_teams")
+                .select("id,tournament_id,player1_id,player2_id")
+                .in_("tournament_id", tournament_chunk)
+                .limit(10001)
+                .execute()
+            )
+            scan_truncated = scan_truncated or len(game_chunk) > 5000 or len(team_chunk) > 10000
+            games.extend(game_chunk[:5000])
+            teams.extend(team_chunk[:10000])
+    except Exception as exc:
+        raise RuntimeError("Unable to inspect tournament games and teams for backfill preview.") from exc
+
+    finalized_games = [row for row in games if row.get("finalized_at") is not None]
+    game_ids = sorted(
+        {
+            str(row.get("id"))
+            for row in finalized_games
+            if str(row.get("id") or "").strip()
+        }
+    )
+    published_game_ids: set[str] = set()
+    try:
+        for game_chunk in _chunks(game_ids, size=200):
+            rows = _safe_rows(
+                supabase.table("matches")
+                .select("id,tournament_game_id")
+                .eq("club_id", str(club_id))
+                .in_("tournament_game_id", game_chunk)
+                .execute()
+            )
+            published_game_ids.update(
+                str(row.get("tournament_game_id"))
+                for row in rows
+                if str(row.get("tournament_game_id") or "").strip()
+            )
+    except Exception as exc:
+        raise RuntimeError("Unable to verify existing official tournament matches.") from exc
+
+    teams_by_key = {
+        (str(row.get("tournament_id") or ""), str(row.get("id") or "")): row
+        for row in teams
+        if str(row.get("id") or "").strip()
+    }
+    candidates: list[dict[str, Any]] = []
+    status_counts: dict[str, int] = {}
+    missing_games = [row for row in finalized_games if str(row.get("id") or "") not in published_game_ids]
+    for game in sorted(missing_games, key=lambda row: (str(row.get("tournament_id") or ""), str(row.get("id") or ""))):
+        tournament_id = str(game.get("tournament_id") or "")
+        game_id = str(game.get("id") or "")
+        tournament = tournaments_by_id.get(tournament_id)
+        score_a = _safe_int(game.get("score_a"))
+        score_b = _safe_int(game.get("score_b"))
+        team_a = teams_by_key.get((tournament_id, str(game.get("team_a_id") or "")))
+        team_b = teams_by_key.get((tournament_id, str(game.get("team_b_id") or "")))
+        match_payload: dict[str, Any] | None = None
+        if not tournament or not game_id:
+            status, reason = "incomplete_tournament", "Tournament or game identity is incomplete."
+        elif score_a is None or score_b is None or score_a + score_b <= 0:
+            status, reason = "empty_score", "Finalized game has no non-zero score."
+        elif score_a == score_b:
+            status, reason = "tied_score", "Official tournament matches cannot use a tied score."
+        elif not team_a or not team_b:
+            status, reason = "incomplete_team", "One or both linked teams are missing."
+        else:
+            match_payload = build_tournament_match_payload(
+                tournament,
+                game,
+                {
+                    team_a.get("id"): team_a,
+                    str(team_a.get("id")): team_a,
+                    team_b.get("id"): team_b,
+                    str(team_b.get("id")): team_b,
+                },
+                score_a=score_a,
+                score_b=score_b,
+            )
+            required_players = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
+            if any(match_payload.get(key) is None for key in required_players):
+                status, reason = "incomplete_team", "Backfill parity requires two linked players on each team."
+                match_payload = None
+            else:
+                status, reason = "ready", "Finalized doubles game can be submitted through the existing Python match service."
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if len(candidates) < safe_candidate_limit:
+            candidates.append(
+                {
+                    "game_id": game_id or None,
+                    "tournament_id": tournament_id or None,
+                    "tournament_name": str((tournament or {}).get("name") or ""),
+                    "team_a_id": game.get("team_a_id"),
+                    "team_b_id": game.get("team_b_id"),
+                    "score_a": score_a,
+                    "score_b": score_b,
+                    "status": status,
+                    "reason": reason,
+                    "match_payload": match_payload,
+                }
+            )
+    candidates_truncated = len(missing_games) > safe_candidate_limit
+    scan_truncated = scan_truncated or candidates_truncated
+    warnings: list[str] = []
+    if scan_truncated:
+        warnings.append("The preview reached a scan or candidate safety limit; do not use it as a complete backfill count.")
+    warnings.append("Preview only: no official match, rating, snapshot, badge, or tournament row was written.")
+    ready_count = int(status_counts.get("ready", 0))
+    return {
+        "ok": True,
+        "mode": "tournament_match_backfill_preview",
+        "read_only": True,
+        "summary": {
+            "tournament_count": len(tournaments),
+            "finalized_game_count": len(finalized_games),
+            "already_published_count": len(published_game_ids.intersection(set(game_ids))),
+            "missing_match_count": len(missing_games),
+            "ready_count": ready_count,
+            "blocked_count": len(missing_games) - ready_count,
+            "candidate_count": len(candidates),
+            "candidate_limit": safe_candidate_limit,
+            "truncated": scan_truncated,
+            "status_counts": status_counts,
+        },
+        "candidates": candidates,
+        "warnings": warnings,
     }
 
 

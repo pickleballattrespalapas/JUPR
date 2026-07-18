@@ -1,6 +1,8 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 from jupr_app.services.admin_tools_service import (
+    build_admin_tournament_match_backfill_preview,
     build_admin_worker_status,
     run_admin_badge_queue_worker,
     run_admin_badge_recompute_job,
@@ -12,6 +14,7 @@ class FakeQuery:
         self.storage = storage
         self.table_name = table_name
         self.filters = []
+        self.in_filters = []
         self.insert_payload = None
         self.limit_value = None
 
@@ -20,6 +23,10 @@ class FakeQuery:
 
     def eq(self, key, value):
         self.filters.append((key, value))
+        return self
+
+    def in_(self, key, values):
+        self.in_filters.append((key, {str(value) for value in values}))
         return self
 
     def limit(self, value):
@@ -39,6 +46,8 @@ class FakeQuery:
         scoped = list(rows)
         for key, expected in self.filters:
             scoped = [row for row in scoped if str(row.get(key)) == str(expected)]
+        for key, expected_values in self.in_filters:
+            scoped = [row for row in scoped if str(row.get(key)) in expected_values]
         if self.limit_value is not None:
             scoped = scoped[: self.limit_value]
         return SimpleNamespace(data=scoped)
@@ -56,6 +65,10 @@ class FakeSupabase:
                 {"id": "run2", "status": "done", "scope_json": {"club_id": "other"}},
             ],
             "admin_activity_log": [],
+            "tournaments": [],
+            "tournament_games": [],
+            "tournament_teams": [],
+            "matches": [],
         }
 
     def table(self, name):
@@ -68,6 +81,54 @@ def test_admin_worker_status_counts_queue(monkeypatch):
     assert payload["queue_counts"]["pending"]["count"] == 1
     assert payload["queue_counts"]["error"]["count"] == 1
     assert payload["badge_recompute_run_count"]["count"] == 1
+
+
+def test_tournament_match_backfill_preview_is_read_only_and_classifies_candidates(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    supabase = FakeSupabase()
+    supabase.storage["tournaments"] = [
+        {"id": "tour-1", "club_id": "club", "name": "Summer Cup"},
+        {"id": "tour-other", "club_id": "other", "name": "Other Club Cup"},
+    ]
+    supabase.storage["tournament_teams"] = [
+        {"id": "team-1", "tournament_id": "tour-1", "player1_id": 1, "player2_id": 2},
+        {"id": "team-2", "tournament_id": "tour-1", "player1_id": 3, "player2_id": 4},
+    ]
+    supabase.storage["tournament_games"] = [
+        {"id": "ready", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 7, "finalized_at": "2026-07-01T00:00:00Z"},
+        {"id": "empty", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 0, "score_b": 0, "finalized_at": "2026-07-01T00:00:00Z"},
+        {"id": "tied", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 10, "score_b": 10, "finalized_at": "2026-07-01T00:00:00Z"},
+        {"id": "incomplete", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "missing", "score_a": 11, "score_b": 8, "finalized_at": "2026-07-01T00:00:00Z"},
+        {"id": "published", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 9, "finalized_at": "2026-07-01T00:00:00Z"},
+        {"id": "not-final", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 6, "finalized_at": None},
+        {"id": "other-club", "tournament_id": "tour-other", "team_a_id": "x", "team_b_id": "y", "score_a": 11, "score_b": 6, "finalized_at": "2026-07-01T00:00:00Z"},
+    ]
+    supabase.storage["matches"] = [
+        {"id": 99, "club_id": "club", "tournament_game_id": "published"},
+        {"id": 100, "club_id": "other", "tournament_game_id": "ready"},
+    ]
+    before = deepcopy(supabase.storage)
+
+    result = build_admin_tournament_match_backfill_preview(supabase, club_id="club")
+
+    assert result["read_only"] is True
+    assert result["summary"]["tournament_count"] == 1
+    assert result["summary"]["finalized_game_count"] == 5
+    assert result["summary"]["already_published_count"] == 1
+    assert result["summary"]["missing_match_count"] == 4
+    assert result["summary"]["ready_count"] == 1
+    assert result["summary"]["blocked_count"] == 3
+    statuses = {row["game_id"]: row["status"] for row in result["candidates"]}
+    assert statuses == {
+        "empty": "empty_score",
+        "incomplete": "incomplete_team",
+        "ready": "ready",
+        "tied": "tied_score",
+    }
+    ready = next(row for row in result["candidates"] if row["game_id"] == "ready")
+    assert ready["match_payload"]["tournament_game_id"] == "ready"
+    assert ready["match_payload"]["t1_p2"] == 2
+    assert supabase.storage == before
 
 
 def test_badge_queue_worker_requires_confirmation(monkeypatch):
