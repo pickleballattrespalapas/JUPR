@@ -23,7 +23,7 @@ def _patch_admin_auth(monkeypatch, supabase: FakeSupabase, role: str = "club_own
     )
     monkeypatch.setattr(
         "services.api.admin_match_log_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role=role),
+        lambda **_kwargs: SimpleNamespace(role=role, assigned=True, source="admin_role_assignments"),
     )
 
 
@@ -47,11 +47,13 @@ def test_admin_match_log_disabled_contract(monkeypatch):
 def test_admin_match_log_enabled_contract(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", raising=False)
-    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
-    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: fake_supabase())
+    supabase = fake_supabase()
+    _patch_admin_auth(monkeypatch, supabase)
 
-    response = TestClient(app).get("/admin/clubs/club/match-log?filter=League&limit=20")
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log?filter=League&limit=20",
+        headers={"Authorization": "Bearer local"},
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -64,6 +66,50 @@ def test_admin_match_log_enabled_contract(monkeypatch):
     assert payload["duplicate_delete_preview"]["delete_count"] == 1
     assert payload["correction_plan"]["apply_endpoint"] is None
     assert "notes" not in payload["matches"][0]
+
+
+def test_admin_match_log_enabled_read_requires_authentication(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: fake_supabase())
+
+    response = TestClient(app).get("/admin/clubs/club/match-log")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "missing bearer token"
+
+
+def test_admin_match_log_read_allows_assigned_scorekeeper(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    supabase = fake_supabase()
+    _patch_admin_auth(monkeypatch, supabase, role="scorekeeper")
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log?limit=20",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+
+
+def test_admin_match_log_read_rejects_unassigned_authenticated_user(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    supabase = fake_supabase()
+    _patch_admin_auth(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="__unassigned__", assigned=False, source="default"),
+    )
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-log",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "insufficient permission"
 
 
 def test_admin_match_log_player_options_contract(monkeypatch):

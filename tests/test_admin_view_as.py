@@ -1,4 +1,4 @@
-from jupr_app.domain.admin.roles import ROLE_ORGANIZER, ROLE_SUPER_ADMIN
+from jupr_app.domain.admin.roles import ROLE_ORGANIZER, ROLE_SUPER_ADMIN, ROLE_UNASSIGNED
 from jupr_app.ui.admin_view_as import (
     can_use_view_as,
     resolve_effective_admin_role,
@@ -22,6 +22,15 @@ def test_non_super_admin_cannot_activate_view_as_mode():
     )
     assert role == "organizer"
     assert source == "admin_role_assignments"
+    assert view_as_role is None
+
+
+def test_unassigned_role_stays_unassigned_through_effective_role_resolution():
+    role, source, view_as_role = resolve_effective_admin_role(
+        ROLE_UNASSIGNED, "default", "read_only"
+    )
+    assert role == ROLE_UNASSIGNED
+    assert source == "default"
     assert view_as_role is None
 
 

@@ -10,6 +10,9 @@ ROLE_CLUB_OWNER = "club_owner"
 ROLE_ORGANIZER = "organizer"
 ROLE_SCOREKEEPER = "scorekeeper"
 ROLE_READ_ONLY = "read_only"
+# Internal fail-closed sentinel. It is intentionally excluded from ALL_ROLES so it
+# cannot be stored as an assignment or selected as an operator-facing role.
+ROLE_UNASSIGNED = "__unassigned__"
 
 ALL_ROLES: tuple[str, ...] = (
     ROLE_SUPER_ADMIN,
@@ -78,6 +81,7 @@ class AdminRoleResolution:
     role: str
     source: str
     table_available: bool
+    assigned: bool
 
 
 def normalize_role(value: str | None) -> str:
@@ -147,6 +151,7 @@ def resolve_admin_role(
 ) -> AdminRoleResolution:
     normalized_email = str(email or "").strip().lower()
     normalized_user_id = str(user_id or "").strip() or None
+    assignment_user_id_mismatch = False
 
     try:
         rows = _select_role_assignment_rows(supabase=supabase, club_id=club_id, email=normalized_email)
@@ -170,13 +175,16 @@ def resolve_admin_role(
                     ),
                     None,
                 )
-            if preferred_row is None:
+            if preferred_row is None and normalized_user_id is None:
                 preferred_row = rows[0]
-            return AdminRoleResolution(
-                role=normalize_role(preferred_row.get("role")),
-                source="admin_role_assignments",
-                table_available=True,
-            )
+            if preferred_row is not None:
+                return AdminRoleResolution(
+                    role=normalize_role(preferred_row.get("role")),
+                    source="admin_role_assignments",
+                    table_available=True,
+                    assigned=True,
+                )
+            assignment_user_id_mismatch = True
     except Exception as exc:  # noqa: BLE001 - graceful fallback required
         if is_roles_table_missing_error(exc):
             # Keep legacy allowlist fallback only for Tres Palapas during migration rollout.
@@ -185,11 +193,13 @@ def resolve_admin_role(
                     role=ROLE_SUPER_ADMIN,
                     source="allowlist_fallback_missing_table",
                     table_available=False,
+                    assigned=True,
                 )
             return AdminRoleResolution(
-                role=ROLE_READ_ONLY,
+                role=ROLE_UNASSIGNED,
                 source="missing_table_default",
                 table_available=False,
+                assigned=False,
             )
         raise
 
@@ -199,16 +209,20 @@ def resolve_admin_role(
             role=ROLE_SUPER_ADMIN,
             source="allowlist_default",
             table_available=True,
+            assigned=True,
         )
 
     return AdminRoleResolution(
-        role=ROLE_READ_ONLY,
-        source="default",
+        role=ROLE_UNASSIGNED,
+        source="admin_role_user_id_mismatch" if assignment_user_id_mismatch else "default",
         table_available=True,
+        assigned=False,
     )
 
 
 def has_permission(role: str, permission: str) -> bool:
+    if str(role or "").strip().lower() == ROLE_UNASSIGNED:
+        return False
     normalized_role = normalize_role(role)
     return permission in ROLE_PERMISSION_MATRIX.get(normalized_role, frozenset())
 

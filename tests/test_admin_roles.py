@@ -8,6 +8,7 @@ from jupr_app.domain.admin.roles import (
     ROLE_READ_ONLY,
     ROLE_SCOREKEEPER,
     ROLE_SUPER_ADMIN,
+    ROLE_UNASSIGNED,
     ROLE_ORGANIZER,
     can_delete_matches,
     can_enter_scores,
@@ -66,6 +67,7 @@ def test_resolve_admin_role_uses_assignment_row():
     )
     assert result.role == ROLE_CLUB_OWNER
     assert result.source == "admin_role_assignments"
+    assert result.assigned is True
 
 
 def test_resolve_admin_role_missing_table_falls_back_to_allowlist_super_admin():
@@ -79,9 +81,10 @@ def test_resolve_admin_role_missing_table_falls_back_to_allowlist_super_admin():
     )
     assert result.role == ROLE_SUPER_ADMIN
     assert result.table_available is False
+    assert result.assigned is True
 
 
-def test_resolve_admin_role_defaults_to_read_only_without_assignment():
+def test_resolve_admin_role_defaults_to_unassigned_without_assignment():
     supabase = _Supabase(_Query(response_data=[]))
     result = resolve_admin_role(
         supabase=supabase,
@@ -90,8 +93,9 @@ def test_resolve_admin_role_defaults_to_read_only_without_assignment():
         user_id=None,
         allowlist={"joe@example.com"},
     )
-    assert result.role == ROLE_READ_ONLY
+    assert result.role == ROLE_UNASSIGNED
     assert result.source == "default"
+    assert result.assigned is False
 
 
 def test_resolve_admin_role_prefers_null_user_id_for_email_only_assignment_when_user_id_present():
@@ -108,6 +112,7 @@ def test_resolve_admin_role_prefers_null_user_id_for_email_only_assignment_when_
     )
     assert result.role == ROLE_ORGANIZER
     assert result.source == "admin_role_assignments"
+    assert result.assigned is True
 
 
 def test_resolve_admin_role_prefers_exact_user_id_match_over_null_user_id():
@@ -124,6 +129,23 @@ def test_resolve_admin_role_prefers_exact_user_id_match_over_null_user_id():
     )
     assert result.role == ROLE_SCOREKEEPER
     assert result.source == "admin_role_assignments"
+    assert result.assigned is True
+
+
+def test_resolve_admin_role_rejects_bound_row_for_different_user_id():
+    supabase = _Supabase(_Query(response_data=[{"role": ROLE_SUPER_ADMIN, "user_id": "other-user"}]))
+
+    result = resolve_admin_role(
+        supabase=supabase,
+        club_id="club-a",
+        email="owner@example.com",
+        user_id="logged-in-user",
+        allowlist=set(),
+    )
+
+    assert result.role == ROLE_UNASSIGNED
+    assert result.source == "admin_role_user_id_mismatch"
+    assert result.assigned is False
 
 
 @pytest.mark.parametrize(
@@ -185,6 +207,20 @@ def test_resolve_admin_role_prefers_exact_user_id_match_over_null_user_id():
                 "can_enter_scores": False,
             },
         ),
+        (
+            ROLE_UNASSIGNED,
+            {
+                "can_manage_roles": False,
+                "can_manage_players": False,
+                "can_manage_matches": False,
+                "can_delete_matches": False,
+                "can_run_replay": False,
+                "can_manage_tournaments": False,
+                "can_manage_subscriptions": False,
+                "can_view_audit_log": False,
+                "can_enter_scores": False,
+            },
+        ),
     ],
 )
 def test_permission_matrix(role: str, expected: dict[str, bool]):
@@ -206,6 +242,10 @@ def test_unmapped_admin_only_page_is_denied_by_default():
     assert is_admin_page_available_for_role("nonexistent_admin_page", ROLE_SUPER_ADMIN, is_admin_only=True) is False
 
 
+def test_unassigned_role_is_denied_by_admin_page_permissions():
+    assert is_admin_page_available_for_role("admin_tools", ROLE_UNASSIGNED, is_admin_only=True) is False
+
+
 def test_resolve_admin_role_allowlist_fallback_only_for_tres_palapas():
     supabase = _Supabase(_Query(response_data=[]))
     tres = resolve_admin_role(
@@ -223,4 +263,6 @@ def test_resolve_admin_role_allowlist_fallback_only_for_tres_palapas():
         allowlist={"joe@example.com"},
     )
     assert tres.role == ROLE_SUPER_ADMIN
-    assert other.role == ROLE_READ_ONLY
+    assert other.role == ROLE_UNASSIGNED
+    assert tres.assigned is True
+    assert other.assigned is False

@@ -167,10 +167,11 @@ class FakeSupabase:
 storage = {}
 supabase = FakeSupabase(storage)
 
+club_id = "club"
 for i in range(20):
     enqueue_badge_eval(
         supabase,
-        club_id="club",
+        club_id=club_id,
         event_type="match_recorded",
         player_ids=[1],
         match_id=f"m{i}",
@@ -209,7 +210,13 @@ ctx = SimpleNamespace(
 )
 
 start = time.perf_counter()
-result = process_badge_eval_queue(supabase, max_jobs=20, time_budget_seconds=5, ctx=ctx)
+result = process_badge_eval_queue(
+    supabase,
+    club_id,
+    max_jobs=20,
+    time_budget_seconds=5,
+    ctx=ctx,
+)
 elapsed = time.perf_counter() - start
 print(f"processed={result['processed']} elapsed={elapsed:.3f}s")
 PY

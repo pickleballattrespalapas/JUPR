@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from jupr_app.workers.badge_queue_worker import main, run_badge_queue_worker
 
 
@@ -9,10 +11,25 @@ def test_run_badge_queue_worker_passes_arguments(monkeypatch):
 
     captured = {}
 
+    class EmptyQuery:
+        def insert(self, _payload):
+            return self
+
+        def update(self, _payload):
+            return self
+
+        def eq(self, _key, _value):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    fake_client = SimpleNamespace(table=lambda _name: EmptyQuery())
+
     def fake_make_supabase(url, key):
         captured["url"] = url
         captured["key"] = key
-        return "fake-client"
+        return fake_client
 
     def fake_process(supabase, club_id, **kwargs):
         captured["supabase"] = supabase
@@ -36,7 +53,7 @@ def test_run_badge_queue_worker_passes_arguments(monkeypatch):
 
     assert captured["url"] == "https://example.supabase.co"
     assert captured["key"] == "service-role"
-    assert captured["supabase"] == "fake-client"
+    assert captured["supabase"] is fake_client
     assert captured["club_id"] == "tres_palapas"
     assert captured["kwargs"] == {
         "max_total_jobs": 500,
@@ -62,21 +79,14 @@ def test_main_missing_config_returns_clean_failure(monkeypatch, capsys):
     assert "SUPABASE_URL" in out
 
 
-def test_main_uses_anon_fallback(monkeypatch):
+def test_main_rejects_anon_only_config(monkeypatch, capsys):
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
 
-    monkeypatch.setattr("jupr_app.workers.badge_queue_worker.make_supabase", lambda url, key: object())
-    monkeypatch.setattr(
-        "jupr_app.workers.badge_queue_worker.process_badge_eval_queue_until_empty",
-        lambda *_args, **_kwargs: {
-            "total_processed": 1,
-            "total_errored": 0,
-            "loops": 1,
-            "stopped_reason": "empty",
-        },
-    )
-
     rc = main(["--club-id", "tres_palapas", "--max-total-jobs", "2"])
-    assert rc == 0
+    out = capsys.readouterr().out
+
+    assert rc == 2
+    assert "SUPABASE_SERVICE_ROLE_KEY" in out
+    assert "cannot use SUPABASE_ANON_KEY" in out

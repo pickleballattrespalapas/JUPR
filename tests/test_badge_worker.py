@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from postgrest.exceptions import APIError
 
-from jupr_app.domain.gamification.badge_queue import BADGE_QUEUE_TABLE, enqueue_badge_eval
+from jupr_app.domain.gamification.badge_queue import (
+    BADGE_QUEUE_CLAIM_RPC,
+    BADGE_QUEUE_TABLE,
+    dequeue_badge_eval,
+    enqueue_badge_eval,
+)
 from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue,
     process_badge_eval_queue_until_empty,
@@ -98,9 +106,42 @@ class FakeTable:
 class FakeSupabase:
     def __init__(self, storage=None):
         self.storage = storage if storage is not None else {}
+        self.claim_lock = threading.Lock()
+        self.rpc_calls = []
 
     def table(self, name):
         return FakeTable(self.storage, name)
+
+    def rpc(self, name, params):
+        self.rpc_calls.append((name, dict(params)))
+        return FakeBadgeQueueClaim(self, name, params)
+
+
+class FakeBadgeQueueClaim:
+    def __init__(self, client, name, params):
+        self.client = client
+        self.name = name
+        self.params = dict(params)
+
+    def execute(self):
+        if self.name != BADGE_QUEUE_CLAIM_RPC:
+            raise AssertionError(f"unexpected RPC: {self.name}")
+        if self.client.storage.get("raise_missing_claim_rpc"):
+            raise APIError({"code": "PGRST202", "message": "function not found"})
+        club_id = str(self.params.get("p_club_id") or "")
+        with self.client.claim_lock:
+            pending = [
+                row
+                for row in self.client.storage.get(BADGE_QUEUE_TABLE, [])
+                if str(row.get("club_id") or "") == club_id and row.get("status") == "pending"
+            ]
+            pending.sort(key=lambda row: (str(row.get("created_at") or ""), str(row.get("id") or "")))
+            if not pending:
+                return SimpleNamespace(data=[])
+            job = pending[0]
+            job["status"] = "processing"
+            job["attempts"] = int(job.get("attempts") or 0) + 1
+            return SimpleNamespace(data=[dict(job)])
 
 
 def _build_ctx():
@@ -129,7 +170,16 @@ def _build_ctx():
         supabase=None,
         club_id="club",
         df_matches=df_matches,
-        df_players_all=pd.DataFrame(),
+        df_players_all=pd.DataFrame(
+            [
+                {
+                    "id": 1,
+                    "wins": 1,
+                    "losses": 0,
+                    "matches_played": 1,
+                }
+            ]
+        ),
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
         df_badges=df_badges,
@@ -152,7 +202,7 @@ def test_worker_processes_queue_and_awards_badge():
         match_id="m1",
     )
     ctx = _build_ctx()
-    result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
+    result = process_badge_eval_queue(supabase, "club", max_jobs=1, time_budget_seconds=2, ctx=ctx)
     assert result["processed"] == 1
     assert storage.get("player_badges")
 
@@ -175,7 +225,7 @@ def test_worker_dedupes_duplicate_events():
         match_id="m1",
     )
     ctx = _build_ctx()
-    process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2, ctx=ctx)
+    process_badge_eval_queue(supabase, "club", max_jobs=2, time_budget_seconds=2, ctx=ctx)
     assert len(storage.get("player_badges", [])) == 1
 
 
@@ -198,7 +248,7 @@ def test_worker_error_marks_queue(monkeypatch):
         "jupr_app.domain.gamification.badge_worker.compute_candidates_for_player",
         boom,
     )
-    process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2, ctx=ctx)
+    process_badge_eval_queue(supabase, "club", max_jobs=1, time_budget_seconds=2, ctx=ctx)
     rows = storage.get("badge_eval_queue", [])
     assert rows[0]["status"] == "error"
     assert rows[0]["attempts"] == 1
@@ -220,6 +270,103 @@ def test_enqueue_badge_eval_missing_table_is_ignored():
     assert storage.get(BADGE_QUEUE_TABLE) is None
 
 
+def test_queue_deduplication_and_processing_are_club_scoped():
+    storage = {}
+    supabase = FakeSupabase(storage)
+    for club_id in ("club", "other"):
+        enqueue_badge_eval(
+            supabase,
+            club_id=club_id,
+            event_type="match_recorded",
+            player_ids=[1],
+            match_id="shared-match-id",
+        )
+
+    # Same-club retries still deduplicate, while another club may use the same
+    # source match identifier independently.
+    enqueue_badge_eval(
+        supabase,
+        club_id="club",
+        event_type="match_recorded",
+        player_ids=[1],
+        match_id="shared-match-id",
+    )
+    assert len(storage[BADGE_QUEUE_TABLE]) == 2
+
+    result = process_badge_eval_queue(
+        supabase,
+        "club",
+        max_jobs=1,
+        time_budget_seconds=2,
+        ctx=_build_ctx(),
+    )
+
+    assert result == {"processed": 1, "errored": 0}
+    rows_by_club = {row["club_id"]: row for row in storage[BADGE_QUEUE_TABLE]}
+    assert rows_by_club["club"]["status"] == "done"
+    assert rows_by_club["other"]["status"] == "pending"
+    assert supabase.rpc_calls[0] == (BADGE_QUEUE_CLAIM_RPC, {"p_club_id": "club"})
+
+
+def test_atomic_dequeue_claims_one_pending_job_at_most_once():
+    storage = {
+        BADGE_QUEUE_TABLE: [
+            {
+                "id": "job-1",
+                "created_at": "2026-07-18T00:00:00Z",
+                "club_id": "club",
+                "event_type": "match_recorded",
+                "status": "pending",
+                "attempts": 0,
+            }
+        ]
+    }
+    supabase = FakeSupabase(storage)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: dequeue_badge_eval(supabase, club_id="club"), range(2)))
+
+    claimed = [row for row in results if row is not None]
+    assert [row["id"] for row in claimed] == ["job-1"]
+    assert storage[BADGE_QUEUE_TABLE][0]["status"] == "processing"
+    assert storage[BADGE_QUEUE_TABLE][0]["attempts"] == 1
+
+
+def test_dequeue_fails_closed_when_atomic_claim_migration_is_missing():
+    supabase = FakeSupabase({"raise_missing_claim_rpc": True})
+
+    with pytest.raises(RuntimeError, match="20260718141016_badge_eval_queue_atomic_club_claim"):
+        dequeue_badge_eval(supabase, club_id="club")
+
+
+def test_worker_max_jobs_caps_errors_as_well_as_successes(monkeypatch):
+    storage = {}
+    supabase = FakeSupabase(storage)
+    for match_id in ("m1", "m2"):
+        enqueue_badge_eval(
+            supabase,
+            club_id="club",
+            event_type="match_recorded",
+            player_ids=[1],
+            match_id=match_id,
+        )
+
+    monkeypatch.setattr(
+        "jupr_app.domain.gamification.badge_worker._process_job_with_retry",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    result = process_badge_eval_queue(
+        supabase,
+        "club",
+        max_jobs=1,
+        time_budget_seconds=2,
+        ctx=_build_ctx(),
+    )
+
+    assert result == {"processed": 0, "errored": 1}
+    assert [row["status"] for row in storage[BADGE_QUEUE_TABLE]].count("pending") == 1
+
+
 def test_worker_drain_until_empty_stops_on_empty(monkeypatch):
     results = iter([
         {"processed": 10, "errored": 0},
@@ -228,9 +375,15 @@ def test_worker_drain_until_empty_stops_on_empty(monkeypatch):
         {"processed": 0, "errored": 0},
     ])
 
+    seen_club_ids = []
+
+    def fake_batch(_supabase, club_id, **_kwargs):
+        seen_club_ids.append(club_id)
+        return next(results)
+
     monkeypatch.setattr(
         "jupr_app.domain.gamification.badge_worker.process_badge_eval_queue",
-        lambda *_args, **_kwargs: next(results),
+        fake_batch,
     )
 
     result = process_badge_eval_queue_until_empty(
@@ -244,6 +397,7 @@ def test_worker_drain_until_empty_stops_on_empty(monkeypatch):
     assert result["total_errored"] == 0
     assert result["loops"] == 4
     assert result["stopped_reason"] == "empty"
+    assert seen_club_ids == ["club"] * 4
 
 
 def test_worker_drain_until_empty_trips_error_circuit_breaker(monkeypatch):
@@ -284,7 +438,8 @@ def test_worker_respects_time_budget_deadline(monkeypatch):
     def fake_monotonic():
         return clock["now"]
 
-    def fake_dequeue(_supabase):
+    def fake_dequeue(_supabase, *, club_id):
+        assert club_id == "club"
         return jobs.pop(0) if jobs else None
 
     def fake_ack(_supabase, job_id, status, error=None):
@@ -303,7 +458,13 @@ def test_worker_respects_time_budget_deadline(monkeypatch):
 
     monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.compute_candidates_for_player", fake_compute)
 
-    result = process_badge_eval_queue(object(), max_jobs=10, time_budget_seconds=1.0, ctx=_build_ctx())
+    result = process_badge_eval_queue(
+        object(),
+        "club",
+        max_jobs=10,
+        time_budget_seconds=1.0,
+        ctx=_build_ctx(),
+    )
 
     assert result["processed"] == 2
     assert acked == ["j1", "j2"]

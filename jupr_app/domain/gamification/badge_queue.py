@@ -8,7 +8,9 @@ from postgrest.exceptions import APIError
 
 
 BADGE_QUEUE_TABLE = "badge_eval_queue"
+BADGE_QUEUE_CLAIM_RPC = "claim_badge_eval_queue_job"
 _MISSING_TABLE_CODES = {"PGRST205", "42P01"}
+_MISSING_CLAIM_RPC_CODES = {"PGRST202", "42883"}
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ def enqueue_badge_eval(
     try:
         table = supabase.table(BADGE_QUEUE_TABLE)
         if match_id:
-            table.upsert(row, on_conflict="event_type,match_id").execute()
+            table.upsert(row, on_conflict="club_id,event_type,match_id").execute()
         else:
             table.insert(row).execute()
     except APIError as exc:
@@ -65,36 +67,39 @@ def enqueue_badge_eval(
     return {"queued": True, "reason": "ok"}
 
 
-def dequeue_badge_eval(supabase: Any) -> dict[str, Any] | None:
+def dequeue_badge_eval(supabase: Any, *, club_id: str) -> dict[str, Any] | None:
+    clean_club_id = str(club_id or "").strip()
     if supabase is None:
         return None
+    if not clean_club_id:
+        raise ValueError("club_id is required to dequeue a badge evaluation")
     try:
-        resp = (
-            supabase.table(BADGE_QUEUE_TABLE)
-            .select("*")
-            .eq("status", "pending")
-            .order("created_at", desc=False)
-            .limit(1)
-            .execute()
-        )
+        resp = supabase.rpc(
+            BADGE_QUEUE_CLAIM_RPC,
+            {"p_club_id": clean_club_id},
+        ).execute()
         rows = resp.data or []
+        if isinstance(rows, dict):
+            rows = [rows]
         if not rows:
             return None
-        job = rows[0]
-        attempts = int(job.get("attempts") or 0) + 1
-        supabase.table(BADGE_QUEUE_TABLE).update(
-            {"status": "processing", "attempts": attempts}
-        ).eq("id", job.get("id")).execute()
-        job["attempts"] = attempts
-        job["status"] = "processing"
+        job = dict(rows[0])
+        if str(job.get("club_id") or "") != clean_club_id:
+            raise RuntimeError("Atomic badge queue claim returned a job for another club.")
         return job
     except APIError as exc:
         code = _get_api_error_code(exc)
         message = _get_api_error_message(exc)
+        if code in _MISSING_CLAIM_RPC_CODES:
+            raise RuntimeError(
+                "Atomic badge queue claims are unavailable. Apply "
+                "supabase/migrations/20260718141016_badge_eval_queue_atomic_club_claim.sql "
+                "before running badge workers."
+            ) from exc
         if code in _MISSING_TABLE_CODES:
             logger.warning(
                 "Badge queue table %s missing in PostgREST schema cache (code=%s message=%s). "
-                "Skipping badge dequeue.",
+                "Skipping badge queue claim.",
                 BADGE_QUEUE_TABLE,
                 code,
                 message,

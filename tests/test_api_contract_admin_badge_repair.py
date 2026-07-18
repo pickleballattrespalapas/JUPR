@@ -25,7 +25,7 @@ def _install_super_env(monkeypatch, supabase) -> None:
     )
     monkeypatch.setattr(
         "services.api.admin_badge_diagnostics_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="super_admin"),
+        lambda **_kwargs: SimpleNamespace(role="super_admin", assigned=True, source="admin_role_assignments"),
     )
 
 

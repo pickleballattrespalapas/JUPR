@@ -70,7 +70,8 @@ def _resolve_badge_diagnostics_role_or_403(
         user_id=user.user_id,
         allowlist=set(),
     )
-    if not has_permission(role_resolution.role, permission):
+    if not role_resolution.assigned or not has_permission(role_resolution.role, permission):
+        reason = "missing_club_assignment" if not role_resolution.assigned else "insufficient_permission"
         denied_payload = build_activity_payload(
             club_id=str(club_id),
             actor_email=user.email,
@@ -78,7 +79,7 @@ def _resolve_badge_diagnostics_role_or_403(
             action_type="admin_badge_diagnostics_denied",
             entity_type="badge_diagnostics",
             entity_id="badge_diagnostics",
-            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission", "required_permission": permission},
+            after_json={"source_client": "fastapi/nextjs", "reason": reason, "required_permission": permission},
             source_page=source,
             flagged_for_review=True,
         )

@@ -967,6 +967,7 @@ def run_admin_badge_queue_worker(
     else:
         result = process_badge_eval_queue(
             supabase,
+            str(club_id),
             max_jobs=safe_max_jobs,
             time_budget_seconds=int(safe_budget),
         )

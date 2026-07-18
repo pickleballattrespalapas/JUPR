@@ -19,20 +19,24 @@ from jupr_app.domain.player_activity import add_activity_columns
 
 def process_badge_eval_queue(
     supabase: Any,
+    club_id: str,
     *,
     max_jobs: int = 10,
     time_budget_seconds: int = 5,
     ctx: Any | None = None,
     match_limit: int = 5000,
 ) -> dict[str, int]:
+    clean_club_id = str(club_id or "").strip()
+    if not clean_club_id:
+        raise ValueError("club_id is required to process the badge evaluation queue")
     deadline = time.monotonic() + float(time_budget_seconds)
     processed = 0
     errored = 0
 
-    while processed < max_jobs:
+    while (processed + errored) < max_jobs:
         if time.monotonic() >= deadline:
             break
-        job = dequeue_badge_eval(supabase)
+        job = dequeue_badge_eval(supabase, club_id=clean_club_id)
         if not job:
             break
         try:
@@ -84,6 +88,7 @@ def process_badge_eval_queue_until_empty(
         batch_budget = min(float(per_batch_time_budget_seconds), max(0.1, remaining))
         batch = process_badge_eval_queue(
             supabase,
+            club_id,
             max_jobs=batch_max_jobs,
             time_budget_seconds=batch_budget,
         )

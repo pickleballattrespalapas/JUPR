@@ -13,14 +13,14 @@ from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue_u
 def _resolve_supabase_config() -> tuple[str, str, str]:
     url = str(os.getenv("SUPABASE_URL") or "").strip()
     service_role = str(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
-    anon = str(os.getenv("SUPABASE_ANON_KEY") or "").strip()
-    key = service_role or anon
-    key_source = "SUPABASE_SERVICE_ROLE_KEY" if service_role else "SUPABASE_ANON_KEY"
     if not url:
         raise ValueError("Missing required environment variable: SUPABASE_URL")
-    if not key:
-        raise ValueError("Missing Supabase key. Set SUPABASE_SERVICE_ROLE_KEY (preferred) or SUPABASE_ANON_KEY.")
-    return url, key, key_source
+    if not service_role:
+        raise ValueError(
+            "Missing required environment variable: SUPABASE_SERVICE_ROLE_KEY. "
+            "Badge queue claims are server-only and cannot use SUPABASE_ANON_KEY."
+        )
+    return url, service_role, "SUPABASE_SERVICE_ROLE_KEY"
 
 
 def _require_worker_run_log() -> bool:

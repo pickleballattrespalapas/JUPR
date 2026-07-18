@@ -371,7 +371,12 @@ def apply_bulk_match_edits(
             worker_result = None
             if not should_fallback:
                 try:
-                    worker_result = process_badge_eval_queue(supabase, max_jobs=1, time_budget_seconds=2)
+                    worker_result = process_badge_eval_queue(
+                        supabase,
+                        str(club_id),
+                        max_jobs=1,
+                        time_budget_seconds=2,
+                    )
                     badge_summary = {"mode": "queue", **worker_result}
                     should_fallback = bool(worker_result.get("errored")) or (
                         int(worker_result.get("processed") or 0) == 0 and int(worker_result.get("errored") or 0) > 0

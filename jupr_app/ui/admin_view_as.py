@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from jupr_app.domain.admin.roles import ROLE_SUPER_ADMIN, normalize_role
+from jupr_app.domain.admin.roles import ROLE_SUPER_ADMIN, ROLE_UNASSIGNED, normalize_role
 
 _ALLOWED_VIEW_AS_ROLES = frozenset({"club_owner", "organizer", "scorekeeper", "read_only"})
 
@@ -23,6 +23,8 @@ def resolve_effective_admin_role(
     real_role_source: str,
     requested_view_as_role: str | None,
 ) -> tuple[str, str, str | None]:
+    if str(real_role or "").strip().lower() == ROLE_UNASSIGNED:
+        return ROLE_UNASSIGNED, str(real_role_source or "default"), None
     normalized_real_role = normalize_role(real_role)
     sanitized_view_as_role = sanitize_view_as_role(normalized_real_role, requested_view_as_role)
 

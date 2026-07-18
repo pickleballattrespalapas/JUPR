@@ -90,7 +90,8 @@ def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | No
         user_id=user.user_id,
         allowlist=set(),
     )
-    if not has_permission(role_resolution.role, permission):
+    if not role_resolution.assigned or not has_permission(role_resolution.role, permission):
+        reason = "missing_club_assignment" if not role_resolution.assigned else "insufficient_permission"
         denied_payload = build_activity_payload(
             club_id=str(club_id),
             actor_email=user.email,
@@ -98,7 +99,7 @@ def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | No
             action_type="admin_tools_denied",
             entity_type="admin_tools",
             entity_id="admin_tools",
-            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission", "required_permission": permission},
+            after_json={"source_client": "fastapi/nextjs", "reason": reason, "required_permission": permission},
             source_page=source,
             flagged_for_review=True,
         )

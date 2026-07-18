@@ -580,7 +580,12 @@ def main():
                 payload={"initial_load": True},
             )
             if enqueue_result.get("queued"):
-                process_badge_eval_queue(supabase, max_jobs=2, time_budget_seconds=2)
+                process_badge_eval_queue(
+                    supabase,
+                    selected_club_id,
+                    max_jobs=2,
+                    time_budget_seconds=2,
+                )
 
         # -------------------------
         # LAZY IMPORT PAGES (prevents import-time KeyError crashes)

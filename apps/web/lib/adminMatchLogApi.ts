@@ -183,12 +183,15 @@ async function apiErrorMessage(response: Response): Promise<string> {
   return `${fallback} ${bodyText.slice(0, 240)}`;
 }
 
-async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
+async function fetchJson<T>(path: string, accessToken?: string): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { next: { revalidate: 30 } });
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
+    });
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {
@@ -205,7 +208,7 @@ export async function getAdminMatchLog(params?: {
   startDate?: string | null;
   endDate?: string | null;
   limit?: string | number | null;
-}): Promise<ApiResult<AdminMatchLogResponse>> {
+}, accessToken?: string): Promise<ApiResult<AdminMatchLogResponse>> {
   const clubId = params?.clubId || "tres_palapas";
   const query = new URLSearchParams();
   if (params?.filter) query.set("filter", String(params.filter));
@@ -216,5 +219,5 @@ export async function getAdminMatchLog(params?: {
   if (params?.endDate) query.set("end_date", String(params.endDate));
   if (params?.limit) query.set("limit", String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return fetchJson<AdminMatchLogResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-log${suffix}`);
+  return fetchJson<AdminMatchLogResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-log${suffix}`, accessToken);
 }

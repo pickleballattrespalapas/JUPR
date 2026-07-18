@@ -117,7 +117,10 @@ def install_env(monkeypatch, supabase):
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
     monkeypatch.setattr("services.api.admin_tools_routes.authenticate_bearer", lambda _authorization: SimpleNamespace(email="owner@example.com", user_id="user-1"))
-    monkeypatch.setattr("services.api.admin_tools_routes.resolve_admin_role", lambda **_kwargs: SimpleNamespace(role="super_admin"))
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="super_admin", assigned=True, source="admin_role_assignments"),
+    )
 
 
 def test_admin_tools_status_disabled(monkeypatch):
@@ -176,7 +179,10 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
 def test_social_review_allows_read_only_role_but_moderation_requires_manage_matches(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
     monkeypatch.setattr("services.api.admin_tools_routes.authenticate_bearer", lambda _authorization: SimpleNamespace(email="reader@example.com", user_id="reader-1"))
-    monkeypatch.setattr("services.api.admin_tools_routes.resolve_admin_role", lambda **_kwargs: SimpleNamespace(role="read_only"))
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="read_only", assigned=True, source="admin_role_assignments"),
+    )
     supabase = FakeSupabase()
     local_app = FastAPI()
     install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
@@ -202,6 +208,48 @@ def test_social_review_allows_read_only_role_but_moderation_requires_manage_matc
     assert moderate.json()["detail"] == "insufficient permission"
     assert not supabase.storage.get("live_events")
     assert supabase.storage["admin_activity_log"][-1]["after_json"]["required_permission"] == "manage_matches"
+
+
+def test_admin_tools_read_rejects_authenticated_user_without_club_assignment(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="owner@example.com", user_id="user-1"),
+    )
+    supabase = FakeSupabase()
+    supabase.storage["admin_role_assignments"] = []
+    local_app = FastAPI()
+    install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
+
+    response = TestClient(local_app).get(
+        "/admin/clubs/club/tools/overview",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "insufficient permission"
+    assert supabase.storage["admin_activity_log"][-1]["after_json"]["reason"] == "missing_club_assignment"
+
+
+def test_admin_tools_read_rejects_assignment_for_other_club(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="owner@example.com", user_id="user-1"),
+    )
+    supabase = FakeSupabase()
+    supabase.storage["admin_role_assignments"][0]["club_id"] = "other-club"
+    local_app = FastAPI()
+    install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
+
+    response = TestClient(local_app).get(
+        "/admin/clubs/club/tools/overview",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "insufficient permission"
+    assert supabase.storage["admin_activity_log"][-1]["after_json"]["reason"] == "missing_club_assignment"
 
 
 def test_admin_tools_overview_and_role_update(monkeypatch):

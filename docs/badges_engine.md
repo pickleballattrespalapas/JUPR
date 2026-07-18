@@ -142,7 +142,8 @@ from jupr_app.data.client import make_supabase
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
 
 supabase = make_supabase("https://YOUR_PROJECT.supabase.co", "SERVICE_ROLE_KEY")
-process_badge_eval_queue(supabase, max_jobs=10, time_budget_seconds=5)
+club_id = "tres_palapas"
+process_badge_eval_queue(supabase, club_id, max_jobs=10, time_budget_seconds=5)
 PY
 ```
 

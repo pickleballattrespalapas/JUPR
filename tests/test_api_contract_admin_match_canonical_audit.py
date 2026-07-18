@@ -91,7 +91,10 @@ def install_env(monkeypatch, supabase=None):
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase or FakeSupabase())
     monkeypatch.setattr("services.api.admin_match_canonical_audit_routes.authenticate_bearer", lambda _authorization: SimpleNamespace(email="owner@example.com", user_id="user-1"))
-    monkeypatch.setattr("services.api.admin_match_canonical_audit_routes.resolve_admin_role", lambda **_kwargs: SimpleNamespace(role="club_owner"))
+    monkeypatch.setattr(
+        "services.api.admin_match_canonical_audit_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="club_owner", assigned=True, source="admin_role_assignments"),
+    )
     monkeypatch.setattr("jupr_app.services.admin_match_canonical_audit_service.load_data", fake_load_data)
 
 

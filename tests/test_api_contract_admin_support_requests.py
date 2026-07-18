@@ -61,7 +61,7 @@ def _install(monkeypatch, supabase):
     )
     monkeypatch.setattr(
         "services.api.admin_support_requests_routes.resolve_admin_role",
-        lambda **_kwargs: SimpleNamespace(role="club_owner"),
+        lambda **_kwargs: SimpleNamespace(role="club_owner", assigned=True, source="admin_role_assignments"),
     )
 
 

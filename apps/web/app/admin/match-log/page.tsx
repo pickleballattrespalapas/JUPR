@@ -1,7 +1,12 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { getAdminApiBaseUrl, getAdminMatchLog } from "@/lib/adminMatchLogApi";
-import type { AdminDuplicateGroup, AdminMatchLogMatch } from "@/lib/adminMatchLogApi";
+import type { AdminDuplicateGroup, AdminMatchLogMatch, AdminMatchLogResponse } from "@/lib/adminMatchLogApi";
 import { getAdminReplayStatus } from "@/lib/adminReplayApi";
+import type { AdminReplayStatusResponse } from "@/lib/adminReplayApi";
+import { useAdminSession } from "@/lib/useAdminSession";
 import MatchLogApplyPanel from "./MatchLogApplyPanel";
 import MatchLogBulkExcludePanel from "./MatchLogBulkExcludePanel";
 import MatchLogQuickReplayPanel from "./MatchLogQuickReplayPanel";
@@ -81,21 +86,86 @@ function DuplicateGroupCard({ group, resolved = false }: { group: AdminDuplicate
   );
 }
 
-export default async function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
+export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
   const clubId = "tres_palapas";
-  const { data, error } = await getAdminMatchLog({
-    clubId,
-    filter: searchParams?.filter || "All",
-    matchId: searchParams?.match_id || null,
-    league: searchParams?.league || null,
-    weekTag: searchParams?.week_tag || null,
-    startDate: searchParams?.start_date || null,
-    endDate: searchParams?.end_date || null,
-    limit: searchParams?.limit || 250
-  });
-  const { data: replayData, error: replayError } = await getAdminReplayStatus(clubId);
+  const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
+  const [data, setData] = useState<AdminMatchLogResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [replayData, setReplayData] = useState<AdminReplayStatusResponse | null>(null);
+  const [replayError, setReplayError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const selectedFilterParam = searchParams?.filter || "All";
+  const matchIdParam = searchParams?.match_id || null;
+  const leagueParam = searchParams?.league || null;
+  const weekTagParam = searchParams?.week_tag || null;
+  const startDateParam = searchParams?.start_date || null;
+  const endDateParam = searchParams?.end_date || null;
+  const limitParam = searchParams?.limit || "250";
 
-  const selectedFilter = searchParams?.filter || data?.filters.filter || "All";
+  useEffect(() => {
+    let cancelled = false;
+
+    if (sessionLoading) {
+      setLoading(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!accessToken) {
+      setData(null);
+      setReplayData(null);
+      setError(sessionMessage);
+      setReplayError(null);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      getAdminMatchLog({
+        clubId,
+        filter: selectedFilterParam,
+        matchId: matchIdParam,
+        league: leagueParam,
+        weekTag: weekTagParam,
+        startDate: startDateParam,
+        endDate: endDateParam,
+        limit: limitParam
+      }, accessToken),
+      getAdminReplayStatus(clubId)
+    ])
+      .then(([matchLogResult, replayResult]) => {
+        if (cancelled) return;
+        setData(matchLogResult.data);
+        setError(matchLogResult.error);
+        setReplayData(replayResult.data);
+        setReplayError(replayResult.error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    accessToken,
+    endDateParam,
+    leagueParam,
+    limitParam,
+    matchIdParam,
+    selectedFilterParam,
+    sessionLoading,
+    sessionMessage,
+    startDateParam,
+    weekTagParam
+  ]);
+
+  const selectedFilter = selectedFilterParam || data?.filters.filter || "All";
   const resolvedDuplicateGroups = data?.resolved_duplicate_groups || [];
   const apiBase = getAdminApiBaseUrl();
 
@@ -108,6 +178,16 @@ export default async function AdminMatchLogPage({ searchParams }: MatchLogPagePr
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Operational view for duplicate scanning, correction planning, and guarded audited apply flows. Writes stay behind FastAPI feature flags, Supabase JWT role checks, and Python domain services.
       </p>
+
+      {loading ? <p style={muted}>Loading protected Match Log…</p> : null}
+
+      {!sessionLoading && !accessToken ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem", background: "#fffbeb", borderColor: "#fbbf24" }}>
+          <h2 style={{ marginTop: 0 }}>Admin sign-in required</h2>
+          <p style={muted}>Sign in with an assigned club admin account before loading Match Log data.</p>
+          <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p>
+        </article>
+      ) : null}
 
       {error ? <p style={{ color: "#b91c1c" }}>Match Log is temporarily unavailable. {error}</p> : null}
 

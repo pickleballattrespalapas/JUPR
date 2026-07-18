@@ -48,7 +48,8 @@ def _resolve_support_role_or_403(*, supabase: Any, club_id: str, authorization: 
         has_permission(role_resolution.role, permission)
         for permission in (PERMISSION_MANAGE_PLAYERS, PERMISSION_MANAGE_MATCHES, PERMISSION_MANAGE_TOURNAMENTS, PERMISSION_MANAGE_SUBSCRIPTIONS)
     )
-    if not (write_allowed if write else read_allowed):
+    if not role_resolution.assigned or not (write_allowed if write else read_allowed):
+        reason = "missing_club_assignment" if not role_resolution.assigned else "insufficient_permission"
         denied_payload = build_activity_payload(
             club_id=str(club_id),
             actor_email=user.email,
@@ -56,7 +57,7 @@ def _resolve_support_role_or_403(*, supabase: Any, club_id: str, authorization: 
             action_type="admin_support_request_denied",
             entity_type="public_support_request",
             entity_id="support_requests",
-            after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission", "write": bool(write)},
+            after_json={"source_client": "fastapi/nextjs", "reason": reason, "write": bool(write)},
             source_page=source,
             flagged_for_review=True,
         )

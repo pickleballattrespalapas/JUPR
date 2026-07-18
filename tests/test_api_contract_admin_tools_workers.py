@@ -320,7 +320,16 @@ def test_badge_queue_worker_requires_confirmation(monkeypatch):
 
 def test_badge_queue_worker_writes_audit(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
-    monkeypatch.setattr("jupr_app.services.admin_tools_service.process_badge_eval_queue", lambda *_args, **_kwargs: {"processed": 2, "errored": 0})
+    captured = {}
+
+    def fake_process(_supabase, club_id, **_kwargs):
+        captured["club_id"] = club_id
+        return {"processed": 2, "errored": 0}
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tools_service.process_badge_eval_queue",
+        fake_process,
+    )
     supabase = FakeSupabase()
     result = run_admin_badge_queue_worker(
         supabase,
@@ -333,6 +342,7 @@ def test_badge_queue_worker_writes_audit(monkeypatch):
         confirmation_text="PROCESS BADGE QUEUE",
     )
     assert result["result"]["processed"] == 2
+    assert captured["club_id"] == "club"
     assert supabase.storage["admin_activity_log"]
 
 
