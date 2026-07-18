@@ -832,7 +832,6 @@ def list_social_match_log_rows(
         supabase.table("live_event_matches")
         .select(
             "id,event_id,match_key,played_on,round_number,court_number,mini_round_number,"
-            "status,submission_mode,"
             "t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,"
             "score_t1,score_t2"
         )
@@ -869,8 +868,8 @@ def list_social_match_log_rows(
                 "round_number": row.get("round_number"),
                 "court_number": row.get("court_number"),
                 "mini_round_number": row.get("mini_round_number"),
-                "status": row.get("status") or event.get("status"),
-                "submission_mode": row.get("submission_mode") or event.get("submission_mode"),
+                "status": event.get("status"),
+                "submission_mode": event.get("submission_mode"),
                 "match_key": row.get("match_key"),
                 "t1_p1": _participant_name(row.get("t1_p1_participant_id")),
                 "t1_p2": _participant_name(row.get("t1_p2_participant_id")),

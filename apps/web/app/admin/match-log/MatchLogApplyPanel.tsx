@@ -21,7 +21,6 @@ type MatchPatch = {
   date?: string;
   week_tag?: string;
   match_type?: string;
-  is_active?: boolean;
   t1_p1?: number;
   t1_p2?: number;
   t2_p1?: number;
@@ -37,7 +36,6 @@ type MatchEditState = {
   date: string;
   scoreT1: string;
   scoreT2: string;
-  isActive: "true" | "false";
   t1p1: string;
   t1p2: string;
   t2p1: string;
@@ -96,7 +94,6 @@ function emptyEditState(): MatchEditState {
     date: "",
     scoreT1: "",
     scoreT2: "",
-    isActive: "true",
     t1p1: "",
     t1p2: "",
     t2p1: "",
@@ -113,7 +110,6 @@ function editStateFromMatch(match: AdminMatchLogMatch | null): MatchEditState {
     date: toDateTimeInput(match.date),
     scoreT1: String(match.score?.team1 ?? ""),
     scoreT2: String(match.score?.team2 ?? ""),
-    isActive: match.is_active === false ? "false" : "true",
     t1p1: match.team1?.[0]?.id == null ? "" : String(match.team1[0].id),
     t1p2: match.team1?.[1]?.id == null ? "" : String(match.team1[1].id),
     t2p1: match.team2?.[0]?.id == null ? "" : String(match.team2[0].id),
@@ -149,9 +145,6 @@ function buildPatch(match: AdminMatchLogMatch, edit: MatchEditState): MatchPatch
   if (scoreT1 !== Number(match.score?.team1 ?? 0)) patch.score_t1 = scoreT1;
   if (scoreT2 !== Number(match.score?.team2 ?? 0)) patch.score_t2 = scoreT2;
 
-  const isActive = edit.isActive === "true";
-  if (isActive !== (match.is_active !== false)) patch.is_active = isActive;
-
   const playerFields: Array<[keyof MatchPatch, string, number | null | undefined, string]> = [
     ["t1_p1", edit.t1p1, match.team1?.[0]?.id, "Team 1 player 1"],
     ["t1_p2", edit.t1p2, match.team1?.[1]?.id, "Team 1 player 2"],
@@ -173,8 +166,8 @@ function patchFields(patch: MatchPatch): string[] {
 }
 
 function patchScope(patches: MatchPatch[]): { standings: boolean; ratings: boolean } {
-  const standingsFields = new Set(["week_tag", "league", "date", "is_active", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"]);
-  const ratingFields = new Set(["league", "date", "match_type", "is_active", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"]);
+  const standingsFields = new Set(["week_tag", "league", "date", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"]);
+  const ratingFields = new Set(["league", "date", "match_type", "t1_p1", "t1_p2", "t2_p1", "t2_p2", "score_t1", "score_t2"]);
   const changed = patches.flatMap((patch) => patchFields(patch));
   return {
     standings: changed.some((field) => standingsFields.has(field)),
@@ -433,12 +426,6 @@ export default function MatchLogApplyPanel({ apiBase, clubId, applyEnabled, dupl
           <label><strong>UTC date/time</strong><br /><input type="datetime-local" value={edit.date} onChange={(event) => updateEdit("date", event.target.value)} style={inputStyle} /></label>
           <label><strong>Team 1 score</strong><br /><input type="number" min="0" step="1" value={edit.scoreT1} onChange={(event) => updateEdit("scoreT1", event.target.value)} style={inputStyle} /></label>
           <label><strong>Team 2 score</strong><br /><input type="number" min="0" step="1" value={edit.scoreT2} onChange={(event) => updateEdit("scoreT2", event.target.value)} style={inputStyle} /></label>
-          <label><strong>Status</strong><br />
-            <select value={edit.isActive} onChange={(event) => updateEdit("isActive", event.target.value as "true" | "false")} style={inputStyle}>
-              <option value="true">Active</option>
-              <option value="false">Inactive</option>
-            </select>
-          </label>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>

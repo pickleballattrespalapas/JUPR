@@ -11,9 +11,9 @@ from jupr_app.domain.dupes import canonical_dup_key
 
 MATCH_LOG_SELECT = (
     "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
-    "score_t1,score_t2,is_active,context_type,context_id,created_at,updated_at"
+    "score_t1,score_t2,deleted_at,context_type,context_id,updated_at"
 )
-MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2"
+MATCH_LOG_MINIMAL_SELECT = "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,score_t1,score_t2,deleted_at"
 DUPLICATE_RESOLUTIONS_TABLE = "admin_match_log_duplicate_resolutions"
 MAX_FETCH_ROWS = 5000
 MAX_RETURN_ROWS = 1000
@@ -80,6 +80,7 @@ def _fetch_match_rows(supabase: Any, *, club_id: str, fetch_limit: int) -> tuple
             supabase.table("matches")
             .select(MATCH_LOG_SELECT)
             .eq("club_id", str(club_id))
+            .is_("deleted_at", None)
             .order("date", desc=True)
             .limit(int(fetch_limit))
             .execute()
@@ -93,6 +94,7 @@ def _fetch_match_rows(supabase: Any, *, club_id: str, fetch_limit: int) -> tuple
             supabase.table("matches")
             .select(MATCH_LOG_MINIMAL_SELECT)
             .eq("club_id", str(club_id))
+            .is_("deleted_at", None)
             .order("date", desc=True)
             .limit(int(fetch_limit))
             .execute()
@@ -172,7 +174,7 @@ def _match_payload(row: dict[str, Any], *, club_id: str, names: dict[int, str]) 
         "score": {"team1": s1, "team2": s2, "display": f"{s1}-{s2}"},
         "team1": [_format_player(p1, names), _format_player(p2, names)],
         "team2": [_format_player(p3, names), _format_player(p4, names)],
-        "is_active": bool(row.get("is_active", True)),
+        "is_active": row.get("deleted_at") in (None, ""),
         "context_type": _clean_text(row.get("context_type"), limit=80),
         "context_id": row.get("context_id"),
         "created_at": _json_safe(row.get("created_at")),
@@ -321,7 +323,6 @@ def _correction_plan() -> dict[str, Any]:
             "date",
             "week_tag",
             "match_type",
-            "is_active",
             "t1_p1",
             "t1_p2",
             "t2_p1",
@@ -336,6 +337,7 @@ def _correction_plan() -> dict[str, Any]:
         "recompute_scope_for_sample_edit": example_patch_scope,
         "safety_rules": [
             "Writes require Supabase JWT auth plus manage/delete match permissions.",
+            "Rated-match removal uses the guarded soft-exclude workflow, not guided field edits.",
             "League/date changes auto-clear week_tag unless explicitly set.",
             "Player and score changes require rating replay review before broad use.",
             "Duplicate cleanup keeps the oldest row and recommends replay history afterward.",
@@ -457,6 +459,8 @@ def apply_admin_match_log_edits(
         raise ValueError("No patches provided.")
     if len(clean_patches) > MAX_PATCHES:
         raise ValueError(f"No more than {MAX_PATCHES} patches can be applied at once.")
+    if any("is_active" in patch for patch in clean_patches):
+        raise ValueError("Use the guarded rated-match exclude workflow to change match activity.")
 
     result = apply_bulk_match_edits(
         supabase,

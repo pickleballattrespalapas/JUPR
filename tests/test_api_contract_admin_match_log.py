@@ -66,6 +66,9 @@ def test_admin_match_log_enabled_contract(monkeypatch):
     assert payload["duplicate_delete_preview"]["delete_count"] == 1
     assert payload["correction_plan"]["apply_endpoint"] is None
     assert "notes" not in payload["matches"][0]
+    assert payload["summary"]["scanned_matches"] == 3
+    assert all(match["id"] != 99 for match in payload["matches"])
+    assert payload["warnings"] == []
 
 
 def test_admin_match_log_enabled_read_requires_authentication(monkeypatch):
@@ -229,6 +232,22 @@ def test_admin_match_log_apply_edits_contract(monkeypatch):
     assert tables["matches"][0]["week_tag"] == "Week 2"
 
 
+def test_admin_match_log_apply_rejects_activity_edits_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/edits",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "APPLY", "patches": [{"id": 1, "is_active": False}]},
+    )
+
+    assert response.status_code == 400
+    assert "guarded rated-match exclude workflow" in response.json()["detail"]
+
+
 def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
@@ -245,7 +264,7 @@ def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):
     payload = response.json()
     assert payload["ok"] is True
     assert payload["deleted_count"] == 1
-    assert [row["id"] for row in tables["matches"]] == [1, 3]
+    assert [row["id"] for row in tables["matches"]] == [1, 3, 99]
 
 
 def test_admin_match_log_bulk_exclude_contract(monkeypatch):
@@ -308,6 +327,6 @@ def test_admin_match_log_duplicate_no_issue_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["mode"] == "duplicate_no_issue"
     assert payload["match_ids"] == [1, 2]
-    assert [row["id"] for row in tables["matches"]] == [1, 2, 3]
+    assert [row["id"] for row in tables["matches"]] == [1, 2, 3, 99]
     assert tables["admin_match_log_duplicate_resolutions"][0]["match_id_key"] == "1,2"
     assert tables["admin_activity_log"][0]["action_type"] == "match_duplicate_false_positive_resolved"
