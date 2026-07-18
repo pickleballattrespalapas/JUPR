@@ -136,9 +136,12 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
     assert set(local_app.openapi()["paths"][contract_path]) == {"get"}
     apply_path = "/admin/clubs/{club_id}/tools/backfills/tournament-matches/apply"
     assert set(local_app.openapi()["paths"][apply_path]) == {"post"}
+    report_path = "/admin/clubs/{club_id}/tools/reports/ratings"
+    assert set(local_app.openapi()["paths"][report_path]) == {"get"}
     before = deepcopy(supabase.storage)
 
     response = TestClient(local_app).get("/admin/clubs/club/tools/backfills/tournament-matches/preview")
+    report_response = TestClient(local_app).get("/admin/clubs/club/tools/reports/ratings")
     apply_response = TestClient(local_app).post(
         "/admin/clubs/club/tools/backfills/tournament-matches/apply",
         json={
@@ -150,6 +153,7 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
     )
 
     assert response.status_code == 401
+    assert report_response.status_code == 401
     assert apply_response.status_code == 401
     assert supabase.storage == before
 
@@ -162,6 +166,10 @@ def test_admin_tools_overview_and_role_update(monkeypatch):
     assert overview.status_code == 200
     assert overview.json()["roles"][0]["email"] == "owner@example.com"
     assert overview.json()["health"]["match_schema"]["snapshot_columns_present"] is True
+    report = client.get("/admin/clubs/club/tools/reports/ratings", headers={"Authorization": "Bearer local"})
+    assert report.status_code == 200
+    assert report.json()["read_only"] is True
+    assert report.json()["scope"] == "OVERALL"
 
     rejected = client.patch(
         "/admin/clubs/club/tools/roles",

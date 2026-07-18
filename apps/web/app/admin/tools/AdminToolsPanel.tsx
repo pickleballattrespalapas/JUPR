@@ -7,6 +7,7 @@ type StatusResponse = { enabled: boolean; status: string; roles?: string[]; rete
 type OverviewResponse = { ok: boolean; roles: Array<Record<string, unknown>>; activity: Array<Record<string, unknown>>; activity_warning?: string | null; health: Record<string, unknown>; role_options: string[]; retention_days: number; retention_cutoff: string };
 type RoleResponse = { ok: boolean; roles: Array<Record<string, unknown>>; audit_warning?: string | null };
 type WorkerResponse = { ok: boolean; mode?: string; result?: Record<string, unknown>; summary?: Record<string, unknown>; worker_status?: Record<string, unknown>; audit_warning?: string | null };
+type RatingReportResponse = { ok: boolean; mode: "admin_rating_report"; read_only: true; scope: string; available_scopes: string[]; generated_on: string; summary: Record<string, unknown>; rows: Array<Record<string, unknown>>; warnings: string[] };
 type TournamentBackfillPreviewResponse = { ok: boolean; mode: "tournament_match_backfill_preview"; read_only: true; preview_fingerprint: string; confirmation_text: string; summary: Record<string, unknown>; candidates: Array<Record<string, unknown>>; warnings: string[] };
 type TournamentBackfillApplyResponse = { ok: boolean; mode: "tournament_match_backfill_apply"; operation_id: string; selected_game_ids: string[]; inserted_count: number; warnings: string[] };
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
@@ -22,11 +23,33 @@ function table(rows: Array<Record<string, unknown>>, keys: string[]) {
   return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}><thead><tr>{keys.map((key) => <th key={key} align="left" style={{ borderBottom: "1px solid #e2e8f0", padding: "0.4rem" }}>{key}</th>)}</tr></thead><tbody>{rows.slice(0, 100).map((row, idx) => <tr key={idx}>{keys.map((key) => <td key={key} style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem", verticalAlign: "top" }}>{typeof row[key] === "object" && row[key] !== null ? JSON.stringify(row[key]) : String(row[key] ?? "")}</td>)}</tr>)}</tbody></table>{rows.length > 100 ? <p style={{ color: "#64748b" }}>Showing first 100 of {rows.length} rows.</p> : null}</div>;
 }
 function Pre({ value }: { value: unknown }) { return <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto", fontSize: "0.82rem" }}>{JSON.stringify(value, null, 2)}</pre>; }
+function csvCell(value: unknown): string {
+  let text = String(value ?? "");
+  if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+function downloadRatingReport(report: RatingReportResponse): void {
+  const fields: Array<[string, string]> = [["name", "name"], ["jupr", "JUPR"], ["wins", "wins"], ["losses", "losses"], ["matches_played", "matches_played"], ["win_percent", "Win %"], ["gain", "Gain"]];
+  const csv = [fields.map(([, heading]) => csvCell(heading)).join(","), ...report.rows.map((row) => fields.map(([key]) => csvCell(row[key])).join(","))].join("\r\n");
+  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const safeScope = report.scope.replace(/[^a-z0-9_-]+/gi, "_") || "ratings";
+  link.href = url;
+  link.download = `${safeScope}_report_${report.generated_on}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
+  const [ratingReportScope, setRatingReportScope] = useState("OVERALL");
+  const [ratingReportScopes, setRatingReportScopes] = useState<string[]>(["OVERALL"]);
+  const [ratingReport, setRatingReport] = useState<RatingReportResponse | null>(null);
   const [targetEmail, setTargetEmail] = useState("");
   const [targetRole, setTargetRole] = useState("read_only");
   const [targetUserId, setTargetUserId] = useState("");
@@ -68,6 +91,18 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       const payload = await requestJson<OverviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/overview?flagged_only=${flaggedOnly ? "true" : "false"}&limit=200`);
       setOverview(payload); setMessage(`Loaded ${payload.roles?.length || 0} role assignment(s) and ${payload.activity?.length || 0} activity row(s).`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to load Admin Tools overview."); }
+    finally { setBusy(false); }
+  }
+
+  async function loadRatingReport() {
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<RatingReportResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/reports/ratings?league=${encodeURIComponent(ratingReportScope)}`);
+      setRatingReport(payload);
+      setRatingReportScopes(payload.available_scopes);
+      setRatingReportScope(payload.scope);
+      setMessage(`Loaded ${String(payload.summary.row_count ?? payload.rows.length)} ${payload.scope} rating report row(s). No rows were written.`);
+    } catch (error) { setRatingReport(null); setMessage(error instanceof Error ? error.message : "Unable to load the rating report."); }
     finally { setBusy(false); }
   }
 
@@ -180,6 +215,19 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     </article>
     {overview ? <>
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>System health</h2><Pre value={health} /></article>
+      <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Reports &amp; exports</h2>
+        <p style={{ color: "#475569" }}>Generate the Streamlit-parity overall or league rating report. This is a club-scoped, read-only query; CSV export is created locally in your browser.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+          <label>Report scope<br /><select value={ratingReportScope} onChange={(event) => { setRatingReportScope(event.target.value); setRatingReport(null); }} style={inputStyle}>{ratingReportScopes.map((scope) => <option key={scope} value={scope}>{scope}</option>)}</select></label>
+          <button type="button" onClick={loadRatingReport} disabled={busy} style={ghostButtonStyle}>Generate report</button>
+        </div>
+        {!ratingReport ? <p style={{ color: "#64748b" }}>Generate the selected scope to view and download it. Available league scopes load after the first OVERALL report.</p> : <div style={{ marginTop: "1rem" }}>
+          {ratingReport.warnings.map((warning) => <p key={warning} style={{ color: "#92400e" }}>{warning}</p>)}
+          {table(ratingReport.rows, ["name", "jupr", "wins", "losses", "matches_played", "win_percent", "gain"])}
+          <p><button type="button" onClick={() => downloadRatingReport(ratingReport)} disabled={!ratingReport.rows.length} style={buttonStyle}>Download {ratingReport.scope} CSV</button></p>
+        </div>}
+      </article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Workers and backfills</h2>
         <p style={{ color: "#475569" }}>Badge worker/recompute controls run through FastAPI/Python with <code>run_replay</code> permission. Tournament match backfill uses a read-only preview followed by a selected, stale-preview-guarded apply.</p>

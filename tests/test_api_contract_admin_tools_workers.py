@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from jupr_app.services.admin_tools_service import (
     apply_admin_tournament_match_backfill,
+    build_admin_rating_report,
     build_admin_tournament_match_backfill_preview,
     build_admin_worker_status,
     run_admin_badge_queue_worker,
@@ -85,6 +86,57 @@ def test_admin_worker_status_counts_queue(monkeypatch):
     assert payload["queue_counts"]["pending"]["count"] == 1
     assert payload["queue_counts"]["error"]["count"] == 1
     assert payload["badge_recompute_run_count"]["count"] == 1
+
+
+def test_admin_rating_reports_are_club_scoped_read_only_and_match_streamlit_calculations(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    supabase = FakeSupabase()
+    supabase.storage["players"] = [
+        {"id": 1, "club_id": "club", "name": "Alice", "rating": 1600, "starting_rating": 1400, "wins": 3, "losses": 1, "matches_played": 4, "active": True, "inactive_at": None},
+        {"id": 2, "club_id": "club", "name": "Bob", "rating": 1400, "starting_rating": 1400, "wins": 1, "losses": 2, "matches_played": 3, "active": False, "inactive_at": "2026-01-01T00:00:00Z"},
+        {"id": 3, "club_id": "club", "name": "Legacy (MERGED into Alice)", "rating": 2000, "starting_rating": 1200, "wins": 9, "losses": 0, "matches_played": 9, "active": True, "inactive_at": None},
+        {"id": 4, "club_id": "club", "name": "Zero", "rating": 1200, "starting_rating": 1200, "wins": 0, "losses": 0, "matches_played": 0, "active": True, "inactive_at": None},
+        {"id": 5, "club_id": "other", "name": "Outside", "rating": 2400, "starting_rating": 1200, "wins": 10, "losses": 0, "matches_played": 10, "active": True, "inactive_at": None},
+    ]
+    supabase.storage["leagues_metadata"] = [
+        {"club_id": "club", "league_name": "Open"},
+        {"club_id": "other", "league_name": "Secret"},
+    ]
+    supabase.storage["league_ratings"] = [
+        {"club_id": "club", "player_id": 1, "league_name": "Open", "rating": 1680, "starting_rating": 1600, "wins": 4, "losses": 1, "matches_played": 5, "is_active": True},
+        {"club_id": "club", "player_id": 2, "league_name": "Open", "rating": 1400, "starting_rating": 1440, "wins": 1, "losses": 3, "matches_played": 4, "is_active": False},
+        {"club_id": "other", "player_id": 5, "league_name": "Open", "rating": 2400, "starting_rating": 1200, "wins": 10, "losses": 0, "matches_played": 10, "is_active": True},
+    ]
+    before = deepcopy(supabase.storage)
+
+    overall = build_admin_rating_report(supabase, club_id="club")
+    league = build_admin_rating_report(supabase, club_id="club", league_name="Open")
+
+    assert overall["read_only"] is True
+    assert overall["available_scopes"] == ["OVERALL", "Open"]
+    assert [row["name"] for row in overall["rows"]] == ["Alice", "Zero"]
+    assert overall["rows"][0] == {
+        "player_id": 1,
+        "name": "Alice",
+        "jupr": 4.0,
+        "wins": 3,
+        "losses": 1,
+        "matches_played": 4,
+        "win_percent": 75.0,
+        "gain": 0.5,
+    }
+    assert overall["rows"][1]["win_percent"] == 0.0
+    assert [row["name"] for row in league["rows"]] == ["Alice", "Bob"]
+    assert league["rows"][0]["jupr"] == 4.2
+    assert league["rows"][0]["gain"] == 0.2
+    assert league["rows"][1]["gain"] == -0.1
+    try:
+        build_admin_rating_report(supabase, club_id="club", league_name="Secret")
+    except ValueError as exc:
+        assert "available" in str(exc).lower()
+    else:
+        raise AssertionError("expected cross-club report scope rejection")
+    assert supabase.storage == before
 
 
 def test_tournament_match_backfill_preview_is_read_only_and_classifies_candidates(monkeypatch):

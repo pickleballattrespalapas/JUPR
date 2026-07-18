@@ -15,6 +15,7 @@ from jupr_app.domain.admin.roles import (
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tools_service import (
     apply_admin_tournament_match_backfill,
+    build_admin_rating_report,
     build_admin_tools_overview,
     build_admin_tools_status,
     build_admin_tournament_match_backfill_preview,
@@ -123,6 +124,31 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
         _resolve_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_admin_tools_overview", permission=PERMISSION_VIEW_AUDIT_LOG)
         try:
             return build_admin_tools_overview(supabase, club_id=str(club_id), include_flagged_only=bool(flagged_only), activity_limit=int(limit))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/tools/reports/ratings")
+    def get_admin_tools_rating_report(
+        club_id: str,
+        league: str = Query(default="OVERALL", min_length=1, max_length=160),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_admin_tools_rating_report",
+            permission=PERMISSION_VIEW_AUDIT_LOG,
+        )
+        try:
+            return build_admin_rating_report(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league),
+            )
         except Exception as exc:
             _handle(exc)
 

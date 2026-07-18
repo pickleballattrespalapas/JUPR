@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -38,6 +39,7 @@ CONFIRM_QUEUE_DRAIN = "DRAIN BADGE QUEUE"
 CONFIRM_BADGE_RECOMPUTE = "RUN BADGE RECOMPUTE"
 CONFIRM_TOURNAMENT_MATCH_BACKFILL = "BACKFILL TOURNAMENT MATCHES"
 MAX_TOURNAMENT_MATCH_BACKFILL_APPLY = 100
+MAX_ADMIN_RATING_REPORT_ROWS = 10000
 SNAPSHOT_COLUMNS = {
     "t1_p1_r",
     "t1_p2_r",
@@ -70,6 +72,7 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "overview": "view_audit_log",
             "roles": "manage_roles",
             "workers": "run_replay",
+            "rating_reports": "view_audit_log",
             "tournament_backfill_preview": "view_audit_log",
             "tournament_backfill_apply": "run_replay",
         },
@@ -127,6 +130,15 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except Exception:
         return None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
 
 
 def _chunks(values: list[str], size: int = 100) -> list[list[str]]:
@@ -207,6 +219,156 @@ def build_admin_worker_status(supabase: Any, *, club_id: str) -> dict[str, Any]:
             "drain": CONFIRM_QUEUE_DRAIN,
             "badge_recompute": CONFIRM_BADGE_RECOMPUTE,
         },
+    }
+
+
+def build_admin_rating_report(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str = "OVERALL",
+) -> dict[str, Any]:
+    """Build the club-scoped read-only ratings report exposed by Streamlit Admin Tools."""
+    if not is_admin_tools_enabled():
+        raise PermissionError("Next Admin Tools are disabled.")
+    selected_scope = str(league_name or "OVERALL").strip() or "OVERALL"
+    is_overall = selected_scope.upper() == "OVERALL"
+    try:
+        player_rows = _safe_rows(
+            supabase.table("players")
+            .select("id,name,rating,starting_rating,wins,losses,matches_played,active,inactive_at")
+            .eq("club_id", str(club_id))
+            .limit(MAX_ADMIN_RATING_REPORT_ROWS + 1)
+            .execute()
+        )
+        metadata_rows = _safe_rows(
+            supabase.table("leagues_metadata")
+            .select("league_name")
+            .eq("club_id", str(club_id))
+            .limit(MAX_ADMIN_RATING_REPORT_ROWS + 1)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to load club-scoped rating report inputs.") from exc
+
+    available_leagues = sorted(
+        {
+            str(row.get("league_name") or "").strip()
+            for row in metadata_rows[:MAX_ADMIN_RATING_REPORT_ROWS]
+            if str(row.get("league_name") or "").strip()
+            and str(row.get("league_name") or "").strip().upper() != "OVERALL"
+        },
+        key=str.casefold,
+    )
+    if not is_overall and selected_scope not in available_leagues:
+        raise ValueError("Select a league available to this club's rating report.")
+
+    players_truncated = len(player_rows) > MAX_ADMIN_RATING_REPORT_ROWS
+    metadata_truncated = len(metadata_rows) > MAX_ADMIN_RATING_REPORT_ROWS
+    player_rows = player_rows[:MAX_ADMIN_RATING_REPORT_ROWS]
+    visible_players = [
+        row
+        for row in player_rows
+        if "(merged into " not in str(row.get("name") or "").casefold()
+    ]
+    player_names = {
+        int(player_id): str(row.get("name") or "")
+        for row in visible_players
+        if (player_id := _safe_int(row.get("id"))) is not None
+    }
+
+    source_rows: list[dict[str, Any]]
+    source_truncated = players_truncated
+    if is_overall:
+        has_inactive_at = any("inactive_at" in row for row in visible_players)
+        source_rows = [
+            {
+                **row,
+                "player_id": row.get("id"),
+                "report_name": str(row.get("name") or ""),
+            }
+            for row in visible_players
+            if (
+                not row.get("inactive_at")
+                if has_inactive_at
+                else row.get("active", row.get("is_active", True)) is not False
+            )
+        ]
+        normalized_scope = "OVERALL"
+    else:
+        try:
+            league_rows = _safe_rows(
+                supabase.table("league_ratings")
+                .select("player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active")
+                .eq("club_id", str(club_id))
+                .eq("league_name", selected_scope)
+                .limit(MAX_ADMIN_RATING_REPORT_ROWS + 1)
+                .execute()
+            )
+        except Exception as exc:
+            raise RuntimeError("Unable to load the selected club league rating report.") from exc
+        source_truncated = players_truncated or len(league_rows) > MAX_ADMIN_RATING_REPORT_ROWS
+        source_rows = [
+            {
+                **row,
+                "report_name": player_names.get(_safe_int(row.get("player_id")) or -1, ""),
+            }
+            for row in league_rows[:MAX_ADMIN_RATING_REPORT_ROWS]
+        ]
+        normalized_scope = selected_scope
+
+    report_rows: list[dict[str, Any]] = []
+    for row in source_rows:
+        rating = _safe_float(row.get("rating"), 1200.0)
+        starting_rating = _safe_float(row.get("starting_rating"), rating)
+        wins = _safe_int(row.get("wins")) or 0
+        losses = _safe_int(row.get("losses")) or 0
+        matches_played = _safe_int(row.get("matches_played"))
+        if matches_played is None:
+            matches_played = wins + losses
+        report_rows.append(
+            {
+                "_rating_sort": rating,
+                "player_id": _safe_int(row.get("player_id")),
+                "name": str(row.get("report_name") or ""),
+                "jupr": round(rating / 400.0, 4),
+                "wins": wins,
+                "losses": losses,
+                "matches_played": matches_played,
+                "win_percent": round((float(wins) / float(max(matches_played, 1))) * 100.0, 2),
+                "gain": round((rating - starting_rating) / 400.0, 4),
+            }
+        )
+    report_rows.sort(
+        key=lambda row: (
+            -float(row.get("_rating_sort") or 0.0),
+            str(row.get("name") or "").casefold(),
+            int(row.get("player_id") or 0),
+        )
+    )
+    for row in report_rows:
+        row.pop("_rating_sort", None)
+    truncated = bool(source_truncated or metadata_truncated)
+    warnings = (
+        [f"The report reached its {MAX_ADMIN_RATING_REPORT_ROWS:,}-row safety limit and may be incomplete."]
+        if truncated
+        else []
+    )
+    return {
+        "ok": True,
+        "mode": "admin_rating_report",
+        "read_only": True,
+        "scope": normalized_scope,
+        "available_scopes": ["OVERALL", *available_leagues],
+        "generated_on": datetime.now(timezone.utc).date().isoformat(),
+        "summary": {
+            "row_count": len(report_rows),
+            "row_limit": MAX_ADMIN_RATING_REPORT_ROWS,
+            "truncated": truncated,
+        },
+        "columns": ["name", "jupr", "wins", "losses", "matches_played", "win_percent", "gain"],
+        "rows": report_rows,
+        "warnings": warnings,
     }
 
 
