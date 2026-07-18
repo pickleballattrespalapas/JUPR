@@ -73,6 +73,8 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "roles": "manage_roles",
             "workers": "run_replay",
             "rating_reports": "view_audit_log",
+            "social_submission_review": "view_audit_log",
+            "social_submission_moderation": "manage_matches",
             "tournament_backfill_preview": "view_audit_log",
             "tournament_backfill_apply": "run_replay",
         },
@@ -82,6 +84,8 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "process_queue": CONFIRM_QUEUE_BATCH,
             "drain_queue": CONFIRM_QUEUE_DRAIN,
             "badge_recompute": CONFIRM_BADGE_RECOMPUTE,
+            "approve_social_submission": "APPROVE SOCIAL SUBMISSION",
+            "reject_social_submission": "REJECT SOCIAL SUBMISSION",
             "tournament_match_backfill": CONFIRM_TOURNAMENT_MATCH_BACKFILL,
         },
     }

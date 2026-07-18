@@ -6,6 +6,7 @@ from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import (
+    PERMISSION_MANAGE_MATCHES,
     PERMISSION_MANAGE_ROLES,
     PERMISSION_RUN_REPLAY,
     PERMISSION_VIEW_AUDIT_LOG,
@@ -13,6 +14,10 @@ from jupr_app.domain.admin.roles import (
     resolve_admin_role,
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.services.admin_social_submission_service import (
+    list_admin_social_submissions,
+    moderate_admin_social_submission,
+)
 from jupr_app.services.admin_tools_service import (
     apply_admin_tournament_match_backfill,
     build_admin_rating_report,
@@ -66,6 +71,14 @@ class AdminTournamentMatchBackfillApplyRequest(BaseModel):
     preview_limit: int = Field(default=500, ge=1, le=1000)
     confirmation_text: str = ""
     source: str = "next_admin_tools_tournament_match_backfill"
+
+
+class AdminSocialSubmissionModerationRequest(BaseModel):
+    action: str
+    expected_status: str
+    rejection_reason: str = ""
+    confirmation_text: str = ""
+    source: str = "next_admin_tools_social_review"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str, permission: str) -> tuple[str, str]:
@@ -148,6 +161,66 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 supabase,
                 club_id=str(club_id),
                 league_name=str(league),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/tools/social-submissions")
+    def get_admin_tools_social_submissions(
+        club_id: str,
+        status: str = Query(default="pending", min_length=1, max_length=40),
+        limit: int = Query(default=100, ge=1, le=100),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_admin_tools_social_review",
+            permission=PERMISSION_VIEW_AUDIT_LOG,
+        )
+        try:
+            return list_admin_social_submissions(
+                supabase,
+                club_id=str(club_id),
+                status=str(status),
+                limit=int(limit),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tools/social-submissions/{event_id}/moderate")
+    def post_admin_tools_social_submission_moderation(
+        club_id: str,
+        event_id: str,
+        payload: AdminSocialSubmissionModerationRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            permission=PERMISSION_MANAGE_MATCHES,
+        )
+        try:
+            return moderate_admin_social_submission(
+                supabase,
+                club_id=str(club_id),
+                event_id=str(event_id),
+                action=payload.action,
+                expected_status=payload.expected_status,
+                rejection_reason=payload.rejection_reason,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
             )
         except Exception as exc:
             _handle(exc)

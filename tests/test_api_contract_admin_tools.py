@@ -138,10 +138,23 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
     assert set(local_app.openapi()["paths"][apply_path]) == {"post"}
     report_path = "/admin/clubs/{club_id}/tools/reports/ratings"
     assert set(local_app.openapi()["paths"][report_path]) == {"get"}
+    social_review_path = "/admin/clubs/{club_id}/tools/social-submissions"
+    assert set(local_app.openapi()["paths"][social_review_path]) == {"get"}
+    social_moderation_path = "/admin/clubs/{club_id}/tools/social-submissions/{event_id}/moderate"
+    assert set(local_app.openapi()["paths"][social_moderation_path]) == {"post"}
     before = deepcopy(supabase.storage)
 
     response = TestClient(local_app).get("/admin/clubs/club/tools/backfills/tournament-matches/preview")
     report_response = TestClient(local_app).get("/admin/clubs/club/tools/reports/ratings")
+    social_review_response = TestClient(local_app).get("/admin/clubs/club/tools/social-submissions?status=pending")
+    social_moderation_response = TestClient(local_app).post(
+        "/admin/clubs/club/tools/social-submissions/harmless/moderate",
+        json={
+            "action": "approve",
+            "expected_status": "pending",
+            "confirmation_text": "APPROVE SOCIAL SUBMISSION",
+        },
+    )
     apply_response = TestClient(local_app).post(
         "/admin/clubs/club/tools/backfills/tournament-matches/apply",
         json={
@@ -154,8 +167,41 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
 
     assert response.status_code == 401
     assert report_response.status_code == 401
+    assert social_review_response.status_code == 401
+    assert social_moderation_response.status_code == 401
     assert apply_response.status_code == 401
     assert supabase.storage == before
+
+
+def test_social_review_allows_read_only_role_but_moderation_requires_manage_matches(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setattr("services.api.admin_tools_routes.authenticate_bearer", lambda _authorization: SimpleNamespace(email="reader@example.com", user_id="reader-1"))
+    monkeypatch.setattr("services.api.admin_tools_routes.resolve_admin_role", lambda **_kwargs: SimpleNamespace(role="read_only"))
+    supabase = FakeSupabase()
+    local_app = FastAPI()
+    install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
+    client = TestClient(local_app)
+
+    review = client.get(
+        "/admin/clubs/club/tools/social-submissions?status=pending",
+        headers={"Authorization": "Bearer local"},
+    )
+    moderate = client.post(
+        "/admin/clubs/club/tools/social-submissions/harmless/moderate",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "action": "approve",
+            "expected_status": "pending",
+            "confirmation_text": "APPROVE SOCIAL SUBMISSION",
+        },
+    )
+
+    assert review.status_code == 200
+    assert review.json()["read_only"] is True
+    assert moderate.status_code == 403
+    assert moderate.json()["detail"] == "insufficient permission"
+    assert not supabase.storage.get("live_events")
+    assert supabase.storage["admin_activity_log"][-1]["after_json"]["required_permission"] == "manage_matches"
 
 
 def test_admin_tools_overview_and_role_update(monkeypatch):

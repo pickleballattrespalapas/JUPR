@@ -28,7 +28,7 @@ export default async function AdminToolsPage() {
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Admin Tools</p>
       <h1 style={{ marginTop: 0 }}>Admin Tools</h1>
-      <p style={{ color: "#334155", maxWidth: "880px" }}>Review admin activity, inspect system health, export overall/league rating reports, manage staff role assignments, run guarded badge workers/recompute, and review/apply selected legacy tournament-match backfills through FastAPI. Remaining one-time maintenance migrations stay on Streamlit fallback.</p>
+      <p style={{ color: "#334155", maxWidth: "880px" }}>Review admin activity and Club Social submissions, inspect system health, export overall/league rating reports, manage staff role assignments, run guarded badge workers/recompute, and review/apply selected legacy tournament-match backfills through FastAPI. Remaining one-time maintenance migrations stay on Streamlit fallback.</p>
       {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Admin Tools status unavailable. {error}</article> : null}
       <AdminToolsPanel apiBase={apiBase()} clubId={clubId} status={status} />
       <p style={{ marginTop: "1rem" }}><Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Operations cockpit</Link></p>

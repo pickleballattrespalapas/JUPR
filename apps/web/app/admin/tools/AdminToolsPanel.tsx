@@ -10,6 +10,9 @@ type WorkerResponse = { ok: boolean; mode?: string; result?: Record<string, unkn
 type RatingReportResponse = { ok: boolean; mode: "admin_rating_report"; read_only: true; scope: string; available_scopes: string[]; generated_on: string; summary: Record<string, unknown>; rows: Array<Record<string, unknown>>; warnings: string[] };
 type TournamentBackfillPreviewResponse = { ok: boolean; mode: "tournament_match_backfill_preview"; read_only: true; preview_fingerprint: string; confirmation_text: string; summary: Record<string, unknown>; candidates: Array<Record<string, unknown>>; warnings: string[] };
 type TournamentBackfillApplyResponse = { ok: boolean; mode: "tournament_match_backfill_apply"; operation_id: string; selected_game_ids: string[]; inserted_count: number; warnings: string[] };
+type SocialSubmission = { id: string; name: string; event_type: string; event_date: unknown; status: string; submission_mode: string; submitted_by_name: string; summary_json: Record<string, unknown>; raw_event_json: Record<string, unknown>; created_at: unknown; updated_at: unknown; rejection_reason?: string | null; moderated_at?: unknown; moderated_by?: string | null };
+type SocialSubmissionListResponse = { ok: boolean; mode: "admin_social_submission_review"; read_only: true; status: string; statuses: string[]; confirmation_text: Record<"approve" | "reject", string>; summary: Record<string, unknown>; submissions: SocialSubmission[]; warnings: string[] };
+type SocialSubmissionModerationResponse = { ok: boolean; mode: "admin_social_submission_moderation"; action: "approve" | "reject"; submission: SocialSubmission; warnings: string[] };
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -71,6 +74,12 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [tournamentBackfillPreview, setTournamentBackfillPreview] = useState<TournamentBackfillPreviewResponse | null>(null);
   const [selectedTournamentBackfillGameIds, setSelectedTournamentBackfillGameIds] = useState<string[]>([]);
   const [tournamentBackfillConfirmation, setTournamentBackfillConfirmation] = useState("");
+  const [socialSubmissionStatus, setSocialSubmissionStatus] = useState("pending");
+  const [socialSubmissionQueue, setSocialSubmissionQueue] = useState<SocialSubmissionListResponse | null>(null);
+  const [selectedSocialSubmissionId, setSelectedSocialSubmissionId] = useState("");
+  const [socialSubmissionAction, setSocialSubmissionAction] = useState<"approve" | "reject">("approve");
+  const [socialSubmissionReason, setSocialSubmissionReason] = useState("");
+  const [socialSubmissionConfirmation, setSocialSubmissionConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -147,6 +156,54 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       setTournamentBackfillConfirmation("");
       setMessage(`Tournament backfill preview found ${String(payload.summary.ready_count ?? 0)} ready and ${String(payload.summary.blocked_count ?? 0)} blocked missing match candidate(s). No rows were written.`);
     } catch (error) { setTournamentBackfillPreview(null); setMessage(error instanceof Error ? error.message : "Unable to preview missing tournament matches."); }
+    finally { setBusy(false); }
+  }
+
+  async function loadSocialSubmissionQueue() {
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<SocialSubmissionListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/social-submissions?status=${encodeURIComponent(socialSubmissionStatus)}&limit=100`);
+      setSocialSubmissionQueue(payload);
+      setSelectedSocialSubmissionId("");
+      setSocialSubmissionReason("");
+      setSocialSubmissionConfirmation("");
+      setMessage(`Loaded ${payload.submissions.length} ${payload.status} Club Social submission(s). No rows were written.`);
+    } catch (error) { setSocialSubmissionQueue(null); setMessage(error instanceof Error ? error.message : "Unable to load the Club Social review queue."); }
+    finally { setBusy(false); }
+  }
+
+  function selectSocialSubmission(submission: SocialSubmission) {
+    setSelectedSocialSubmissionId(submission.id);
+    setSocialSubmissionAction(submission.status === "saved" ? "reject" : "approve");
+    setSocialSubmissionReason("");
+    setSocialSubmissionConfirmation("");
+  }
+
+  async function moderateSocialSubmission() {
+    const selected = socialSubmissionQueue?.submissions.find((submission) => submission.id === selectedSocialSubmissionId);
+    if (!selected || !socialSubmissionQueue) { setMessage("Select and review one Club Social submission first."); return; }
+    const expectedConfirmation = socialSubmissionQueue.confirmation_text[socialSubmissionAction];
+    if (socialSubmissionConfirmation.trim().toUpperCase() !== expectedConfirmation) { setMessage(`Type ${expectedConfirmation} to moderate this submission.`); return; }
+    if (socialSubmissionAction === "reject" && !socialSubmissionReason.trim()) { setMessage("Enter a rejection reason before rejecting this submission."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<SocialSubmissionModerationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/social-submissions/${encodeURIComponent(selected.id)}/moderate`, {
+        method: "POST",
+        body: JSON.stringify({
+          action: socialSubmissionAction,
+          expected_status: selected.status,
+          rejection_reason: socialSubmissionReason,
+          confirmation_text: socialSubmissionConfirmation,
+          source: "next_admin_tools_social_review"
+        })
+      });
+      setSocialSubmissionQueue((current) => current ? { ...current, submissions: current.submissions.filter((submission) => submission.id !== selected.id), summary: { ...current.summary, returned_count: Math.max(0, current.submissions.length - 1) } } : current);
+      setSelectedSocialSubmissionId("");
+      setSocialSubmissionReason("");
+      setSocialSubmissionConfirmation("");
+      const warning = payload.warnings.length ? ` Audit warning: ${payload.warnings.join(" ")}` : "";
+      setMessage(`Submission ${payload.action === "approve" ? "approved" : "rejected"}.${warning}`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to moderate the Club Social submission."); }
     finally { setBusy(false); }
   }
 
@@ -227,6 +284,39 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           {table(ratingReport.rows, ["name", "jupr", "wins", "losses", "matches_played", "win_percent", "gain"])}
           <p><button type="button" onClick={() => downloadRatingReport(ratingReport)} disabled={!ratingReport.rows.length} style={buttonStyle}>Download {ratingReport.scope} CSV</button></p>
         </div>}
+      </article>
+      <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>Club Social submission review</h2>
+        <p style={{ color: "#475569" }}>Review unrated Club Social event submissions for this club. Loading a queue is read-only. Approve or reject requires <code>manage_matches</code> permission, a current expected status, and an exact confirmation phrase.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+          <label>Queue<br /><select value={socialSubmissionStatus} onChange={(event) => { setSocialSubmissionStatus(event.target.value); setSocialSubmissionQueue(null); setSelectedSocialSubmissionId(""); }} style={inputStyle}><option value="pending">pending</option><option value="saved">saved</option><option value="rejected">rejected</option></select></label>
+          <button type="button" onClick={loadSocialSubmissionQueue} disabled={busy} style={ghostButtonStyle}>Load review queue</button>
+        </div>
+        {socialSubmissionQueue ? <div style={{ marginTop: "1rem" }}>
+          {socialSubmissionQueue.warnings.map((warning) => <p key={warning} style={{ color: "#92400e" }}>{warning}</p>)}
+          {!socialSubmissionQueue.submissions.length ? <p style={{ color: "#64748b" }}>No {socialSubmissionQueue.status} Club Social submissions found.</p> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}><thead><tr>{["name", "event", "date", "submitted by", "participants", "matches", "updated", "review"].map((heading) => <th key={heading} align="left" style={{ borderBottom: "1px solid #e2e8f0", padding: "0.4rem" }}>{heading}</th>)}</tr></thead><tbody>{socialSubmissionQueue.submissions.map((submission) => <tr key={submission.id} style={{ background: selectedSocialSubmissionId === submission.id ? "#eff6ff" : "transparent" }}><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{submission.name}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{submission.event_type}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.event_date ?? "")}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{submission.submitted_by_name}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.summary_json.participant_count ?? 0)}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.summary_json.match_count ?? 0)}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}>{String(submission.updated_at ?? "")}</td><td style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem" }}><button type="button" onClick={() => selectSocialSubmission(submission)} disabled={busy} style={ghostButtonStyle}>Review</button></td></tr>)}</tbody></table></div>}
+          {(() => {
+            const selected = socialSubmissionQueue.submissions.find((submission) => submission.id === selectedSocialSubmissionId);
+            if (!selected) return null;
+            const targetStatus = socialSubmissionAction === "approve" ? "saved" : "rejected";
+            const isNoOp = selected.status === targetStatus;
+            const expectedConfirmation = socialSubmissionQueue.confirmation_text[socialSubmissionAction];
+            return <section style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: "12px", padding: "1rem", marginTop: "1rem" }}>
+              <h3 style={{ marginTop: 0 }}>Review: {selected.name}</h3>
+              <p><strong>Status:</strong> {selected.status} · <strong>Submitted by:</strong> {selected.submitted_by_name} · <strong>Mode:</strong> {selected.submission_mode}</p>
+              {selected.rejection_reason ? <p><strong>Previous rejection reason:</strong> {selected.rejection_reason}</p> : null}
+              <details><summary>Summary JSON</summary><Pre value={selected.summary_json} /></details>
+              <details><summary>Raw event JSON</summary><Pre value={selected.raw_event_json} /></details>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "1rem" }}>
+                <label>Action<br /><select value={socialSubmissionAction} onChange={(event) => { setSocialSubmissionAction(event.target.value as "approve" | "reject"); setSocialSubmissionReason(""); setSocialSubmissionConfirmation(""); }} style={inputStyle}><option value="approve">approve → saved</option><option value="reject">reject → rejected</option></select></label>
+                {socialSubmissionAction === "reject" ? <label>Rejection reason<br /><input value={socialSubmissionReason} onChange={(event) => setSocialSubmissionReason(event.target.value)} maxLength={1200} style={inputStyle} /></label> : null}
+                <label>Confirmation<br /><input value={socialSubmissionConfirmation} onChange={(event) => setSocialSubmissionConfirmation(event.target.value)} placeholder={expectedConfirmation} style={inputStyle} /></label>
+                <button type="button" onClick={moderateSocialSubmission} disabled={busy || isNoOp} style={buttonStyle}>{socialSubmissionAction === "approve" ? "Approve selected submission" : "Reject selected submission"}</button>
+              </div>
+              {isNoOp ? <p style={{ color: "#92400e" }}>This submission is already {targetStatus}; choose the other action or reload another queue.</p> : <p style={{ color: "#991b1b" }}>Only the reviewed submission status and moderation metadata will change. Reload the queue after any stale-status warning.</p>}
+            </section>;
+          })()}
+        </div> : <p style={{ color: "#64748b" }}>Choose a queue and load it to begin review.</p>}
       </article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Workers and backfills</h2>
