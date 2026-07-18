@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from jupr_app.domain.live_social import list_social_match_log_rows
+from jupr_app.domain.live_social import (
+    delete_social_matches,
+    list_social_match_log_rows,
+    update_social_match_row,
+)
 from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_duplicate_cleanup,
     apply_admin_match_log_edits,
@@ -15,10 +19,11 @@ SCHEMA_STRICT_TABLES = {"matches", "live_event_matches"}
 
 
 class FakeQuery:
-    def __init__(self, storage, table_name, *, strict_select=False):
+    def __init__(self, storage, table_name, *, strict_select=False, operations=None):
         self.storage = storage
         self.table_name = table_name
         self.strict_select = bool(strict_select)
+        self.operations = operations if operations is not None else []
         self.filters: list[tuple[str, str, object]] = []
         self.order_key: str | None = None
         self.order_desc = False
@@ -85,6 +90,8 @@ class FakeQuery:
             if missing_columns:
                 raise RuntimeError(f"Unknown columns for {self.table_name}: {', '.join(missing_columns)}")
         if self.insert_payload is not None:
+            if self.table_name in self.storage.get("__failed_insert_tables__", set()):
+                raise RuntimeError(f"Insert failed for {self.table_name}")
             rows = self.insert_payload if isinstance(self.insert_payload, list) else [self.insert_payload]
             for row in rows:
                 table.append(dict(row))
@@ -94,6 +101,15 @@ class FakeQuery:
             self.storage[self.table_name] = [row for row in table if row not in matched]
             return SimpleNamespace(data=matched)
         if self.update_payload is not None:
+            self.operations.append(
+                {
+                    "operation": "update",
+                    "table": self.table_name,
+                    "payload": dict(self.update_payload),
+                }
+            )
+            if self.table_name in self.storage.get("__empty_update_tables__", set()):
+                return SimpleNamespace(data=[])
             for row in matched:
                 row.update(self.update_payload)
             return SimpleNamespace(data=matched)
@@ -108,9 +124,15 @@ class FakeSupabase:
     def __init__(self, tables, *, strict_select_tables=None):
         self.tables = tables
         self.strict_select_tables = set(strict_select_tables or [])
+        self.operations: list[dict] = []
 
     def table(self, name):
-        return FakeQuery(self.tables, name, strict_select=name in self.strict_select_tables)
+        return FakeQuery(
+            self.tables,
+            name,
+            strict_select=name in self.strict_select_tables,
+            operations=self.operations,
+        )
 
 
 def fake_tables():
@@ -352,6 +374,221 @@ def test_club_social_match_log_uses_parent_event_moderation_fields() -> None:
     assert rows.iloc[0]["social_match_id"] == "social-1"
     assert rows.iloc[0]["status"] == "saved"
     assert rows.iloc[0]["submission_mode"] == "admin"
+
+
+def test_club_social_update_applies_only_actual_field_delta() -> None:
+    tables = fake_tables()
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    result = update_social_match_row(
+        supabase,
+        club_id="club",
+        social_match_id="social-1",
+        patch={
+            "event_name": "  Friday   Social  ",
+            "score_t1": 8,
+            "score_t2": 11,
+            "round_number": 1,
+        },
+    )
+
+    assert result == {
+        "social_match_id": "social-1",
+        "event_id": "event-1",
+        "updated_match_fields": ["score_t1"],
+        "updated_event_name": False,
+        "patch": {"score_t1": 8},
+        "before": {"score_t1": 7},
+        "after": {"score_t1": 8},
+    }
+    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert tables["live_events"][0]["name"] == "Friday Social"
+    assert [operation for operation in supabase.operations if operation["operation"] == "update"] == [
+        {"operation": "update", "table": "live_event_matches", "payload": {"score_t1": 8}},
+    ]
+
+
+def test_club_social_update_normalizes_event_name_only_delta() -> None:
+    tables = fake_tables()
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    result = update_social_match_row(
+        supabase,
+        club_id="club",
+        social_match_id="social-1",
+        patch={"event_name": "  Friday   Social   Updated  "},
+    )
+
+    assert result["updated_match_fields"] == []
+    assert result["updated_event_name"] is True
+    assert result["patch"] == {"event_name": "Friday Social Updated"}
+    assert result["before"] == {"event_name": "Friday Social"}
+    assert result["after"] == {"event_name": "Friday Social Updated"}
+    assert tables["live_events"][0]["name"] == "Friday Social Updated"
+
+
+def test_club_social_update_rejects_blank_event_name_without_writes() -> None:
+    tables = fake_tables()
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={"event_name": " \u00a0  "},
+        )
+    except ValueError as exc:
+        assert str(exc) == "Club Social event name cannot be blank."
+    else:
+        raise AssertionError("Expected a blank Club Social event name to be rejected")
+
+    assert supabase.operations == []
+    assert tables["live_events"][0]["name"] == "Friday Social"
+
+
+def test_club_social_update_rejects_mixed_event_and_match_deltas_without_writes() -> None:
+    tables = fake_tables()
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={"event_name": "Friday Social Updated", "score_t1": 8},
+        )
+    except ValueError as exc:
+        assert str(exc) == "Update the Club Social event name separately from match fields."
+    else:
+        raise AssertionError("Expected a mixed event and match update to be rejected")
+
+    assert supabase.operations == []
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+    assert tables["live_events"][0]["name"] == "Friday Social"
+
+
+def test_club_social_update_rejects_normalized_noop_without_writes() -> None:
+    tables = fake_tables()
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={
+                "event_name": "  Friday   Social  ",
+                "score_t1": 7,
+                "score_t2": 11,
+                "round_number": 1,
+            },
+        )
+    except ValueError as exc:
+        assert str(exc) == "No Club Social changes detected."
+    else:
+        raise AssertionError("Expected unchanged Club Social values to be rejected")
+
+    assert supabase.operations == []
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+    assert tables["live_events"][0]["name"] == "Friday Social"
+
+
+def test_club_social_update_rejects_non_social_parent_event() -> None:
+    tables = fake_tables()
+    tables["live_events"][0]["result_mode"] = "official_rated"
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={"score_t1": 8},
+        )
+    except RuntimeError as exc:
+        assert "not a Club Social match" in str(exc)
+    else:
+        raise AssertionError("Expected non-social live event match update to be rejected")
+
+    assert supabase.operations == []
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+
+
+def test_club_social_update_rejects_cross_club_parent_event() -> None:
+    tables = fake_tables()
+    tables["live_events"][0]["club_id"] = "another-club"
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={"score_t1": 8},
+        )
+    except RuntimeError as exc:
+        assert "does not belong to this club" in str(exc)
+    else:
+        raise AssertionError("Expected cross-club social match update to be rejected")
+
+    assert supabase.operations == []
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+
+
+def test_club_social_delete_rejects_rated_parent_event() -> None:
+    tables = fake_tables()
+    tables["live_events"][0]["result_mode"] = "official_rated"
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    deleted = delete_social_matches(
+        supabase,
+        club_id="club",
+        social_match_ids=["social-1"],
+    )
+
+    assert deleted == 0
+    assert [row["id"] for row in tables["live_event_matches"]] == ["social-1"]
+
+
+def test_club_social_update_requires_match_update_result() -> None:
+    tables = fake_tables()
+    tables["__empty_update_tables__"] = {"live_event_matches"}
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={"score_t1": 8},
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Social match update did not persist."
+    else:
+        raise AssertionError("Expected empty match update result to be rejected")
+
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+
+
+def test_club_social_update_requires_event_name_update_result() -> None:
+    tables = fake_tables()
+    tables["__empty_update_tables__"] = {"live_events"}
+    supabase = FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES)
+
+    try:
+        update_social_match_row(
+            supabase,
+            club_id="club",
+            social_match_id="social-1",
+            patch={"event_name": "Friday Social Updated"},
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Club Social event name update did not persist."
+    else:
+        raise AssertionError("Expected empty event name update result to be rejected")
+
+    assert tables["live_events"][0]["name"] == "Friday Social"
 
 
 def test_admin_match_log_duplicate_cleanup(monkeypatch) -> None:

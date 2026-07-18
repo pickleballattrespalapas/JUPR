@@ -888,12 +888,15 @@ def update_social_match_row(
     club_id: str,
     social_match_id: str,
     patch: dict,
+    expected_current: dict | None = None,
 ) -> dict:
     club_id = str(club_id)
     social_match_id = str(social_match_id)
     match_rows = (
         supabase.table("live_event_matches")
-        .select("id,event_id")
+        .select(
+            "id,event_id,played_on,score_t1,score_t2,round_number,court_number,mini_round_number"
+        )
         .eq("id", social_match_id)
         .limit(1)
         .execute()
@@ -908,64 +911,159 @@ def update_social_match_row(
 
     event_rows = (
         supabase.table("live_events")
-        .select("id")
+        .select("id,name")
         .eq("id", event_id)
         .eq("club_id", club_id)
+        .eq("result_mode", "social_unrated")
         .limit(1)
         .execute()
         .data
         or []
     )
     if not event_rows:
-        raise RuntimeError("Social match does not belong to this club.")
+        raise RuntimeError("Social match does not belong to this club or is not a Club Social match.")
 
-    allowed_match_fields = {
+    allowed_match_fields = (
         "played_on",
         "score_t1",
         "score_t2",
         "round_number",
         "court_number",
         "mini_round_number",
+    )
+    numeric_match_fields = {
+        "score_t1",
+        "score_t2",
+        "round_number",
+        "court_number",
+        "mini_round_number",
     }
-    match_payload = {k: v for k, v in (patch or {}).items() if k in allowed_match_fields}
-    if match_payload:
-        supabase.table("live_event_matches").update(match_payload).eq("id", social_match_id).execute()
 
-    event_name = (patch or {}).get("event_name")
+    def _normalized_match_value(field: str, value: object) -> object:
+        if value is None:
+            return None
+        if field in numeric_match_fields:
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field} must be an integer.") from exc
+        isoformat = getattr(value, "isoformat", None)
+        return str(isoformat() if callable(isoformat) else value).strip()
+
+    requested_patch = dict(patch or {})
+    expected_patch = dict(expected_current or {}) if expected_current is not None else None
+    current_match = dict(match_rows[0])
+    current_event = dict(event_rows[0])
+    match_payload: dict[str, object] = {}
+    before: dict[str, object] = {}
+    after: dict[str, object] = {}
+
+    if expected_patch is not None:
+        unsupported_expected = set(expected_patch) - {*allowed_match_fields, "event_name"}
+        if unsupported_expected:
+            raise ValueError(f"Unsupported Club Social compare fields: {sorted(unsupported_expected)}")
+        for field, expected_value in expected_patch.items():
+            if field == "event_name":
+                current_value = normalize_name(current_event.get("name"))
+                normalized_expected = normalize_name(expected_value)
+            else:
+                current_value = _normalized_match_value(field, current_match.get(field))
+                normalized_expected = _normalized_match_value(field, expected_value)
+            if current_value != normalized_expected:
+                raise RuntimeError("Club Social row changed before rollback; newer data was preserved.")
+
+    for field in allowed_match_fields:
+        if field not in requested_patch:
+            continue
+        current_value = _normalized_match_value(field, current_match.get(field))
+        requested_value = _normalized_match_value(field, requested_patch.get(field))
+        if requested_value == current_value:
+            continue
+        match_payload[field] = requested_value
+        before[field] = current_value
+        after[field] = requested_value
+
+    event_name_payload: str | None = None
+    event_name = requested_patch.get("event_name")
     if event_name is not None:
-        supabase.table("live_events").update({"name": normalize_name(event_name)}).eq("id", event_id).eq(
-            "club_id", club_id
-        ).execute()
+        current_event_name = normalize_name(current_event.get("name"))
+        requested_event_name = normalize_name(event_name)
+        if not requested_event_name:
+            raise ValueError("Club Social event name cannot be blank.")
+        if requested_event_name != current_event_name:
+            event_name_payload = requested_event_name
+            before["event_name"] = current_event_name
+            after["event_name"] = requested_event_name
+
+    if not after:
+        raise ValueError("No Club Social changes detected.")
+    if match_payload and event_name_payload is not None:
+        raise ValueError("Update the Club Social event name separately from match fields.")
+
+    if match_payload:
+        match_update_query = supabase.table("live_event_matches").update(match_payload).eq(
+            "id", social_match_id
+        ).eq("event_id", event_id)
+        for field, expected_value in (expected_patch or {}).items():
+            if field not in allowed_match_fields:
+                continue
+            normalized_expected = _normalized_match_value(field, expected_value)
+            if normalized_expected is None:
+                match_update_query = match_update_query.is_(field, None)
+            else:
+                match_update_query = match_update_query.eq(field, normalized_expected)
+        match_update_rows = match_update_query.select("id").execute().data or []
+        if not match_update_rows:
+            raise RuntimeError("Social match update did not persist.")
+
+    if event_name_payload is not None:
+        event_update_query = (
+            supabase.table("live_events")
+            .update({"name": event_name_payload})
+            .eq("id", event_id)
+            .eq("club_id", club_id)
+            .eq("result_mode", "social_unrated")
+        )
+        if expected_patch is not None and "event_name" in expected_patch:
+            event_update_query = event_update_query.eq(
+                "name", normalize_name(expected_patch.get("event_name"))
+            )
+        event_update_rows = event_update_query.select("id").execute().data or []
+        if not event_update_rows:
+            raise RuntimeError("Club Social event name update did not persist.")
 
     return {
         "social_match_id": social_match_id,
         "event_id": event_id,
         "updated_match_fields": sorted(match_payload.keys()),
-        "updated_event_name": event_name is not None,
+        "updated_event_name": event_name_payload is not None,
+        "patch": dict(after),
+        "before": before,
+        "after": after,
     }
 
 
-def delete_social_matches(
+def snapshot_social_matches_for_delete(
     supabase,
     *,
     club_id: str,
     social_match_ids: Iterable[str],
-) -> int:
+) -> list[dict]:
     club_id = str(club_id)
-    ids = [str(v) for v in (social_match_ids or []) if str(v).strip()]
+    ids = list(dict.fromkeys(str(v).strip() for v in (social_match_ids or []) if str(v).strip()))
     if not ids:
-        return 0
+        return []
 
     rows = (
         supabase.table("live_event_matches")
-        .select("id,event_id")
+        .select("*")
         .in_("id", ids)
         .execute()
         .data
         or []
     )
     if not rows:
-        return 0
+        return []
 
     event_ids = [str(r.get("event_id")) for r in rows if r.get("event_id")]
     allowed_events = set()
@@ -974,6 +1072,7 @@ def delete_social_matches(
             supabase.table("live_events")
             .select("id")
             .eq("club_id", club_id)
+            .eq("result_mode", "social_unrated")
             .in_("id", event_ids)
             .execute()
             .data
@@ -981,9 +1080,107 @@ def delete_social_matches(
         )
         allowed_events = {str(r["id"]) for r in allowed_rows if r.get("id")}
 
-    allowed_ids = [str(r["id"]) for r in rows if str(r.get("event_id")) in allowed_events]
-    if not allowed_ids:
+    return [dict(row) for row in rows if str(row.get("event_id")) in allowed_events]
+
+
+def delete_social_match_snapshots(
+    supabase,
+    *,
+    snapshots: Iterable[dict],
+) -> tuple[int, list[dict]]:
+    rows = [dict(row) for row in (snapshots or []) if isinstance(row, dict)]
+    allowed_ids = [str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()]
+    allowed_event_ids = list(
+        dict.fromkeys(
+            str(row.get("event_id") or "").strip()
+            for row in rows
+            if str(row.get("event_id") or "").strip()
+        )
+    )
+    if not allowed_ids or not allowed_event_ids:
+        return 0, []
+
+    deleted_rows = (
+        supabase.table("live_event_matches")
+        .delete()
+        .in_("id", allowed_ids)
+        .in_("event_id", allowed_event_ids)
+        .select("*")
+        .execute()
+        .data
+        or []
+    )
+    snapshots = [dict(row) for row in deleted_rows]
+    return len(snapshots), snapshots
+
+
+def delete_social_matches_with_snapshot(
+    supabase,
+    *,
+    club_id: str,
+    social_match_ids: Iterable[str],
+) -> tuple[int, list[dict]]:
+    snapshots = snapshot_social_matches_for_delete(
+        supabase,
+        club_id=club_id,
+        social_match_ids=social_match_ids,
+    )
+    return delete_social_match_snapshots(supabase, snapshots=snapshots)
+
+
+def restore_social_matches(
+    supabase,
+    *,
+    club_id: str,
+    snapshots: Iterable[dict],
+) -> int:
+    club_id = str(club_id)
+    rows = [dict(row) for row in (snapshots or []) if isinstance(row, dict)]
+    if not rows:
         return 0
 
-    supabase.table("live_event_matches").delete().in_("id", allowed_ids).execute()
-    return len(allowed_ids)
+    expected_ids = {str(row.get("id") or "") for row in rows if str(row.get("id") or "").strip()}
+    event_ids = {str(row.get("event_id") or "") for row in rows if str(row.get("event_id") or "").strip()}
+    if len(expected_ids) != len(rows) or not event_ids:
+        raise RuntimeError("Club Social delete snapshot is incomplete.")
+
+    allowed_rows = (
+        supabase.table("live_events")
+        .select("id")
+        .eq("club_id", club_id)
+        .eq("result_mode", "social_unrated")
+        .in_("id", list(event_ids))
+        .execute()
+        .data
+        or []
+    )
+    allowed_event_ids = {str(row.get("id") or "") for row in allowed_rows}
+    if allowed_event_ids != event_ids:
+        raise RuntimeError("Club Social delete snapshot no longer belongs to this club.")
+
+    restored_rows = (
+        supabase.table("live_event_matches")
+        .insert(rows)
+        .select("id")
+        .execute()
+        .data
+        or []
+    )
+    restored_ids = {str(row.get("id") or "") for row in restored_rows}
+    if restored_ids != expected_ids:
+        raise RuntimeError("Club Social deleted rows could not be fully restored.")
+    return len(restored_ids)
+
+
+def delete_social_matches(
+    supabase,
+    *,
+    club_id: str,
+    social_match_ids: Iterable[str],
+) -> int:
+    deleted_count, _snapshots = delete_social_matches_with_snapshot(
+        supabase,
+        club_id=club_id,
+        social_match_ids=social_match_ids,
+    )
+    return deleted_count

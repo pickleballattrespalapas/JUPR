@@ -160,12 +160,13 @@ def test_admin_match_log_social_update_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.delenv("JUPR_REQUIRE_API_AUDIT_LOG", raising=False)
     _patch_admin_auth(monkeypatch, supabase)
 
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/social/social-1",
         headers={"Authorization": "Bearer local"},
-        json={"event_name": "Friday Social Updated", "score_t1": 8, "score_t2": 11},
+        json={"event_name": "  Friday   Social  ", "score_t1": 8, "score_t2": 11},
     )
 
     assert response.status_code == 200
@@ -173,14 +174,211 @@ def test_admin_match_log_social_update_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["mode"] == "social_match_updated"
     assert tables["live_event_matches"][0]["score_t1"] == 8
-    assert tables["live_events"][0]["name"] == "Friday Social Updated"
-    assert tables["admin_activity_log"][0]["action_type"] == "social_match_log_update"
+    assert tables["live_events"][0]["name"] == "Friday Social"
+    assert payload["result"]["patch"] == {"score_t1": 8}
+    assert payload["result"]["before"] == {"score_t1": 7}
+    assert payload["result"]["after"] == {"score_t1": 8}
+    audit = tables["admin_activity_log"][0]
+    assert audit["action_type"] == "social_match_log_update"
+    assert audit["actor_email"] == "admin@example.com"
+    assert audit["actor_role"] == "club_owner"
+    assert audit["entity_type"] == "live_event_match"
+    assert audit["entity_id"] == "social-1"
+    assert audit["source_page"] == "next_match_log_social_editor"
+    assert audit["flagged_for_review"] is True
+    assert audit["before_json"] == {"score_t1": 7}
+    assert audit["after_json"]["source_client"] == "fastapi/nextjs"
+    assert audit["after_json"]["source_page"] == "next_match_log_social_editor"
+    assert audit["after_json"]["patch"] == {"score_t1": 8}
+    assert audit["after_json"]["result"] == payload["result"]
+
+
+def test_admin_match_log_social_update_rejects_blank_event_name(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"event_name": " \u00a0 "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Club Social event name cannot be blank."
+    assert tables["live_events"][0]["name"] == "Friday Social"
+    assert tables["admin_activity_log"] == []
+    assert supabase.operations == []
+
+
+def test_admin_match_log_social_update_rejects_mixed_table_delta(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"event_name": "Friday Social Updated", "score_t1": 8},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Update the Club Social event name separately from match fields."
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+    assert tables["live_events"][0]["name"] == "Friday Social"
+    assert tables["admin_activity_log"] == []
+    assert supabase.operations == []
+
+
+def test_admin_match_log_social_update_strict_audit_failure_rolls_back(monkeypatch):
+    tables = fake_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Audit log write required but unavailable; the Club Social update was rolled back."
+    )
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+    assert tables["admin_activity_log"] == []
+    assert [operation["payload"] for operation in supabase.operations] == [
+        {"score_t1": 8},
+        {"score_t1": 7},
+    ]
+
+
+def test_admin_match_log_social_update_non_strict_audit_failure_warns(monkeypatch):
+    tables = fake_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.delenv("JUPR_REQUIRE_API_AUDIT_LOG", raising=False)
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["warnings"] == ["Admin activity log write failed."]
+    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_match_log_social_update_reports_critical_rollback_failure(monkeypatch):
+    from services.api import admin_match_log_routes
+
+    tables = fake_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    real_update = admin_match_log_routes.update_social_match_row
+    calls = {"count": 0}
+
+    def update_then_fail_rollback(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("rollback unavailable")
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(admin_match_log_routes, "update_social_match_row", update_then_fail_rollback)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Critical: audit log write failed and the Club Social update could not be rolled back. "
+        "Manual review is required."
+    )
+    assert tables["live_event_matches"][0]["score_t1"] == 8
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_match_log_social_update_rollback_preserves_concurrent_newer_value(monkeypatch):
+    from services.api import admin_match_log_routes
+
+    tables = fake_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    real_update = admin_match_log_routes.update_social_match_row
+    calls = {"count": 0}
+
+    def update_with_concurrent_change(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            tables["live_event_matches"][0]["score_t1"] = 9
+        return real_update(*args, **kwargs)
+
+    monkeypatch.setattr(admin_match_log_routes, "update_social_match_row", update_with_concurrent_change)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={"score_t1": 8},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Critical: audit log write failed and the Club Social update could not be rolled back. "
+        "Manual review is required."
+    )
+    assert tables["live_event_matches"][0]["score_t1"] == 9
+    assert tables["admin_activity_log"] == []
+    assert [operation["payload"] for operation in supabase.operations] == [{"score_t1": 8}]
+
+
+def test_admin_match_log_social_update_rejects_true_noop_without_audit(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/match-log/social/social-1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "event_name": "  Friday   Social  ",
+            "score_t1": 7,
+            "score_t2": 11,
+            "round_number": 1,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "No Club Social changes detected."
+    assert tables["live_event_matches"][0]["score_t1"] == 7
+    assert tables["live_events"][0]["name"] == "Friday Social"
+    assert tables["admin_activity_log"] == []
+    assert supabase.operations == []
 
 
 def test_admin_match_log_social_delete_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.delenv("JUPR_REQUIRE_API_AUDIT_LOG", raising=False)
     _patch_admin_auth(monkeypatch, supabase)
 
     response = TestClient(app).post(
@@ -195,7 +393,77 @@ def test_admin_match_log_social_delete_contract(monkeypatch):
     assert payload["mode"] == "social_matches_deleted"
     assert payload["deleted_count"] == 1
     assert tables["live_event_matches"] == []
-    assert tables["admin_activity_log"][0]["action_type"] == "social_match_log_delete"
+    audit = tables["admin_activity_log"][0]
+    assert audit["action_type"] == "social_match_log_delete"
+    assert audit["before_json"][0]["id"] == "social-1"
+    assert audit["after_json"]["deleted_count"] == 1
+
+
+def test_admin_match_log_social_delete_strict_audit_failure_restores_rows(monkeypatch):
+    tables = fake_tables()
+    original_row = dict(tables["live_event_matches"][0])
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/social/delete",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "DELETE", "social_match_ids": ["social-1"]},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Audit log write required but unavailable; the Club Social delete was rolled back."
+    )
+    assert tables["live_event_matches"] == [original_row]
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_match_log_social_delete_reports_critical_restore_failure(monkeypatch):
+    tables = fake_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log", "live_event_matches"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/social/delete",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "DELETE", "social_match_ids": ["social-1"]},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Critical: audit log write failed and the Club Social delete could not be rolled back. "
+        "Manual review is required."
+    )
+    assert tables["live_event_matches"] == []
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_match_log_social_delete_non_strict_audit_failure_warns(monkeypatch):
+    tables = fake_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.delenv("JUPR_REQUIRE_API_AUDIT_LOG", raising=False)
+    _patch_admin_auth(monkeypatch, supabase)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/social/delete",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "DELETE", "social_match_ids": ["social-1"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deleted_count"] == 1
+    assert response.json()["warnings"] == ["Admin activity log write failed."]
+    assert tables["live_event_matches"] == []
+    assert tables["admin_activity_log"] == []
 
 
 def test_admin_match_log_apply_disabled_before_auth(monkeypatch):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
 from typing import Any
 
@@ -17,8 +18,9 @@ from jupr_app.domain.admin.roles import (
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.live_social import (
     SocialTablesNotInstalledError,
-    delete_social_matches,
+    delete_social_matches_with_snapshot,
     list_social_match_log_rows,
+    restore_social_matches,
     update_social_match_row,
 )
 from jupr_app.domain.match_delete import delete_rated_matches_with_replay
@@ -82,6 +84,16 @@ def _dump_model(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(exclude_none=True)
     return model.dict(exclude_none=True)
+
+
+def _is_api_audit_log_required() -> bool:
+    return os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
 
 
 def _safe_int(value: Any) -> int | None:
@@ -329,11 +341,38 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 action_type="social_match_log_update",
                 entity_type="live_event_match",
                 entity_id=str(social_match_id),
-                after_json={"source_client": "fastapi/nextjs", "source_page": source, "patch": patch, "result": result},
+                before_json=result["before"],
+                after_json={
+                    "source_client": "fastapi/nextjs",
+                    "source_page": source,
+                    "patch": result["patch"],
+                    "result": result,
+                },
                 source_page=source,
                 flagged_for_review=True,
             ),
         )
+        if not audit_result.ok and _is_api_audit_log_required():
+            try:
+                update_social_match_row(
+                    supabase,
+                    club_id=str(club_id),
+                    social_match_id=str(social_match_id),
+                    patch=dict(result["before"]),
+                    expected_current=dict(result["after"]),
+                )
+            except Exception as rollback_exc:  # noqa: BLE001 - surface a critical partial-write state
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Critical: audit log write failed and the Club Social update could not be rolled back. "
+                        "Manual review is required."
+                    ),
+                ) from rollback_exc
+            raise HTTPException(
+                status_code=500,
+                detail="Audit log write required but unavailable; the Club Social update was rolled back.",
+            )
         warnings = [audit_result.warning] if audit_result.warning else []
         return {"ok": True, "mode": "social_match_updated", "social_match_id": str(social_match_id), "result": result, "warnings": warnings}
 
@@ -361,7 +400,11 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
         )
         try:
-            deleted = delete_social_matches(supabase, club_id=str(club_id), social_match_ids=social_ids)
+            deleted, deleted_snapshots = delete_social_matches_with_snapshot(
+                supabase,
+                club_id=str(club_id),
+                social_match_ids=social_ids,
+            )
         except SocialTablesNotInstalledError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
@@ -375,11 +418,33 @@ def install_admin_match_log_routes(app, *, get_supabase_client) -> None:
                 action_type="social_match_log_delete",
                 entity_type="live_event_match",
                 entity_id="bulk",
+                before_json=deleted_snapshots,
                 after_json={"source_client": "fastapi/nextjs", "source_page": payload.source, "requested_ids": social_ids, "deleted_count": deleted},
                 source_page=payload.source,
                 flagged_for_review=True,
             ),
         )
+        if not audit_result.ok and _is_api_audit_log_required():
+            try:
+                restored = restore_social_matches(
+                    supabase,
+                    club_id=str(club_id),
+                    snapshots=deleted_snapshots,
+                )
+                if restored != deleted:
+                    raise RuntimeError("Club Social deleted rows were not fully restored.")
+            except Exception as rollback_exc:  # noqa: BLE001 - surface a critical destructive state
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Critical: audit log write failed and the Club Social delete could not be rolled back. "
+                        "Manual review is required."
+                    ),
+                ) from rollback_exc
+            raise HTTPException(
+                status_code=500,
+                detail="Audit log write required but unavailable; the Club Social delete was rolled back.",
+            )
         warnings = [audit_result.warning] if audit_result.warning else []
         return {"ok": True, "mode": "social_matches_deleted", "deleted_count": deleted, "requested_ids": social_ids, "warnings": warnings}
 
