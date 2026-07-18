@@ -2,6 +2,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from jupr_app.services.admin_tools_service import (
+    apply_admin_tournament_match_backfill,
     build_admin_tournament_match_backfill_preview,
     build_admin_worker_status,
     run_admin_badge_queue_worker,
@@ -69,6 +70,9 @@ class FakeSupabase:
             "tournament_games": [],
             "tournament_teams": [],
             "matches": [],
+            "players": [],
+            "league_ratings": [],
+            "leagues_metadata": [],
         }
 
     def table(self, name):
@@ -93,12 +97,14 @@ def test_tournament_match_backfill_preview_is_read_only_and_classifies_candidate
     supabase.storage["tournament_teams"] = [
         {"id": "team-1", "tournament_id": "tour-1", "player1_id": 1, "player2_id": 2},
         {"id": "team-2", "tournament_id": "tour-1", "player1_id": 3, "player2_id": 4},
+        {"id": "team-3", "tournament_id": "tour-1", "player1_id": 3, "player2_id": 99},
     ]
     supabase.storage["tournament_games"] = [
         {"id": "ready", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 7, "finalized_at": "2026-07-01T00:00:00Z"},
         {"id": "empty", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 0, "score_b": 0, "finalized_at": "2026-07-01T00:00:00Z"},
         {"id": "tied", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 10, "score_b": 10, "finalized_at": "2026-07-01T00:00:00Z"},
         {"id": "incomplete", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "missing", "score_a": 11, "score_b": 8, "finalized_at": "2026-07-01T00:00:00Z"},
+        {"id": "missing-player", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-3", "score_a": 11, "score_b": 8, "finalized_at": "2026-07-01T00:00:00Z"},
         {"id": "published", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 9, "finalized_at": "2026-07-01T00:00:00Z"},
         {"id": "not-final", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 6, "finalized_at": None},
         {"id": "other-club", "tournament_id": "tour-other", "team_a_id": "x", "team_b_id": "y", "score_a": 11, "score_b": 6, "finalized_at": "2026-07-01T00:00:00Z"},
@@ -107,27 +113,137 @@ def test_tournament_match_backfill_preview_is_read_only_and_classifies_candidate
         {"id": 99, "club_id": "club", "tournament_game_id": "published"},
         {"id": 100, "club_id": "other", "tournament_game_id": "ready"},
     ]
+    supabase.storage["players"] = [
+        {"id": 1, "club_id": "club", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+        {"id": 2, "club_id": "club", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+        {"id": 3, "club_id": "club", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+        {"id": 4, "club_id": "club", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+    ]
     before = deepcopy(supabase.storage)
 
     result = build_admin_tournament_match_backfill_preview(supabase, club_id="club")
 
     assert result["read_only"] is True
     assert result["summary"]["tournament_count"] == 1
-    assert result["summary"]["finalized_game_count"] == 5
+    assert result["summary"]["finalized_game_count"] == 6
     assert result["summary"]["already_published_count"] == 1
-    assert result["summary"]["missing_match_count"] == 4
+    assert result["summary"]["missing_match_count"] == 5
     assert result["summary"]["ready_count"] == 1
-    assert result["summary"]["blocked_count"] == 3
+    assert result["summary"]["blocked_count"] == 4
     statuses = {row["game_id"]: row["status"] for row in result["candidates"]}
     assert statuses == {
         "empty": "empty_score",
         "incomplete": "incomplete_team",
+        "missing-player": "missing_player",
         "ready": "ready",
         "tied": "tied_score",
     }
     ready = next(row for row in result["candidates"] if row["game_id"] == "ready")
     assert ready["match_payload"]["tournament_game_id"] == "ready"
     assert ready["match_payload"]["t1_p2"] == 2
+    assert len(result["preview_fingerprint"]) == 64
+    assert result["confirmation_text"] == "BACKFILL TOURNAMENT MATCHES"
+    assert supabase.storage == before
+
+
+def test_tournament_match_backfill_apply_requires_current_selected_preview(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
+    supabase = FakeSupabase()
+    supabase.storage["tournaments"] = [
+        {"id": "tour-1", "club_id": "club", "name": "Summer Cup"},
+    ]
+    supabase.storage["tournament_teams"] = [
+        {"id": "team-1", "tournament_id": "tour-1", "player1_id": 1, "player2_id": 2},
+        {"id": "team-2", "tournament_id": "tour-1", "player1_id": 3, "player2_id": 4},
+    ]
+    supabase.storage["tournament_games"] = [
+        {"id": "ready", "tournament_id": "tour-1", "team_a_id": "team-1", "team_b_id": "team-2", "score_a": 11, "score_b": 7, "finalized_at": "2026-07-01T00:00:00Z"},
+    ]
+    supabase.storage["players"] = [
+        {"id": value, "club_id": "club", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0}
+        for value in (1, 2, 3, 4)
+    ]
+    preview = build_admin_tournament_match_backfill_preview(supabase, club_id="club")
+    captured: dict[str, object] = {}
+
+    def fake_process(match_payloads, **kwargs):
+        captured["payloads"] = deepcopy(match_payloads)
+        captured["club_id"] = kwargs.get("club_id")
+        for payload in match_payloads:
+            supabase.storage["matches"].append(
+                {
+                    "id": f"match-{len(supabase.storage['matches']) + 1}",
+                    "club_id": kwargs.get("club_id"),
+                    "tournament_game_id": payload.get("tournament_game_id"),
+                }
+            )
+        return {"inserted": len(match_payloads), "badge_summary": {"mode": "test"}}
+
+    monkeypatch.setattr("jupr_app.services.admin_tools_service.process_matches", fake_process)
+    try:
+        apply_admin_tournament_match_backfill(
+            supabase,
+            club_id="club",
+            game_ids=["ready"],
+            preview_fingerprint=preview["preview_fingerprint"],
+            preview_limit=1000,
+            confirmation_text="BACKFILL TOURNAMENT MATCHES",
+            actor_email="owner@example.com",
+            actor_role="super_admin",
+        )
+    except ValueError as exc:
+        assert "stale" in str(exc).lower()
+    else:
+        raise AssertionError("expected preview-limit fingerprint rejection")
+    assert supabase.storage["matches"] == []
+    assert supabase.storage["admin_activity_log"] == []
+
+    result = apply_admin_tournament_match_backfill(
+        supabase,
+        club_id="club",
+        game_ids=["ready"],
+        preview_fingerprint=preview["preview_fingerprint"],
+        confirmation_text="BACKFILL TOURNAMENT MATCHES",
+        actor_email="owner@example.com",
+        actor_role="super_admin",
+    )
+
+    assert result["inserted_count"] == 1
+    assert result["selected_game_ids"] == ["ready"]
+    assert captured["club_id"] == "club"
+    assert captured["payloads"][0]["t1_p2"] == 2
+    assert [row["action_type"] for row in supabase.storage["admin_activity_log"]] == [
+        "tournament_match_backfill_apply_started",
+        "tournament_match_backfill_applied",
+    ]
+
+
+def test_tournament_match_backfill_apply_rejects_stale_preview_without_writes(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    supabase = FakeSupabase()
+    before = deepcopy(supabase.storage)
+    called = {"process": False}
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tools_service.process_matches",
+        lambda *_args, **_kwargs: called.update(process=True),
+    )
+
+    try:
+        apply_admin_tournament_match_backfill(
+            supabase,
+            club_id="club",
+            game_ids=["missing"],
+            preview_fingerprint="stale",
+            confirmation_text="BACKFILL TOURNAMENT MATCHES",
+            actor_email="owner@example.com",
+            actor_role="super_admin",
+        )
+    except ValueError as exc:
+        assert "stale" in str(exc).lower()
+    else:
+        raise AssertionError("expected stale preview rejection")
+    assert called["process"] is False
     assert supabase.storage == before
 
 

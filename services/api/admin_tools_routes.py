@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import (
     PERMISSION_MANAGE_ROLES,
@@ -14,6 +14,7 @@ from jupr_app.domain.admin.roles import (
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tools_service import (
+    apply_admin_tournament_match_backfill,
     build_admin_tools_overview,
     build_admin_tools_status,
     build_admin_tournament_match_backfill_preview,
@@ -56,6 +57,14 @@ class AdminBadgeRecomputeRequest(BaseModel):
     match_limit: int = 5000
     confirmation_text: str = ""
     source: str = "next_admin_tools_badge_recompute"
+
+
+class AdminTournamentMatchBackfillApplyRequest(BaseModel):
+    game_ids: list[str] = Field(default_factory=list)
+    preview_fingerprint: str = ""
+    preview_limit: int = Field(default=500, ge=1, le=1000)
+    confirmation_text: str = ""
+    source: str = "next_admin_tools_tournament_match_backfill"
 
 
 def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str, permission: str) -> tuple[str, str]:
@@ -152,6 +161,37 @@ def install_admin_tools_routes(app, *, get_supabase_client) -> None:
                 supabase,
                 club_id=str(club_id),
                 candidate_limit=int(limit),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tools/backfills/tournament-matches/apply")
+    def post_admin_tools_tournament_match_backfill_apply(
+        club_id: str,
+        payload: AdminTournamentMatchBackfillApplyRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tools_enabled():
+            raise HTTPException(status_code=403, detail="Next Admin Tools are disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            permission=PERMISSION_RUN_REPLAY,
+        )
+        try:
+            return apply_admin_tournament_match_backfill(
+                supabase,
+                club_id=str(club_id),
+                game_ids=payload.game_ids,
+                preview_fingerprint=payload.preview_fingerprint,
+                preview_limit=payload.preview_limit,
+                confirmation_text=payload.confirmation_text,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
             )
         except Exception as exc:
             _handle(exc)

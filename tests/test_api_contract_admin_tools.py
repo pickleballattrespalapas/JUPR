@@ -134,11 +134,23 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
     install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
     contract_path = "/admin/clubs/{club_id}/tools/backfills/tournament-matches/preview"
     assert set(local_app.openapi()["paths"][contract_path]) == {"get"}
+    apply_path = "/admin/clubs/{club_id}/tools/backfills/tournament-matches/apply"
+    assert set(local_app.openapi()["paths"][apply_path]) == {"post"}
     before = deepcopy(supabase.storage)
 
     response = TestClient(local_app).get("/admin/clubs/club/tools/backfills/tournament-matches/preview")
+    apply_response = TestClient(local_app).post(
+        "/admin/clubs/club/tools/backfills/tournament-matches/apply",
+        json={
+            "game_ids": ["harmless"],
+            "preview_fingerprint": "not-used-without-auth",
+            "preview_limit": 500,
+            "confirmation_text": "BACKFILL TOURNAMENT MATCHES",
+        },
+    )
 
     assert response.status_code == 401
+    assert apply_response.status_code == 401
     assert supabase.storage == before
 
 

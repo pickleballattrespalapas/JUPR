@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from typing import Any
+
+import pandas as pd
 
 from jupr_app.domain.admin.role_assignments import (
     delete_role_assignment,
@@ -23,6 +27,7 @@ from jupr_app.domain.gamification.badge_worker import (
     process_badge_eval_queue_until_empty,
 )
 from jupr_app.domain.gamification.recompute import run_badge_recompute
+from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 
 TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -31,6 +36,8 @@ CONFIRM_REVOKE = "REVOKE ROLE"
 CONFIRM_QUEUE_BATCH = "PROCESS BADGE QUEUE"
 CONFIRM_QUEUE_DRAIN = "DRAIN BADGE QUEUE"
 CONFIRM_BADGE_RECOMPUTE = "RUN BADGE RECOMPUTE"
+CONFIRM_TOURNAMENT_MATCH_BACKFILL = "BACKFILL TOURNAMENT MATCHES"
+MAX_TOURNAMENT_MATCH_BACKFILL_APPLY = 100
 SNAPSHOT_COLUMNS = {
     "t1_p1_r",
     "t1_p2_r",
@@ -64,6 +71,7 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "roles": "manage_roles",
             "workers": "run_replay",
             "tournament_backfill_preview": "view_audit_log",
+            "tournament_backfill_apply": "run_replay",
         },
         "confirmation_text": {
             "save": CONFIRM_ROLE,
@@ -71,6 +79,7 @@ def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
             "process_queue": CONFIRM_QUEUE_BATCH,
             "drain_queue": CONFIRM_QUEUE_DRAIN,
             "badge_recompute": CONFIRM_BADGE_RECOMPUTE,
+            "tournament_match_backfill": CONFIRM_TOURNAMENT_MATCH_BACKFILL,
         },
     }
 
@@ -122,6 +131,33 @@ def _safe_int(value: Any) -> int | None:
 
 def _chunks(values: list[str], size: int = 100) -> list[list[str]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _preview_fingerprint(*, club_id: str, candidate_limit: int, rows: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        {
+            "club_id": str(club_id),
+            "candidate_limit": int(candidate_limit),
+            "candidates": rows,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _strict_table_frame(supabase: Any, table_name: str, *, club_id: str) -> pd.DataFrame:
+    try:
+        rows = _safe_rows(
+            supabase.table(table_name)
+            .select("*")
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Unable to load club-scoped {table_name} for tournament match backfill.") from exc
+    return pd.DataFrame(rows)
 
 
 def _table_count(supabase: Any, table: str, *, club_id: str, status: str | None = None, limit: int = 10000) -> dict[str, Any]:
@@ -203,10 +239,17 @@ def build_admin_tournament_match_backfill_preview(
     }
     tournament_ids = sorted(tournaments_by_id)
     if not tournament_ids:
+        fingerprint = _preview_fingerprint(
+            club_id=str(club_id),
+            candidate_limit=safe_candidate_limit,
+            rows=[],
+        )
         return {
             "ok": True,
             "mode": "tournament_match_backfill_preview",
             "read_only": True,
+            "preview_fingerprint": fingerprint,
+            "confirmation_text": CONFIRM_TOURNAMENT_MATCH_BACKFILL,
             "summary": {
                 "tournament_count": 0,
                 "finalized_game_count": 0,
@@ -216,6 +259,7 @@ def build_admin_tournament_match_backfill_preview(
                 "blocked_count": 0,
                 "candidate_count": 0,
                 "candidate_limit": safe_candidate_limit,
+                "apply_limit": MAX_TOURNAMENT_MATCH_BACKFILL_APPLY,
                 "truncated": tournaments_truncated,
             },
             "candidates": [],
@@ -224,6 +268,7 @@ def build_admin_tournament_match_backfill_preview(
 
     games: list[dict[str, Any]] = []
     teams: list[dict[str, Any]] = []
+    players: list[dict[str, Any]] = []
     scan_truncated = tournaments_truncated
     try:
         for tournament_chunk in _chunks(tournament_ids):
@@ -244,8 +289,17 @@ def build_admin_tournament_match_backfill_preview(
             scan_truncated = scan_truncated or len(game_chunk) > 5000 or len(team_chunk) > 10000
             games.extend(game_chunk[:5000])
             teams.extend(team_chunk[:10000])
+        players = _safe_rows(
+            supabase.table("players")
+            .select("id,club_id")
+            .eq("club_id", str(club_id))
+            .limit(10001)
+            .execute()
+        )
+        scan_truncated = scan_truncated or len(players) > 10000
+        players = players[:10000]
     except Exception as exc:
-        raise RuntimeError("Unable to inspect tournament games and teams for backfill preview.") from exc
+        raise RuntimeError("Unable to inspect tournament games, teams, and players for backfill preview.") from exc
 
     finalized_games = [row for row in games if row.get("finalized_at") is not None]
     game_ids = sorted(
@@ -278,7 +332,13 @@ def build_admin_tournament_match_backfill_preview(
         for row in teams
         if str(row.get("id") or "").strip()
     }
+    club_player_ids = {
+        str(row.get("id"))
+        for row in players
+        if str(row.get("id") or "").strip()
+    }
     candidates: list[dict[str, Any]] = []
+    fingerprint_rows: list[dict[str, Any]] = []
     status_counts: dict[str, int] = {}
     missing_games = [row for row in finalized_games if str(row.get("id") or "") not in published_game_ids]
     for game in sorted(missing_games, key=lambda row: (str(row.get("tournament_id") or ""), str(row.get("id") or ""))):
@@ -315,9 +375,36 @@ def build_admin_tournament_match_backfill_preview(
             if any(match_payload.get(key) is None for key in required_players):
                 status, reason = "incomplete_team", "Backfill parity requires two linked players on each team."
                 match_payload = None
+            elif any(str(match_payload.get(key)) not in club_player_ids for key in required_players):
+                status, reason = "missing_player", "One or more linked players do not belong to this club."
+                match_payload = None
+            elif len({str(match_payload.get(key)) for key in required_players}) != len(required_players):
+                status, reason = "invalid_players", "A player cannot occupy multiple positions in one official match."
+                match_payload = None
             else:
                 status, reason = "ready", "Finalized doubles game can be submitted through the existing Python match service."
         status_counts[status] = status_counts.get(status, 0) + 1
+        fingerprint_rows.append(
+            {
+                "game_id": game_id or None,
+                "tournament_id": tournament_id or None,
+                "tournament_name": str((tournament or {}).get("name") or ""),
+                "team_a_id": str(game.get("team_a_id") or ""),
+                "team_b_id": str(game.get("team_b_id") or ""),
+                "team_a_players": [
+                    (team_a or {}).get("player1_id"),
+                    (team_a or {}).get("player2_id"),
+                ],
+                "team_b_players": [
+                    (team_b or {}).get("player1_id"),
+                    (team_b or {}).get("player2_id"),
+                ],
+                "score_a": score_a,
+                "score_b": score_b,
+                "finalized_at": str(game.get("finalized_at") or ""),
+                "status": status,
+            }
+        )
         if len(candidates) < safe_candidate_limit:
             candidates.append(
                 {
@@ -340,10 +427,17 @@ def build_admin_tournament_match_backfill_preview(
         warnings.append("The preview reached a scan or candidate safety limit; do not use it as a complete backfill count.")
     warnings.append("Preview only: no official match, rating, snapshot, badge, or tournament row was written.")
     ready_count = int(status_counts.get("ready", 0))
+    fingerprint = _preview_fingerprint(
+        club_id=str(club_id),
+        candidate_limit=safe_candidate_limit,
+        rows=fingerprint_rows,
+    )
     return {
         "ok": True,
         "mode": "tournament_match_backfill_preview",
         "read_only": True,
+        "preview_fingerprint": fingerprint,
+        "confirmation_text": CONFIRM_TOURNAMENT_MATCH_BACKFILL,
         "summary": {
             "tournament_count": len(tournaments),
             "finalized_game_count": len(finalized_games),
@@ -353,10 +447,214 @@ def build_admin_tournament_match_backfill_preview(
             "blocked_count": len(missing_games) - ready_count,
             "candidate_count": len(candidates),
             "candidate_limit": safe_candidate_limit,
+            "apply_limit": MAX_TOURNAMENT_MATCH_BACKFILL_APPLY,
             "truncated": scan_truncated,
             "status_counts": status_counts,
         },
         "candidates": candidates,
+        "warnings": warnings,
+    }
+
+
+def apply_admin_tournament_match_backfill(
+    supabase: Any,
+    *,
+    club_id: str,
+    game_ids: list[str],
+    preview_fingerprint: str,
+    preview_limit: int = 500,
+    confirmation_text: str,
+    actor_email: str,
+    actor_role: str,
+    source: str = "next_admin_tools_tournament_match_backfill",
+) -> dict[str, Any]:
+    """Apply an explicitly reviewed subset of ready legacy tournament games."""
+    if not is_admin_tools_enabled():
+        raise PermissionError("Next Admin Tools are disabled.")
+    if str(confirmation_text or "").strip().upper() != CONFIRM_TOURNAMENT_MATCH_BACKFILL:
+        raise ValueError(
+            f"Type {CONFIRM_TOURNAMENT_MATCH_BACKFILL} to apply the tournament match backfill."
+        )
+    selected_game_ids = sorted(
+        {
+            str(value).strip()
+            for value in (game_ids or [])
+            if str(value or "").strip()
+        }
+    )
+    if not selected_game_ids:
+        raise ValueError("Select at least one ready tournament game to backfill.")
+    if len(selected_game_ids) > MAX_TOURNAMENT_MATCH_BACKFILL_APPLY:
+        raise ValueError(
+            f"Tournament match backfill is capped at {MAX_TOURNAMENT_MATCH_BACKFILL_APPLY} games per reviewed apply."
+        )
+
+    preview = build_admin_tournament_match_backfill_preview(
+        supabase,
+        club_id=str(club_id),
+        candidate_limit=int(preview_limit),
+    )
+    if bool((preview.get("summary") or {}).get("truncated")):
+        raise ValueError("The tournament backfill preview is truncated; narrow the data set before applying it.")
+    if str(preview_fingerprint or "").strip() != str(preview.get("preview_fingerprint") or ""):
+        raise ValueError("Tournament backfill preview is stale. Reload and review the candidates again.")
+    candidates_by_id = {
+        str(row.get("game_id")): row
+        for row in (preview.get("candidates") or [])
+        if str(row.get("game_id") or "").strip()
+    }
+    missing_ids = [game_id for game_id in selected_game_ids if game_id not in candidates_by_id]
+    if missing_ids:
+        raise ValueError("Selected tournament games are no longer missing official matches: " + ", ".join(missing_ids))
+    blocked = [
+        f"{game_id} ({candidates_by_id[game_id].get('status')})"
+        for game_id in selected_game_ids
+        if str(candidates_by_id[game_id].get("status") or "") != "ready"
+    ]
+    if blocked:
+        raise ValueError("Only ready tournament games can be backfilled: " + ", ".join(blocked))
+
+    try:
+        duplicate_rows = _safe_rows(
+            supabase.table("matches")
+            .select("id,club_id,tournament_game_id")
+            .in_("tournament_game_id", selected_game_ids)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to recheck tournament match duplicates before backfill.") from exc
+    duplicate_ids = sorted(
+        {
+            str(row.get("tournament_game_id"))
+            for row in duplicate_rows
+            if str(row.get("tournament_game_id") or "").strip()
+        }
+    )
+    if duplicate_ids:
+        raise ValueError("Selected tournament games already have official matches: " + ", ".join(duplicate_ids))
+
+    selected_candidates = [candidates_by_id[game_id] for game_id in selected_game_ids]
+    match_payloads = [dict(row.get("match_payload") or {}) for row in selected_candidates]
+    required_player_ids = {
+        int(payload[key])
+        for payload in match_payloads
+        for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
+    }
+    df_players_all = _strict_table_frame(supabase, "players", club_id=str(club_id))
+    df_leagues = _strict_table_frame(supabase, "league_ratings", club_id=str(club_id))
+    df_meta = _strict_table_frame(supabase, "leagues_metadata", club_id=str(club_id))
+    loaded_player_ids = {
+        int(coerced)
+        for value in (df_players_all.get("id", pd.Series(dtype="int64")).tolist())
+        if (coerced := _safe_int(value)) is not None
+    }
+    missing_player_ids = sorted(required_player_ids - loaded_player_ids)
+    if missing_player_ids:
+        raise ValueError(
+            "Selected tournament games reference players outside this club: "
+            + ", ".join(str(value) for value in missing_player_ids)
+        )
+
+    operation_id = hashlib.sha256(
+        f"{club_id}:{preview_fingerprint}:{','.join(selected_game_ids)}".encode("utf-8")
+    ).hexdigest()[:24]
+    intent_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="tournament_match_backfill_apply_started",
+        entity_type="tournament_match_backfill",
+        entity_id=operation_id,
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "preview_fingerprint": str(preview_fingerprint),
+            "selected_game_ids": selected_game_ids,
+            "selected_count": len(selected_game_ids),
+        },
+        source_page=source,
+        flagged_for_review=True,
+    )
+    intent_write = write_admin_activity_log(supabase, intent_payload)
+    warnings: list[str] = []
+    if intent_write.warning:
+        warnings.append(intent_write.warning)
+    if not intent_write.ok and os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY:
+        raise RuntimeError("audit log write required but unavailable")
+
+    process_result = process_matches(
+        match_payloads,
+        supabase=supabase,
+        club_id=str(club_id),
+        name_to_id={},
+        df_players_all=df_players_all,
+        df_leagues=df_leagues,
+        df_meta=df_meta,
+    )
+    inserted_count = int(process_result.get("inserted") or 0)
+    if inserted_count != len(match_payloads):
+        raise RuntimeError(
+            f"Tournament match backfill inserted {inserted_count} of {len(match_payloads)} reviewed games. "
+            "Stop further writes and use Match Log plus Replay History to recover."
+        )
+    try:
+        persisted_rows = _safe_rows(
+            supabase.table("matches")
+            .select("id,club_id,tournament_game_id")
+            .eq("club_id", str(club_id))
+            .in_("tournament_game_id", selected_game_ids)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Unable to verify persisted tournament backfill matches.") from exc
+    persisted_ids = {
+        str(row.get("tournament_game_id"))
+        for row in persisted_rows
+        if str(row.get("tournament_game_id") or "").strip()
+    }
+    if persisted_ids != set(selected_game_ids):
+        raise RuntimeError(
+            "Tournament match backfill persisted IDs differ from the reviewed selection. "
+            "Stop further writes and use Match Log plus Replay History to recover."
+        )
+
+    completion_payload = build_activity_payload(
+        club_id=str(club_id),
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        action_type="tournament_match_backfill_applied",
+        entity_type="tournament_match_backfill",
+        entity_id=operation_id,
+        before_json={
+            "preview_fingerprint": str(preview_fingerprint),
+            "selected_game_ids": selected_game_ids,
+        },
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "inserted_count": inserted_count,
+            "persisted_game_ids": sorted(persisted_ids),
+            "process_result": process_result,
+        },
+        source_page=source,
+        flagged_for_review=True,
+    )
+    completion_write = write_admin_activity_log(supabase, completion_payload)
+    if completion_write.warning:
+        warnings.append(completion_write.warning)
+    if not completion_write.ok and os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY:
+        raise RuntimeError("audit log write required but unavailable")
+    warnings.append(
+        "If any post-apply verification disagrees, stop additional writes and recover through Match Log and Replay History."
+    )
+    return {
+        "ok": True,
+        "mode": "tournament_match_backfill_apply",
+        "operation_id": operation_id,
+        "preview_fingerprint": str(preview_fingerprint),
+        "selected_game_ids": selected_game_ids,
+        "inserted_count": inserted_count,
+        "process_result": process_result,
         "warnings": warnings,
     }
 

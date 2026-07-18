@@ -7,7 +7,8 @@ type StatusResponse = { enabled: boolean; status: string; roles?: string[]; rete
 type OverviewResponse = { ok: boolean; roles: Array<Record<string, unknown>>; activity: Array<Record<string, unknown>>; activity_warning?: string | null; health: Record<string, unknown>; role_options: string[]; retention_days: number; retention_cutoff: string };
 type RoleResponse = { ok: boolean; roles: Array<Record<string, unknown>>; audit_warning?: string | null };
 type WorkerResponse = { ok: boolean; mode?: string; result?: Record<string, unknown>; summary?: Record<string, unknown>; worker_status?: Record<string, unknown>; audit_warning?: string | null };
-type TournamentBackfillPreviewResponse = { ok: boolean; mode: "tournament_match_backfill_preview"; read_only: true; summary: Record<string, unknown>; candidates: Array<Record<string, unknown>>; warnings: string[] };
+type TournamentBackfillPreviewResponse = { ok: boolean; mode: "tournament_match_backfill_preview"; read_only: true; preview_fingerprint: string; confirmation_text: string; summary: Record<string, unknown>; candidates: Array<Record<string, unknown>>; warnings: string[] };
+type TournamentBackfillApplyResponse = { ok: boolean; mode: "tournament_match_backfill_apply"; operation_id: string; selected_game_ids: string[]; inserted_count: number; warnings: string[] };
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -45,6 +46,8 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [recomputeConfirmation, setRecomputeConfirmation] = useState("");
   const [lastWorkerResult, setLastWorkerResult] = useState<WorkerResponse | null>(null);
   const [tournamentBackfillPreview, setTournamentBackfillPreview] = useState<TournamentBackfillPreviewResponse | null>(null);
+  const [selectedTournamentBackfillGameIds, setSelectedTournamentBackfillGameIds] = useState<string[]>([]);
+  const [tournamentBackfillConfirmation, setTournamentBackfillConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -105,8 +108,34 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<TournamentBackfillPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/preview?limit=500`);
       setTournamentBackfillPreview(payload);
+      setSelectedTournamentBackfillGameIds([]);
+      setTournamentBackfillConfirmation("");
       setMessage(`Tournament backfill preview found ${String(payload.summary.ready_count ?? 0)} ready and ${String(payload.summary.blocked_count ?? 0)} blocked missing match candidate(s). No rows were written.`);
     } catch (error) { setTournamentBackfillPreview(null); setMessage(error instanceof Error ? error.message : "Unable to preview missing tournament matches."); }
+    finally { setBusy(false); }
+  }
+
+  async function applyTournamentMatchBackfill() {
+    if (!tournamentBackfillPreview) { setMessage("Load and review a current tournament backfill preview first."); return; }
+    if (!selectedTournamentBackfillGameIds.length) { setMessage("Select at least one ready tournament game to backfill."); return; }
+    if (tournamentBackfillConfirmation.trim().toUpperCase() !== tournamentBackfillPreview.confirmation_text) { setMessage(`Type ${tournamentBackfillPreview.confirmation_text} to apply the selected backfill.`); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<TournamentBackfillApplyResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/apply`, {
+        method: "POST",
+        body: JSON.stringify({
+          game_ids: selectedTournamentBackfillGameIds,
+          preview_fingerprint: tournamentBackfillPreview.preview_fingerprint,
+          preview_limit: Number(tournamentBackfillPreview.summary.candidate_limit ?? 500),
+          confirmation_text: tournamentBackfillConfirmation,
+          source: "next_admin_tools_tournament_match_backfill"
+        })
+      });
+      setTournamentBackfillPreview(null);
+      setSelectedTournamentBackfillGameIds([]);
+      setTournamentBackfillConfirmation("");
+      setMessage(`Backfilled ${payload.inserted_count} reviewed tournament match(es). Operation ${payload.operation_id}. Reload the preview and verify Match Log before any further write.`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); }
     finally { setBusy(false); }
   }
 
@@ -153,16 +182,39 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>System health</h2><Pre value={health} /></article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Workers and backfills</h2>
-        <p style={{ color: "#475569" }}>Badge worker/recompute controls run through FastAPI/Python with <code>run_replay</code> permission. Tournament match backfill is preview-only in Next; use it to inventory candidates without writing matches or ratings.</p>
+        <p style={{ color: "#475569" }}>Badge worker/recompute controls run through FastAPI/Python with <code>run_replay</code> permission. Tournament match backfill uses a read-only preview followed by a selected, stale-preview-guarded apply.</p>
         {workerStatus ? <Pre value={workerStatus} /> : null}
         <section style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: "12px", padding: "1rem", margin: "1rem 0" }}>
-          <h3 style={{ marginTop: 0 }}>Tournament match backfill preview</h3>
-          <p style={{ color: "#475569" }}>Read-only scan for finalized tournament games that have no club-scoped official match with the same <code>tournament_game_id</code>. The preview classifies ready and blocked games; it cannot apply a backfill.</p>
+          <h3 style={{ marginTop: 0 }}>Tournament match backfill</h3>
+          <p style={{ color: "#475569" }}>Start with a read-only scan for finalized tournament games that have no club-scoped official match with the same <code>tournament_game_id</code>. Select only reviewed ready games; apply rechecks the preview fingerprint, player scope, and duplicate state before using the Python match service.</p>
           <button type="button" onClick={loadTournamentBackfillPreview} disabled={busy} style={ghostButtonStyle}>Preview missing tournament matches</button>
           {tournamentBackfillPreview ? <div style={{ marginTop: "1rem" }}>
             <Pre value={tournamentBackfillPreview.summary} />
             {tournamentBackfillPreview.warnings.map((warning) => <p key={warning} style={{ color: "#92400e" }}>{warning}</p>)}
             {table(tournamentBackfillPreview.candidates, ["tournament_name", "game_id", "score_a", "score_b", "status", "reason"])}
+            {(() => {
+              const readyGameIds = tournamentBackfillPreview.candidates
+                .filter((candidate) => candidate.status === "ready")
+                .map((candidate) => String(candidate.game_id || ""))
+                .filter(Boolean);
+              const applyLimit = Math.max(1, Number(tournamentBackfillPreview.summary.apply_limit ?? 100));
+              return readyGameIds.length ? <div style={{ borderTop: "1px solid #bfdbfe", marginTop: "1rem", paddingTop: "1rem" }}>
+                <p><strong>Reviewed ready games</strong> — maximum {applyLimit} per apply.</p>
+                <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setSelectedTournamentBackfillGameIds(readyGameIds.slice(0, applyLimit))} disabled={busy} style={ghostButtonStyle}>Select all ready shown</button>
+                  <button type="button" onClick={() => setSelectedTournamentBackfillGameIds([])} disabled={busy} style={ghostButtonStyle}>Clear selection</button>
+                </p>
+                <div style={{ display: "grid", gap: "0.4rem", maxHeight: "240px", overflowY: "auto" }}>
+                  {readyGameIds.map((gameId) => {
+                    const checked = selectedTournamentBackfillGameIds.includes(gameId);
+                    return <label key={gameId} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={checked} disabled={busy || (!checked && selectedTournamentBackfillGameIds.length >= applyLimit)} onChange={(event) => setSelectedTournamentBackfillGameIds((current) => event.target.checked ? [...new Set([...current, gameId])].slice(0, applyLimit) : current.filter((value) => value !== gameId))} /> <code>{gameId}</code></label>;
+                  })}
+                </div>
+                <p><label>Confirmation<br /><input value={tournamentBackfillConfirmation} onChange={(event) => setTournamentBackfillConfirmation(event.target.value)} placeholder={tournamentBackfillPreview.confirmation_text} style={inputStyle} /></label></p>
+                <p style={{ color: "#991b1b" }}>After apply, verify the exact rows in Match Log. If counts or ratings disagree, stop further writes and recover through Replay History.</p>
+                <button type="button" onClick={applyTournamentMatchBackfill} disabled={busy || !selectedTournamentBackfillGameIds.length} style={buttonStyle}>Apply selected tournament matches</button>
+              </div> : <p style={{ color: "#64748b" }}>No ready tournament games are available to select.</p>;
+            })()}
           </div> : null}
         </section>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
