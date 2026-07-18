@@ -4,6 +4,8 @@ export type AdminBadgeDiagnosticsStatusResponse = {
   options_endpoint?: string | null;
   debug_endpoint?: string | null;
   audit_endpoint?: string | null;
+  state_endpoint?: string | null;
+  confirmation_text?: Record<string, string>;
   badge_count?: number | null;
   player_badge_count?: number | null;
   warnings: string[];
@@ -13,6 +15,10 @@ export type AdminBadgeOption = {
   badge_id: string;
   name: string;
   status?: string | null;
+  state?: "live" | "frozen" | "deprecated";
+  state_changed_at?: string | null;
+  state_change_reason?: string | null;
+  definition_found?: boolean;
   scope?: string | null;
   award_timing?: string | null;
 };

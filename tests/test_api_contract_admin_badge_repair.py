@@ -39,7 +39,9 @@ def test_admin_badge_status_exposes_repair_endpoints(monkeypatch):
     payload = response.json()
     assert payload["status"] == "ready_for_badge_diagnostics_and_repair"
     assert payload["recompute_endpoint"].endswith("/badges/recompute")
+    assert payload["state_endpoint"].endswith("/badges/{badge_id}/state")
     assert payload["confirmation_text"]["revoke"] == "REVOKE BADGE"
+    assert payload["confirmation_text"]["state"] == "UPDATE BADGE STATE"
 
 
 def test_admin_badge_recompute_requires_confirmation(monkeypatch):
@@ -94,3 +96,124 @@ def test_admin_badge_revoke_updates_rows_and_audit(monkeypatch):
     assert tables["player_badges"][0]["revoked_at"]
     assert tables["player_badges"][0]["revoke_reason"] == "duplicate award"
     assert tables["admin_activity_log"]
+
+
+def test_admin_badge_state_transition_is_stale_safe_and_audited(monkeypatch):
+    tables = badge_tables()
+    supabase = FakeSupabase(tables)
+    _install_super_env(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/badges/high_roller/state",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_state": "live",
+            "target_state": "frozen",
+            "reason": "Pause awards during rule review",
+            "confirmation_text": "UPDATE BADGE STATE",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["badge"]["state"] == "frozen"
+    assert tables["badges"][0]["state"] == "frozen"
+    assert tables["badges"][0]["state_change_reason"] == "Pause awards during rule review"
+    audit = tables["admin_activity_log"][-1]
+    assert audit["action_type"] == "update_badge_definition_state"
+    assert audit["before_json"]["state"] == "live"
+    assert audit["after_json"]["state"] == "frozen"
+    assert audit["flagged_for_review"] is True
+
+
+def test_admin_badge_state_rejects_nonstandard_transition_without_force(monkeypatch):
+    tables = badge_tables()
+    supabase = FakeSupabase(tables)
+    _install_super_env(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/badges/high_roller/state",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_state": "live",
+            "target_state": "deprecated",
+            "reason": "Retire immediately",
+            "confirmation_text": "UPDATE BADGE STATE",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "without force" in response.json()["detail"]
+    assert tables["badges"][0]["state"] == "live"
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_badge_state_requires_exact_confirmation_and_reason(monkeypatch):
+    tables = badge_tables()
+    supabase = FakeSupabase(tables)
+    _install_super_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    bad_confirmation = client.patch(
+        "/admin/clubs/club/badges/high_roller/state",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_state": "live",
+            "target_state": "frozen",
+            "reason": "Review",
+            "confirmation_text": "UPDATE",
+        },
+    )
+    missing_reason = client.patch(
+        "/admin/clubs/club/badges/high_roller/state",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_state": "live",
+            "target_state": "frozen",
+            "reason": "",
+            "confirmation_text": "UPDATE BADGE STATE",
+        },
+    )
+
+    assert bad_confirmation.status_code == 400
+    assert "UPDATE BADGE STATE" in bad_confirmation.json()["detail"]
+    assert missing_reason.status_code == 400
+    assert "reason is required" in missing_reason.json()["detail"]
+    assert tables["badges"][0]["state"] == "live"
+    assert tables["admin_activity_log"] == []
+
+
+def test_admin_badge_state_force_override_and_stale_expected_state(monkeypatch):
+    tables = badge_tables()
+    supabase = FakeSupabase(tables)
+    _install_super_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    stale = client.patch(
+        "/admin/clubs/club/badges/high_roller/state",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_state": "frozen",
+            "target_state": "deprecated",
+            "reason": "Stale request",
+            "force": True,
+            "confirmation_text": "UPDATE BADGE STATE",
+        },
+    )
+    forced = client.patch(
+        "/admin/clubs/club/badges/high_roller/state",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "expected_state": "live",
+            "target_state": "deprecated",
+            "reason": "Emergency rule retirement",
+            "force": True,
+            "confirmation_text": "UPDATE BADGE STATE",
+        },
+    )
+
+    assert stale.status_code == 400
+    assert "changed from frozen to live" in stale.json()["detail"]
+    assert forced.status_code == 200
+    assert forced.json()["force"] is True
+    assert tables["badges"][0]["state"] == "deprecated"

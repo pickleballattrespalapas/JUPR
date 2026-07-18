@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import HTTPException, Query
 from pydantic import BaseModel
 
-from jupr_app.domain.admin.roles import PERMISSION_RUN_REPLAY, PERMISSION_VIEW_AUDIT_LOG, has_permission, resolve_admin_role
+from jupr_app.domain.admin.roles import PERMISSION_MANAGE_ROLES, PERMISSION_RUN_REPLAY, PERMISSION_VIEW_AUDIT_LOG, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_badge_diagnostics_service import (
     build_admin_badge_audit,
@@ -15,6 +15,7 @@ from jupr_app.services.admin_badge_diagnostics_service import (
     list_admin_badge_diagnostic_options,
     revoke_admin_player_badge,
     run_admin_badge_recompute,
+    update_admin_badge_definition_state,
 )
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -42,6 +43,15 @@ class BadgeRevokeRequest(BaseModel):
     revoke_reason: str | None = None
     confirmation_text: str = ""
     source: str = "next_badge_revoke"
+
+
+class BadgeDefinitionStateRequest(BaseModel):
+    expected_state: str
+    target_state: str
+    reason: str
+    force: bool = False
+    confirmation_text: str = ""
+    source: str = "next_badge_definition_state"
 
 
 def _resolve_badge_diagnostics_role_or_403(
@@ -130,6 +140,40 @@ def install_admin_badge_diagnostics_routes(app, *, get_supabase_client) -> None:
                 badge_id=str(badge_id),
                 league_id=league_id,
                 match_limit=int(match_limit),
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.patch("/admin/clubs/{club_id}/badges/{badge_id}/state")
+    def patch_admin_badge_definition_state(
+        club_id: str,
+        badge_id: str,
+        payload: BadgeDefinitionStateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_badge_diagnostics_enabled():
+            raise HTTPException(status_code=403, detail="Next Badge Diagnostics is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_badge_diagnostics_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+            permission=PERMISSION_MANAGE_ROLES,
+        )
+        try:
+            return update_admin_badge_definition_state(
+                supabase,
+                club_id=str(club_id),
+                badge_id=str(badge_id),
+                expected_state=payload.expected_state,
+                target_state=payload.target_state,
+                reason=payload.reason,
+                force=payload.force,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
             )
         except Exception as exc:
             _handle_common(exc)

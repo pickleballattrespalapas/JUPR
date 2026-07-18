@@ -13,6 +13,7 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminBadgeDiagnosticsStatusResponse };
 type RepairResponse = { ok: boolean; mode?: string; recompute_mode?: string; summary?: Record<string, unknown>; revoked_count?: number; rows?: Array<Record<string, unknown>>; audit_warning?: string | null };
+type BadgeStateUpdateResponse = { ok: boolean; mode: "badge_definition_state_update"; badge: { badge_id: string; name: string; state: "live" | "frozen" | "deprecated"; state_changed_at?: string | null; state_change_reason?: string | null }; force: boolean; audit_warning?: string | null };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -64,6 +65,10 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
   const [playerBadgeId, setPlayerBadgeId] = useState("");
   const [revokeReason, setRevokeReason] = useState("");
   const [revokeConfirm, setRevokeConfirm] = useState("");
+  const [badgeStateTarget, setBadgeStateTarget] = useState<"live" | "frozen" | "deprecated">("frozen");
+  const [badgeStateReason, setBadgeStateReason] = useState("");
+  const [badgeStateForce, setBadgeStateForce] = useState(false);
+  const [badgeStateConfirm, setBadgeStateConfirm] = useState("");
   const [debugReport, setDebugReport] = useState<Record<string, unknown> | null>(null);
   const [auditReport, setAuditReport] = useState<Record<string, unknown> | null>(null);
   const [repairResult, setRepairResult] = useState<RepairResponse | null>(null);
@@ -71,7 +76,8 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
   const [message, setMessage] = useState<string | null>(null);
 
   const selectedPlayerName = useMemo(() => players.find((player) => String(player.id) === String(playerId))?.name || "", [players, playerId]);
-  const selectedBadgeName = useMemo(() => badges.find((badge) => String(badge.badge_id) === String(badgeId))?.name || badgeId, [badges, badgeId]);
+  const selectedBadge = useMemo(() => badges.find((badge) => String(badge.badge_id) === String(badgeId)), [badges, badgeId]);
+  const selectedBadgeName = selectedBadge?.name || badgeId;
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -173,6 +179,34 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     finally { setBusy(false); }
   }
 
+  async function updateBadgeState() {
+    const expectedConfirmation = status.confirmation_text?.state || "UPDATE BADGE STATE";
+    if (!selectedBadge || !selectedBadge.definition_found) { setMessage("Choose a badge definition loaded from the staging badges table."); return; }
+    if (badgeStateConfirm.trim().toUpperCase() !== expectedConfirmation) { setMessage(`Type ${expectedConfirmation} to update badge state.`); return; }
+    if (!badgeStateReason.trim()) { setMessage("Enter a reason for the badge state change."); return; }
+    if (selectedBadge.state === badgeStateTarget) { setMessage(`Badge state is already ${badgeStateTarget}.`); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<BadgeStateUpdateResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/badges/${encodeURIComponent(selectedBadge.badge_id)}/state`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          expected_state: selectedBadge.state || "live",
+          target_state: badgeStateTarget,
+          reason: badgeStateReason,
+          force: badgeStateForce,
+          confirmation_text: badgeStateConfirm,
+          source: "next_badge_definition_state"
+        })
+      });
+      setBadges((current) => current.map((badge) => badge.badge_id === payload.badge.badge_id ? { ...badge, ...payload.badge, definition_found: true } : badge));
+      setBadgeStateReason("");
+      setBadgeStateForce(false);
+      setBadgeStateConfirm("");
+      setMessage(payload.audit_warning ? `Badge state updated with audit warning: ${payload.audit_warning}` : `Badge state updated to ${payload.badge.state}.`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update badge definition state."); }
+    finally { setBusy(false); }
+  }
+
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -240,8 +274,25 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
         ) : null}
       </article>
 
+      <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+        <h2 style={{ marginTop: 0 }}>4. Badge Definition State</h2>
+        <p style={{ color: "#475569" }}>Control whether the selected badge definition can continue awarding. Normal transitions are <code>live → frozen → deprecated</code>. This global staging definition change requires <code>manage_roles</code>, a reason, current-state locking, and an exact confirmation.</p>
+        {!selectedBadge ? <p style={{ color: "#64748b" }}>Load options and select a badge first.</p> : <>
+          <p><strong>{selectedBadge.name}</strong> · <code>{selectedBadge.badge_id}</code><br />Current state: <strong>{selectedBadge.state || "live"}</strong>{selectedBadge.state_changed_at ? ` · changed ${selectedBadge.state_changed_at}` : ""}</p>
+          {selectedBadge.state_change_reason ? <p><strong>Previous reason:</strong> {selectedBadge.state_change_reason}</p> : null}
+          {!selectedBadge.definition_found ? <p style={{ color: "#92400e" }}>This badge exists in the code registry but not in the staging <code>badges</code> table, so its state cannot be changed here.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
+            <label>Target state<br /><select value={badgeStateTarget} onChange={(event) => { setBadgeStateTarget(event.target.value as "live" | "frozen" | "deprecated"); setBadgeStateConfirm(""); }} style={inputStyle}><option value="live">live</option><option value="frozen">frozen</option><option value="deprecated">deprecated</option></select></label>
+            <label>Reason<br /><input value={badgeStateReason} onChange={(event) => setBadgeStateReason(event.target.value)} maxLength={500} style={inputStyle} /></label>
+            <label>Confirmation<br /><input value={badgeStateConfirm} onChange={(event) => setBadgeStateConfirm(event.target.value)} placeholder={status.confirmation_text?.state || "UPDATE BADGE STATE"} style={inputStyle} /></label>
+            <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={badgeStateForce} onChange={(event) => { setBadgeStateForce(event.target.checked); setBadgeStateConfirm(""); }} /> Force nonstandard transition</label>
+            <button type="button" onClick={updateBadgeState} disabled={busy || selectedBadge.state === badgeStateTarget} style={buttonStyle}>Update badge state</button>
+          </div>}
+          {badgeStateForce ? <p style={{ color: "#991b1b" }}>Force override permits a transition outside the normal lifecycle. Re-review the badge, target state, and reason before confirming.</p> : null}
+        </>}
+      </article>
+
       <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
-        <h2 style={{ marginTop: 0 }}>4. Badge Repair / Recompute</h2>
+        <h2 style={{ marginTop: 0 }}>5. Badge Repair / Recompute</h2>
         <p style={{ color: "#9a3412" }}>Super-admin repair controls for staging validation. Dry-run previews do not mutate badges; append-only and strict modes write through the Python badge recompute path. Revoke marks matched badge rows as revoked.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label>Recompute mode<br /><select value={recomputeMode} onChange={(event) => setRecomputeMode(event.target.value)} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>

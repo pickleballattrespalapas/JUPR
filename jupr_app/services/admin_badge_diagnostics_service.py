@@ -13,11 +13,17 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.domain.gamification.badge_audit import build_badge_audit_report
 from jupr_app.domain.gamification.badge_debug import build_badge_debug_report
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id, registry
+from jupr_app.domain.gamification.badge_state import (
+    ALLOWED_BADGE_STATES,
+    can_transition_badge_state,
+    normalize_badge_state,
+)
 from jupr_app.domain.gamification.recompute import run_badge_recompute
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_RECOMPUTE = "RECOMPUTE BADGES"
 CONFIRM_REVOKE = "REVOKE BADGE"
+CONFIRM_BADGE_STATE = "UPDATE BADGE STATE"
 
 
 def _truthy_env(name: str) -> bool:
@@ -132,7 +138,12 @@ def build_admin_badge_diagnostics_status(supabase: Any | None, *, club_id: str) 
         "audit_endpoint": "/admin/clubs/{club_id}/badges/audit",
         "recompute_endpoint": "/admin/clubs/{club_id}/badges/recompute",
         "revoke_endpoint": "/admin/clubs/{club_id}/badges/revoke",
-        "confirmation_text": {"recompute": CONFIRM_RECOMPUTE, "revoke": CONFIRM_REVOKE},
+        "state_endpoint": "/admin/clubs/{club_id}/badges/{badge_id}/state",
+        "confirmation_text": {
+            "recompute": CONFIRM_RECOMPUTE,
+            "revoke": CONFIRM_REVOKE,
+            "state": CONFIRM_BADGE_STATE,
+        },
         "badge_count": badge_count,
         "player_badge_count": player_badge_count,
         "warnings": [],
@@ -152,6 +163,15 @@ def list_admin_badge_diagnostic_options(supabase: Any, *, club_id: str) -> dict[
         )
     except Exception:
         player_rows = []
+    try:
+        badge_definition_rows = _safe_rows(
+            supabase.table("badges")
+            .select("badge_id,name,state,state_changed_at,state_change_reason")
+            .order("name", desc=False)
+            .execute()
+        )
+    except Exception:
+        badge_definition_rows = []
     players = [
         {
             "id": _safe_int(row.get("id")),
@@ -166,21 +186,142 @@ def list_admin_badge_diagnostic_options(supabase: Any, *, club_id: str) -> dict[
         if _safe_int(row.get("id")) is not None
     ]
     schema = badge_schema_by_id()
-    badge_ids = sorted(set(registry().keys()) | set(schema.keys()))
+    definitions_by_id = {
+        _clean_text(row.get("badge_id"), limit=120): row
+        for row in badge_definition_rows
+        if _clean_text(row.get("badge_id"), limit=120)
+    }
+    badge_ids = sorted(set(registry().keys()) | set(schema.keys()) | set(definitions_by_id))
     badges = []
     for badge_id in badge_ids:
         spec = registry().get(badge_id)
         badge_schema = schema.get(badge_id)
+        definition = definitions_by_id.get(badge_id, {})
         badges.append(
             {
                 "badge_id": badge_id,
-                "name": getattr(spec, "name", None) or getattr(badge_schema, "name", None) or badge_id.replace("_", " ").title(),
+                "name": _clean_text(definition.get("name"), limit=160) or getattr(spec, "name", None) or getattr(badge_schema, "name", None) or badge_id.replace("_", " ").title(),
                 "status": getattr(badge_schema, "status", "live") if badge_schema is not None else "live",
+                "state": normalize_badge_state(definition.get("state")),
+                "state_changed_at": definition.get("state_changed_at"),
+                "state_change_reason": _clean_text(definition.get("state_change_reason"), limit=500) or None,
+                "definition_found": bool(definition),
                 "scope": getattr(badge_schema, "scope", None) if badge_schema is not None else None,
                 "award_timing": getattr(badge_schema, "award_timing", None) if badge_schema is not None else None,
             }
         )
     return {"ok": True, "mode": "badge_diagnostic_options", "players": players, "badges": badges, "player_count": len(players), "badge_count": len(badges)}
+
+
+def update_admin_badge_definition_state(
+    supabase: Any,
+    *,
+    club_id: str,
+    badge_id: str,
+    expected_state: str,
+    target_state: str,
+    reason: str,
+    force: bool,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_badge_definition_state",
+) -> dict[str, Any]:
+    if not is_admin_badge_diagnostics_enabled():
+        raise PermissionError("Next Badge Diagnostics is disabled.")
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_BADGE_STATE:
+        raise ValueError(f"Type {CONFIRM_BADGE_STATE} to update badge state.")
+    clean_badge_id = _clean_text(badge_id, limit=120)
+    if not clean_badge_id:
+        raise ValueError("badge_id is required.")
+    clean_reason = _clean_text(reason, limit=500)
+    if not clean_reason:
+        raise ValueError("A badge state change reason is required.")
+    normalized_expected = normalize_badge_state(expected_state)
+    normalized_target = normalize_badge_state(target_state)
+    if normalized_expected not in ALLOWED_BADGE_STATES:
+        raise ValueError("A valid expected_state is required.")
+    if normalized_target not in ALLOWED_BADGE_STATES:
+        raise ValueError("A valid target_state is required.")
+
+    before_rows = _safe_rows(
+        supabase.table("badges")
+        .select("badge_id,name,state,state_changed_at,state_change_reason")
+        .eq("badge_id", clean_badge_id)
+        .limit(1)
+        .execute()
+    )
+    if not before_rows:
+        raise ValueError("Badge definition not found.")
+    before = before_rows[0]
+    current_state = normalize_badge_state(before.get("state"))
+    if current_state != normalized_expected:
+        raise ValueError(
+            f"Badge state changed from {normalized_expected} to {current_state}. Reload badge options before updating."
+        )
+    transition = can_transition_badge_state(current_state, normalized_target, force=bool(force))
+    if not transition.allowed:
+        raise ValueError(transition.reason or "Badge state transition is not allowed.")
+
+    patch = {
+        "state": normalized_target,
+        "state_changed_at": datetime.now(timezone.utc).isoformat(),
+        "state_change_reason": clean_reason,
+    }
+    updated_rows = _safe_rows(
+        supabase.table("badges")
+        .update(patch)
+        .eq("badge_id", clean_badge_id)
+        .eq("state", current_state)
+        .execute()
+    )
+    if not updated_rows:
+        raise ValueError("Badge state changed while it was being updated. Reload badge options and review it again.")
+    updated = {**before, **updated_rows[0]}
+    audit_write = write_admin_activity_log(
+        supabase,
+        build_activity_payload(
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="update_badge_definition_state",
+            entity_type="badge_definition",
+            entity_id=clean_badge_id,
+            before_json={
+                "badge_id": clean_badge_id,
+                "name": _clean_text(before.get("name"), limit=160),
+                "state": current_state,
+                "state_changed_at": before.get("state_changed_at"),
+                "state_change_reason": _clean_text(before.get("state_change_reason"), limit=500) or None,
+            },
+            after_json={
+                "source_client": "fastapi/nextjs",
+                "badge_id": clean_badge_id,
+                "state": normalized_target,
+                "state_changed_at": updated.get("state_changed_at"),
+                "state_change_reason": clean_reason,
+                "force": bool(force),
+            },
+            note=clean_reason,
+            source_page=_clean_text(source, limit=120) or "next_badge_definition_state",
+            flagged_for_review=True,
+        ),
+    )
+    if not audit_write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+        raise RuntimeError("audit log write required but unavailable")
+    return {
+        "ok": True,
+        "mode": "badge_definition_state_update",
+        "badge": {
+            "badge_id": clean_badge_id,
+            "name": _clean_text(updated.get("name"), limit=160) or clean_badge_id,
+            "state": normalized_target,
+            "state_changed_at": updated.get("state_changed_at"),
+            "state_change_reason": clean_reason,
+        },
+        "force": bool(force),
+        "audit_warning": audit_write.warning,
+    }
 
 
 def build_admin_badge_debug(

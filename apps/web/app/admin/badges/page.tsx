@@ -15,7 +15,7 @@ export default async function AdminBadgeDiagnosticsPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Badge Debug & Audit</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Read-only badge diagnostics for expected-versus-actual badge rows, duplicate/stale/missing badge audit, and player-specific badge evaluator debugging.
+        Badge diagnostics for expected-versus-actual rows, duplicate/stale/missing audit, player-specific evaluator debugging, and guarded badge-definition lifecycle controls.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Badge Diagnostics status is unavailable. {error}</p> : null}
