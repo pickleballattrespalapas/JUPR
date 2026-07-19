@@ -40,6 +40,8 @@ def _submit_registration(client: TestClient) -> str:
             "email": "alex@example.com",
             "phone": "555-0100",
             "doubles_skill": 4.0,
+            "age": 34,
+            "gender": "Men",
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },
@@ -158,6 +160,7 @@ def test_public_registration_edit_submit_contract(client_and_storage):
             "phone": "555-9999",
             "doubles_skill": 4.25,
             "terms_accepted": True,
+            "wants_partner_board_contact": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NEEDS_PARTNER", "show_on_partner_board": True}],
         },
     )

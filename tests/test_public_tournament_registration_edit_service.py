@@ -100,8 +100,9 @@ def test_registration_edit_submit_updates_existing_registration_and_locks_email(
             "display_name": "Alexis R",
             "email": "evil@example.com",
             "phone": "555-9999",
-            "doubles_skill": 4.25,
-            "terms_accepted": True,
+                "doubles_skill": 4.25,
+                "wants_partner_board_contact": True,
+                "terms_accepted": True,
             "selections": [
                 {
                     "event_option_id": "event1",

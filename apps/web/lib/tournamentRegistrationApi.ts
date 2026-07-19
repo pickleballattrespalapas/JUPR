@@ -64,6 +64,34 @@ export type PublicRegistrationPlayer = {
   singles_skill?: number | null;
 };
 
+export type PublicRegistrationProfileResolutionPayload = {
+  tournament_id?: string | null;
+  registration_slug?: string | null;
+  first_name: string;
+  last_name: string;
+  email: string;
+  age: number;
+  gender: string;
+  website?: string | null;
+};
+
+export type PublicRegistrationProfileResolutionResponse = {
+  club: { id: string; slug: string; name: string };
+  ok: boolean;
+  status: "ready" | "existing_registration" | "closed";
+  can_start_new: boolean;
+  registration_open: boolean;
+  registration_closed_reason?: string | null;
+  masked_email: string;
+  profile_match_kind: "email_exact" | "name_exact" | "none";
+  profile_candidates: PublicRegistrationPlayer[];
+  profile_policy: {
+    linkage: "staff_review_required";
+    public_submission_links_player: false;
+  };
+  message: string;
+};
+
 export type TournamentRegistrationResponse = {
   club: { id: string; slug: string; name: string };
   available: boolean;
@@ -289,7 +317,7 @@ export type PublicRegistrationConfirmationResponse = {
   } | null;
 };
 
-type ApiResult<T> = { data: T | null; error: string | null };
+type ApiResult<T> = { data: T | null; error: string | null; status?: number | null };
 
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
@@ -317,14 +345,14 @@ async function apiErrorMessage(response: Response): Promise<string> {
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
+  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable.", status: null };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
     const response = await fetch(url, init ?? { next: { revalidate: 60 } });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
-    return { data: (await response.json()) as T, error: null };
+    if (!response.ok) return { data: null, error: await apiErrorMessage(response), status: response.status };
+    return { data: (await response.json()) as T, error: null, status: response.status };
   } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}`, status: null };
   }
 }
 
@@ -337,6 +365,20 @@ export async function getClubTournamentRegistration(
   if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return fetchJson<TournamentRegistrationResponse>(`/clubs/${clubSlug}/tournament-registration${suffix}`);
+}
+
+export async function resolveClubTournamentRegistrationProfile(
+  clubSlug: string,
+  payload: PublicRegistrationProfileResolutionPayload
+): Promise<ApiResult<PublicRegistrationProfileResolutionResponse>> {
+  return fetchJson<PublicRegistrationProfileResolutionResponse>(
+    `/clubs/${clubSlug}/tournament-registration/profile-resolution`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
 }
 
 export async function getClubTournamentRegistrationEdit(

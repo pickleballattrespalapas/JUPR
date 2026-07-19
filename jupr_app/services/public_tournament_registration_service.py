@@ -48,6 +48,20 @@ _MEN_GENDERS = {"m", "male", "man", "men", "mens", "boy", "boys"}
 LOGGER = logging.getLogger(__name__)
 
 
+class DuplicateTournamentRegistrationError(ValueError):
+    """Raised when a public intake must switch to the secure edit-link flow."""
+
+
+def _mask_email(value: Any) -> str:
+    email = _clean_email(value)
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***{local[-1:] if len(local) > 1 else ''}@{domain}"
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
@@ -122,6 +136,77 @@ def _public_registration_player(row: dict[str, Any]) -> dict[str, Any]:
         "doubles_skill": doubles_skill,
         "singles_skill": singles_skill,
     }
+
+
+def _normalized_name(value: Any) -> str:
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", str(value or "").lower()).split())
+
+
+def _player_full_name(row: dict[str, Any]) -> str:
+    first = _clean_text(row.get("first_name"), limit=80)
+    last = _clean_text(row.get("last_name"), limit=80)
+    return " ".join(part for part in (first, last) if part) or _clean_text(
+        row.get("display_name") or row.get("name"), limit=160
+    )
+
+
+def _profile_candidates(
+    supabase: Any,
+    *,
+    club_id: str,
+    first_name: Any,
+    last_name: Any,
+    email: Any,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Return a bounded, public-safe exact-match projection.
+
+    This is a discovery hint, not proof of identity. Public intake never persists
+    the returned player id; tournament staff must verify and link the profile.
+    """
+
+    try:
+        rows = _safe_rows(
+            supabase.table("players")
+            .select("*")
+            .eq("club_id", str(club_id))
+            .limit(2000)
+            .execute()
+        )
+    except Exception:
+        rows = []
+    active_rows = [row for row in rows if _player_is_active(row)]
+    clean_email = _clean_email(email)
+    email_matches = [row for row in active_rows if clean_email and _clean_email(row.get("email")) == clean_email]
+    if email_matches:
+        match_kind = "email_exact"
+        matches = email_matches
+    else:
+        requested_name = _normalized_name(
+            " ".join(
+                part
+                for part in (_clean_text(first_name, limit=80), _clean_text(last_name, limit=80))
+                if part
+            )
+        )
+        matches = [
+            row
+            for row in active_rows
+            if requested_name and _normalized_name(_player_full_name(row)) == requested_name
+        ]
+        match_kind = "name_exact" if matches else "none"
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in matches:
+        candidate = _public_registration_player(row)
+        candidate_id = str(candidate.get("id") or "")
+        if not candidate_id or candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        candidates.append(candidate)
+        if len(candidates) >= 3:
+            break
+    return match_kind, candidates
 
 
 def _list_public_registration_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
@@ -556,6 +641,111 @@ def build_public_tournament_registration_page(
     }
 
 
+def resolve_public_tournament_registration_profile(
+    supabase: Any,
+    *,
+    club_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Preflight the first registration step without trusting browser identity.
+
+    The endpoint intentionally returns only exact-match, public-safe profile
+    suggestions. A suggestion can prefill the browser wizard, but a new public
+    registration remains unlinked until staff verify the player relationship.
+    """
+
+    if _clean_text(payload.get("website")):
+        raise ValueError("Unable to continue registration.")
+    email = _clean_email(payload.get("email"))
+    if not email or not _EMAIL_RE.match(email):
+        raise ValueError("A valid email is required.")
+    first_name = _clean_text(payload.get("first_name"), limit=80)
+    last_name = _clean_text(payload.get("last_name"), limit=80)
+    if not first_name or not last_name:
+        raise ValueError("First and last name are required.")
+    age = _validated_age(payload.get("age"), label="Age")
+    if age is None:
+        raise ValueError("Age is required.")
+    gender = _clean_text(payload.get("gender"), limit=40)
+    if not gender:
+        raise ValueError("Gender is required.")
+
+    page = build_public_tournament_registration_page(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=_clean_text(payload.get("tournament_id"), limit=120) or None,
+        registration_slug=_clean_text(payload.get("registration_slug"), limit=120) or None,
+    )
+    if not page.get("available"):
+        raise ValueError("Tournament registration is not configured.")
+    tournament = page.get("tournament") or {}
+    tournament_id = str(tournament.get("id") or "").strip()
+    if not tournament_id:
+        raise ValueError("Tournament registration was not found.")
+
+    existing = get_registration_by_email(supabase, tournament_id, email)
+    if existing:
+        return {
+            "ok": True,
+            "status": "existing_registration",
+            "can_start_new": False,
+            "registration_open": bool(page.get("registration_open")),
+            "registration_closed_reason": page.get("registration_closed_reason"),
+            "masked_email": _mask_email(email),
+            "profile_match_kind": "none",
+            "profile_candidates": [],
+            "profile_policy": {
+                "linkage": "staff_review_required",
+                "public_submission_links_player": False,
+            },
+            "message": "A registration already exists for this email. Use the secure edit-link flow.",
+        }
+
+    if not page.get("registration_open"):
+        return {
+            "ok": True,
+            "status": "closed",
+            "can_start_new": False,
+            "registration_open": False,
+            "registration_closed_reason": page.get("registration_closed_reason"),
+            "masked_email": _mask_email(email),
+            "profile_match_kind": "none",
+            "profile_candidates": [],
+            "profile_policy": {
+                "linkage": "staff_review_required",
+                "public_submission_links_player": False,
+            },
+            "message": str(page.get("registration_closed_reason") or "Registration is not open."),
+        }
+
+    match_kind, candidates = _profile_candidates(
+        supabase,
+        club_id=str(club_id),
+        first_name=first_name,
+        last_name=last_name,
+        email=email,
+    )
+    return {
+        "ok": True,
+        "status": "ready",
+        "can_start_new": True,
+        "registration_open": True,
+        "registration_closed_reason": None,
+        "masked_email": _mask_email(email),
+        "profile_match_kind": match_kind,
+        "profile_candidates": candidates,
+        "profile_policy": {
+            "linkage": "staff_review_required",
+            "public_submission_links_player": False,
+        },
+        "message": (
+            "Review the suggested profile or continue without one. Tournament staff verify all public profile links."
+            if candidates
+            else "No exact active profile match was found. You can continue and staff can connect it later."
+        ),
+    }
+
+
 def _validate_submit_payload(payload: dict[str, Any]) -> None:
     if _clean_text(payload.get("website")):
         raise ValueError("Unable to submit registration.")
@@ -567,6 +757,11 @@ def _validate_submit_payload(payload: dict[str, Any]) -> None:
     display_name = _clean_text(payload.get("display_name") or " ".join(part for part in [payload.get("first_name"), payload.get("last_name")] if _clean_text(part)))
     if not display_name:
         raise ValueError("Player name is required.")
+    if _safe_bool(payload.get("_require_demographics")):
+        if _validated_age(payload.get("age"), label="Age") is None:
+            raise ValueError("Age is required.")
+        if not _clean_text(payload.get("gender"), limit=40):
+            raise ValueError("Gender is required.")
     selections = payload.get("selections") or []
     if not isinstance(selections, list) or not selections:
         raise ValueError("Select at least one event.")
@@ -716,9 +911,9 @@ def validate_and_clean_tournament_selection(
     if not event_option_id:
         raise ValueError("Each event selection must identify a division.")
 
-    partner_required = _safe_bool(event.get("partner_required"))
     event_type = _clean_text(event.get("event_type"), limit=40).upper()
     singles_event = event_type == "SINGLES"
+    partner_required = _safe_bool(event.get("partner_required"))
     partner_mode = str(clean_selection.get("partner_mode") or "NONE")
     if partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
         raise ValueError(f"{_event_label(event)}: choose whether you have or need a partner.")
@@ -746,20 +941,42 @@ def validate_and_clean_tournament_selection(
             primary_player_id=player_profile.get("player_id"),
         )
         if registered_partner:
-            partner_profile = {
-                "doubles_skill": _safe_float(registered_partner.get("doubles_skill")),
-                "singles_skill": _safe_float(registered_partner.get("singles_skill")),
-            }
-            partner_gender = registered_partner.get("gender") or partner_gender
-            clean_selection["partner_skill"] = (
-                partner_profile.get("doubles_skill")
-                if partner_profile.get("doubles_skill") is not None
-                else partner_profile.get("singles_skill")
+            submitted_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
+            registered_doubles = _safe_float(registered_partner.get("doubles_skill"))
+            registered_singles = _safe_float(registered_partner.get("singles_skill"))
+            resolved_skill = (
+                registered_doubles
+                if registered_doubles is not None
+                else registered_singles
+                if registered_singles is not None
+                else submitted_skill
             )
-            clean_selection["partner_age"] = _safe_int(registered_partner.get("age"))
+            registered_age = _validated_age(registered_partner.get("age"), label="Partner age")
+            submitted_age = _validated_age(clean_selection.get("partner_age"), label="Partner age")
+            resolved_age = registered_age if registered_age is not None else submitted_age
+            partner_gender = registered_partner.get("gender") or partner_gender
+            partner_profile = {
+                "doubles_skill": registered_doubles if registered_doubles is not None else resolved_skill,
+                "singles_skill": registered_singles if registered_singles is not None else resolved_skill,
+                "age": resolved_age,
+                "gender": _clean_text(partner_gender, limit=40),
+            }
+            clean_selection["partner_skill"] = resolved_skill
+            clean_selection["partner_age"] = resolved_age
         else:
             partner_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
-            partner_profile = {"doubles_skill": partner_skill, "singles_skill": partner_skill}
+            partner_profile = {
+                "doubles_skill": partner_skill,
+                "singles_skill": partner_skill,
+                "age": _validated_age(clean_selection.get("partner_age"), label="Partner age"),
+                "gender": _clean_text(partner_gender, limit=40),
+            }
+        partner_age = _validated_age(clean_selection.get("partner_age"), label="Partner age")
+        if partner_age is None:
+            raise ValueError(f"{_event_label(event)}: partner age is required.")
+        if not _clean_text(partner_gender, limit=40):
+            raise ValueError(f"{_event_label(event)}: partner gender is required.")
+        clean_selection["partner_age"] = partner_age
         clean_selection["show_on_partner_board"] = False
     elif partner_mode == "NEEDS_PARTNER":
         if _safe_bool(clean_selection.get("show_on_partner_board")):
@@ -912,6 +1129,10 @@ def build_validated_public_registration_save_payload(
         primary_registration_id=str(locked.get("id") or "") if locked else None,
         existing_event_options=existing_event_options,
     )
+    if any(_safe_bool(selection.get("show_on_partner_board")) for selection in selections) and not _safe_bool(
+        payload.get("wants_partner_board_contact")
+    ):
+        raise ValueError("Partner-board contact consent is required before publishing a needs-partner listing.")
 
     save_payload = {
         "first_name": _clean_text(payload.get("first_name"), limit=80),
@@ -956,6 +1177,10 @@ def submit_public_tournament_registration(
     tournament_id = str(tournament.get("id") or "").strip()
     if not tournament_id:
         raise ValueError("Tournament registration was not found.")
+    if get_registration_by_email(supabase, tournament_id, _clean_email(payload.get("email"))):
+        raise DuplicateTournamentRegistrationError(
+            "A registration already exists for this email. Please use the secure edit-link flow."
+        )
     save_payload = build_validated_public_registration_save_payload(
         supabase,
         club_id=str(club_id),

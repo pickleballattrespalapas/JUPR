@@ -19,8 +19,10 @@ from jupr_app.services.public_tournament_registration_edit_service import (
     submit_public_tournament_registration_edit,
 )
 from jupr_app.services.public_tournament_registration_service import (
+    DuplicateTournamentRegistrationError,
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
+    resolve_public_tournament_registration_profile,
     submit_public_tournament_registration,
 )
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
@@ -57,6 +59,17 @@ class PublicTournamentRegistrationEditLinkRequest(BaseModel):
     tournament_id: str | None = None
     registration_slug: str | None = None
     email: str
+    website: str | None = None
+
+
+class PublicTournamentRegistrationProfileResolutionRequest(BaseModel):
+    tournament_id: str | None = None
+    registration_slug: str | None = None
+    first_name: str
+    last_name: str
+    email: str
+    age: int
+    gender: str
     website: str | None = None
 
 
@@ -121,6 +134,24 @@ def install_public_tournament_registration_routes(
             )
         except PublicRegistrationEditUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"club": public_club_payload(club, club_slug), **result}
+
+    @app.post("/clubs/{club_slug}/tournament-registration/profile-resolution")
+    def resolve_club_tournament_registration_profile(
+        club_slug: str,
+        payload: PublicTournamentRegistrationProfileResolutionRequest,
+    ) -> dict[str, Any]:
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        try:
+            result = resolve_public_tournament_registration_profile(
+                supabase,
+                club_id=club_id,
+                payload=_dump_model(payload),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
@@ -209,12 +240,16 @@ def install_public_tournament_registration_routes(
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         try:
+            request_payload = _dump_model(payload)
+            request_payload["_require_demographics"] = True
             result = submit_public_tournament_registration(
                 supabase,
                 club_id=club_id,
                 club_slug=club_slug,
-                payload=_dump_model(payload),
+                payload=request_payload,
             )
+        except DuplicateTournamentRegistrationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}

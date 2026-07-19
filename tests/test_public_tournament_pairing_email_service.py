@@ -18,6 +18,7 @@ def _submit(supabase, *, first_name: str, email: str, mode: str = "NONE", board:
             "last_name": "Player",
             "email": email,
             "doubles_skill": 4.0,
+            "wants_partner_board_contact": board,
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": mode, "show_on_partner_board": board}],
         },

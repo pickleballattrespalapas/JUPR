@@ -68,6 +68,46 @@ def test_public_tournament_registration_page_contract(client):
     assert "internal_seed_notes" not in payload["events"][0]
 
 
+def test_public_tournament_registration_profile_resolution_contract(integrity_client):
+    api, storage = integrity_client
+    storage["players"][0].update(
+        {"name": "Verified Alex", "email": "alex@example.com", "dupr_id": "DUPR-10"}
+    )
+    response = api.post(
+        "/clubs/tres-palapas/tournament-registration/profile-resolution",
+        json={
+            "registration_slug": "tres-open",
+            "first_name": "Verified",
+            "last_name": "Alex",
+            "email": "alex@example.com",
+            "age": 34,
+            "gender": "Men",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["profile_match_kind"] == "email_exact"
+    assert payload["profile_candidates"][0]["id"] == "10"
+    assert payload["profile_policy"]["public_submission_links_player"] is False
+    assert "email" not in payload["profile_candidates"][0]
+
+
+def test_public_tournament_registration_profile_resolution_requires_demographics(client):
+    response = client.post(
+        "/clubs/tres-palapas/tournament-registration/profile-resolution",
+        json={
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_public_tournament_registration_submit_and_confirmation_contract(client):
     response = client.post(
         "/clubs/tres-palapas/tournament-registration",
@@ -77,6 +117,8 @@ def test_public_tournament_registration_submit_and_confirmation_contract(client)
             "last_name": "Rivera",
             "email": "alex@example.com",
             "doubles_skill": 4.0,
+            "age": 34,
+            "gender": "Men",
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },
@@ -115,6 +157,42 @@ def test_public_tournament_registration_submit_and_confirmation_contract(client)
     assert tampered.status_code == 404
 
 
+def test_public_tournament_registration_duplicate_email_returns_recovery_conflict(client):
+    payload = {
+        "registration_slug": "tres-open",
+        "first_name": "Alex",
+        "last_name": "Rivera",
+        "email": "alex@example.com",
+        "age": 34,
+        "gender": "Men",
+        "terms_accepted": True,
+        "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+    }
+    assert client.post("/clubs/tres-palapas/tournament-registration", json=payload).status_code == 200
+
+    duplicate = client.post("/clubs/tres-palapas/tournament-registration", json=payload)
+
+    assert duplicate.status_code == 409
+    assert "secure edit-link flow" in duplicate.json()["detail"]
+
+
+def test_public_tournament_registration_submit_requires_age_and_gender(client):
+    response = client.post(
+        "/clubs/tres-palapas/tournament-registration",
+        json={
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Age is required" in response.json()["detail"]
+
+
 def test_public_tournament_registration_honeypot_contract(client):
     response = client.post(
         "/clubs/tres-palapas/tournament-registration",
@@ -140,6 +218,8 @@ def test_public_tournament_registration_integrity_errors_are_api_400(integrity_c
             "first_name": "Mallory",
             "email": "mallory@example.com",
             "player_id": 11,
+            "age": 32,
+            "gender": "Women",
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },
@@ -154,6 +234,8 @@ def test_public_tournament_registration_integrity_errors_are_api_400(integrity_c
             "registration_slug": "tres-open",
             "first_name": "Casey",
             "email": "casey@example.com",
+            "age": 40,
+            "gender": "Women",
             "terms_accepted": True,
             "selections": [
                 {"event_option_id": "event1", "partner_mode": "NONE"},
@@ -174,6 +256,7 @@ def test_public_tournament_registration_integrity_errors_are_api_400(integrity_c
             "first_name": "Jordan",
             "email": "jordan@example.com",
             "gender": "Men",
+            "age": 36,
             "singles_skill": 3.2,
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],

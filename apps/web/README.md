@@ -24,7 +24,7 @@ Current public and staff-facing routes include:
 - `/clubs/[clubSlug]/badge-codex` Python-authoritative badge definitions grouped by availability/timing, category and scope filters, direct anchors, paged public earners, and privacy-safe trophy-room context.
 - `/clubs/[clubSlug]/challenge-ladder` public tiers/status/challenge deep links, Python-computed eligible-opponent hints, a complete rulebook, and the canonical status legend.
 - `/clubs/[clubSlug]/weekly-recap` public published weekly recap with spotlight reel, around-the-club highlights, tournament podiums, print view, and PDF download.
-- `/clubs/[clubSlug]/tournament-registration` public tournament registration intake, including secure edit-link request.
+- `/clubs/[clubSlug]/tournament-registration` four-step public tournament registration intake with exact-match profile preflight, duplicate/closed recovery, partner policy, sponsor/refund/roster content, and secure edit-link request.
 - `/clubs/[clubSlug]/tournament-registration/confirmation?confirmation_token=...` signed, registrant-specific confirmation page.
 - `/clubs/[clubSlug]/tournament-registration/edit?edit_token=...` tokenized registration edit page.
 - `/clubs/[clubSlug]/tournament-roster` public-safe tournament roster.
