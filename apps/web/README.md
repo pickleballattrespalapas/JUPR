@@ -19,7 +19,7 @@ Current public and staff-facing routes include:
 - `/` public product home.
 - `/site-map` public click-through route map.
 - `/clubs/[clubSlug]` club landing page.
-- `/clubs/[clubSlug]/leaderboards` public leaderboard page.
+- `/clubs/[clubSlug]/leaderboards` public Overall/league leaderboards with Active-by-default status, search/snapshot links, qualification and badge context, stable filters, and pagination.
 - `/clubs/[clubSlug]/league-results` public league standings, weekly results, and season summaries.
 - `/clubs/[clubSlug]/badge-codex` public badge definitions, unlock paths, prestige, and recent badge earners.
 - `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.

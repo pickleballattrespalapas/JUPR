@@ -20,9 +20,20 @@ def client(monkeypatch):
     )
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: object())
 
-    def fake_get_public_leaderboard(*, supabase, club_id, league_name=None):
+    def fake_build_public_leaderboard(
+        supabase,
+        *,
+        club_id,
+        league_name=None,
+        status="active",
+        search=None,
+        sort="rank",
+        player_id=None,
+        limit=50,
+        offset=0,
+    ):
         assert club_id == "club-1"
-        return [
+        rows = [
             {
                 "rank_position": 7,
                 "club_id": "club-1",
@@ -51,8 +62,19 @@ def client(monkeypatch):
                 "internal_notes": "hidden",
             },
         ]
+        return {
+            "scopes": [{"name": "OVERALL", "label": "Overall", "min_games": 0}, {"name": league_name or "Open", "label": league_name or "Open", "min_games": 0}],
+            "selected_scope": league_name or "Open",
+            "scope": {"name": league_name or "Open", "label": league_name or "Open", "min_games": 0},
+            "filters": {"status": status, "search": search or "", "sort": sort},
+            "summary": {"ranked_players": 2, "active_players": 2, "inactive_players": 0, "leaderboard_scopes": 2, "filtered_players": 2},
+            "leaderboard": rows,
+            "snapshot": None,
+            "highlights": {"highest_rating": rows[:1], "most_improved": [], "best_win_pct": rows[:1], "most_wins": rows[:1]},
+            "pagination": {"total": 2, "offset": offset, "limit": limit, "has_more": False},
+        }
 
-    monkeypatch.setattr("services.api.main.get_public_leaderboard", fake_get_public_leaderboard)
+    monkeypatch.setattr("services.api.main.build_public_leaderboard", fake_build_public_leaderboard)
     return TestClient(app)
 
 

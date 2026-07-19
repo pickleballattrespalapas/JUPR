@@ -107,8 +107,8 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `PATCH /admin/clubs/{club_id}/match-log/edits` guarded by `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY` plus Supabase JWT role authorization
 - `POST /admin/clubs/{club_id}/match-log/duplicates/cleanup` guarded by `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY` plus Supabase JWT role authorization
 - `GET /clubs/{club_slug}`
-- `GET /clubs/{club_slug}/leaderboards?league_name=...`
-- `GET /clubs/{club_slug}/leaderboards/public?league_name=...` temporary compatibility alias
+- `GET /clubs/{club_slug}/leaderboards?league_name=OVERALL&status=active&q=...&sort=rank&player_id=...&limit=50&offset=0`
+- `GET /clubs/{club_slug}/leaderboards/public?...` temporary compatibility alias with the same filters and response
 - `GET /clubs/{club_slug}/league-results?league_name=...`
 - `GET /clubs/{club_slug}/badges`
 - `GET /clubs/{club_slug}/badges/{badge_id}/earners?offset=...&limit=...`
@@ -137,4 +137,4 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 
-The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.get_public_leaderboard` and only returns public-safe fields.
+The leaderboard endpoint delegates to `jupr_app.services.leaderboard_service.build_public_leaderboard`. `OVERALL` is built from the club player ratings; league tabs use the selected league-rating projection. Active players are the default. The explicit public response adds starting/gain/gap values, qualification, capped badge context, highlights, a selected-player snapshot, and offset pagination without forwarding raw player or badge rows.

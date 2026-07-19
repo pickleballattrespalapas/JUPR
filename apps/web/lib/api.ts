@@ -19,16 +19,60 @@ export type LeaderboardEntry = {
   player_name: string;
   rating?: number | null;
   rating_jupr?: number | null;
+  starting_rating?: number | null;
+  starting_rating_jupr?: number | null;
+  rating_gain_jupr?: number | null;
+  gap_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
+  win_pct?: number | null;
   is_active?: boolean | null;
+  qualified?: boolean | null;
+  min_games?: number | null;
+  badges?: LeaderboardBadge[];
+  badge_count?: number;
   updated_at?: string | null;
+};
+
+export type LeaderboardBadge = {
+  badge_id: string;
+  name: string;
+  prestige?: number | null;
+  category?: string | null;
+  icon_key?: string | null;
+  rarity?: string | null;
+  earned_at?: string | null;
+};
+
+export type LeaderboardScope = {
+  name: string;
+  label: string;
+  min_games: number;
 };
 
 export type LeaderboardResponse = {
   club: { id: string; slug: string; name: string };
+  scopes: LeaderboardScope[];
+  selected_scope: string;
+  scope: LeaderboardScope;
+  filters: { status: "active" | "inactive" | "all"; search: string; sort: string };
+  summary: {
+    ranked_players: number;
+    active_players: number;
+    inactive_players: number;
+    leaderboard_scopes: number;
+    filtered_players: number;
+  };
   leaderboard: LeaderboardEntry[];
+  snapshot?: LeaderboardEntry | null;
+  highlights: {
+    highest_rating: LeaderboardEntry[];
+    most_improved: LeaderboardEntry[];
+    best_win_pct: LeaderboardEntry[];
+    most_wins: LeaderboardEntry[];
+  };
+  pagination: { total: number; offset: number; limit: number; has_more: boolean };
 };
 
 export type PublicPlayer = {
@@ -287,8 +331,30 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
   return fetchJson<ClubSummary>(`/clubs/${clubSlug}`);
 }
 
-export async function getClubLeaderboard(clubSlug: string): Promise<ApiResult<LeaderboardResponse>> {
-  return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards`);
+export type LeaderboardRequest = {
+  leagueName?: string | null;
+  status?: "active" | "inactive" | "all";
+  search?: string | null;
+  sort?: "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
+  playerId?: string | number | null;
+  limit?: number;
+  offset?: number;
+};
+
+export async function getClubLeaderboard(
+  clubSlug: string,
+  options: LeaderboardRequest = {}
+): Promise<ApiResult<LeaderboardResponse>> {
+  const params = new URLSearchParams();
+  if (options.leagueName) params.set("league_name", String(options.leagueName));
+  if (options.status) params.set("status", options.status);
+  if (options.search) params.set("q", String(options.search));
+  if (options.sort) params.set("sort", options.sort);
+  if (options.playerId != null && String(options.playerId).trim()) params.set("player_id", String(options.playerId));
+  if (options.limit != null) params.set("limit", String(options.limit));
+  if (options.offset != null) params.set("offset", String(options.offset));
+  const query = params.toString();
+  return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards${query ? `?${query}` : ""}`);
 }
 
 export async function getClubPlayers(clubSlug: string): Promise<ApiResult<PlayersResponse>> {

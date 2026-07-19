@@ -14,7 +14,7 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.context import ServiceContext
-from jupr_app.services.leaderboard_service import get_public_leaderboard
+from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_write_service import PublicLiveSessionError, create_public_round_robin_session, update_public_round_robin_scores
@@ -51,12 +51,22 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "player_name",
     "rating",
     "rating_jupr",
+    "starting_rating",
+    "starting_rating_jupr",
+    "rating_gain_jupr",
+    "gap_jupr",
     "wins",
     "losses",
     "matches_played",
+    "win_pct",
     "is_active",
+    "qualified",
+    "min_games",
+    "badges",
+    "badge_count",
     "updated_at",
 }
+PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "icon_key", "rarity", "earned_at"}
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,created_at,updated_at,last_seen_at,expires_at"
 PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
 LIVE_SESSIONS_SETUP_ERROR = "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
@@ -257,18 +267,97 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
     normalized: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
         clean = {key: row.get(key) for key in PUBLIC_LEADERBOARD_ENTRY_FIELDS if key in row}
+        clean["badges"] = [
+            {key: badge.get(key) for key in PUBLIC_LEADERBOARD_BADGE_FIELDS if key in badge}
+            for badge in (row.get("badges") or [])
+            if isinstance(badge, dict)
+        ][:3]
         if clean.get("rank") is None:
             clean["rank"] = clean.get("rank_position") if clean.get("rank_position") is not None else idx
         normalized.append(clean)
     return normalized
 
 
-def _build_leaderboard_response(club_slug: str, league_name: str | None) -> dict[str, Any]:
+def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    scopes = [
+        {
+            "name": str(scope.get("name") or ""),
+            "label": str(scope.get("label") or scope.get("name") or ""),
+            "min_games": max(0, int(scope.get("min_games") or 0)),
+        }
+        for scope in (payload.get("scopes") or [])
+        if isinstance(scope, dict) and str(scope.get("name") or "").strip()
+    ]
+    scope = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+    filters = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
+    snapshot_rows = _normalize_public_leaderboard_rows([payload["snapshot"]]) if isinstance(payload.get("snapshot"), dict) else []
+    highlights = payload.get("highlights") if isinstance(payload.get("highlights"), dict) else {}
+    return {
+        "scopes": scopes,
+        "selected_scope": str(payload.get("selected_scope") or "OVERALL"),
+        "scope": {
+            "name": str(scope.get("name") or payload.get("selected_scope") or "OVERALL"),
+            "label": str(scope.get("label") or scope.get("name") or payload.get("selected_scope") or "Overall"),
+            "min_games": max(0, int(scope.get("min_games") or 0)),
+        },
+        "filters": {
+            "status": str(filters.get("status") or "active"),
+            "search": str(filters.get("search") or ""),
+            "sort": str(filters.get("sort") or "rank"),
+        },
+        "summary": {
+            "ranked_players": max(0, int(summary.get("ranked_players") or 0)),
+            "active_players": max(0, int(summary.get("active_players") or 0)),
+            "inactive_players": max(0, int(summary.get("inactive_players") or 0)),
+            "leaderboard_scopes": max(0, int(summary.get("leaderboard_scopes") or len(scopes))),
+            "filtered_players": max(0, int(summary.get("filtered_players") or 0)),
+        },
+        "leaderboard": _normalize_public_leaderboard_rows(payload.get("leaderboard") or []),
+        "snapshot": snapshot_rows[0] if snapshot_rows else None,
+        "highlights": {
+            key: _normalize_public_leaderboard_rows(highlights.get(key) or [])
+            for key in ("highest_rating", "most_improved", "best_win_pct", "most_wins")
+        },
+        "pagination": {
+            "total": max(0, int(pagination.get("total") or 0)),
+            "offset": max(0, int(pagination.get("offset") or 0)),
+            "limit": max(1, min(int(pagination.get("limit") or 50), 100)),
+            "has_more": bool(pagination.get("has_more")),
+        },
+    }
+
+
+def _build_leaderboard_response(
+    club_slug: str,
+    league_name: str | None,
+    *,
+    status: str = "active",
+    search: str | None = None,
+    sort: str = "rank",
+    player_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
-    rows = get_public_leaderboard(supabase=supabase, club_id=club_id, league_name=league_name)
-    return {"club": _public_club_payload(club, club_slug), "leaderboard": _normalize_public_leaderboard_rows(rows)}
+    try:
+        projection = build_public_leaderboard(
+            supabase,
+            club_id=club_id,
+            league_name=league_name,
+            status=status,
+            search=search,
+            sort=sort,
+            player_id=player_id,
+            limit=limit,
+            offset=offset,
+        )
+    except LeaderboardDataUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Leaderboard data is temporarily unavailable.") from exc
+    return {"club": _public_club_payload(club, club_slug), **_normalize_public_leaderboard_projection(projection)}
 
 
 def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
@@ -441,13 +530,49 @@ install_public_weekly_recap_routes(app, get_club=get_club, get_supabase_client=g
 
 
 @app.get("/clubs/{club_slug}/leaderboards")
-def get_club_leaderboard(club_slug: str, league_name: str | None = Query(default=None)) -> dict[str, Any]:
-    return _build_leaderboard_response(club_slug, league_name)
+def get_club_leaderboard(
+    club_slug: str,
+    league_name: str | None = Query(default=None),
+    status: str = Query(default="active"),
+    q: str | None = Query(default=None, max_length=120),
+    sort: str = Query(default="rank"),
+    player_id: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    return _build_leaderboard_response(
+        club_slug,
+        league_name,
+        status=status,
+        search=q,
+        sort=sort,
+        player_id=player_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/clubs/{club_slug}/leaderboards/public")
-def get_club_leaderboard_compat(club_slug: str, league_name: str | None = Query(default=None)) -> dict[str, Any]:
-    return _build_leaderboard_response(club_slug, league_name)
+def get_club_leaderboard_compat(
+    club_slug: str,
+    league_name: str | None = Query(default=None),
+    status: str = Query(default="active"),
+    q: str | None = Query(default=None, max_length=120),
+    sort: str = Query(default="rank"),
+    player_id: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    return _build_leaderboard_response(
+        club_slug,
+        league_name,
+        status=status,
+        search=q,
+        sort=sort,
+        player_id=player_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/clubs/{club_slug}/players")
