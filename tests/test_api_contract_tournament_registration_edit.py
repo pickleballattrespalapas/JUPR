@@ -55,7 +55,7 @@ def _edit_token(registration_id: str) -> str:
         tournament_id="t1",
         registration_id=registration_id,
         email="alex@example.com",
-        secret="test-secret",
+        secret="test-registration-edit-secret-32bytes",
     )
 
 
@@ -159,6 +159,8 @@ def test_public_registration_edit_submit_contract(client_and_storage):
             "email": "changed@example.com",
             "phone": "555-9999",
             "doubles_skill": 4.25,
+            "age": 34,
+            "gender": "Men",
             "terms_accepted": True,
             "wants_partner_board_contact": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NEEDS_PARTNER", "show_on_partner_board": True}],
@@ -216,6 +218,8 @@ def test_public_registration_edit_imported_draw_returns_conflict_without_mutatio
             "first_name": "Changed",
             "last_name": "Rivera",
             "email": "alex@example.com",
+            "age": 34,
+            "gender": "Men",
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },

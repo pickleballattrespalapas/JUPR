@@ -22,7 +22,11 @@ SECRET = "partner-flow-contract-secret-1234567890"
 def partner_client(monkeypatch):
     storage = fake_storage()
     storage["clubs"] = [{"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas"}]
-    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
+    fake_supabase = FakeSupabase(storage)
+    # This API-flow fixture exercises the documented table-backed local-fake
+    # path. Transactional RPC behavior has separate migration/domain coverage.
+    fake_supabase.rpc = None
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: fake_supabase)
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", SECRET)
@@ -39,6 +43,8 @@ def _register(api: TestClient, storage: dict, *, first_name: str, email: str, ne
             "last_name": "Player",
             "email": email,
             "doubles_skill": 4.0,
+            "age": 34,
+            "gender": "Mixed",
             "wants_partner_board_contact": needs_partner,
             "terms_accepted": True,
             "selections": [

@@ -47,6 +47,8 @@ def test_public_tournament_roster_after_submit_contract(client):
             "email": "alex@example.com",
             "phone": "555-0100",
             "doubles_skill": 4.0,
+            "age": 34,
+            "gender": "Men",
             "terms_accepted": True,
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },
