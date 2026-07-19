@@ -146,7 +146,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
       <article data-testid="player-public-identity" style={{ ...cardStyle, background: "#eff6ff", marginBottom: "1rem" }}>
         <strong>{verifiedLabel}</strong>
         <p style={{ margin: "0.35rem 0", color: "#334155" }}>This page uses the player&apos;s approved public display name. Contact details, legal names, social identity keys, and subscription records are never included.</p>
-        {data.verified_updates.can_request ? <Link href={`/verified-updates?club=${encodeURIComponent(clubSlug)}&player_id=${encodeURIComponent(String(player.id))}&pid=${encodeURIComponent(String(player.id))}`}>Request verified player updates</Link> : <span>Update access is managed through the private link in the verified email.</span>}
+        {data.verified_updates.can_request ? <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`}>Request verified player updates</Link> : <span>Update access is managed through the private link in the verified email.</span>}
         <span style={{ color: "#64748b" }}> · </span><Link href="/profile-privacy">Request an alias or privacy review</Link>
       </article>
 
@@ -158,7 +158,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         ))}
         <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Leaderboard snapshot</Link>
         <Link href={`/clubs/${clubSlug}/badge-codex`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Badge codex</Link>
-        <Link href={`/verified-updates?club=${encodeURIComponent(clubSlug)}&player_id=${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Request verified updates</Link>
+        <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Request verified updates</Link>
       </nav>
 
       <div data-testid="player-summary-cards" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>

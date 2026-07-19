@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from jupr_app import config
 from jupr_app.domain.notifications import player_update_sender as sender
 
@@ -51,6 +53,7 @@ def test_dry_run_does_not_call_smtp_send(monkeypatch):
     calls = {"smtp": 0, "status": []}
 
     monkeypatch.setattr(sender, "list_outbox_rows", lambda *a, **k: [{"id": "o1", "subscription_id": "s1", "week_start": "2026-05-01", "week_end": "2026-05-07", "player_id": 9, "email": "real@example.com"}])
+    monkeypatch.setattr(sender, "claim_outbox_row_for_send", lambda *a, **k: {"id": "o1", "send_status": "sending", "row_version": 2, "delivery_attempt_id": "11111111-1111-1111-1111-111111111111"})
     monkeypatch.setattr(sender, "_safe_subscription", lambda *a, **k: {"id": "s1", "request_status": "active", "preferences_json": {"send_only_if_changed": False}})
     monkeypatch.setattr(sender, "_safe_digest_for_week", lambda *a, **k: {"final_json": {"summary": {"matches_played": 1}, "links": {}}})
     monkeypatch.setattr(sender, "_merge_links_for_send", lambda **k: {"summary": {"matches_played": 1}, "links": {"unsubscribe": "https://x/u"}})
@@ -84,6 +87,7 @@ def test_staging_redirect_sends_to_redirect_only(monkeypatch):
 
     captured = {"to": None}
     monkeypatch.setattr(sender, "list_outbox_rows", lambda *a, **k: [{"id": "o1", "subscription_id": "s1", "week_start": "2026-05-01", "week_end": "2026-05-07", "player_id": 9, "email": "real@example.com"}])
+    monkeypatch.setattr(sender, "claim_outbox_row_for_send", lambda *a, **k: {"id": "o1", "send_status": "sending", "row_version": 2, "delivery_attempt_id": "11111111-1111-1111-1111-111111111111"})
     monkeypatch.setattr(sender, "_safe_subscription", lambda *a, **k: {"id": "s1", "request_status": "active", "preferences_json": {"send_only_if_changed": False}})
     monkeypatch.setattr(sender, "_safe_digest_for_week", lambda *a, **k: {"final_json": {"summary": {"matches_played": 1}, "links": {}}})
     monkeypatch.setattr(sender, "_merge_links_for_send", lambda **k: {"summary": {"matches_played": 1}, "links": {"unsubscribe": "https://x/u"}})
@@ -106,6 +110,64 @@ def test_staging_redirect_sends_to_redirect_only(monkeypatch):
 
     sender.send_pending_player_update_emails(Ctx(), limit=10)
     assert captured["to"] == "safe@example.com"
+
+
+def _mock_test_digest(monkeypatch):
+    monkeypatch.setattr(sender, "compute_player_weekly_digest", lambda *_args, **_kwargs: {"links": {}})
+    monkeypatch.setattr(sender, "_merge_links_for_send", lambda **_kwargs: {"links": {"unsubscribe": "https://x/u"}})
+    monkeypatch.setattr(sender, "ensure_unsubscribe_token", lambda *_args, **_kwargs: "tok")
+    monkeypatch.setattr(sender, "render_player_digest_chart_png", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(sender, "build_player_update_email_subject", lambda *_args, **_kwargs: "Subject")
+    monkeypatch.setattr(sender, "build_player_update_email_html", lambda *_args, **_kwargs: "<p>Hi</p>")
+    monkeypatch.setattr(sender, "build_player_update_email_text", lambda *_args, **_kwargs: "Hi")
+
+
+def test_test_email_respects_dry_run(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
+    _mock_test_digest(monkeypatch)
+    monkeypatch.setattr(
+        sender,
+        "send_email_with_inline_chart",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("SMTP must not run in dry_run")),
+    )
+
+    class Ctx:
+        supabase = _FakeSupabase()
+        club_id = "club"
+
+    result = sender.send_test_player_update_email(
+        Ctx(),
+        start_date=date(2026, 5, 1),
+        end_date=date(2026, 5, 7),
+        player_id=9,
+        to_email="real@example.com",
+    )
+    assert result["provider_message_id"] == "dry_run"
+    assert result["email_mode"] == "dry_run"
+
+
+def test_test_email_respects_staging_redirect(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "staging_redirect")
+    monkeypatch.setenv("JUPR_STAGING_EMAIL_REDIRECT_TO", "safe@example.com")
+    _mock_test_digest(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(sender, "send_email_with_inline_chart", lambda **kwargs: captured.update(kwargs) or "smtp")
+
+    class Ctx:
+        supabase = _FakeSupabase()
+        club_id = "club"
+
+    result = sender.send_test_player_update_email(
+        Ctx(),
+        start_date=date(2026, 5, 1),
+        end_date=date(2026, 5, 7),
+        player_id=9,
+        to_email="real@example.com",
+    )
+    assert captured["to_email"] == "safe@example.com"
+    assert result["original_to_email"] == "real@example.com"
 
 
 def test_summaries_do_not_print_secrets(monkeypatch):

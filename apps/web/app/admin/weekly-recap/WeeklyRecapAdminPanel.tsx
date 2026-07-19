@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   AdminWeeklyRecapCandidate,
   AdminWeeklyRecapDetailResponse,
@@ -10,8 +10,10 @@ import type {
   AdminWeeklyRecapWriteResponse
 } from "@/lib/adminWeeklyRecapApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
+import { clubTodayIso, clubWeekStartIso } from "@/lib/clubDate";
 
-type Props = { apiBase: string | null; clubId: string; status: AdminWeeklyRecapStatusResponse };
+type Props = { apiBase: string | null; clubId: string; status: AdminWeeklyRecapStatusResponse; initialWeekStart?: string; printMode?: boolean };
 type SpotlightEdit = { include: boolean; order: string; description: string; players: string[] };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -22,18 +24,6 @@ const dangerButtonStyle = { ...buttonStyle, background: "#991b1b", borderColor: 
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function firstDayOfWeekIso(): string {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = (day + 6) % 7;
-  d.setDate(d.getDate() - diff);
-  return d.toISOString().slice(0, 10);
 }
 
 function shortValue(value: unknown): string {
@@ -95,18 +85,12 @@ function buildEditsPayload(lookingAhead: string[], spotlightEdits: Record<string
   };
 }
 
-function messageColor(message: string | null): string {
-  const text = (message || "").toLowerCase();
-  if (text.includes("unable") || text.includes("error") || text.includes("type") || text.includes("missing")) return "#b91c1c";
-  return "#166534";
-}
-
-export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props) {
+export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initialWeekStart = "", printMode = false }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [weekStart, setWeekStart] = useState(firstDayOfWeekIso());
-  const [weekEnd, setWeekEnd] = useState(todayIso());
+  const [weekStart, setWeekStart] = useState(() => clubWeekStartIso());
+  const [weekEnd, setWeekEnd] = useState(() => clubTodayIso());
   const [recaps, setRecaps] = useState<AdminWeeklyRecapRow[]>([]);
-  const [selectedWeekStart, setSelectedWeekStart] = useState("");
+  const [selectedWeekStart, setSelectedWeekStart] = useState(initialWeekStart);
   const [selectedRecap, setSelectedRecap] = useState<AdminWeeklyRecapRow | null>(null);
   const [candidates, setCandidates] = useState<Record<string, AdminWeeklyRecapCandidate[]>>({});
   const [lookingAhead, setLookingAhead] = useState<string[]>(["", "", ""]);
@@ -116,10 +100,18 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
   const [publishConfirm, setPublishConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageSeverity, setMessageSeverity] = useState<"success" | "error" | null>(null);
 
   const candidateKeys = useMemo(() => normalizeCandidateKeys(candidates), [candidates]);
   const recapNumbers = numbersFromRecap(selectedRecap);
   const spotlightPreview = finalSpotlight(selectedRecap);
+
+  useEffect(() => {
+    if (!accessToken || !initialWeekStart || selectedRecap) return;
+    void loadSelectedRecap(initialWeekStart);
+    // Deep-linked preview should load once after the authenticated session is restored.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, initialWeekStart]);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -129,7 +121,11 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = String(payload?.detail || `API error (${response.status})`);
+      if (response.status === 409) throw new Error(`${detail} Reload the recap before trying again.`);
+      throw new Error(detail);
+    }
     return payload as T;
   }
 
@@ -153,32 +149,39 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
   async function loadRecaps() {
     setBusy(true);
     setMessage(null);
+    setMessageSeverity(null);
     try {
       const payload = await requestJson<AdminWeeklyRecapListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps?limit=100`);
       setRecaps(payload.recaps || []);
       if (!selectedWeekStart && payload.recaps?.length) setSelectedWeekStart(payload.recaps[0].week_start);
       setMessage(`Loaded ${payload.count ?? payload.recaps?.length ?? 0} recap(s).`);
+      setMessageSeverity("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load weekly recaps.");
+      setMessageSeverity("error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function loadSelectedRecap() {
-    const target = selectedWeekStart || weekStart;
+  async function loadSelectedRecap(explicitWeekStart?: string) {
+    const target = explicitWeekStart || selectedWeekStart || weekStart;
     if (!target) {
       setMessage("Select a recap first.");
+      setMessageSeverity("error");
       return;
     }
     setBusy(true);
     setMessage(null);
+    setMessageSeverity(null);
     try {
       const payload = await requestJson<AdminWeeklyRecapDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(target)}?include_candidates=true`);
       applyDetail(payload);
       setMessage("Weekly recap loaded.");
+      setMessageSeverity("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load weekly recap.");
+      setMessageSeverity("error");
     } finally {
       setBusy(false);
     }
@@ -187,17 +190,20 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
   async function generateDraft() {
     setBusy(true);
     setMessage(null);
+    setMessageSeverity(null);
     try {
       const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/generate`, {
         method: "POST",
-        body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, confirmation_text: generateConfirm, source: "next_weekly_recap_generate" })
+        body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, confirmation_text: generateConfirm, expected_row_version: selectedRecap?.week_start === weekStart ? selectedRecap.row_version : null, source: "next_weekly_recap_generate" })
       });
       applyDetail(payload);
       setGenerateConfirm("");
       await loadRecaps();
       setMessage("Draft generated from current match, social, and tournament data.");
+      setMessageSeverity("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate weekly recap draft.");
+      setMessageSeverity("error");
     } finally {
       setBusy(false);
     }
@@ -206,20 +212,24 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
   async function saveDraft() {
     if (!selectedRecap) {
       setMessage("Load or generate a recap before saving edits.");
+      setMessageSeverity("error");
       return;
     }
     setBusy(true);
     setMessage(null);
+    setMessageSeverity(null);
     try {
       const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(selectedRecap.week_start)}`, {
         method: "PATCH",
-        body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: saveConfirm, source: "next_weekly_recap_save" })
+        body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: saveConfirm, expected_row_version: selectedRecap.row_version, source: "next_weekly_recap_save" })
       });
       applyDetail(payload);
       setSaveConfirm("");
       setMessage("Draft edits saved.");
+      setMessageSeverity("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save weekly recap draft.");
+      setMessageSeverity("error");
     } finally {
       setBusy(false);
     }
@@ -228,21 +238,25 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
   async function publishAction(action: "publish" | "unpublish") {
     if (!selectedRecap) {
       setMessage("Load or generate a recap before publishing.");
+      setMessageSeverity("error");
       return;
     }
     setBusy(true);
     setMessage(null);
+    setMessageSeverity(null);
     try {
       const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(selectedRecap.week_start)}/publish`, {
         method: "POST",
-        body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: publishConfirm, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
+        body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: publishConfirm, expected_row_version: selectedRecap.row_version, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
       });
       applyDetail(payload);
       setPublishConfirm("");
       await loadRecaps();
       setMessage(action === "publish" ? "Weekly recap published." : "Weekly recap unpublished and returned to draft.");
+      setMessageSeverity("success");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : `Unable to ${action} weekly recap.`);
+      setMessageSeverity("error");
     } finally {
       setBusy(false);
     }
@@ -284,7 +298,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
           <label>Start date<br /><input type="date" value={weekStart} onChange={(event) => setWeekStart(event.target.value)} style={inputStyle} /></label>
           <label>End date<br /><input type="date" value={weekEnd} onChange={(event) => setWeekEnd(event.target.value)} style={inputStyle} /></label>
           <label>Generate confirmation<br /><input value={generateConfirm} onChange={(event) => setGenerateConfirm(event.target.value)} placeholder="GENERATE RECAP" style={inputStyle} /></label>
-          <button type="button" onClick={generateDraft} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Working…" : "Generate draft"}</button>
+          <button type="button" onClick={generateDraft} disabled={busy || !accessToken || (selectedRecap?.week_start === weekStart && selectedRecap.status === "published")} style={buttonStyle}>{busy ? "Working…" : "Generate draft"}</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto auto", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
           <label>Existing recaps<br />
@@ -294,14 +308,14 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
             </select>
           </label>
           <button type="button" onClick={loadRecaps} disabled={busy || !accessToken} style={ghostButtonStyle}>Load recaps</button>
-          <button type="button" onClick={loadSelectedRecap} disabled={busy || !selectedWeekStart} style={ghostButtonStyle}>Open selected</button>
+          <button type="button" onClick={() => loadSelectedRecap()} disabled={busy || !selectedWeekStart} style={ghostButtonStyle}>Open selected</button>
         </div>
-        {message ? <p style={{ color: messageColor(message) }}>{message}</p> : null}
+        {message ? <p role={messageSeverity === "error" ? "alert" : "status"} style={{ color: messageSeverity === "error" ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
       {selectedRecap ? (
         <>
-          <article style={cardStyle}>
+          <article style={cardStyle} className="admin-recap-no-print">
             <h2 style={{ marginTop: 0 }}>2. Edit draft</h2>
             <p style={{ color: "#475569" }}><strong>Recap:</strong> {selectedRecap.week_start} → {selectedRecap.week_end} · <strong>Status:</strong> {selectedRecap.status}</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -313,7 +327,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
             </div>
           </article>
 
-          <article style={cardStyle}>
+          <article style={cardStyle} className="admin-recap-no-print">
             <h2 style={{ marginTop: 0 }}>Spotlight reel</h2>
             <p style={{ color: "#475569" }}>Choose up to three candidates per spotlight category. Leave a slot blank to omit it.</p>
             {candidateKeys.length ? candidateKeys.map((key, idx) => {
@@ -342,12 +356,12 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
             }) : <p style={{ color: "#92400e" }}>No spotlight candidates are available for this date range.</p>}
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", marginTop: "1rem", alignItems: "end" }}>
               <label>Save confirmation<br /><input value={saveConfirm} onChange={(event) => setSaveConfirm(event.target.value)} placeholder="SAVE RECAP" style={inputStyle} /></label>
-              <button type="button" onClick={saveDraft} disabled={busy} style={buttonStyle}>Save draft edits</button>
+              <button type="button" onClick={saveDraft} disabled={busy || selectedRecap.status === "published"} style={buttonStyle}>Save draft edits</button>
             </div>
           </article>
 
-          <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>3. Preview</h2>
+          <article style={cardStyle} className="admin-recap-no-print">
+            <h2 style={{ marginTop: 0 }}>3. Preview summary</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}>
               {Object.entries(recapNumbers).slice(0, 8).map(([key, value]) => <div key={key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}><strong>{key.replace(/_/g, " ")}</strong><br />{shortValue(value)}</div>)}
             </div>
@@ -355,14 +369,20 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status }: Props
             {spotlightPreview.length ? <ul>{spotlightPreview.map((item, idx) => <li key={`${item.key}-${idx}`}><strong>{shortValue(item.label || item.key)}</strong>: {Array.isArray(item.players) ? item.players.join(", ") : "—"}<br /><span style={{ color: "#475569" }}>{shortValue(item.description)}</span></li>)}</ul> : <p style={{ color: "#64748b" }}>Save draft edits to refresh the final spotlight preview.</p>}
           </article>
 
-          <article style={cardStyle}>
+          <article style={cardStyle} className="admin-recap-no-print">
             <h2 style={{ marginTop: 0 }}>4. Publish control</h2>
             <p style={{ color: "#475569" }}>Publishing makes this recap visible on the public Weekly Recap page. Unpublishing returns it to draft.</p>
             <label>Publish / unpublish confirmation<br /><input value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} placeholder="PUBLISH RECAP or UNPUBLISH RECAP" style={inputStyle} /></label>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
-              <button type="button" onClick={() => publishAction("publish")} disabled={busy} style={buttonStyle}>Publish recap</button>
-              <button type="button" onClick={() => publishAction("unpublish")} disabled={busy} style={dangerButtonStyle}>Unpublish recap</button>
+              <button type="button" onClick={() => publishAction("publish")} disabled={busy || selectedRecap.status === "published"} style={buttonStyle}>Publish recap</button>
+              <button type="button" onClick={() => publishAction("unpublish")} disabled={busy || selectedRecap.status !== "published"} style={dangerButtonStyle}>Unpublish recap</button>
             </div>
+          </article>
+
+          <article style={cardStyle}>
+            <h2 className="admin-recap-no-print" style={{ marginTop: 0 }}>5. Full unpublished preview and print proof</h2>
+            <p className="admin-recap-no-print" style={{ color: "#475569" }}>This renders the complete saved <code>final_json</code> even while status is draft. It never exposes an unpublished recap through the public API.</p>
+            <AdminWeeklyRecapPreview recap={selectedRecap} printMode={printMode} />
           </article>
         </>
       ) : null}

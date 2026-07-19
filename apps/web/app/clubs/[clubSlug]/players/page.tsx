@@ -197,6 +197,8 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
                         <td style={tdStyle}>{player.is_active === false ? "Inactive" : "Active"}</td>
                         <td style={tdStyle}>
                           <Link href={profileHref}>profile</Link><span style={{ color: "#64748b" }}> · </span>
+                          <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`}>leaderboard</Link><span style={{ color: "#64748b" }}> · </span>
+                          <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`}>email updates</Link><span style={{ color: "#64748b" }}> · </span>
                           <Link aria-label={`${player.name} stable row link`} href={`${pageHref({ clubSlug, q, status, sort, player: player.id, page, perPage })}#${playerAnchor(player.id)}`}>row link</Link>
                         </td>
                       </tr>

@@ -70,8 +70,10 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert env["JUPR_EMAIL_MODE"] == "dry_run"
     assert env["JUPR_WEB_BASE_URL"] == EXPECTED_STAGING_WEB_ORIGIN
     assert env["JUPR_REQUIRE_API_AUDIT_LOG"] == "1"
+    assert env["JUPR_REQUIRE_WORKER_RUN_LOG"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"] == "1"
     assert env["JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"] == "1"
+    assert env["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"] == "0"
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].startswith("^https://jupr")
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].endswith("vercel\\.app$")
@@ -90,6 +92,7 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
     assert 'if [ "$FLY_APP_NAME" = "juprleagues-api" ]' in workflow
     assert "--require-supabase-isolation" in workflow
     assert "--expect-full-next-admin" in workflow
+    assert 'JUPR_REQUIRE_WORKER_RUN_LOG: "1"' in workflow
     assert "fly.staging.toml" in workflow
 
 

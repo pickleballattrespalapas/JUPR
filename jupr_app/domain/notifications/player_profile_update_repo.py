@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import re
 import secrets
 from typing import Any
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 REQUEST_STATUS_PENDING = "pending_admin_review"
 REQUEST_STATUS_ACTIVE = "active"
@@ -10,6 +12,7 @@ REQUEST_STATUS_REJECTED = "rejected"
 REQUEST_STATUS_UNSUBSCRIBED = "unsubscribed"
 
 SEND_STATUS_PENDING = "pending"
+SEND_STATUS_SENDING = "sending"
 SEND_STATUS_SENT = "sent"
 SEND_STATUS_SKIPPED = "skipped"
 SEND_STATUS_ERROR = "error"
@@ -20,10 +23,36 @@ DEFAULT_PREFERENCES = {
 }
 
 PUBLIC_UNSUBSCRIBE_SCOPES = {"player_updates", "global"}
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+OUTBOX_SEND_LEASE = timedelta(minutes=30)
+
+
+class StaleCommunicationsStateError(ValueError):
+    """Raised when an operator acts on a row that changed after it was loaded."""
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def validate_email_address(value: Any, *, field_name: str = "email") -> str:
+    email = _require_nonempty(value, field_name)
+    if not _EMAIL_RE.match(email):
+        raise ValueError(f"{field_name} must be a valid email address")
+    return email
+
+
+def _utc_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _safe_data(resp: Any) -> list[dict[str, Any]]:
@@ -43,6 +72,16 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         raise ValueError("player_id must be an integer-like value")
+
+
+def _safe_version(value: Any) -> int:
+    try:
+        version = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("expected_row_version must be an integer") from exc
+    if version < 1:
+        raise ValueError("expected_row_version must be positive")
+    return version
 
 
 def _is_unique_violation(exc: Exception) -> bool:
@@ -205,6 +244,102 @@ def list_active_subscriptions(
         .execute()
     )
     return _safe_data(resp)
+
+
+def get_subscription(
+    supabase,
+    *,
+    club_id: str,
+    subscription_id: str,
+) -> dict[str, Any] | None:
+    club_id = _require_nonempty(club_id, "club_id")
+    subscription_id = _require_nonempty(subscription_id, "subscription_id")
+    return _safe_first(
+        supabase.table("player_profile_update_subscriptions")
+        .select("*")
+        .eq("club_id", club_id)
+        .eq("id", subscription_id)
+        .limit(1)
+        .execute()
+    )
+
+
+def replace_verified_subscriber_atomic(
+    supabase,
+    *,
+    club_id: str,
+    old_subscription_id: str,
+    new_email: str,
+    new_request_note: str | None,
+    verified_by: str,
+    admin_note: str | None,
+    expected_row_version: int,
+    operation_key: str,
+) -> dict[str, Any]:
+    """Replace one active subscriber in a Postgres transaction.
+
+    The RPC is service-role-only. ``operation_key`` makes a network retry return
+    the already-created replacement instead of replacing it a second time.
+    """
+
+    club_id = _require_nonempty(club_id, "club_id")
+    old_subscription_id = _require_nonempty(old_subscription_id, "old_subscription_id")
+    verified_by = _require_nonempty(verified_by, "verified_by")
+    email_raw = validate_email_address(new_email, field_name="new_email")
+    operation_key = _require_nonempty(operation_key, "operation_key")
+    expected_version = _safe_version(expected_row_version)
+    try:
+        response = supabase.rpc(
+            "replace_verified_update_subscription",
+            {
+                "p_club_id": club_id,
+                "p_old_subscription_id": old_subscription_id,
+                "p_new_email": email_raw,
+                "p_new_email_normalized": normalize_email(email_raw),
+                "p_new_request_note": str(new_request_note or "").strip() or None,
+                "p_verified_by": verified_by,
+                "p_admin_note": str(admin_note or "").strip() or None,
+                "p_expected_row_version": expected_version,
+                "p_operation_key": operation_key,
+            },
+        ).execute()
+    except Exception as exc:
+        if "stale" in str(exc or "").lower():
+            raise StaleCommunicationsStateError("Subscription changed. Reload before replacing it.") from exc
+        raise
+    data = getattr(response, "data", None)
+    if isinstance(data, list):
+        data = data[0] if data else None
+    if not isinstance(data, dict):
+        raise RuntimeError("Atomic replacement did not return the replacement subscription")
+    return dict(data)
+
+
+def mark_unsubscribed_guarded(
+    supabase,
+    *,
+    club_id: str,
+    subscription_id: str,
+    expected_row_version: int,
+) -> dict[str, Any]:
+    club_id = _require_nonempty(club_id, "club_id")
+    subscription_id = _require_nonempty(subscription_id, "subscription_id")
+    expected_version = _safe_version(expected_row_version)
+    updated = _safe_first(
+        supabase.table("player_profile_update_subscriptions")
+        .update({"request_status": REQUEST_STATUS_UNSUBSCRIBED, "unsubscribed_at": _now_iso()})
+        .eq("club_id", club_id)
+        .eq("id", subscription_id)
+        .eq("request_status", REQUEST_STATUS_ACTIVE)
+        .eq("row_version", expected_version)
+        .execute()
+    )
+    if updated is None:
+        current = get_subscription(supabase, club_id=club_id, subscription_id=subscription_id)
+        if current is None:
+            raise ValueError("Subscription not found")
+        raise StaleCommunicationsStateError("Subscription changed. Reload before deactivating it.")
+    return updated
 
 
 def reject_request(
@@ -627,10 +762,38 @@ def create_outbox_row(
     week_start: date,
     week_end: date,
     email: str,
+    operation_key: str | None = None,
+    digest_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     subscription_id = _require_nonempty(subscription_id, "subscription_id")
     club_id = _require_nonempty(club_id, "club_id")
     email_raw = _require_nonempty(email, "email")
+
+    clean_operation_key = str(operation_key or "").strip() or None
+    exact_query = (
+        supabase.table("player_profile_update_outbox")
+        .select("*")
+        .eq("club_id", club_id)
+        .eq("subscription_id", subscription_id)
+        .eq("week_start", week_start.isoformat())
+        .eq("week_end", week_end.isoformat())
+    )
+    if clean_operation_key:
+        existing = _safe_first(exact_query.eq("queue_operation_key", clean_operation_key).limit(1).execute())
+        if existing is not None:
+            return existing
+    else:
+        # Legacy match side effects do not supply a request key. Preserve their
+        # historical one-row-per-window behavior while explicit admin queue
+        # operations remain repeatable with distinct keys.
+        if _safe_first(exact_query.limit(1).execute()) is not None:
+            raise ValueError("An outbox row already exists for this subscriber and date window.")
+        clean_operation_key = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"jupr:auto-player-update:{club_id}:{subscription_id}:{week_start.isoformat()}:{week_end.isoformat()}",
+            )
+        )
 
     payload = {
         "subscription_id": subscription_id,
@@ -640,6 +803,8 @@ def create_outbox_row(
         "week_end": week_end.isoformat(),
         "email": email_raw,
         "send_status": SEND_STATUS_PENDING,
+        "queue_operation_key": clean_operation_key,
+        "digest_snapshot_json": dict(digest_snapshot or {}),
     }
     try:
         row = _safe_first(
@@ -806,6 +971,49 @@ def bulk_delete_pending_outbox_rows(
     }
 
 
+def delete_pending_outbox_rows_guarded(
+    supabase,
+    *,
+    club_id: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    club_id = _require_nonempty(club_id, "club_id")
+    normalized: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for item in items or []:
+        outbox_id = _require_nonempty((item or {}).get("id"), "outbox id")
+        if outbox_id in seen:
+            continue
+        seen.add(outbox_id)
+        normalized.append((outbox_id, _safe_version((item or {}).get("expected_row_version"))))
+    if not normalized:
+        raise ValueError("At least one outbox row is required")
+
+    deleted_rows: list[dict[str, Any]] = []
+    stale_ids: list[str] = []
+    for outbox_id, expected_version in normalized:
+        deleted = _safe_first(
+            supabase.table("player_profile_update_outbox")
+            .delete()
+            .eq("club_id", club_id)
+            .eq("id", outbox_id)
+            .eq("send_status", SEND_STATUS_PENDING)
+            .eq("row_version", expected_version)
+            .execute()
+        )
+        if deleted is None:
+            stale_ids.append(outbox_id)
+        else:
+            deleted_rows.append(deleted)
+    return {
+        "requested": len(normalized),
+        "deleted": len(deleted_rows),
+        "stale": len(stale_ids),
+        "stale_ids": stale_ids,
+        "deleted_rows": deleted_rows,
+    }
+
+
 def list_outbox_rows(
     supabase,
     club_id: str,
@@ -813,6 +1021,8 @@ def list_outbox_rows(
     status: str | None = None,
     limit: int = 200,
     offset: int = 0,
+    week_start: date | None = None,
+    week_end: date | None = None,
 ) -> list[dict[str, Any]]:
     club_id = _require_nonempty(club_id, "club_id")
 
@@ -830,13 +1040,71 @@ def list_outbox_rows(
         normalized_status = str(status).strip().lower()
         if normalized_status not in {
             SEND_STATUS_PENDING,
+            SEND_STATUS_SENDING,
             SEND_STATUS_SENT,
             SEND_STATUS_SKIPPED,
             SEND_STATUS_ERROR,
         }:
             raise ValueError("Invalid outbox status")
         query = query.eq("send_status", normalized_status)
+    if week_start is not None:
+        query = query.eq("week_start", week_start.isoformat())
+    if week_end is not None:
+        query = query.eq("week_end", week_end.isoformat())
     return _safe_data(query.execute())
+
+
+def get_outbox_row(supabase, *, club_id: str, outbox_id: str) -> dict[str, Any] | None:
+    club_id = _require_nonempty(club_id, "club_id")
+    outbox_id = _require_nonempty(outbox_id, "outbox_id")
+    return _safe_first(
+        supabase.table("player_profile_update_outbox")
+        .select("*")
+        .eq("club_id", club_id)
+        .eq("id", outbox_id)
+        .limit(1)
+        .execute()
+    )
+
+
+def claim_outbox_row_for_send(
+    supabase,
+    *,
+    club_id: str,
+    outbox_id: str,
+    expected_row_version: int,
+    actor_email: str,
+    delivery_mode: str | None = None,
+) -> dict[str, Any]:
+    expected_version = _safe_version(expected_row_version)
+    current = get_outbox_row(supabase, club_id=club_id, outbox_id=outbox_id)
+    if current is None:
+        raise ValueError("Outbox row not found")
+    if str(current.get("send_status") or "") != SEND_STATUS_PENDING:
+        raise StaleCommunicationsStateError("Outbox row is no longer pending. Reload the queue.")
+    if _safe_version(current.get("row_version") or 1) != expected_version:
+        raise StaleCommunicationsStateError("Outbox row changed. Reload the queue before sending.")
+    payload = {
+        "send_status": SEND_STATUS_SENDING,
+        "attempt_count": int(current.get("attempt_count") or 0) + 1,
+        "last_attempt_at": _now_iso(),
+        "last_attempt_by": str(actor_email or "").strip() or None,
+        "delivery_attempt_id": str(uuid4()),
+        "delivery_mode": str(delivery_mode or "").strip() or None,
+        "error_text": None,
+    }
+    updated = _safe_first(
+        supabase.table("player_profile_update_outbox")
+        .update(payload)
+        .eq("club_id", str(club_id))
+        .eq("id", str(outbox_id))
+        .eq("send_status", SEND_STATUS_PENDING)
+        .eq("row_version", expected_version)
+        .execute()
+    )
+    if updated is None:
+        raise StaleCommunicationsStateError("Outbox row changed. Reload the queue before sending.")
+    return updated
 
 
 def update_outbox_status(
@@ -847,10 +1115,14 @@ def update_outbox_status(
     provider_message_id: str | None = None,
     error_text: str | None = None,
     sent_at: datetime | None = None,
+    club_id: str | None = None,
+    expected_row_version: int | None = None,
+    expected_status: str | None = None,
+    delivery_mode: str | None = None,
 ) -> dict[str, Any]:
     outbox_id = _require_nonempty(outbox_id, "outbox_id")
     normalized_status = str(send_status or "").strip().lower()
-    if normalized_status not in {SEND_STATUS_PENDING, SEND_STATUS_SENT, SEND_STATUS_SKIPPED, SEND_STATUS_ERROR}:
+    if normalized_status not in {SEND_STATUS_PENDING, SEND_STATUS_SENDING, SEND_STATUS_SENT, SEND_STATUS_SKIPPED, SEND_STATUS_ERROR}:
         raise ValueError("Invalid send_status")
 
     payload: dict[str, Any] = {
@@ -858,18 +1130,24 @@ def update_outbox_status(
         "provider_message_id": str(provider_message_id or "").strip() or None,
         "error_text": str(error_text or "").strip() or None,
     }
+    if delivery_mode is not None:
+        payload["delivery_mode"] = str(delivery_mode or "").strip() or None
     if sent_at is not None:
         payload["sent_at"] = sent_at.astimezone(timezone.utc).isoformat()
     elif normalized_status == SEND_STATUS_SENT:
         payload["sent_at"] = _now_iso()
 
-    updated = _safe_first(
-        supabase.table("player_profile_update_outbox")
-        .update(payload)
-        .eq("id", outbox_id)
-        .execute()
-    )
+    query = supabase.table("player_profile_update_outbox").update(payload).eq("id", outbox_id)
+    if club_id is not None:
+        query = query.eq("club_id", _require_nonempty(club_id, "club_id"))
+    if expected_row_version is not None:
+        query = query.eq("row_version", _safe_version(expected_row_version))
+    if expected_status is not None:
+        query = query.eq("send_status", str(expected_status or "").strip().lower())
+    updated = _safe_first(query.execute())
     if updated is None:
+        if expected_row_version is not None or expected_status is not None:
+            raise StaleCommunicationsStateError("Outbox row changed before delivery status could be finalized.")
         raise RuntimeError("Outbox row could not be updated")
     return updated
 
@@ -884,7 +1162,7 @@ def reset_outbox_rows_to_pending(
 ) -> dict[str, int]:
     club_id = _require_nonempty(club_id, "club_id")
     normalized_status = str(only_status or "").strip().lower()
-    if normalized_status not in {SEND_STATUS_PENDING, SEND_STATUS_SENT, SEND_STATUS_SKIPPED, SEND_STATUS_ERROR}:
+    if normalized_status not in {SEND_STATUS_PENDING, SEND_STATUS_SENDING, SEND_STATUS_SENT, SEND_STATUS_SKIPPED, SEND_STATUS_ERROR}:
         raise ValueError("Invalid only_status")
 
     query = (
@@ -922,3 +1200,190 @@ def reset_outbox_rows_to_pending(
     reset_count = len(updated_rows)
     failed_count = max(0, len(row_ids) - reset_count)
     return {"matched": len(row_ids), "reset_to_pending": reset_count, "failed": failed_count}
+
+
+def retry_outbox_rows_guarded(
+    supabase,
+    *,
+    club_id: str,
+    items: list[dict[str, Any]],
+    allow_uncertain: bool = False,
+) -> dict[str, Any]:
+    club_id = _require_nonempty(club_id, "club_id")
+    reset_rows: list[dict[str, Any]] = []
+    stale_ids: list[str] = []
+    seen: set[str] = set()
+    eligible: list[tuple[str, int, str]] = []
+    for item in items or []:
+        outbox_id = _require_nonempty((item or {}).get("id"), "outbox id")
+        if outbox_id in seen:
+            continue
+        seen.add(outbox_id)
+        expected_version = _safe_version((item or {}).get("expected_row_version"))
+        current = get_outbox_row(supabase, club_id=club_id, outbox_id=outbox_id)
+        if current is None:
+            stale_ids.append(outbox_id)
+            continue
+        current_status = str(current.get("send_status") or "")
+        if current_status not in {SEND_STATUS_ERROR, SEND_STATUS_SENDING}:
+            stale_ids.append(outbox_id)
+            continue
+        if current_status == SEND_STATUS_SENDING:
+            if not allow_uncertain:
+                raise ValueError("Type RETRY UNCERTAIN EMAILS before resetting any sending row.")
+            last_attempt_at = _utc_datetime(current.get("last_attempt_at"))
+            if last_attempt_at is None:
+                raise ValueError(
+                    "A selected sending row has no claim timestamp. Reconcile it manually before retrying."
+                )
+            retry_after = last_attempt_at + OUTBOX_SEND_LEASE
+            if datetime.now(timezone.utc) < retry_after:
+                raise ValueError(
+                    f"Outbox row {outbox_id} is still inside its 30-minute send lease. "
+                    "Wait for the in-flight request to finish before retrying."
+                )
+        eligible.append((outbox_id, expected_version, current_status))
+
+    if not seen:
+        raise ValueError("At least one outbox row is required")
+
+    # Perform no mutations until every selected row has passed the in-flight
+    # lease check. That prevents a mixed selection from being partially reset.
+    for outbox_id, expected_version, current_status in eligible:
+        updated = _safe_first(
+            supabase.table("player_profile_update_outbox")
+            .update(
+                {
+                    "send_status": SEND_STATUS_PENDING,
+                    "error_text": None,
+                    "provider_message_id": None,
+                    "sent_at": None,
+                }
+            )
+            .eq("club_id", club_id)
+            .eq("id", outbox_id)
+            .eq("send_status", current_status)
+            .eq("row_version", expected_version)
+            .execute()
+        )
+        if updated is None:
+            stale_ids.append(outbox_id)
+        else:
+            reset_rows.append(updated)
+    return {
+        "requested": len(seen),
+        "reset_to_pending": len(reset_rows),
+        "stale": len(stale_ids),
+        "stale_ids": stale_ids,
+        "rows": reset_rows,
+    }
+
+
+def claim_communications_admin_operation(
+    supabase,
+    *,
+    club_id: str,
+    operation_key: str,
+    operation_type: str,
+    request_json: dict[str, Any],
+) -> dict[str, Any]:
+    """Create or validate a request-level idempotency record.
+
+    Reusing a key with changed scope is rejected before digest recomputation or
+    queue writes. A completed retry returns the stored result verbatim.
+    """
+
+    club_id = _require_nonempty(club_id, "club_id")
+    operation_key = _require_nonempty(operation_key, "operation_key")
+    operation_type = _require_nonempty(operation_type, "operation_type")
+    normalized_request = dict(request_json or {})
+
+    def _existing() -> dict[str, Any] | None:
+        return _safe_first(
+            supabase.table("communications_admin_operations")
+            .select("*")
+            .eq("operation_key", operation_key)
+            .limit(1)
+            .execute()
+        )
+
+    existing = _existing()
+    if existing is None:
+        try:
+            existing = _safe_first(
+                supabase.table("communications_admin_operations")
+                .insert(
+                    {
+                        "operation_key": operation_key,
+                        "club_id": club_id,
+                        "operation_type": operation_type,
+                        "request_json": normalized_request,
+                        "status": "started",
+                    }
+                )
+                .execute()
+            )
+        except Exception as exc:
+            if not _is_unique_violation(exc):
+                raise
+            existing = _existing()
+    if existing is None:
+        raise RuntimeError("Communications operation could not be claimed")
+    return validate_communications_admin_operation(
+        existing,
+        club_id=club_id,
+        operation_type=operation_type,
+        request_json=normalized_request,
+    )
+
+
+def validate_communications_admin_operation(
+    operation: dict[str, Any],
+    *,
+    club_id: str,
+    operation_type: str,
+    request_json: dict[str, Any],
+) -> dict[str, Any]:
+    if (
+        str(operation.get("club_id") or "") != _require_nonempty(club_id, "club_id")
+        or str(operation.get("operation_type") or "") != _require_nonempty(operation_type, "operation_type")
+        or dict(operation.get("request_json") or {}) != dict(request_json or {})
+    ):
+        raise ValueError("operation_key was already used for a different communications request")
+    return operation
+
+
+def get_communications_admin_operation(supabase, *, operation_key: str) -> dict[str, Any] | None:
+    return _safe_first(
+        supabase.table("communications_admin_operations")
+        .select("*")
+        .eq("operation_key", _require_nonempty(operation_key, "operation_key"))
+        .limit(1)
+        .execute()
+    )
+
+
+def complete_communications_admin_operation(
+    supabase,
+    *,
+    club_id: str,
+    operation_key: str,
+    result_json: dict[str, Any],
+) -> dict[str, Any]:
+    updated = _safe_first(
+        supabase.table("communications_admin_operations")
+        .update(
+            {
+                "status": "completed",
+                "result_json": dict(result_json or {}),
+                "completed_at": _now_iso(),
+                "updated_at": _now_iso(),
+            }
+        )
+        .eq("operation_key", _require_nonempty(operation_key, "operation_key"))
+        .eq("club_id", _require_nonempty(club_id, "club_id"))
+        .execute()
+    )
+    if updated is None:
+        raise RuntimeError("Communications operation result could not be persisted")
+    return updated

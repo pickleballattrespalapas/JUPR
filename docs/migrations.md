@@ -15,20 +15,38 @@ builds on the partner-link tables provisioned by
 `migrations/20261019_tournament_registration_partner_links.sql` and the canonical
 selection lock protocol already captured under `supabase/migrations/`.
 
-## Current inventory (as of 2026-07-02)
+## Current inventory (as of 2026-07-19)
 
 Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
-- `20260719171000_public_support_intake_guardrails.sql`
 - `20260420000000_verified_player_updates_foundation.sql`
 - `20260424_matches_soft_delete.sql`
 - `20260428090000_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
 - `20260428100000_admin_role_assignments.sql`
 - `20260428101000_admin_activity_log.sql`
+- `20260502120000_replay_jobs.sql`
+- `20260502121500_clubs_config.sql`
+- `20260502133000_public_leaderboards_view.sql`
+- `20260511120000_admin_role_assignments_club_scope.sql`
+- `20260511143000_clubs_saas_onboarding_fields.sql`
+- `20260511170000_worker_run_log.sql`
+- `20260624000000_confirm_tournament_registrations.sql`
 - `20260702080000_live_sessions.sql`
 - `20260702170000_live_sessions_schema_contract.sql`
+- `20260715165000_admin_match_log_duplicate_resolutions.sql`
+- `20260717141224_selection_update_transaction_guards.sql`
+- `20260717142402_selection_relationship_update_lock_scope.sql`
+- `20260718141016_badge_eval_queue_atomic_club_claim.sql`
+- `20260719160821_public_registration_edit_transaction.sql`
+- `20260719171000_public_support_intake_guardrails.sql`
+- `20260719172000_replay_job_idempotency.sql`
+- `20260719182606_communications_outbox_stale_guards.sql`
+- `20260719182921_league_live_domain_contract.sql`
+- `20260719190954_league_live_publish_reconciliation.sql`
+- `20260719193000_admin_player_merge_transactions.sql`
+- `20260719194500_public_partner_pairing_lifecycle.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 
@@ -113,6 +131,8 @@ For schema changes:
 3. Confirm expected table/column/constraint exists in staging.
 4. Deploy the `Test` branch application and run staging smoke checks.
 5. Promote to production only after staging verification; then run reviewed SQL in production.
+
+The communications migration must precede the corresponding API/web release. Verify the four `row_version` columns, the outbox `sending` state, and `replace_verified_update_subscription`; confirm `anon` and `authenticated` cannot access the four server-only tables or execute the replacement RPC.
 
 ## Guardrail for future changes
 

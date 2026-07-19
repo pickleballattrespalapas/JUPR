@@ -486,7 +486,44 @@ def _build_social_spotlight_candidates(social_stats: dict[tuple[str, int | str],
     return candidates
 
 
-def _build_social_around_club(social_skill_stats: dict[str, dict]) -> list[dict]:
+def _build_social_around_club(
+    social_skill_stats: dict[str, dict],
+    events: dict[str, dict] | None = None,
+) -> list[dict]:
+    # Keep the event-level helper contract used by recap parity/regression
+    # callers while the production recap now groups community highlights by
+    # skill bucket. The one-argument form below remains the canonical path.
+    if events is not None:
+        event_rows: list[dict] = []
+        for event_id, event_players in sorted(
+            social_skill_stats.items(),
+            key=lambda item: (
+                str(events.get(item[0], {}).get("event_date") or ""),
+                str(events.get(item[0], {}).get("name") or ""),
+            ),
+        ):
+            candidates = _build_social_spotlight_candidates(event_players)
+            highlights: list[dict] = []
+            standout = (candidates.get("COMMUNITY_STANDOUT_WEEK") or [])[:1]
+            grinder = (candidates.get("SOCIAL_GRIND_WEEK") or [])[:1]
+            if standout:
+                highlights.append({"key": "COMMUNITY_STANDOUT_WEEK", "display": f"Community Standout: {standout[0].display}"})
+            if grinder and (not standout or grinder[0].candidate_id != standout[0].candidate_id):
+                highlights.append({"key": "SOCIAL_GRIND_WEEK", "display": f"Social Grinder: {grinder[0].display}"})
+            if highlights:
+                event = events.get(event_id, {})
+                event_type = str(event.get("event_type") or "round_robin")
+                event_rows.append(
+                    {
+                        "event_id": event_id,
+                        "event_name": str(event.get("name") or "Club Social Event"),
+                        "event_type": event_type,
+                        "event_type_label": "Social Ladder" if event_type == "league" else "Social RR",
+                        "highlights": highlights[:2],
+                    }
+                )
+        return event_rows
+
     rows: list[dict] = []
     for skill_level in SOCIAL_SKILL_BUCKETS:
         skill_players = social_skill_stats.get(skill_level) or {}

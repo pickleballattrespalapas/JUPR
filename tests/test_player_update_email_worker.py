@@ -61,6 +61,8 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "sent": 5,
         "skipped": 2,
         "errors": 1,
+        "stale": 0,
+        "uncertain": 0,
         "email_mode": "dry_run",
     }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+import os
+from typing import Any, Literal
 
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
@@ -15,6 +16,7 @@ from jupr_app.services.admin_weekly_recap_service import (
     list_admin_weekly_recaps,
     publish_admin_weekly_recap,
     save_admin_weekly_recap,
+    StaleWeeklyRecapStateError,
 )
 from services.api.auth import authenticate_bearer, auth_header
 
@@ -25,6 +27,7 @@ class AdminWeeklyRecapGenerateRequest(BaseModel):
     tz_name: str = "America/Mazatlan"
     confirmation_text: str = ""
     source: str = "next_weekly_recap_generate"
+    expected_row_version: int | None = Field(default=None, ge=1)
 
 
 class AdminWeeklyRecapSaveRequest(BaseModel):
@@ -32,14 +35,24 @@ class AdminWeeklyRecapSaveRequest(BaseModel):
     tz_name: str = "America/Mazatlan"
     confirmation_text: str = ""
     source: str = "next_weekly_recap_save"
+    expected_row_version: int | None = Field(default=None, ge=1)
 
 
 class AdminWeeklyRecapPublishRequest(BaseModel):
-    action: str = "publish"
+    action: Literal["publish", "unpublish"] = "publish"
     edits_json: dict[str, Any] | None = None
     tz_name: str = "America/Mazatlan"
     confirmation_text: str = ""
     source: str = "next_weekly_recap_publish"
+    expected_row_version: int | None = Field(default=None, ge=1)
+
+
+def _require_service_role() -> None:
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Weekly Recap Admin requires SUPABASE_SERVICE_ROLE_KEY on FastAPI. Never configure this secret in browser or Vercel public variables.",
+        )
 
 
 def _resolve_weekly_recap_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
@@ -69,6 +82,8 @@ def _resolve_weekly_recap_role_or_403(*, supabase: Any, club_id: str, authorizat
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, StaleWeeklyRecapStateError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -94,6 +109,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_service_role()
         supabase = get_supabase_client()
         _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_weekly_recap_list")
         try:
@@ -111,6 +127,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_service_role()
         supabase = get_supabase_client()
         _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_weekly_recap_detail")
         try:
@@ -128,6 +145,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
@@ -141,6 +159,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 tz_name=payload.tz_name,
                 source=payload.source,
+                expected_row_version=payload.expected_row_version,
             )
         except Exception as exc:
             _handle_common(exc)
@@ -154,6 +173,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
@@ -167,6 +187,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 tz_name=payload.tz_name,
                 source=payload.source,
+                expected_row_version=payload.expected_row_version,
             )
         except Exception as exc:
             _handle_common(exc)
@@ -180,6 +201,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     ) -> dict[str, Any]:
         if not is_admin_weekly_recap_enabled():
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_service_role()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
         try:
@@ -194,6 +216,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 tz_name=payload.tz_name,
                 source=payload.source,
+                expected_row_version=payload.expected_row_version,
             )
         except Exception as exc:
             _handle_common(exc)

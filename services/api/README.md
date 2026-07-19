@@ -96,6 +96,8 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS=1`
 - `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`
+- `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`
+- `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0` keeps Next live delivery blocked independently of the admin UI flag
 - `JUPR_ENABLE_NEXT_ADMIN_TOOLS=1`
 
 Do not enable high-risk workflow flags broadly until the workflow has server-side FastAPI writes, staff-only auth, club scoping, audit attribution, a correction/replay path when rating-adjacent, and Streamlit fallback.
@@ -153,6 +155,13 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /admin/clubs/{club_id}/league-manager/top-players-printable?limit=...` authenticated, read-only previous-calendar-month ranking model
 
 League Manager create, duplicate, lifecycle, settings, and roster mutations fail closed unless FastAPI has `SUPABASE_SERVICE_ROLE_KEY`; the anonymous/publishable key is never accepted as their mutation credential.
+- `GET /admin/clubs/{club_id}/weekly-recap/recaps` and guarded generate/save/publish routes
+- `GET /admin/clubs/{club_id}/player-updates/workspace`
+- `POST /admin/clubs/{club_id}/player-updates/digests/preview` and `/digests/queue`
+- `POST /admin/clubs/{club_id}/player-updates/outbox/send`, `/retry`, and `/delete`
+- `POST /admin/clubs/{club_id}/player-updates/subscriptions/{subscription_id}/replace` and `/deactivate`
+
+The recap and communications admin routes require `SUPABASE_SERVICE_ROLE_KEY` on FastAPI and reject stale versions. Keep email acceptance in `dry_run` or `staging_redirect`; see `docs/communications_parity_runbook.md`.
 
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 

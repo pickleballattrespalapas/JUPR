@@ -11,7 +11,7 @@ function statusText(value?: string | null): string {
 export default async function AdminPlayerUpdatesPage() {
   const clubId = "tres_palapas";
   const { data: status, error } = await getAdminPlayerUpdatesStatus(clubId);
-  const smtpConfigured = Boolean(status?.smtp_status && (status.smtp_status as { configured?: unknown }).configured);
+  const smtpConfigured = Boolean(status?.smtp_configured);
 
   return (
     <section>
@@ -31,7 +31,7 @@ export default async function AdminPlayerUpdatesPage() {
           <article style={cardStyle}><strong>Email mode</strong><br />{status.email_mode || "unknown"}</article>
           <article style={cardStyle}><strong>SMTP</strong><br />{smtpConfigured ? "Configured" : "Not configured"}</article>
           <article style={cardStyle}><strong>Auto post-batch send</strong><br />{status.auto_send_enabled ? "Enabled" : "Disabled"}</article>
-          <article style={cardStyle}><strong>Active subscriptions</strong><br />{status.active_subscription_count ?? "—"}</article>
+          <article style={cardStyle}><strong>Subscription data</strong><br />Sign in to load</article>
         </div>
       ) : null}
 

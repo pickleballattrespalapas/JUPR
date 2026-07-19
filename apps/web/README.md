@@ -48,6 +48,8 @@ Current public and staff-facing routes include:
 - `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, `/admin/league-manager`, and `/admin/league-manager/awards` guarded staff migration surfaces.
 - `/admin/league-manager/print` authenticated browser-print schedule, weekly leaders, configured Top Performers, standings, and attendance roster.
 - `/admin/top-players-printable` authenticated previous-calendar-month Top 50 browser export.
+- `/admin/weekly-recap` guarded full draft preview/print and recap lifecycle surface.
+- `/admin/player-updates` guarded subscription, digest, queue, delivery-history, retry, delete, and replacement workspace.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
 
 ## Environment variables
@@ -145,6 +147,8 @@ NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com
 ```
 
 Do **not** configure `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel.
+
+Weekly Recap Admin and Player Updates Admin receive authenticated FastAPI projections only. Their database service role and SMTP configuration remain on Fly. Follow `docs/communications_parity_runbook.md` for staging flags, safe email modes, recovery, and the deferred manual checklist.
 
 If a Vercel preview build is rate-limited, rerun the preview after quota resets and wait for a fresh green Vercel status before merging frontend PRs.
 

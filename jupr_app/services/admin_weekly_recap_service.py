@@ -25,6 +25,10 @@ ADMIN_WEEKLY_RECAP_SELECT = "*"
 MAX_RECAP_DAYS = 60
 
 
+class StaleWeeklyRecapStateError(ValueError):
+    """Raised when a recap changed after the operator loaded it."""
+
+
 def _truthy_env(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in TRUTHY_ENV_VALUES
 
@@ -101,7 +105,10 @@ def normalize_spotlight_overrides(overrides: dict[str, Any] | None, generated_sp
     for key, value in (overrides or {}).items():
         if key not in normalized or not isinstance(value, dict):
             continue
-        normalized[key]["players"] = list(value.get("players") or normalized[key]["players"])
+        if "players" in value and isinstance(value.get("players"), list):
+            # An explicit empty list means "omit this spotlight". Do not
+            # silently restore the generated selection via truthiness.
+            normalized[key]["players"] = list(value["players"])
         normalized[key]["description"] = _clean_text(value.get("description", normalized[key]["description"]), limit=1000)
         normalized[key]["order"] = int(value.get("order") or normalized[key]["order"])
         normalized[key]["include"] = bool(value.get("include", normalized[key]["include"]))
@@ -121,14 +128,23 @@ def apply_weekly_recap_edits(generated_json: dict[str, Any] | None, edits_json: 
         for key, items in (candidates or {}).items()
     }
     generated_spotlight = recap.get("spotlight", []) or []
-    overrides = normalize_spotlight_overrides(edits.get("spotlight_overrides", {}), generated_spotlight)
+    raw_overrides = edits.get("spotlight_overrides", {}) if isinstance(edits.get("spotlight_overrides", {}), dict) else {}
+    overrides = normalize_spotlight_overrides(raw_overrides, generated_spotlight)
     updated = []
     for key, config in overrides.items():
         if not config.get("include", True):
             continue
         selected_ids = list(config.get("players") or [])[:3]
+        has_explicit_override = key in raw_overrides
+        if has_explicit_override and not selected_ids:
+            # The admin UI defines an explicit blank selection as omission.
+            continue
         selected_options = [candidate_maps.get(key, {}).get(candidate_id) for candidate_id in selected_ids]
         selected_options = [item for item in selected_options if item]
+        if has_explicit_override and len(selected_options) != len(selected_ids):
+            raise StaleWeeklyRecapStateError(
+                "Weekly recap candidates changed. Reload before saving or publishing."
+            )
         if not selected_options:
             fallback = (candidates or {}).get(key) or []
             selected_options = [item for item in fallback[:3] if isinstance(item, dict)]
@@ -166,6 +182,7 @@ def _row_payload(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "published_by": row.get("published_by"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
+        "row_version": int(row.get("row_version") or 1),
     }
 
 
@@ -180,20 +197,43 @@ def _fetch_recap_row(supabase: Any, *, club_id: str, week_start: str) -> dict[st
     )
 
 
-def _upsert_recap_row(supabase: Any, *, club_id: str, week_start: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _upsert_recap_row(
+    supabase: Any,
+    *,
+    club_id: str,
+    week_start: str,
+    payload: dict[str, Any],
+    expected_row_version: int | None = None,
+) -> dict[str, Any]:
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
     clean_payload = {k: v for k, v in payload.items() if v is not None or k in {"published_at", "published_by"}}
     if before:
+        current_version = int(before.get("row_version") or 1)
+        if expected_row_version is None:
+            raise StaleWeeklyRecapStateError("This recap already exists. Load it before overwriting the draft.")
+        if int(expected_row_version) != current_version:
+            raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before saving.")
         row = _first_row(
             supabase.table("weekly_recaps")
             .update({**clean_payload, "updated_at": _now_iso()})
             .eq("club_id", str(club_id))
             .eq("week_start", str(week_start))
+            .eq("row_version", current_version)
             .execute()
         )
-        return row or {**before, **clean_payload}
-    insert_payload = {"id": str(uuid4()), "created_at": _now_iso(), "updated_at": _now_iso(), **clean_payload}
-    row = _first_row(supabase.table("weekly_recaps").insert(insert_payload).execute())
+        if row is None:
+            raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before saving.")
+        return row
+    insert_payload = {"id": str(uuid4()), "created_at": _now_iso(), "updated_at": _now_iso(), "row_version": 1, **clean_payload}
+    try:
+        row = _first_row(supabase.table("weekly_recaps").insert(insert_payload).execute())
+    except Exception as exc:
+        detail = str(exc or "").lower()
+        if "duplicate key" in detail or "unique" in detail:
+            raise StaleWeeklyRecapStateError(
+                "This recap was created by another request. Reload before overwriting the draft."
+            ) from exc
+        raise
     return row or insert_payload
 
 
@@ -208,6 +248,7 @@ def _audit(
     before_json: dict[str, Any] | None = None,
     after_json: dict[str, Any] | None = None,
     source: str,
+    post_mutation: bool = True,
 ) -> list[str]:
     payload = build_activity_payload(
         club_id=str(club_id),
@@ -223,8 +264,72 @@ def _audit(
     )
     write = write_admin_activity_log(supabase, payload)
     if not write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        raise RuntimeError("audit log write required but unavailable")
+        if not post_mutation:
+            raise RuntimeError("Required audit intent could not be persisted; nothing was changed or published.")
+        raise RuntimeError(
+            "The recap may have changed, but its required completion audit could not be persisted. Reload before retrying."
+        )
     return [write.warning] if write.warning else []
+
+
+def _required_audit_intent(
+    supabase: Any,
+    *,
+    club_id: str,
+    actor_email: str,
+    actor_role: str,
+    action_type: str,
+    week_start: str,
+    reviewed_scope: dict[str, Any],
+    source: str,
+) -> None:
+    if not _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
+        return
+    _audit(
+        supabase,
+        club_id=club_id,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type=f"{action_type}_intent",
+        week_start=week_start,
+        after_json={"phase": "intent", "reviewed_scope": reviewed_scope},
+        source=source,
+        post_mutation=False,
+    )
+
+
+def _audit_failure(
+    supabase: Any,
+    *,
+    club_id: str,
+    actor_email: str,
+    actor_role: str,
+    action_type: str,
+    week_start: str,
+    reviewed_scope: dict[str, Any],
+    source: str,
+    error: Exception,
+) -> None:
+    try:
+        _audit(
+            supabase,
+            club_id=club_id,
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=f"{action_type}_failed",
+            week_start=week_start,
+            after_json={
+                "phase": "failed",
+                "reviewed_scope": reviewed_scope,
+                "error_type": type(error).__name__,
+                "error": _clean_text(str(error), limit=500),
+            },
+            source=source,
+        )
+    except Exception:
+        raise RuntimeError(
+            "The recap operation failed or is uncertain, and its required failure audit also failed. Reload before retrying."
+        ) from error
 
 
 def _recap_context(supabase: Any, *, club_id: str) -> SimpleNamespace:
@@ -266,6 +371,7 @@ def _candidates_for_row(supabase: Any, *, club_id: str, week_start: str, week_en
 
 
 def build_admin_weekly_recap_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
+    del supabase, club_id
     if not is_admin_weekly_recap_enabled():
         return {
             "enabled": False,
@@ -273,23 +379,11 @@ def build_admin_weekly_recap_status(supabase: Any | None, *, club_id: str) -> di
             "list_endpoint": None,
             "warnings": ["Next Weekly Recap Admin is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP on FastAPI."],
         }
-    count = 0
-    published_count = 0
-    if supabase is not None:
-        try:
-            rows = _safe_rows(supabase.table("weekly_recaps").select("id,status").eq("club_id", str(club_id)).execute())
-            count = len(rows)
-            published_count = len([row for row in rows if str(row.get("status") or "") == "published"])
-        except Exception:
-            count = 0
-            published_count = 0
     return {
         "enabled": True,
         "status": "ready_for_weekly_recap_admin",
         "list_endpoint": "/admin/clubs/{club_id}/weekly-recap/recaps",
         "generate_endpoint": "/admin/clubs/{club_id}/weekly-recap/generate",
-        "recap_count": count,
-        "published_count": published_count,
         "warnings": [],
     }
 
@@ -300,7 +394,7 @@ def list_admin_weekly_recaps(supabase: Any, *, club_id: str, limit: int = 50) ->
     try:
         rows = _safe_rows(
             supabase.table("weekly_recaps")
-            .select("id,club_id,week_start,week_end,status,published_at,published_by,created_at,updated_at")
+            .select("id,club_id,week_start,week_end,status,published_at,published_by,created_at,updated_at,row_version")
             .eq("club_id", str(club_id))
             .order("week_start", desc=True)
             .limit(max(1, min(int(limit or 50), 200)))
@@ -338,6 +432,7 @@ def generate_admin_weekly_recap(
     confirmation_text: str,
     tz_name: str = "America/Mazatlan",
     source: str = "next_weekly_recap_generate",
+    expected_row_version: int | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
@@ -345,8 +440,11 @@ def generate_admin_weekly_recap(
         raise ValueError(f"Type {CONFIRM_GENERATE} to generate a weekly recap draft.")
     start_date, end_date = _date_range(week_start, week_end)
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=start_date.isoformat())
+    if before and str(before.get("status") or "") == "published":
+        raise ValueError("Published recaps must be explicitly unpublished before regeneration.")
     ctx = _recap_context(supabase, club_id=str(club_id))
     recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
+    candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
     payload = {
         "club_id": str(club_id),
         "week_start": start_date.isoformat(),
@@ -358,19 +456,53 @@ def generate_admin_weekly_recap(
         "published_at": None,
         "published_by": None,
     }
-    row = _upsert_recap_row(supabase, club_id=str(club_id), week_start=start_date.isoformat(), payload=payload)
-    warnings = _audit(
+    reviewed_scope = {
+        "week_start": start_date.isoformat(),
+        "week_end": end_date.isoformat(),
+        "expected_row_version": expected_row_version,
+    }
+    _required_audit_intent(
         supabase,
         club_id=str(club_id),
         actor_email=actor_email,
         actor_role=actor_role,
         action_type="generate_weekly_recap_admin",
         week_start=start_date.isoformat(),
-        before_json={"recap": _row_payload(before)} if before else {},
-        after_json={"recap": _row_payload(row)},
+        reviewed_scope=reviewed_scope,
         source=source,
     )
-    candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
+    try:
+        row = _upsert_recap_row(
+            supabase,
+            club_id=str(club_id),
+            week_start=start_date.isoformat(),
+            payload=payload,
+            expected_row_version=expected_row_version,
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="generate_weekly_recap_admin",
+            week_start=start_date.isoformat(),
+            before_json={"recap": _row_payload(before)} if before else {},
+            after_json={"recap": _row_payload(row)},
+            source=source,
+        )
+    except Exception as exc:
+        _audit_failure(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="generate_weekly_recap_admin",
+            week_start=start_date.isoformat(),
+            reviewed_scope=reviewed_scope,
+            source=source,
+            error=exc,
+        )
+        raise
     return {"ok": True, "mode": "weekly_recap_generate", "recap": _row_payload(row), "candidates": candidates, "warnings": warnings}
 
 
@@ -385,6 +517,7 @@ def save_admin_weekly_recap(
     confirmation_text: str,
     tz_name: str = "America/Mazatlan",
     source: str = "next_weekly_recap_save",
+    expected_row_version: int | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
@@ -393,6 +526,10 @@ def save_admin_weekly_recap(
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
     if before is None:
         raise ValueError("weekly recap not found")
+    if str(before.get("status") or "") == "published":
+        raise ValueError("Published recaps must be explicitly unpublished before saving draft edits.")
+    if expected_row_version is None:
+        raise StaleWeeklyRecapStateError("Weekly recap version is required. Reload before saving.")
     edits = dict(edits_json or {})
     candidates = _candidates_for_row(supabase, club_id=str(club_id), week_start=str(before.get("week_start")), week_end=str(before.get("week_end")), tz_name=tz_name)
     final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
@@ -407,18 +544,53 @@ def save_admin_weekly_recap(
         "published_at": None,
         "published_by": None,
     }
-    row = _upsert_recap_row(supabase, club_id=str(club_id), week_start=str(before.get("week_start")), payload=payload)
-    warnings = _audit(
+    reviewed_scope = {
+        "week_start": str(before.get("week_start")),
+        "expected_row_version": int(expected_row_version),
+        "edit_keys": sorted(edits),
+    }
+    _required_audit_intent(
         supabase,
         club_id=str(club_id),
         actor_email=actor_email,
         actor_role=actor_role,
         action_type="save_weekly_recap_admin",
         week_start=str(before.get("week_start")),
-        before_json={"recap": _row_payload(before)},
-        after_json={"recap": _row_payload(row)},
+        reviewed_scope=reviewed_scope,
         source=source,
     )
+    try:
+        row = _upsert_recap_row(
+            supabase,
+            club_id=str(club_id),
+            week_start=str(before.get("week_start")),
+            payload=payload,
+            expected_row_version=expected_row_version,
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="save_weekly_recap_admin",
+            week_start=str(before.get("week_start")),
+            before_json={"recap": _row_payload(before)},
+            after_json={"recap": _row_payload(row)},
+            source=source,
+        )
+    except Exception as exc:
+        _audit_failure(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="save_weekly_recap_admin",
+            week_start=str(before.get("week_start")),
+            reviewed_scope=reviewed_scope,
+            source=source,
+            error=exc,
+        )
+        raise
     return {"ok": True, "mode": "weekly_recap_save", "recap": _row_payload(row), "candidates": candidates, "warnings": warnings}
 
 
@@ -434,41 +606,106 @@ def publish_admin_weekly_recap(
     confirmation_text: str,
     tz_name: str = "America/Mazatlan",
     source: str = "next_weekly_recap_publish",
+    expected_row_version: int | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
     clean_action = _clean_text(action, limit=40).lower() or "publish"
+    if clean_action not in {"publish", "unpublish"}:
+        raise ValueError("action must be publish or unpublish")
     required = CONFIRM_UNPUBLISH if clean_action == "unpublish" else CONFIRM_PUBLISH
     if _clean_text(confirmation_text, limit=80).upper() != required:
         raise ValueError(f"Type {required} to {clean_action} the weekly recap.")
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
     if before is None:
         raise ValueError("weekly recap not found")
-    edits = dict(edits_json if edits_json is not None else (before.get("edits_json") or {}))
-    candidates = _candidates_for_row(supabase, club_id=str(club_id), week_start=str(before.get("week_start")), week_end=str(before.get("week_end")), tz_name=tz_name)
-    final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
-    is_publish = clean_action != "unpublish"
-    payload = {
-        "club_id": str(club_id),
+    if expected_row_version is None:
+        raise StaleWeeklyRecapStateError("Weekly recap version is required. Reload before publishing.")
+    is_publish = clean_action == "publish"
+    if is_publish and str(before.get("status") or "") == "published":
+        raise StaleWeeklyRecapStateError("This recap is already published. Unpublish it before changing content.")
+    if is_publish:
+        candidates = _candidates_for_row(
+            supabase,
+            club_id=str(club_id),
+            week_start=str(before.get("week_start")),
+            week_end=str(before.get("week_end")),
+            tz_name=tz_name,
+        )
+        edits = dict(edits_json if edits_json is not None else (before.get("edits_json") or {}))
+        final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
+        payload = {
+            "club_id": str(club_id),
+            "week_start": str(before.get("week_start")),
+            "week_end": str(before.get("week_end")),
+            "status": "published",
+            "generated_json": before.get("generated_json") or {},
+            "edits_json": edits,
+            "final_json": final_json,
+            "published_at": _now_iso(),
+            "published_by": str(actor_email or ""),
+        }
+    else:
+        candidates = {}
+        # Unpublish is deliberately status-only. Preserve the exact published
+        # content and edits so rollback cannot silently rewrite history.
+        payload = {
+            "club_id": str(club_id),
+            "week_start": str(before.get("week_start")),
+            "week_end": str(before.get("week_end")),
+            "status": "draft",
+            "generated_json": before.get("generated_json") or {},
+            "edits_json": before.get("edits_json") or {},
+            "final_json": before.get("final_json") or {},
+            "published_at": None,
+            "published_by": None,
+        }
+    action_type = "publish_weekly_recap_admin" if is_publish else "unpublish_weekly_recap_admin"
+    reviewed_scope = {
         "week_start": str(before.get("week_start")),
-        "week_end": str(before.get("week_end")),
-        "status": "published" if is_publish else "draft",
-        "generated_json": before.get("generated_json") or {},
-        "edits_json": edits,
-        "final_json": final_json,
-        "published_at": _now_iso() if is_publish else None,
-        "published_by": str(actor_email or "") if is_publish else None,
+        "action": clean_action,
+        "expected_row_version": int(expected_row_version),
     }
-    row = _upsert_recap_row(supabase, club_id=str(club_id), week_start=str(before.get("week_start")), payload=payload)
-    warnings = _audit(
+    _required_audit_intent(
         supabase,
         club_id=str(club_id),
         actor_email=actor_email,
         actor_role=actor_role,
-        action_type="publish_weekly_recap_admin" if is_publish else "unpublish_weekly_recap_admin",
+        action_type=action_type,
         week_start=str(before.get("week_start")),
-        before_json={"recap": _row_payload(before)},
-        after_json={"recap": _row_payload(row)},
+        reviewed_scope=reviewed_scope,
         source=source,
     )
+    try:
+        row = _upsert_recap_row(
+            supabase,
+            club_id=str(club_id),
+            week_start=str(before.get("week_start")),
+            payload=payload,
+            expected_row_version=expected_row_version,
+        )
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=action_type,
+            week_start=str(before.get("week_start")),
+            before_json={"recap": _row_payload(before)},
+            after_json={"recap": _row_payload(row)},
+            source=source,
+        )
+    except Exception as exc:
+        _audit_failure(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=action_type,
+            week_start=str(before.get("week_start")),
+            reviewed_scope=reviewed_scope,
+            source=source,
+            error=exc,
+        )
+        raise
     return {"ok": True, "mode": "weekly_recap_publish" if is_publish else "weekly_recap_unpublish", "recap": _row_payload(row), "candidates": candidates, "warnings": warnings}
