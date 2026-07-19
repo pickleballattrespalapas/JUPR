@@ -28,6 +28,12 @@ KNOWN_PUBLIC_WEB_HOSTS = {"pickleballclubsandwich.com", "www.pickleballclubsandw
 KNOWN_FASTAPI_BASE_URL = "https://api.juprleagues.com"
 API_BASE_ENV_NAMES = ("JUPR_API_BASE_URL", "STAGING_JUPR_API_BASE_URL", "NEXT_PUBLIC_JUPR_API_BASE_URL")
 WEB_BASE_ENV_NAMES = ("JUPR_WEB_BASE_URL", "STAGING_WEB_BASE_URL", "NEXT_PUBLIC_JUPR_WEB_BASE_URL")
+VERCEL_AUTOMATION_BYPASS_SECRET_ENV = "VERCEL_AUTOMATION_BYPASS_SECRET"
+VERCEL_DEPLOYMENT_HOST_SUFFIX = ".vercel.app"
+VERCEL_BYPASS_HEADERS = (
+    "x-vercel-protection-bypass",
+    "x-vercel-set-bypass-cookie",
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,7 @@ class SmokeCheck:
     method: str = "GET"
     body: str | None = None
     require_json: bool = False
+    allow_vercel_bypass: bool = False
 
 
 @dataclass
@@ -116,15 +123,59 @@ def _read_response_body(response: BinaryIO, *, require_json: bool) -> tuple[byte
     return response.read(PREVIEW_BODY_BYTES), False
 
 
+def _vercel_bypass_headers(check: SmokeCheck) -> dict[str, str]:
+    """Return deployment-protection headers only for explicit HTTPS Vercel web checks."""
+    if not check.allow_vercel_bypass:
+        return {}
+    try:
+        parsed = urllib.parse.urlparse(check.url)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return {}
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or not hostname.endswith(VERCEL_DEPLOYMENT_HOST_SUFFIX)
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        return {}
+    secret = os.getenv(VERCEL_AUTOMATION_BYPASS_SECRET_ENV, "").strip()
+    if not secret:
+        return {}
+    return {
+        "x-vercel-protection-bypass": secret,
+        "x-vercel-set-bypass-cookie": "true",
+    }
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevent deployment-protection credentials from crossing origins on redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201 - urllib override
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is None:
+            return None
+        resolved_url = urllib.parse.urljoin(req.full_url, newurl)
+        if _origin(req.full_url) != _origin(resolved_url):
+            for header, _value in list(redirected.header_items()):
+                if header.lower() in VERCEL_BYPASS_HEADERS:
+                    redirected.remove_header(header)
+        return redirected
+
+
 def _request(check: SmokeCheck, timeout_seconds: float) -> SmokeResult:
     started = time.perf_counter()
     data = check.body.encode("utf-8") if check.body is not None else None
     headers = {"User-Agent": "public-web-smoke/1.0", "Accept": "application/json,text/html,application/xml,text/xml;q=0.9,*/*;q=0.8"}
+    headers.update(_vercel_bypass_headers(check))
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(check.url, data=data, headers=headers, method=check.method)
+    opener = urllib.request.build_opener(_SameOriginRedirectHandler())
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with opener.open(request, timeout=timeout_seconds) as response:
             status = int(response.status)
             body, body_truncated = _read_response_body(response, require_json=check.require_json)
             content_type = response.headers.get("content-type", "")
@@ -163,7 +214,7 @@ def _api_get_checks(api_base_url: str, club_slug: str, club_id: str, *, allow_li
     paths = [
         ("api: health", "/health", (200,)),
         ("api: admin operations status", "/admin/operations/status", (200,)),
-        ("api: admin match log", f"/admin/clubs/{club_id}/match-log", (200,)),
+        ("api: unauthenticated admin match log read blocked", f"/admin/clubs/{club_id}/match-log", (401,)),
         ("api: admin replay", f"/admin/clubs/{club_id}/replay-history", (200,)),
         ("api: admin match uploader", f"/admin/clubs/{club_id}/match-uploader/status", (200,)),
         ("api: admin player editor", f"/admin/clubs/{club_id}/players/editor/status", (200,)),
@@ -171,7 +222,7 @@ def _api_get_checks(api_base_url: str, club_slug: str, club_id: str, *, allow_li
         ("api: admin verified updates", f"/admin/clubs/{club_id}/verified-updates/status", (200,)),
         ("api: admin support requests", f"/admin/clubs/{club_id}/support-requests/status", (200,)),
         ("api: admin league manager", f"/admin/clubs/{club_id}/league-manager/status", (200,)),
-        ("api: admin tournament", f"/admin/clubs/{club_id}/tournaments/status", (200,)),
+        ("api: admin tournament", f"/admin/clubs/{club_id}/tournaments/admin/status", (200,)),
         ("api: admin tournament setup", f"/admin/clubs/{club_id}/tournaments/setup/status", (200,)),
         ("api: admin weekly recap", f"/admin/clubs/{club_id}/weekly-recap/status", (200,)),
         ("api: admin badge diagnostics", f"/admin/clubs/{club_id}/badges/status", (200,)),
@@ -256,8 +307,16 @@ def _web_get_checks(web_base_url: str, club_slug: str) -> list[SmokeCheck]:
         ("web: email preferences", "/email-preferences"),
         ("web: verified updates", "/verified-updates"),
     ]
-    checks = [SmokeCheck(label, _join_url(web_base_url, path), (200,)) for label, path in paths]
-    checks.append(SmokeCheck("web: match explorer preview proxy validation", _join_url(web_base_url, f"/api/clubs/{club_slug}/match-explorer/preview"), (422,), require_json=True))
+    checks = [SmokeCheck(label, _join_url(web_base_url, path), (200,), allow_vercel_bypass=True) for label, path in paths]
+    checks.append(
+        SmokeCheck(
+            "web: match explorer preview proxy validation",
+            _join_url(web_base_url, f"/api/clubs/{club_slug}/match-explorer/preview"),
+            (422,),
+            require_json=True,
+            allow_vercel_bypass=True,
+        )
+    )
     return checks
 
 

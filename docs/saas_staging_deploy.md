@@ -146,7 +146,9 @@ input where supported):
 - `STAGING_WEB_BASE_URL`: the protected Vercel Preview/staging origin;
 - `STAGING_SUPABASE_URL`: the exact isolated Auth origin the Preview must report;
 - `VERCEL_AUTOMATION_BYPASS_SECRET`: Vercel Deployment Protection automation
-  bypass value used only by the browser test.
+  bypass value used only by the public-web and browser smoke request steps. Both
+  clients restrict it to the isolated HTTPS Vercel origin and prevent it from
+  crossing origins on redirects.
 
 The Chromium pass covers the critical public and admin shells, fails on page or
 console errors, refuses known production domains, and asserts the sanitized

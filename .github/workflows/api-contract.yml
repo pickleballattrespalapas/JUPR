@@ -34,4 +34,5 @@ jobs:
             tests/test_api_contract_*.py \
             tests/test_api_admin_score_entry_disabled.py \
             tests/test_check_staging_environment.py \
+            tests/test_smoke_public_web.py \
             tests/test_staging_deployment_config.py

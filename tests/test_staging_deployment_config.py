@@ -65,6 +65,44 @@ def test_only_one_staging_smoke_workflow_remains():
     assert [path.name for path in staging_smokes] == ["staging_smoke.yml"]
 
 
+def test_staging_smoke_validates_exact_isolated_targets_before_requests():
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+
+    validation = workflow.index("- name: Validate staging smoke configuration")
+    checkout = workflow.index("- name: Check out repository")
+    public_smoke = workflow.index("- name: Run public smoke checks")
+    assert validation < checkout < public_smoke
+    assert 'JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"' in workflow
+    assert 'JUPR_EXPECTED_STAGING_WEB_ORIGIN: "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"' in workflow
+    assert "Missing Vercel automation bypass secret" in workflow
+    assert "Unsafe staging API URL" in workflow
+    assert "Unsafe staging web URL" in workflow
+
+
+def test_staging_smoke_scopes_bypass_secret_to_request_steps():
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+    job_env = workflow.split("    steps:\n", 1)[0]
+
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in job_env
+    assert workflow.count(
+        "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}"
+    ) == 3
+
+
+def test_browser_smoke_scopes_bypass_headers_and_disables_protected_traces():
+    config = (ROOT / "apps/web/playwright.config.ts").read_text(encoding="utf-8")
+    spec = (ROOT / "apps/web/e2e/staging.smoke.spec.ts").read_text(encoding="utf-8")
+
+    assert "extraHTTPHeaders" not in config
+    assert 'trace: protectedVercelRun ? "off" : "retain-on-failure"' in config
+    assert "context.route(`${vercelBypassOrigin}/**`" in spec
+    assert 'parsed.hostname.toLowerCase().endsWith(".vercel.app")' in spec
+    assert '"x-vercel-protection-bypass": bypassSecret' in spec
+    assert "route.continue" not in spec
+    assert "maxRedirects: 0" in spec
+    assert "route.fulfill({ response })" in spec
+
+
 def test_schema_copy_workflow_has_explicit_apply_confirmation():
     workflow = (ROOT / ".github/workflows/supabase-schema-copy.yml").read_text(encoding="utf-8")
     assert "APPLY SCHEMA TO STAGING" in workflow
