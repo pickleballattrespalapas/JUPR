@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
-import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse, AdminMatchUploaderWriteResult } from "@/lib/adminMatchUploaderApi";
+import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
+import type { AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse, AdminMatchUploaderWriteResult } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -12,6 +12,7 @@ type Props = {
   leagueStatus: AdminLeagueManagerStatusResponse;
   uploaderStatus: AdminMatchUploaderStatusResponse;
   players: PublicPlayer[];
+  liveDomainStatus: AdminLeagueLiveStatusResponse;
 };
 
 type CourtDraft = { court: string; formatType: string; playerNames: string };
@@ -26,27 +27,18 @@ type LeagueLiveSession = {
   roster_json?: Array<Record<string, unknown>>;
   current_court_state_json?: Array<Record<string, unknown>>;
   notes?: string | null;
-  updated_at?: string | null;
+  updated_at: string | null;
 };
 type LeagueLiveCourt = { round_number: number; court_number: number; format_type: string; player_names: string[]; players_json?: Array<Record<string, unknown>> };
-type LeagueMovementRow = { player_id?: number | null; player_name: string; from_court: number; to_court: number; wins: number; differential: number; points: number; direction: "up" | "down" | "stay" };
-type LeagueMovementPayload = { strategy: string; applied: boolean; next_round: number; rows: LeagueMovementRow[]; next_courts: ReturnType<typeof courtsToPayload> };
+type LeagueLiveRosterRow = { player_id: number; player_name: string; rating?: number | null; status: "active" | "bench"; court_number?: number | null; slot?: number | null; bench_reason?: string | null };
+type LeagueMovementRow = { player_id: number; player_name: string; from_court: number; suggested_court: number; to_court: number; wins: number; differential: number; points: number; direction: "up" | "down" | "stay"; overridden: boolean };
+type LeagueMovementPayload = { strategy: string; authority: "python_fastapi"; applied: boolean; override_applied: boolean; override_reason?: string | null; next_round: number; rows: LeagueMovementRow[]; next_courts: LeagueLiveCourt[]; operation_key: string };
 type LeagueLiveRound = { round_number: number; round_label?: string | null; status: string; submitted_match_count?: number | null; match_date?: string | null; updated_at?: string | null; movement_json?: LeagueMovementPayload | Record<string, unknown> | null };
 type LeagueLiveListResponse = { ok: boolean; sessions: LeagueLiveSession[]; count: number };
 type LeagueLiveDetailResponse = { ok: boolean; session: LeagueLiveSession; rounds: LeagueLiveRound[]; courts: LeagueLiveCourt[] };
-type LeagueLiveWriteResponse = { ok: boolean; session: LeagueLiveSession; round?: LeagueLiveRound; courts?: LeagueLiveCourt[]; warnings?: string[] };
-
-type MovementPlayer = {
-  id?: number | null;
-  name: string;
-  rating?: number | null;
-  fromCourt: number;
-  toCourt: number;
-  slot: number;
-  wins: number;
-  differential: number;
-  points: number;
-};
+type LeagueLiveWriteResponse = { ok: boolean; idempotent_replay?: boolean; operation_key?: string; session: LeagueLiveSession; round?: LeagueLiveRound; courts?: LeagueLiveCourt[]; movement?: LeagueMovementPayload; bench?: LeagueLiveRosterRow[]; warnings?: string[] };
+type LeagueLiveRosterSuggestion = { ok: boolean; roster: LeagueLiveRosterRow[]; active_roster: LeagueLiveRosterRow[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[]; default_bench_player_ids: number[]; bench_override_applied: boolean; court_sizes: number[]; courts: LeagueLiveCourt[]; suggestion_note?: string | null; fingerprint: string };
+type LeagueLiveRoundPlan = { ok: boolean; operation_key: string; session_updated_at: string; round_number: number; next_round: number; ready_to_save: boolean; scored_match_count: number; warnings: string[]; movement: LeagueMovementPayload; next_roster: LeagueLiveRosterRow[]; next_courts: LeagueLiveCourt[]; bench: LeagueLiveRosterRow[]; bench_player_ids: number[] };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -59,25 +51,6 @@ function apiUrl(apiBase: string, path: string): string {
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function cleanName(value: unknown): string {
-  return String(value || "").replace(/\u00a0/g, " ").trim();
-}
-
-function normalizedName(value: unknown): string {
-  return cleanName(value).toLowerCase().replace(/\s+/g, " ");
-}
-
-function rosterToCourtDrafts(detail: AdminLeagueManagerDetailResponse | null): CourtDraft[] {
-  const active = (detail?.roster || []).filter((row) => row.in_league).sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0));
-  if (!active.length) return [{ court: "1", formatType: "4-player", playerNames: "" }];
-  const courts: CourtDraft[] = [];
-  for (let i = 0; i < active.length; i += 4) {
-    const chunk = active.slice(i, i + 4);
-    courts.push({ court: String(courts.length + 1), formatType: "4-player", playerNames: chunk.map((row) => row.player_name).join("\n") });
-  }
-  return courts;
 }
 
 function splitNames(value: string): string[] {
@@ -126,136 +99,6 @@ function activeRosterPayload(detail: AdminLeagueManagerDetailResponse | null) {
   }));
 }
 
-function collectPreviewPlayers(preview: AdminMatchUploaderRoundRobinPreview | null) {
-  const byId = new Map<number, { id: number; name: string; rating?: number | null }>();
-  const byName = new Map<string, { id: number; name: string; rating?: number | null }>();
-  for (const match of (preview?.courts || []).flatMap((court) => court.matches || [])) {
-    for (const player of [...(match.t1 || []), ...(match.t2 || [])]) {
-      const id = Number(player.id);
-      const name = cleanName(player.name);
-      if (!Number.isFinite(id) || !name) continue;
-      const payload = { id, name, rating: player.rating };
-      byId.set(id, payload);
-      byName.set(normalizedName(name), payload);
-    }
-  }
-  return { byId, byName };
-}
-
-function matchPlayers(match: AdminMatchUploaderRoundRobinMatch): number[] {
-  return [match.t1_p1, match.t1_p2, match.t2_p1, match.t2_p2].map(Number).filter((value) => Number.isFinite(value));
-}
-
-function buildMovementPlan(courts: CourtDraft[], preview: AdminMatchUploaderRoundRobinPreview | null, scores: Record<string, ScoreDraft>, nextRound: number): { movement: LeagueMovementPayload; nextCourts: CourtDraft[] } | null {
-  if (!preview?.courts?.length) return null;
-  const { byId, byName } = collectPreviewPlayers(preview);
-  const currentPlayers: MovementPlayer[] = [];
-  const seenPlayerKeys = new Set<string>();
-
-  for (const court of courts) {
-    const courtNumber = Number(court.court) || currentPlayers.length + 1;
-    const names = splitNames(court.playerNames);
-    names.forEach((name, index) => {
-      const lookup = byName.get(normalizedName(name));
-      const key = lookup ? `id:${lookup.id}` : `name:${normalizedName(name)}`;
-      if (seenPlayerKeys.has(key)) return;
-      seenPlayerKeys.add(key);
-      currentPlayers.push({
-        id: lookup?.id ?? null,
-        name: lookup?.name || name,
-        rating: lookup?.rating,
-        fromCourt: courtNumber,
-        toCourt: courtNumber,
-        slot: index + 1,
-        wins: 0,
-        differential: 0,
-        points: 0
-      });
-    });
-  }
-
-  if (!currentPlayers.length) return null;
-  const byPlayerKey = new Map<string, MovementPlayer>();
-  for (const player of currentPlayers) {
-    if (player.id != null) byPlayerKey.set(`id:${player.id}`, player);
-    byPlayerKey.set(`name:${normalizedName(player.name)}`, player);
-  }
-
-  for (const match of (preview.courts || []).flatMap((court) => court.matches || [])) {
-    const score = scores[match.row_id] || { scoreT1: "", scoreT2: "" };
-    if (!scoreIsValid(score)) continue;
-    const s1 = Number(score.scoreT1);
-    const s2 = Number(score.scoreT2);
-    const t1 = [Number(match.t1_p1), Number(match.t1_p2)];
-    const t2 = [Number(match.t2_p1), Number(match.t2_p2)];
-    const team1Won = s1 > s2;
-    const diff = Math.abs(s1 - s2);
-    const update = (playerId: number, won: boolean, points: number, signedDiff: number) => {
-      const player = byPlayerKey.get(`id:${playerId}`) || byPlayerKey.get(`name:${normalizedName(byId.get(playerId)?.name)}`);
-      if (!player) return;
-      player.points += points;
-      player.differential += signedDiff;
-      if (won) player.wins += 1;
-    };
-    t1.forEach((id) => update(id, team1Won, s1, team1Won ? diff : -diff));
-    t2.forEach((id) => update(id, !team1Won, s2, team1Won ? -diff : diff));
-  }
-
-  const courtNumbers = Array.from(new Set(currentPlayers.map((player) => player.fromCourt))).sort((a, b) => a - b);
-  const minCourt = courtNumbers[0] || 1;
-  const maxCourt = courtNumbers[courtNumbers.length - 1] || minCourt;
-  for (const courtNumber of courtNumbers) {
-    const courtPlayers = currentPlayers
-      .filter((player) => player.fromCourt === courtNumber)
-      .sort((left, right) => (right.wins - left.wins) || (right.differential - left.differential) || (right.points - left.points) || (left.slot - right.slot));
-    const top = courtPlayers[0];
-    const bottom = courtPlayers[courtPlayers.length - 1];
-    if (top && courtNumber > minCourt) top.toCourt = courtNumber - 1;
-    if (bottom && courtNumber < maxCourt) bottom.toCourt = courtNumber + 1;
-  }
-
-  const rows: LeagueMovementRow[] = currentPlayers
-    .slice()
-    .sort((left, right) => (left.fromCourt - right.fromCourt) || (left.slot - right.slot))
-    .map((player) => ({
-      player_id: player.id ?? null,
-      player_name: player.name,
-      from_court: player.fromCourt,
-      to_court: player.toCourt,
-      wins: player.wins,
-      differential: player.differential,
-      points: player.points,
-      direction: player.toCourt < player.fromCourt ? "up" : player.toCourt > player.fromCourt ? "down" : "stay"
-    }));
-
-  const formatByCourt = new Map(courts.map((court) => [Number(court.court), court.formatType]));
-  const grouped = new Map<number, MovementPlayer[]>();
-  for (const player of currentPlayers) {
-    const bucket = grouped.get(player.toCourt) || [];
-    bucket.push(player);
-    grouped.set(player.toCourt, bucket);
-  }
-  const nextCourts: CourtDraft[] = Array.from(grouped.entries())
-    .sort(([left], [right]) => left - right)
-    .map(([courtNumber, playersForCourt]) => ({
-      court: String(courtNumber),
-      formatType: formatByCourt.get(courtNumber) || "4-player",
-      playerNames: playersForCourt
-        .sort((left, right) => (left.fromCourt - right.fromCourt) || (left.slot - right.slot) || left.name.localeCompare(right.name))
-        .map((player) => player.name)
-        .join("\n")
-    }));
-
-  const movement: LeagueMovementPayload = {
-    strategy: "top_up_bottom_down",
-    applied: rows.some((row) => row.direction !== "stay"),
-    next_round: nextRound,
-    rows,
-    next_courts: courtsToPayload(nextCourts, nextRound)
-  };
-  return { movement, nextCourts };
-}
-
 function movementSummary(movement?: LeagueMovementPayload | Record<string, unknown> | null): string {
   if (!movement || typeof movement !== "object") return "—";
   const rows = Array.isArray((movement as LeagueMovementPayload).rows) ? (movement as LeagueMovementPayload).rows : [];
@@ -263,7 +106,7 @@ function movementSummary(movement?: LeagueMovementPayload | Record<string, unkno
   return moved ? `${moved} move(s)` : "No movement";
 }
 
-export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players }: Props) {
+export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [leagues, setLeagues] = useState<string[]>([]);
   const [leagueName, setLeagueName] = useState("");
@@ -273,8 +116,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [roundLabel, setRoundLabel] = useState("Round 1");
   const [matchDate, setMatchDate] = useState(todayIso());
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
+  const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
   const [liveSessions, setLiveSessions] = useState<LeagueLiveSession[]>([]);
   const [sessionId, setSessionId] = useState("");
+  const [sessionUpdatedAt, setSessionUpdatedAt] = useState("");
   const [sessionStatus, setSessionStatus] = useState("active");
   const [sessionNotes, setSessionNotes] = useState("");
   const [createConfirm, setCreateConfirm] = useState("");
@@ -283,17 +128,28 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
   const [courts, setCourts] = useState<CourtDraft[]>([{ court: "1", formatType: "4-player", playerNames: "" }]);
   const [preview, setPreview] = useState<AdminMatchUploaderRoundRobinPreview | null>(null);
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
+  const [rosterSuggestion, setRosterSuggestion] = useState<LeagueLiveRosterSuggestion | null>(null);
+  const [movementPlan, setMovementPlan] = useState<LeagueLiveRoundPlan | null>(null);
+  const [movementPlanStale, setMovementPlanStale] = useState(false);
+  const [movementOverrides, setMovementOverrides] = useState<Record<number, string>>({});
+  const [overrideReason, setOverrideReason] = useState("");
+  const [rosterAction, setRosterAction] = useState<"none" | "add" | "substitute">("none");
+  const [incomingPlayerId, setIncomingPlayerId] = useState("");
+  const [replacedPlayerId, setReplacedPlayerId] = useState("");
+  const [benchOverrideIds, setBenchOverrideIds] = useState<number[]>([]);
+  const [benchOverrideReason, setBenchOverrideReason] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const currentRound = Math.max(1, Number(roundNumber) || 1);
   const safeTotalRounds = Math.max(currentRound, Number(totalRounds) || currentRound);
-  const nextRound = Math.min(currentRound + 1, safeTotalRounds);
   const playerOptions = useMemo(() => players.map((player) => player.name).filter(Boolean).sort((a, b) => a.localeCompare(b)), [players]);
+  const rosterPlayerIds = useMemo(() => new Set(sessionRoster.map((row) => Number(row.player_id))), [sessionRoster]);
+  const incomingPlayerOptions = useMemo(() => players.filter((player) => !rosterPlayerIds.has(Number(player.id))).sort((a, b) => a.name.localeCompare(b.name)), [players, rosterPlayerIds]);
+  const activeSessionRoster = useMemo(() => sessionRoster.filter((row) => row.status === "active"), [sessionRoster]);
   const allPreviewMatches = (preview?.courts || []).flatMap((court) => court.matches || []);
   const validScoreCount = allPreviewMatches.filter((match) => scoreIsValid(scores[match.row_id] || { scoreT1: "", scoreT2: "" })).length;
-  const movementPlan = useMemo(() => buildMovementPlan(courts, preview, scores, nextRound), [courts, preview, scores, nextRound]);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -309,6 +165,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
 
   function applySession(sessionRow: LeagueLiveSession, courtsRows: LeagueLiveCourt[] = [], rounds: LeagueLiveRound[] = []) {
     setSessionId(sessionRow.id);
+    setSessionUpdatedAt(sessionRow.updated_at || "");
     setLeagueName(sessionRow.league_name);
     setWeekTag(sessionRow.week_tag || "Week 1");
     setSessionStatus(sessionRow.status || "active");
@@ -316,10 +173,48 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setRoundNumber(String(sessionRow.current_round || 1));
     setRoundLabel(`Round ${sessionRow.current_round || 1}`);
     setSessionNotes(sessionRow.notes || "");
+    setSessionRoster((sessionRow.roster_json || []) as LeagueLiveRosterRow[]);
     setRoundHistory(rounds || []);
     setCourts(courtsFromPersisted(courtsRows, sessionRow.current_round || 1, sessionRow.current_court_state_json || []));
     setPreview(null);
     setScores({});
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    setMovementOverrides({});
+    setBenchOverrideIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).filter((row) => row.status === "bench").map((row) => Number(row.player_id)));
+  }
+
+  function rosterForWrite(): Array<Record<string, unknown>> {
+    return sessionRoster.length ? sessionRoster : activeRosterPayload(detail);
+  }
+
+  function markPlanStale() {
+    if (movementPlan) setMovementPlanStale(true);
+  }
+
+  async function requestRosterSuggestion(
+    leagueDetail: AdminLeagueManagerDetailResponse,
+    requestedBenchIds: number[] = [],
+    requestedBenchReason = ""
+  ): Promise<LeagueLiveRosterSuggestion> {
+    const payload = await requestJson<LeagueLiveRosterSuggestion>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/roster-suggestion`, {
+      method: "POST",
+      body: JSON.stringify({
+        roster: activeRosterPayload(leagueDetail),
+        bench_player_ids: requestedBenchIds,
+        bench_override_reason: requestedBenchReason || null,
+        round_number: currentRound
+      })
+    });
+    setRosterSuggestion(payload);
+    setSessionRoster(payload.roster || []);
+    setBenchOverrideIds(payload.bench_player_ids || []);
+    setCourts(courtsFromPersisted(payload.courts || [], currentRound));
+    setPreview(null);
+    setScores({});
+    setMovementPlan(null);
+    setMovementPlanStale(false);
+    return payload;
   }
 
   async function loadLeagues() {
@@ -362,12 +257,27 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     try {
       const payload = await requestJson<AdminLeagueManagerDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/leagues/${encodeURIComponent(leagueName)}`);
       setDetail(payload);
-      setCourts(rosterToCourtDrafts(payload));
-      setPreview(null);
-      setScores({});
-      setMessage("League roster loaded into court draft.");
+      const suggestion = await requestRosterSuggestion(payload);
+      setMessage(`Python suggested ${suggestion.courts.length} court(s) and ${suggestion.bench.length} bench player(s). Review before creating the session.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load league detail.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshRosterSuggestion() {
+    if (!detail) {
+      setMessage("Load a league roster before requesting another Python roster suggestion.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const suggestion = await requestRosterSuggestion(detail, benchOverrideIds, benchOverrideReason);
+      setMessage(`Python refreshed ${suggestion.courts.length} court(s); ${suggestion.bench.length} player(s) are benched.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to refresh the Python roster suggestion.");
     } finally {
       setBusy(false);
     }
@@ -388,8 +298,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           week_tag: weekTag,
           total_rounds: safeTotalRounds,
           current_round: currentRound,
-          roster: activeRosterPayload(detail),
+          roster: rosterForWrite(),
           courts: courtsToPayload(courts, currentRound),
+          bench_player_ids: benchOverrideIds,
+          bench_override_reason: benchOverrideReason || null,
           notes: sessionNotes,
           confirmation_text: createConfirm,
           source: "next_league_live_session_create"
@@ -439,9 +351,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           week_tag: weekTag,
           total_rounds: safeTotalRounds,
           current_round: currentRound,
-          roster: activeRosterPayload(detail),
+          roster: rosterForWrite(),
           courts: courtsToPayload(courts, currentRound),
+          bench_player_ids: benchOverrideIds,
+          bench_override_reason: benchOverrideReason || null,
           notes: sessionNotes,
+          expected_updated_at: sessionUpdatedAt,
           confirmation_text: saveConfirm,
           source: "next_league_live_session_snapshot"
         })
@@ -460,18 +375,21 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     setCourts((current) => current.map((row, idx) => idx === index ? { ...row, ...patch } : row));
     setPreview(null);
     setScores({});
+    markPlanStale();
   }
 
   function addCourt() {
     setCourts((current) => [...current, { court: String(current.length + 1), formatType: "4-player", playerNames: "" }]);
     setPreview(null);
     setScores({});
+    markPlanStale();
   }
 
   function removeCourt(index: number) {
     setCourts((current) => current.filter((_, idx) => idx !== index).map((row, idx) => ({ ...row, court: String(idx + 1) })));
     setPreview(null);
     setScores({});
+    markPlanStale();
   }
 
   async function generatePreview() {
@@ -487,6 +405,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       const nextScores: Record<string, ScoreDraft> = {};
       for (const match of (payload.courts || []).flatMap((court) => court.matches || [])) nextScores[match.row_id] = { scoreT1: "", scoreT2: "" };
       setScores(nextScores);
+      setMovementPlan(null);
+      setMovementPlanStale(false);
+      setMovementOverrides({});
       if (payload.missing_players?.length) setMessage(`Missing players: ${payload.missing_players.join(", ")}`);
       else setMessage(`Generated ${payload.match_count || 0} match slot(s). Save the session snapshot before leaving this page.`);
     } catch (error) {
@@ -496,8 +417,84 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  async function persistSubmittedRound(matches: Array<Record<string, unknown>>, submitResult: AdminMatchUploaderWriteResult, movement: LeagueMovementPayload | null) {
+  function buildScoredMatches(): Array<Record<string, unknown>> {
+    return allPreviewMatches
+      .filter((match) => scoreIsValid(scores[match.row_id] || { scoreT1: "", scoreT2: "" }))
+      .map((match) => ({
+        date: matchDate,
+        league: leagueName,
+        week_tag: weekTag,
+        match_type: "League Manager Live",
+        context_type: "league_live_session",
+        context_id: `${sessionId}:round-${currentRound}:court-${match.court}:match-${match.match_index}`,
+        court: match.court,
+        t1_p1: match.t1_p1,
+        t1_p2: match.t1_p2,
+        t2_p1: match.t2_p1,
+        t2_p2: match.t2_p2,
+        score_t1: Number(scores[match.row_id]?.scoreT1 || 0),
+        score_t2: Number(scores[match.row_id]?.scoreT2 || 0)
+      }));
+  }
+
+  function movementOverridePayload(): Array<{ player_id: number; to_court: number }> {
+    return Object.entries(movementOverrides)
+      .filter(([, toCourt]) => Number(toCourt) > 0)
+      .map(([playerId, toCourt]) => ({ player_id: Number(playerId), to_court: Number(toCourt) }));
+  }
+
+  function rosterChangePayload(): Record<string, unknown> | null {
+    if (rosterAction === "none") return null;
+    const player = players.find((row) => Number(row.id) === Number(incomingPlayerId));
+    if (!player) throw new Error("Select a valid incoming player before previewing movement.");
+    if (rosterAction === "substitute" && !replacedPlayerId) throw new Error("Select the player being replaced before previewing movement.");
+    return {
+      action: rosterAction,
+      replaced_player_id: rosterAction === "substitute" ? Number(replacedPlayerId) : null,
+      player: { player_id: Number(player.id), player_name: player.name, rating: player.rating ?? 1200 }
+    };
+  }
+
+  async function previewPythonMovement() {
+    if (!sessionId || !sessionUpdatedAt) {
+      setMessage("Create or reload the persisted session before previewing Python movement.");
+      return;
+    }
+    const matches = buildScoredMatches();
+    if (!matches.length) {
+      setMessage("Enter at least one valid non-tied score before previewing Python movement.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<LeagueLiveRoundPlan>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(currentRound))}/plan`, {
+        method: "POST",
+        body: JSON.stringify({
+          expected_updated_at: sessionUpdatedAt,
+          matches,
+          courts: courtsToPayload(courts, currentRound),
+          movement_overrides: movementOverridePayload(),
+          override_reason: overrideReason || null,
+          roster_change: rosterChangePayload(),
+          bench_player_ids: benchOverrideIds,
+          bench_override_reason: benchOverrideReason || null
+        })
+      });
+      setMovementPlan(payload);
+      setMovementPlanStale(false);
+      setMessage(`Python-authoritative plan ${payload.operation_key.slice(0, 12)}… is ready for Round ${payload.next_round}.`);
+    } catch (error) {
+      setMovementPlanStale(true);
+      setMessage(error instanceof Error ? error.message : "Unable to preview Python court movement.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function persistSubmittedRound(matches: Array<Record<string, unknown>>, submitResult: AdminMatchUploaderWriteResult) {
     if (!sessionId) return null;
+    if (!movementPlan || movementPlanStale) throw new Error("Preview the current Python movement plan before saving this round.");
     return requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/rounds/${encodeURIComponent(String(currentRound))}`, {
       method: "POST",
       body: JSON.stringify({
@@ -505,33 +502,19 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         match_date: matchDate,
         preview: preview || {},
         matches,
-        movement: movement || {},
+        movement_overrides: movementOverridePayload(),
+        override_reason: overrideReason || null,
+        roster_change: rosterChangePayload(),
+        bench_player_ids: benchOverrideIds,
+        bench_override_reason: benchOverrideReason || null,
+        expected_updated_at: sessionUpdatedAt,
+        expected_operation_key: movementPlan.operation_key,
         submitted_match_count: submitResult.submitted_count ?? matches.length,
         submitted_match_ids: submitResult.feedback?.latest_match_id ? [submitResult.feedback.latest_match_id] : [],
         courts: courtsToPayload(courts, currentRound),
         advance_after_save: true,
         confirmation_text: "SAVE ROUND",
         source: "next_league_live_round_persist"
-      })
-    });
-  }
-
-  async function saveNextRoundMovementSnapshot(savedSession: LeagueLiveSession, nextCourts: CourtDraft[]) {
-    if (!sessionId || !nextCourts.length) return null;
-    const savedCurrentRound = Number(savedSession.current_round || currentRound);
-    if (savedCurrentRound <= currentRound) return null;
-    return requestJson<LeagueLiveWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live-sessions/${encodeURIComponent(sessionId)}/snapshot`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        status: savedSession.status || sessionStatus,
-        week_tag: weekTag,
-        total_rounds: Number(savedSession.total_rounds || safeTotalRounds),
-        current_round: savedCurrentRound,
-        roster: activeRosterPayload(detail),
-        courts: courtsToPayload(nextCourts, savedCurrentRound),
-        notes: sessionNotes,
-        confirmation_text: "SAVE SESSION",
-        source: "next_league_live_movement_snapshot"
       })
     });
   }
@@ -545,37 +528,26 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       setMessage("Type SUBMIT LEAGUE ROUND to publish these scored league matches.");
       return;
     }
-    const matches = allPreviewMatches
-      .filter((match) => scoreIsValid(scores[match.row_id] || { scoreT1: "", scoreT2: "" }))
-      .map((match) => ({
-        date: matchDate,
-        league: leagueName,
-        week_tag: weekTag,
-        match_type: "League Manager Live",
-        context_type: "league_live_session",
-        context_id: `${sessionId}:round-${currentRound}:court-${match.court}:match-${match.match_index}`,
-        t1_p1: match.t1_p1,
-        t1_p2: match.t1_p2,
-        t2_p1: match.t2_p1,
-        t2_p2: match.t2_p2,
-        score_t1: Number(scores[match.row_id]?.scoreT1 || 0),
-        score_t2: Number(scores[match.row_id]?.scoreT2 || 0)
-      }));
+    const matches = buildScoredMatches();
     if (!matches.length) {
       setMessage("Enter at least one valid non-tied score before submitting.");
+      return;
+    }
+    if (!movementPlan || movementPlanStale) {
+      setMessage("Preview the current Python movement plan before submitting. Any score, roster, bench, or override change makes the previous plan stale.");
       return;
     }
     setBusy(true);
     setMessage(null);
     try {
-      const plannedMovement = movementPlan?.movement || null;
+      const plannedMovement = movementPlan.movement;
       const payload = await requestJson<AdminMatchUploaderWriteResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/batch`, {
         method: "POST",
         body: JSON.stringify({ matches, source: "next_league_manager_live_submit" })
       });
-      const saved = await persistSubmittedRound(matches, payload, plannedMovement);
+      const saved = await persistSubmittedRound(matches, payload);
       if (saved?.session) {
-        await saveNextRoundMovementSnapshot(saved.session, movementPlan?.nextCourts || []);
+        applySession(saved.session, saved.courts || [], [...roundHistory, ...(saved.round ? [saved.round] : [])]);
         setRoundNumber(String(saved.session.current_round || currentRound));
         setRoundLabel(`Round ${saved.session.current_round || currentRound}`);
       }
@@ -592,15 +564,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
     }
   }
 
-  if (!leagueStatus.enabled || !uploaderStatus.enabled) {
+  if (!leagueStatus.enabled || !uploaderStatus.enabled || !liveDomainStatus.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>League Live is disabled</h2>
-        <p style={{ color: "#475569" }}>Enable both League Manager and Match Uploader on FastAPI before using League Live round entry.</p>
+        <p style={{ color: "#475569" }}>League Live fails closed until League Manager, Match Uploader, the Python Live domain flag, and FastAPI service-role storage are all ready. Keep using the Streamlit League Manager fallback meanwhile.</p>
         <ul style={{ color: "#475569" }}>
           <li>League Manager: {leagueStatus.status}</li>
           <li>Match Uploader: {uploaderStatus.status}</li>
+          <li>Python Live domain: {liveDomainStatus.status}</li>
+          <li>Service role: {liveDomainStatus.service_role_configured ? "configured on FastAPI" : "not configured"}</li>
         </ul>
+        <p style={{ color: "#475569" }}>Required staging flag: <code>JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=true</code></p>
       </article>
     );
   }
@@ -610,6 +585,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>Admin session</h2>
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
+        <p style={{ color: "#166534" }}><strong>Movement authority:</strong> {liveDomainStatus.movement_authority === "python_fastapi" ? "Python / FastAPI" : liveDomainStatus.movement_authority || "unavailable"}. The browser displays plans but never ranks players.</p>
+        <p style={{ color: "#475569" }}><strong>Recovery:</strong> Streamlit League Manager remains the fallback until this staging workflow is manually accepted.</p>
         {sessionLoading ? <p>Checking session…</p> : null}
         {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
       </article>
@@ -642,6 +619,32 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
           <label>Create confirmation<br /><input value={createConfirm} onChange={(event) => setCreateConfirm(event.target.value)} placeholder="CREATE LIVE SESSION" style={inputStyle} /></label>
           <button type="button" onClick={createSession} disabled={busy || !leagueName} style={buttonStyle}>Create persisted session</button>
         </div>
+        {rosterSuggestion ? (
+          <section style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
+            <h3 style={{ marginTop: 0 }}>Python roster and bench suggestion</h3>
+            <p style={{ color: "#475569" }}>Uncheck or check bench assignments, explain any non-default choice, then ask Python to validate and rebuild the courts.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.35rem" }}>
+              {rosterSuggestion.roster.map((row) => (
+                <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={benchOverrideIds.includes(Number(row.player_id))}
+                    onChange={(event) => {
+                      setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id)));
+                      markPlanStale();
+                    }}
+                  />
+                  Bench {row.player_name}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
+              <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} placeholder="Required when changing Python's default bench" style={inputStyle} /></label>
+              <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh Python roster suggestion</button>
+            </div>
+            <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
+          </section>
+        ) : null}
         {sessionId ? <p style={{ color: "#475569" }}><strong>Active persisted session:</strong> {sessionId}</p> : <p style={{ color: "#92400e" }}>Create or resume a persisted session before submitting official scores.</p>}
         {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("missing") || message.toLowerCase().includes("type") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
@@ -663,7 +666,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
         <p><button type="button" onClick={addCourt} style={ghostButtonStyle}>Add court</button> <button type="button" onClick={generatePreview} disabled={busy || !leagueName} style={buttonStyle}>Generate match slots</button></p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "0.75rem", alignItems: "end" }}>
           <label>Save snapshot confirmation<br /><input value={saveConfirm} onChange={(event) => setSaveConfirm(event.target.value)} placeholder="SAVE SESSION" style={inputStyle} /></label>
-          <button type="button" onClick={saveSessionSnapshot} disabled={busy || !sessionId} style={ghostButtonStyle}>Save session snapshot</button>
+          <button type="button" onClick={saveSessionSnapshot} disabled={busy || !sessionId || !sessionUpdatedAt} style={ghostButtonStyle}>Save session snapshot</button>
         </div>
       </article>
 
@@ -682,7 +685,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
       {preview?.courts?.length ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>3. Enter scores</h2>
-          <p style={{ color: "#475569" }}>Only rows with valid non-tied scores will be submitted. After submit, the session saves movement using top-up/bottom-down court logic for the next round.</p>
+          <p style={{ color: "#475569" }}>Only rows with valid non-tied scores will be submitted. FastAPI/Python recomputes all round statistics and top-up/bottom-down movement; no browser-calculated movement is accepted.</p>
           <div style={{ display: "grid", gap: "0.75rem" }}>
             {(preview.courts as AdminMatchUploaderRoundRobinCourt[]).map((court) => (
               <section key={court.court} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
@@ -690,22 +693,47 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, leagueStatus, up
                 {(court.matches || []).map((match) => (
                   <div key={match.row_id} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px", gap: "0.75rem", alignItems: "center", borderTop: "1px solid #f1f5f9", padding: "0.5rem 0" }}>
                     <div><strong>{match.label}</strong><br />{match.t1.map((p) => p.name).join(" / ")} vs {match.t2.map((p) => p.name).join(" / ")}</div>
-                    <input value={scores[match.row_id]?.scoreT1 || ""} onChange={(event) => setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } }))} placeholder="Team 1" style={inputStyle} />
-                    <input value={scores[match.row_id]?.scoreT2 || ""} onChange={(event) => setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } }))} placeholder="Team 2" style={inputStyle} />
+                    <input value={scores[match.row_id]?.scoreT1 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT1: event.target.value } })); markPlanStale(); }} placeholder="Team 1" style={inputStyle} />
+                    <input value={scores[match.row_id]?.scoreT2 || ""} onChange={(event) => { setScores((current) => ({ ...current, [match.row_id]: { ...(current[match.row_id] || { scoreT1: "", scoreT2: "" }), scoreT2: event.target.value } })); markPlanStale(); }} placeholder="Team 2" style={inputStyle} />
                   </div>
                 ))}
               </section>
             ))}
           </div>
           <p style={{ color: "#475569" }}>Valid scored matches: {validScoreCount} / {allPreviewMatches.length}</p>
+          <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
+            <h3 style={{ marginTop: 0 }}>Next-round roster change</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
+              <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} style={inputStyle}><option value="none">No roster change</option><option value="add">Add player</option><option value="substitute">Substitute player</option></select></label>
+              {rosterAction !== "none" ? <label>Incoming player<br /><select value={incomingPlayerId} onChange={(event) => { setIncomingPlayerId(event.target.value); markPlanStale(); }} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</select></label> : null}
+              {rosterAction === "substitute" ? <label>Replace active player<br /><select value={replacedPlayerId} onChange={(event) => { setReplacedPlayerId(event.target.value); markPlanStale(); }} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</select></label> : null}
+            </div>
+            {sessionRoster.length ? (
+              <details style={{ marginTop: "0.75rem" }}>
+                <summary>Review next-round bench assignments</summary>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem", marginTop: "0.5rem" }}>
+                  {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} /> Bench {row.player_name}</label>)}
+                </div>
+                <label style={{ display: "block", marginTop: "0.5rem" }}>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); markPlanStale(); }} placeholder="Required for a non-default bench" style={inputStyle} /></label>
+              </details>
+            ) : null}
+          </section>
           {movementPlan ? (
             <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "0.75rem" }}>
-              <strong>Next-round movement preview:</strong> {movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "no court movement required"} for Round {movementPlan.movement.next_round}.
-              {movementPlan.movement.applied ? <ul style={{ color: "#475569", marginBottom: 0 }}>{movementPlan.movement.rows.filter((row) => row.direction !== "stay").map((row) => <li key={`${row.player_name}-${row.from_court}-${row.to_court}`}>{row.player_name}: Court {row.from_court} → Court {row.to_court}</li>)}</ul> : null}
+              <strong>Python next-round movement plan:</strong> {movementPlan.movement.applied ? `${movementPlan.movement.rows.filter((row) => row.direction !== "stay").length} player movement(s)` : "no court movement required"} for Round {movementPlan.movement.next_round}.
+              <p style={{ color: movementPlanStale ? "#b91c1c" : "#166534" }}>{movementPlanStale ? "This plan is stale. Preview Python movement again before submitting." : `Verified operation key ${movementPlan.operation_key.slice(0, 16)}…`}</p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th align="left">Player</th><th align="right">Wins</th><th align="right">Diff</th><th align="left">From</th><th align="left">Python</th><th align="left">Final target</th></tr></thead>
+                  <tbody>{movementPlan.movement.rows.map((row) => <tr key={row.player_id}><td>{row.player_name}</td><td align="right">{row.wins}</td><td align="right">{row.differential}</td><td>Court {row.from_court}</td><td>Court {row.suggested_court}</td><td><select aria-label={`Final court for ${row.player_name}`} value={movementOverrides[row.player_id] || String(row.to_court)} onChange={(event) => { setMovementOverrides((current) => ({ ...current, [row.player_id]: event.target.value })); setMovementPlanStale(true); }} style={inputStyle}>{courts.map((court) => <option key={court.court} value={court.court}>Court {court.court}</option>)}</select></td></tr>)}</tbody>
+                </table>
+              </div>
+              <label style={{ display: "block", marginTop: "0.75rem" }}>Manual movement override reason<br /><input value={overrideReason} onChange={(event) => { setOverrideReason(event.target.value); markPlanStale(); }} placeholder="At least 10 characters when changing a Python target" style={inputStyle} /></label>
             </article>
           ) : null}
+          <p><button type="button" onClick={previewPythonMovement} disabled={busy || !validScoreCount || !sessionId || !sessionUpdatedAt} style={ghostButtonStyle}>{busy ? "Planning…" : "Preview Python movement"}</button></p>
           <label>Confirmation<br /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="SUBMIT LEAGUE ROUND" style={inputStyle} /></label>
-          <button type="button" onClick={submitRound} disabled={busy || !validScoreCount || !sessionId} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Submitting…" : "Submit scored league round"}</button>
+          <button type="button" onClick={submitRound} disabled={busy || !validScoreCount || !sessionId || !movementPlan || movementPlanStale} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Submitting…" : "Submit scored league round"}</button>
         </article>
       ) : null}
     </div>

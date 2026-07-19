@@ -27,6 +27,7 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - League print output combines schedule, roster, standings, weekly rating-gain and win leaders, and configured season Top Performers. Stored rating snapshots are authoritative; Python rating replay is the explicit fallback when a scored row lacks complete snapshots.
 - Top Active Players matches the Streamlit export policy: active players only, at least 10 scored games in the previous UTC calendar month, ranked by current JUPR with games/wins as deterministic tie-breakers.
 - Stored Supabase admin session for the closed-club staging pilot.
+- Python-authoritative League Live roster/bench suggestion, round planning, deterministic movement, reviewed overrides, and resumable next-round state at `/admin/league-manager/live`.
 
 ## Runtime flag
 
@@ -34,6 +35,7 @@ The workflow is disabled unless the FastAPI runtime enables:
 
 ```text
 JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1
+JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=1  # staging pilot only
 ```
 
 League Awards writes have a separate staging-first gate and require the FastAPI service-role credential:
@@ -53,7 +55,7 @@ When enabled, League Manager reads and writes require a stored Supabase admin se
 
 The browser sends admin reads and guarded writes to FastAPI. FastAPI keeps club scope, permission checks, audit attribution, and league read-model normalization in Python.
 
-No browser-side code writes directly to Supabase tables and no league movement, schedule generation, score submission, award minting, or rating logic is implemented in TypeScript.
+No browser-side code writes directly to Supabase tables and no league movement, schedule generation, score submission, award minting, or rating logic is implemented in TypeScript. League Live additionally requires `SUPABASE_SERVICE_ROLE_KEY` on FastAPI; its Supabase tables revoke browser roles.
 
 Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. The publishable/anonymous key can never be used as a mutation fallback. Supabase service/secret credentials remain server-only and are never exposed through `NEXT_PUBLIC_*` variables.
 
@@ -73,8 +75,10 @@ Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` o
 - Settings, roster, and lifecycle writes reject inconsistent `status`/`is_active` pairs; lifecycle compare-and-set also matches both values before updating, so stale or corrupt state cannot silently mutate.
 - Staging requires successful API audit logging. Lifecycle and settings mutations are rolled back if their required audit write fails; Streamlit remains the production fallback.
 - Rating, match, movement, and award calculations remain in Python services.
+- League Live snapshots use `expected_updated_at`; round saves recompute the Python plan and require its `expected_operation_key`. Manual movement and bench overrides require server validation and a reason.
+- The canonical League Live table contract is `supabase/migrations/20260719182921_league_live_domain_contract.sql`. Apply it to staging before enabling the Live domain flag.
 
 ## Follow-up slices
 
-- Validate draft create/duplicate, live rounds, court movement, and Match Log/Replay recovery against isolated staging data. League Awards manual evidence remains deferred in `docs/league_awards_parity_evidence.md`.
-- League Live movement/submission remains deliberately owned by the following parity slices; the authenticated print model remains read-only.
+- Validate draft create/duplicate, the complete League Live domain manual test book, and Match Log/Replay recovery against isolated staging data. League Awards manual evidence remains deferred in `docs/league_awards_parity_evidence.md`; keep the matrix `Partial` until the consolidated manual evidence exists.
+- League Live all-match submission remains deliberately owned by the following parity slice; the authenticated print model remains read-only.

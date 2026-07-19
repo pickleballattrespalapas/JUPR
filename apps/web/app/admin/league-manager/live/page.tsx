@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getClubPlayers } from "@/lib/api";
-import { getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
+import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
 import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
 
@@ -9,8 +9,9 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 export default async function LeagueManagerLivePage() {
   const clubSlug = "tres-palapas";
   const clubId = "tres_palapas";
-  const [{ data: leagueStatus, error: leagueError }, { data: uploaderStatus, error: uploaderError }, { data: playersData, error: playersError }] = await Promise.all([
+  const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: uploaderStatus, error: uploaderError }, { data: playersData, error: playersError }] = await Promise.all([
     getAdminLeagueManagerStatus(clubId),
+    getAdminLeagueLiveStatus(clubId),
     getAdminMatchUploaderStatus(clubId),
     getClubPlayers(clubSlug)
   ]);
@@ -26,6 +27,7 @@ export default async function LeagueManagerLivePage() {
       </p>
 
       {leagueError ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {leagueError}</p> : null}
+      {liveDomainError ? <p style={{ color: "#b91c1c" }}>Python League Live status is unavailable. {liveDomainError}</p> : null}
       {uploaderError ? <p style={{ color: "#b91c1c" }}>Match Uploader status is unavailable. {uploaderError}</p> : null}
       {playersError ? <p style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
 
@@ -35,16 +37,18 @@ export default async function LeagueManagerLivePage() {
           <li>Schedule generation runs through FastAPI/Python Match Uploader preview logic.</li>
           <li>Official score submission runs through FastAPI/Python Match Uploader processing and audit logging.</li>
           <li>Only valid non-tied scores are submitted; later corrections should use Match Log and Replay History.</li>
-          <li>Session snapshots and multi-round court movement are persisted through the guarded League Manager API so an interrupted night can be resumed.</li>
+          <li>Python owns deterministic roster seeding, bench selection, score aggregation, court movement, overrides, and next-round state; the browser never ranks players.</li>
+          <li>Session snapshots and multi-round court movement use stale-version guards and idempotent operation keys so an interrupted night can be recovered safely.</li>
           <li>Keep Streamlit available for recovery until the persisted live workflow is proven in the staging pilot.</li>
         </ul>
       </article>
 
-      {leagueStatus && uploaderStatus ? (
+      {leagueStatus && liveDomainStatus && uploaderStatus ? (
         <LeagueLiveRoundPanel
           apiBase={getAdminLeagueManagerApiBaseUrl()}
           clubId={clubId}
           leagueStatus={leagueStatus}
+          liveDomainStatus={liveDomainStatus}
           uploaderStatus={uploaderStatus}
           players={playersData?.players || []}
         />

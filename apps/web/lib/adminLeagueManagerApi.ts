@@ -19,6 +19,19 @@ export type AdminLeagueManagerStatusResponse = {
   warnings: string[];
 };
 
+export type AdminLeagueLiveStatusResponse = {
+  enabled: boolean;
+  status: string;
+  sessions_endpoint?: string | null;
+  roster_suggestion_endpoint?: string | null;
+  round_plan_endpoint?: string | null;
+  movement_authority?: string | null;
+  service_role_configured?: boolean;
+  streamlit_fallback?: string | null;
+  session_count?: number | null;
+  warnings: string[];
+};
+
 export type AdminLeagueManagerLeague = {
   league_name: string;
   league_type?: string | null;
@@ -241,4 +254,8 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
 
 export async function getAdminLeagueManagerStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminLeagueManagerStatusResponse>> {
   return fetchJson<AdminLeagueManagerStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/status`);
+}
+
+export async function getAdminLeagueLiveStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminLeagueLiveStatusResponse>> {
+  return fetchJson<AdminLeagueLiveStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/status`);
 }
