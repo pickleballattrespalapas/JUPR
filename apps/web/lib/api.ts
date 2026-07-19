@@ -246,6 +246,9 @@ export type LeagueResultsLeague = {
   name: string;
   min_games?: number | null;
   k_factor?: number | null;
+  start_week?: number | null;
+  end_week?: number | null;
+  num_weeks?: number | null;
 };
 
 export type LeagueResultsStanding = {
@@ -269,6 +272,42 @@ export type LeagueResultsStatRow = {
   wins?: number | null;
   losses?: number | null;
   win_pct?: number | null;
+  rating_jupr?: number | null;
+  rating_delta_jupr?: number | null;
+  rank?: number | null;
+  prev_rank?: number | null;
+  rank_delta?: number | null;
+};
+
+export type LeagueResultsHighlights = {
+  scope?: "week" | "season" | string | null;
+  week_num?: number | null;
+  min_games?: number | null;
+  biggest_climbers: LeagueResultsStatRow[];
+  best_win_pct: LeagueResultsStatRow[];
+  most_active: LeagueResultsStatRow[];
+};
+
+export type LeagueResultsPlayerOption = {
+  player_id: string | number;
+  player_name: string;
+};
+
+export type LeagueResultsPlayerSummary = LeagueResultsStatRow & {
+  rating_jupr?: number | null;
+  rank?: number | null;
+};
+
+export type LeagueResultsRecentMatch = {
+  match_id: string | number;
+  date?: string | null;
+  week_num?: number | null;
+  week_label?: string | null;
+  partner?: LeagueResultsPlayerOption | null;
+  opponents: LeagueResultsPlayerOption[];
+  result: "W" | "L" | "D" | string;
+  score_for: number;
+  score_against: number;
   rating_delta_jupr?: number | null;
 };
 
@@ -278,14 +317,18 @@ export type LeagueResultsResponse = {
   selected_league?: string | null;
   league?: LeagueResultsLeague | null;
   standings: LeagueResultsStanding[];
-  weeks: Array<{ week_num: number; week_label: string }>;
+  weeks: Array<{ week_num: number; week_label: string; has_results?: boolean | null }>;
+  selected_week?: number | null;
   weekly_results: LeagueResultsStatRow[];
   cumulative: LeagueResultsStatRow[];
-  highlights: {
-    biggest_climbers: LeagueResultsStatRow[];
-    best_win_pct: LeagueResultsStatRow[];
-    most_active: LeagueResultsStatRow[];
-  };
+  players: LeagueResultsPlayerOption[];
+  selected_player_id?: string | number | null;
+  player_summary?: LeagueResultsPlayerSummary | null;
+  player_weekly: LeagueResultsStatRow[];
+  recent_matches: LeagueResultsRecentMatch[];
+  weekly_highlights: LeagueResultsHighlights;
+  season_highlights: LeagueResultsHighlights;
+  highlights: LeagueResultsHighlights;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -389,7 +432,18 @@ export async function getClubMatchExplorerContext(clubSlug: string): Promise<Api
   return fetchJson<MatchExplorerContextResponse>(`/clubs/${clubSlug}/match-explorer`);
 }
 
-export async function getClubLeagueResults(clubSlug: string, leagueName?: string | null): Promise<ApiResult<LeagueResultsResponse>> {
-  const query = leagueName ? `?league_name=${encodeURIComponent(leagueName)}` : "";
-  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query}`);
+export async function getClubLeagueResults(
+  clubSlug: string,
+  leagueName?: string | null,
+  week?: number | null,
+  player?: string | number | null,
+  weeklyMinGames?: number | null
+): Promise<ApiResult<LeagueResultsResponse>> {
+  const params = new URLSearchParams();
+  if (leagueName) params.set("league_name", leagueName);
+  if (week) params.set("week", String(week));
+  if (player) params.set("player", String(player));
+  if (weeklyMinGames) params.set("weekly_min_games", String(weeklyMinGames));
+  const query = params.toString();
+  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`);
 }

@@ -109,7 +109,7 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `GET /clubs/{club_slug}`
 - `GET /clubs/{club_slug}/leaderboards?league_name=OVERALL&status=active&q=...&sort=rank&player_id=...&limit=50&offset=0`
 - `GET /clubs/{club_slug}/leaderboards/public?...` temporary compatibility alias with the same filters and response
-- `GET /clubs/{club_slug}/league-results?league_name=...`
+- `GET /clubs/{club_slug}/league-results?league_name=...&week=...&player=...&weekly_min_games=...`
 - `GET /clubs/{club_slug}/badges`
 - `GET /clubs/{club_slug}/badges/{badge_id}/earners?offset=...&limit=...`
 - `GET /clubs/{club_slug}/challenge-ladder`
