@@ -47,31 +47,52 @@ jobs:
       JUPR_EXPECTED_STAGING_AUTH_ORIGIN: ${{ secrets.STAGING_SUPABASE_URL }}
     steps:
       - name: Validate staging smoke configuration
-        shell: bash
+        shell: python
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
-          set -euo pipefail
-          if [[ -z "${STAGING_JUPR_API_BASE_URL//[[:space:]]/}" ]]; then
-            echo "::error title=Missing staging API URL::Set the staging environment secret STAGING_JUPR_API_BASE_URL or pass api_base_url."
-            exit 1
-          fi
-          if [ "${STAGING_JUPR_API_BASE_URL%/}" != "$JUPR_EXPECTED_STAGING_API_ORIGIN" ]; then
-            echo "::error title=Unsafe staging API URL::The staging smoke may target only $JUPR_EXPECTED_STAGING_API_ORIGIN."
-            exit 1
-          fi
-          if [[ -z "${STAGING_WEB_BASE_URL//[[:space:]]/}" ]]; then
-            echo "::error title=Missing staging web URL::Set the staging environment secret STAGING_WEB_BASE_URL or pass web_base_url."
-            exit 1
-          fi
-          if [ "${STAGING_WEB_BASE_URL%/}" != "$JUPR_EXPECTED_STAGING_WEB_ORIGIN" ]; then
-            echo "::error title=Unsafe staging web URL::The staging smoke may target only $JUPR_EXPECTED_STAGING_WEB_ORIGIN."
-            exit 1
-          fi
-          if [[ -z "${VERCEL_AUTOMATION_BYPASS_SECRET//[[:space:]]/}" ]]; then
-            echo "::error title=Missing Vercel automation bypass secret::Set VERCEL_AUTOMATION_BYPASS_SECRET in the GitHub staging environment."
-            exit 1
-          fi
+          import os
+          from pathlib import Path
+
+          def fail(title: str, message: str) -> None:
+              print(f"::error title={title}::{message}")
+              raise SystemExit(1)
+
+          expected_api = os.environ["JUPR_EXPECTED_STAGING_API_ORIGIN"]
+          expected_web = os.environ["JUPR_EXPECTED_STAGING_WEB_ORIGIN"]
+          api = os.environ.get("STAGING_JUPR_API_BASE_URL", "").strip()
+          web = os.environ.get("STAGING_WEB_BASE_URL", "").strip()
+
+          if not api:
+              fail(
+                  "Missing staging API URL",
+                  "Set the staging environment secret STAGING_JUPR_API_BASE_URL or pass api_base_url.",
+              )
+          if api not in {expected_api, f"{expected_api}/"}:
+              fail(
+                  "Unsafe staging API URL",
+                  f"The staging smoke may target only {expected_api}.",
+              )
+          if not web:
+              fail(
+                  "Missing staging web URL",
+                  "Set the staging environment secret STAGING_WEB_BASE_URL or pass web_base_url.",
+              )
+          if web not in {expected_web, f"{expected_web}/"}:
+              fail(
+                  "Unsafe staging web URL",
+                  f"The staging smoke may target only {expected_web}.",
+              )
+          if not os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "").strip():
+              fail(
+                  "Missing Vercel automation bypass secret",
+                  "Set VERCEL_AUTOMATION_BYPASS_SECRET in the GitHub staging environment.",
+              )
+
+          # Downstream steps receive canonical allowlisted origins, never raw input.
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+              print(f"STAGING_JUPR_API_BASE_URL={expected_api}", file=env_file)
+              print(f"STAGING_WEB_BASE_URL={expected_web}", file=env_file)
 
       - name: Check out repository
         uses: actions/checkout@v4

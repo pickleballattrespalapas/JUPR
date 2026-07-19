@@ -148,7 +148,9 @@ input where supported):
 - `VERCEL_AUTOMATION_BYPASS_SECRET`: Vercel Deployment Protection automation
   bypass value used only by the public-web and browser smoke request steps. Both
   clients restrict it to the isolated HTTPS Vercel origin and prevent it from
-  crossing origins on redirects.
+  crossing origins on redirects. The Python client uses the direct bypass header
+  without requesting a cookie redirect; Chromium owns the optional bypass-cookie
+  handshake used by the browser suite.
 
 The Chromium pass covers the critical public and admin shells, fails on page or
 console errors, refuses known production domains, and asserts the sanitized

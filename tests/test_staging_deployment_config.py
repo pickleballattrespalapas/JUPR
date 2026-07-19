@@ -1,17 +1,60 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
+import textwrap
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from scripts.check_staging_environment import FULL_NEXT_ADMIN_FLAGS
 
 
 ROOT = Path(__file__).resolve().parent.parent
+EXPECTED_STAGING_API_ORIGIN = "https://juprleagues-api-staging.fly.dev"
+EXPECTED_STAGING_WEB_ORIGIN = "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
 
 
 def _toml(path: str) -> dict:
     return tomllib.loads((ROOT / path).read_text(encoding="utf-8"))
+
+
+def _staging_validation_script() -> str:
+    workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
+    step = workflow.split("      - name: Validate staging smoke configuration\n", 1)[1]
+    block = step.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
+    return textwrap.dedent(block)
+
+
+def _run_staging_validation(
+    tmp_path: Path,
+    *,
+    api: str,
+    web: str,
+    bypass_secret: str = "test-bypass-secret",
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    github_env = tmp_path / "github-env"
+    env = {
+        **os.environ,
+        "STAGING_JUPR_API_BASE_URL": api,
+        "STAGING_WEB_BASE_URL": web,
+        "JUPR_EXPECTED_STAGING_API_ORIGIN": EXPECTED_STAGING_API_ORIGIN,
+        "JUPR_EXPECTED_STAGING_WEB_ORIGIN": EXPECTED_STAGING_WEB_ORIGIN,
+        "VERCEL_AUTOMATION_BYPASS_SECRET": bypass_secret,
+        "GITHUB_ENV": str(github_env),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", _staging_validation_script()],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    output = github_env.read_text(encoding="utf-8") if github_env.exists() else ""
+    return result, output
 
 
 def test_staging_fly_config_is_isolated_and_full_surface():
@@ -77,6 +120,12 @@ def test_staging_smoke_validates_exact_isolated_targets_before_requests():
     assert "Missing Vercel automation bypass secret" in workflow
     assert "Unsafe staging API URL" in workflow
     assert "Unsafe staging web URL" in workflow
+    assert 'api = os.environ.get("STAGING_JUPR_API_BASE_URL", "").strip()' in workflow
+    assert 'web = os.environ.get("STAGING_WEB_BASE_URL", "").strip()' in workflow
+    assert 'api not in {expected_api, f"{expected_api}/"}' in workflow
+    assert 'web not in {expected_web, f"{expected_web}/"}' in workflow
+    assert 'print(f"STAGING_JUPR_API_BASE_URL={expected_api}", file=env_file)' in workflow
+    assert 'print(f"STAGING_WEB_BASE_URL={expected_web}", file=env_file)' in workflow
 
 
 def test_staging_smoke_scopes_bypass_secret_to_request_steps():
@@ -87,6 +136,84 @@ def test_staging_smoke_scopes_bypass_secret_to_request_steps():
     assert workflow.count(
         "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}"
     ) == 3
+
+
+@pytest.mark.parametrize(
+    ("api", "web"),
+    [
+        (EXPECTED_STAGING_API_ORIGIN, EXPECTED_STAGING_WEB_ORIGIN),
+        (f"  {EXPECTED_STAGING_API_ORIGIN}\t", f"\t{EXPECTED_STAGING_WEB_ORIGIN}  "),
+        (f"\r\n{EXPECTED_STAGING_API_ORIGIN}/\r\n", f"\n{EXPECTED_STAGING_WEB_ORIGIN}/\n"),
+    ],
+)
+def test_staging_smoke_normalizes_only_surrounding_whitespace_and_single_slash(
+    tmp_path: Path,
+    api: str,
+    web: str,
+):
+    result, github_env = _run_staging_validation(tmp_path, api=api, web=web)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert github_env == (
+        f"STAGING_JUPR_API_BASE_URL={EXPECTED_STAGING_API_ORIGIN}\n"
+        f"STAGING_WEB_BASE_URL={EXPECTED_STAGING_WEB_ORIGIN}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("api", "web"),
+    [
+        (f"{EXPECTED_STAGING_API_ORIGIN}//", EXPECTED_STAGING_WEB_ORIGIN),
+        (f"{EXPECTED_STAGING_API_ORIGIN}/health", EXPECTED_STAGING_WEB_ORIGIN),
+        (f"{EXPECTED_STAGING_API_ORIGIN}?target=staging", EXPECTED_STAGING_WEB_ORIGIN),
+        (
+            EXPECTED_STAGING_API_ORIGIN,
+            f"https://user@{EXPECTED_STAGING_WEB_ORIGIN.removeprefix('https://')}",
+        ),
+        (EXPECTED_STAGING_API_ORIGIN, f"{EXPECTED_STAGING_WEB_ORIGIN}/ admin"),
+        ("https://juprleagues-api-\nstaging.fly.dev", EXPECTED_STAGING_WEB_ORIGIN),
+        ("https://api.juprleagues.com", EXPECTED_STAGING_WEB_ORIGIN),
+    ],
+)
+def test_staging_smoke_rejects_every_non_allowlisted_target(
+    tmp_path: Path,
+    api: str,
+    web: str,
+):
+    result, github_env = _run_staging_validation(tmp_path, api=api, web=web)
+
+    assert result.returncode == 1
+    assert github_env == ""
+
+
+def test_staging_smoke_rejects_whitespace_only_secret_without_printing_it(tmp_path: Path):
+    result, github_env = _run_staging_validation(
+        tmp_path,
+        api=EXPECTED_STAGING_API_ORIGIN,
+        web=EXPECTED_STAGING_WEB_ORIGIN,
+        bypass_secret=" \t\r\n ",
+    )
+
+    assert result.returncode == 1
+    assert "Missing Vercel automation bypass secret" in result.stdout
+    assert github_env == ""
+
+
+def test_staging_smoke_does_not_print_raw_invalid_input_or_bypass_secret(tmp_path: Path):
+    invalid_api = "https://attacker.example/private-path"
+    bypass_secret = "top-secret-do-not-print"
+    result, github_env = _run_staging_validation(
+        tmp_path,
+        api=invalid_api,
+        web=EXPECTED_STAGING_WEB_ORIGIN,
+        bypass_secret=bypass_secret,
+    )
+
+    combined_output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert invalid_api not in combined_output
+    assert bypass_secret not in combined_output
+    assert github_env == ""
 
 
 def test_browser_smoke_scopes_bypass_headers_and_disables_protected_traces():

@@ -124,7 +124,12 @@ def _read_response_body(response: BinaryIO, *, require_json: bool) -> tuple[byte
 
 
 def _vercel_bypass_headers(check: SmokeCheck) -> dict[str, str]:
-    """Return deployment-protection headers only for explicit HTTPS Vercel web checks."""
+    """Return the direct bypass header only for explicit HTTPS Vercel web checks.
+
+    Programmatic requests do not need Vercel's optional bypass-cookie handshake.
+    Asking for that cookie makes Vercel return a same-path redirect, while this
+    dependency-free client intentionally carries no browser session state.
+    """
     if not check.allow_vercel_bypass:
         return {}
     try:
@@ -144,10 +149,7 @@ def _vercel_bypass_headers(check: SmokeCheck) -> dict[str, str]:
     secret = os.getenv(VERCEL_AUTOMATION_BYPASS_SECRET_ENV, "").strip()
     if not secret:
         return {}
-    return {
-        "x-vercel-protection-bypass": secret,
-        "x-vercel-set-bypass-cookie": "true",
-    }
+    return {"x-vercel-protection-bypass": secret}
 
 
 class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
