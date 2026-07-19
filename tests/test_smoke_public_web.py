@@ -21,7 +21,6 @@ def test_vercel_bypass_headers_are_limited_to_explicit_https_web_checks(monkeypa
 
     assert smoke._vercel_bypass_headers(_check("https://jupr-git-staging-team.vercel.app/page")) == {
         "x-vercel-protection-bypass": "staging-secret",
-        "x-vercel-set-bypass-cookie": "true",
     }
 
 
@@ -131,6 +130,7 @@ def test_request_wires_bypass_headers_without_putting_secret_in_result(monkeypat
 
     assert result.ok is True
     assert captured["request"].get_header("X-vercel-protection-bypass") == "staging-secret"
+    assert captured["request"].get_header("X-vercel-set-bypass-cookie") is None
     assert "staging-secret" not in repr(result)
 
 
