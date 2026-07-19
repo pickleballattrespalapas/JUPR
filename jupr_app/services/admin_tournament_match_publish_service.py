@@ -11,6 +11,7 @@ from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.singles_match_processing import process_singles_matches
 from jupr_app.services.admin_player_updates_service import auto_send_player_updates_for_match_payloads
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
+from jupr_app.services.admin_tournament_guarded_operation import TournamentAdminRecoveryRequiredError
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
     _clean_text,
@@ -75,8 +76,8 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw before official publish; no matches were published.") from exc
     return rows[0] if rows else None
 
 
@@ -93,8 +94,8 @@ def _fetch_event_option(supabase: Any, *, tournament_id: str, event_option_id: s
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament event option before official publish; no matches were published.") from exc
     return rows[0] if rows else None
 
 
@@ -107,8 +108,8 @@ def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify tournament teams before official publish; no matches were published.") from exc
     return sorted(rows, key=lambda row: int(_safe_int(row.get("team_number")) or 0))
 
 
@@ -121,8 +122,8 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify tournament games before official publish; no matches were published.") from exc
     return sorted(
         rows,
         key=lambda row: (
@@ -147,8 +148,8 @@ def _existing_published_game_ids(supabase: Any, *, club_id: str, tournament_id: 
             .in_("tournament_game_id", game_ids)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify whether tournament games were already published; official publish was refused.") from exc
     return {str(row.get("tournament_game_id")) for row in rows if row.get("tournament_game_id")}
 
 
@@ -158,8 +159,8 @@ def _table_frame(supabase: Any, table_name: str, *, club_id: str | None = None) 
         if club_id and table_name in {"players", "league_ratings", "leagues_metadata"}:
             query = query.eq("club_id", str(club_id))
         rows = _safe_rows(query.execute())
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError(f"Could not load required {table_name} state before official publish; no matches were published.") from exc
     return pd.DataFrame(rows)
 
 
@@ -289,6 +290,138 @@ def _build_official_match_payloads(
     return payloads
 
 
+def build_admin_tournament_official_publish_plan(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+    playoff_winner_bonus_elo: Any = 0.0,
+) -> dict[str, Any]:
+    """Build immutable evidence for a guarded official-publish request.
+
+    Unlike the mutation preflight this intentionally does not reject existing
+    matches. That makes the same deterministic request reproducible after a
+    response loss, while the guarded runner decides whether read-back evidence
+    is exact enough to complete the operation without invoking the processor.
+    """
+
+    clean_tournament_id = _clean_text(tournament_id, limit=120)
+    clean_draw_id = _clean_text(draw_id, limit=120)
+    bonus_elo = _validate_bonus_elo(playoff_winner_bonus_elo)
+    tournament = _first_row(supabase, "tournaments", TOURNAMENT_SELECT, key="id", value=clean_tournament_id)
+    if not tournament or str(tournament.get("club_id") or "") != str(club_id):
+        raise ValueError("tournament not found")
+    draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    if not draw:
+        raise ValueError("draw not found for this tournament")
+    teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    if not games:
+        raise ValueError("This draw has no tournament games to publish.")
+    event_option = _fetch_event_option(
+        supabase,
+        tournament_id=clean_tournament_id,
+        event_option_id=_clean_text(draw.get("event_option_id"), limit=120),
+    )
+    match_payloads = _build_official_match_payloads(
+        tournament=tournament,
+        draw=draw,
+        event_option=event_option,
+        teams=teams,
+        games=games,
+        playoff_winner_bonus_elo=bonus_elo,
+    )
+    game_ids = [str(row.get("tournament_game_id")) for row in match_payloads]
+    if len(game_ids) != len(set(game_ids)) or any(not value for value in game_ids):
+        raise ValueError("Official publish requires one unique tournament game id per reviewed match.")
+    singles_count = sum(1 for row in match_payloads if str(row.get("match_format")) == "singles")
+    bonus_game_ids = [str(row.get("tournament_game_id")) for row in match_payloads if _safe_float(row.get("winner_bonus_elo"))]
+    return {
+        "draw_id": clean_draw_id,
+        "tournament_game_ids": game_ids,
+        "match_count": len(game_ids),
+        "singles_match_count": singles_count,
+        "doubles_match_count": len(game_ids) - singles_count,
+        "playoff_winner_bonus_elo": bonus_elo,
+        "bonus_tournament_game_ids": bonus_game_ids,
+    }
+
+
+def reconcile_admin_tournament_official_publish(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+    expected_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Reconstruct a lost publish result from an exact authoritative set.
+
+    Zero, partial, duplicate, changed-draw, and cross-club evidence all remain
+    recovery-required. This function is read-only and never calls either match
+    processor, so replay cannot create a second official match or rating write.
+    """
+
+    expected_ids = [str(value) for value in (expected_plan.get("tournament_game_ids") or []) if str(value)]
+    if not expected_ids or len(expected_ids) != len(set(expected_ids)):
+        raise TournamentAdminRecoveryRequiredError(
+            "Official publish recovery has no valid deterministic game set; do not repeat the mutation."
+        )
+    current_ids = [str(row.get("id")) for row in _games_for_draw(
+        supabase,
+        tournament_id=str(tournament_id),
+        draw_id=str(draw_id),
+    ) if row.get("id")]
+    if set(current_ids) != set(expected_ids) or len(current_ids) != len(expected_ids):
+        raise TournamentAdminRecoveryRequiredError(
+            "Official publish recovery found a changed tournament-game set. The operation remains recovery-required; do not repeat it."
+        )
+    try:
+        rows = _safe_rows(
+            supabase.table("matches")
+            .select("id,club_id,tournament_id,tournament_game_id")
+            .eq("club_id", str(club_id))
+            .eq("tournament_id", str(tournament_id))
+            .in_("tournament_game_id", expected_ids)
+            .execute()
+        )
+    except Exception as exc:
+        raise TournamentAdminRecoveryRequiredError(
+            "Official publish recovery could not read authoritative match evidence; do not repeat the mutation."
+        ) from exc
+    actual_ids = [str(row.get("tournament_game_id")) for row in rows if row.get("tournament_game_id")]
+    exact = (
+        len(actual_ids) == len(expected_ids)
+        and len(actual_ids) == len(set(actual_ids))
+        and set(actual_ids) == set(expected_ids)
+    )
+    if not exact:
+        evidence = "zero" if not actual_ids else "partial or duplicate"
+        raise TournamentAdminRecoveryRequiredError(
+            f"Official publish recovery found {evidence} match evidence. The operation remains recovery-required; do not repeat it."
+        )
+    singles_count = int(expected_plan.get("singles_match_count") or 0)
+    doubles_count = int(expected_plan.get("doubles_match_count") or 0)
+    bonus_ids = [str(value) for value in (expected_plan.get("bonus_tournament_game_ids") or [])]
+    return {
+        "ok": True,
+        "mode": "tournament_official_matches_publish",
+        "draw_id": str(draw_id),
+        "match_count": len(expected_ids),
+        "singles_match_count": singles_count,
+        "doubles_match_count": doubles_count,
+        "game_count": len(expected_ids),
+        "tournament_game_ids": expected_ids,
+        "playoff_winner_bonus_elo": float(expected_plan.get("playoff_winner_bonus_elo") or 0.0),
+        "bonus_match_count": len(bonus_ids),
+        "bonus_tournament_game_ids": bonus_ids,
+        "process_result": {"inserted": len(expected_ids), "reconciled_from_authoritative_matches": True},
+        "auto_player_updates": {"mode": "reconciliation_readback_only"},
+        "warnings": ["Response-loss recovery completed from the exact official-match set; no publish mutation was repeated."],
+    }
+
+
 def publish_admin_tournament_draw_matches(
     supabase: Any,
     *,
@@ -300,6 +433,7 @@ def publish_admin_tournament_draw_matches(
     confirmation_text: str,
     playoff_winner_bonus_elo: Any = 0.0,
     source: str = "next_tournament_admin_publish_matches",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -347,6 +481,25 @@ def publish_admin_tournament_draw_matches(
     bonus_game_ids = [str(payload.get("tournament_game_id")) for payload in match_payloads if _safe_float(payload.get("winner_bonus_elo"))]
     singles_payloads = [row for row in match_payloads if str(row.get("match_format")) == "singles"]
     doubles_payloads = [row for row in match_payloads if str(row.get("match_format")) != "singles"]
+
+    if dry_run:
+        return {
+            "ok": True,
+            "mode": "tournament_official_matches_publish_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "match_count": len(match_payloads),
+            "singles_match_count": len(singles_payloads),
+            "doubles_match_count": len(doubles_payloads),
+            "game_count": len(games),
+            "tournament_game_ids": game_ids,
+            "playoff_winner_bonus_elo": bonus_elo,
+            "bonus_match_count": len(bonus_game_ids),
+            "bonus_tournament_game_ids": bonus_game_ids,
+            "auto_player_updates": {"mode": "preview_only"},
+            "warnings": [],
+        }
 
     df_players_all = _table_frame(supabase, "players", club_id=str(club_id))
     df_leagues = _table_frame(supabase, "league_ratings", club_id=str(club_id))

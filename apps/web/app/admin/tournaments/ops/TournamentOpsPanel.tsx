@@ -4,17 +4,18 @@ import Link from "next/link";
 import { useState } from "react";
 import type {
   AdminTournament,
-  AdminTournamentDetailResponse,
   AdminTournamentListResponse,
   AdminTournamentOpsSnapshotResponse,
   AdminTournamentOpsTeam,
+  AdminTournamentResultsImportPreviewResponse,
   AdminTournamentStatusResponse,
   AdminTournamentWriteResponse
 } from "@/lib/adminTournamentApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
-type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse };
-type TeamEditorRow = { team_number: string; player1_id: string; player2_id: string; seed: string; notes: string };
+export type OpsWorkflow = "all" | "draws" | "import" | "results" | "publish";
+type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow };
+type TeamEditorRow = { editor_key: string; team_number: string; player1_id: string; player2_id: string; seed: string; notes: string };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -51,9 +52,10 @@ function teamRowsFromTeams(teams: AdminTournamentOpsTeam[], drawId: string): Tea
     .filter((row) => !drawId || String(row.draw_id || "") === drawId)
     .sort((left, right) => Number(left.team_number || 0) - Number(right.team_number || 0));
   if (!scoped.length) {
-    return [1, 2, 3, 4].map((teamNumber) => ({ team_number: String(teamNumber), player1_id: "", player2_id: "", seed: String(teamNumber), notes: "" }));
+    return [1, 2, 3, 4].map((teamNumber) => ({ editor_key: `empty-team-${teamNumber}`, team_number: String(teamNumber), player1_id: "", player2_id: "", seed: String(teamNumber), notes: "" }));
   }
   return scoped.map((row, index) => ({
+    editor_key: String(row.id || `loaded-team-${row.team_number || index + 1}`),
     team_number: String(row.team_number || index + 1),
     player1_id: row.player1_id == null ? "" : String(row.player1_id),
     player2_id: row.player2_id == null ? "" : String(row.player2_id),
@@ -84,13 +86,12 @@ function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<strin
   );
 }
 
-export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
+export default function TournamentOpsPanel({ apiBase, clubId, status, workflow = "all" }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [includeArchived, setIncludeArchived] = useState(false);
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [selectedDrawId, setSelectedDrawId] = useState("");
-  const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
   const [snapshot, setSnapshot] = useState<AdminTournamentOpsSnapshotResponse | null>(null);
   const [drawEventOptionId, setDrawEventOptionId] = useState("");
   const [drawName, setDrawName] = useState("");
@@ -113,8 +114,37 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
   const [awardConfirm, setAwardConfirm] = useState("");
   const [publishConfirm, setPublishConfirm] = useState("");
   const [publishBonusElo, setPublishBonusElo] = useState("0");
+  const [resultsImportMode, setResultsImportMode] = useState("REPLACE");
+  const [resultsRawText, setResultsRawText] = useState("playerA1,playerB1,teamAGame1,teamBGame1\n");
+  const [resultsPreview, setResultsPreview] = useState<AdminTournamentResultsImportPreviewResponse | null>(null);
+  const [resultsMappings, setResultsMappings] = useState<Record<string, { action?: string; player_id?: string | number | null }>>({});
+  const [resultsMatchReviews, setResultsMatchReviews] = useState<Record<string, { include?: boolean; stage?: string }>>({});
+  const [resultsPodiumRefs, setResultsPodiumRefs] = useState<Record<string, string | null>>({});
+  const [allowDuplicateMapping, setAllowDuplicateMapping] = useState(false);
+  const [resultsConfirm, setResultsConfirm] = useState("");
+  const [resultsReviewDirty, setResultsReviewDirty] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  const operationsWriteReady = Boolean(
+    status.mutation_runtime?.service_role_ready
+    && status.mutation_runtime?.surface_flags?.operations?.enabled
+  );
+  const reviewedState = snapshot?.state_fingerprint || "";
+  const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
+  const reviewedDrawUpdatedAt = String(selectedDraw?.updated_at || "").trim();
+  const reviewedTeamVersions = (snapshot?.teams || [])
+    .filter((row) => String(row.draw_id || "") === selectedDrawId)
+    .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
+  const reviewedSourceGameVersions = (snapshot?.games || [])
+    .filter((row) => String(row.draw_id || "") === selectedDrawId)
+    .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
+  const officialPublishReady = Boolean(snapshot?.operation_runtime?.official_publish_enabled);
+  const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState;
+  const drawCasWriteDisabled = guardedWriteDisabled || !reviewedDrawUpdatedAt;
+  const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
+  const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
+  const shows = (name: Exclude<OpsWorkflow, "all">) => workflow === "all" || workflow === name;
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -124,8 +154,23 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = String(payload?.detail || `API error (${response.status})`);
+      if (response.status === 409) {
+        const recovery = /recovery|required|may already|identical request|response.?lost/i.test(detail);
+        throw new Error(recovery
+          ? `${detail} Keep this exact reviewed request intact and retry it only to reconcile, or use the Streamlit fallback.`
+          : `${detail} Reload the authoritative Ops snapshot before submitting a new request.`);
+      }
+      throw new Error(detail);
+    }
     return payload as T;
+  }
+
+  function operationSuffix(payload: AdminTournamentWriteResponse): string {
+    if (payload.reconciled) return ` Reconciled without repeating the domain write (${payload.operation_key?.slice(0, 12) || "operation"}).`;
+    if (payload.idempotent_replay) return ` Idempotent replay; no second domain write (${payload.operation_key?.slice(0, 12) || "operation"}).`;
+    return payload.operation_key ? ` Operation ${payload.operation_key.slice(0, 12)} recorded.` : "";
   }
 
   function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
@@ -145,10 +190,10 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     setSnapshot(null);
-    setDetail(null);
+    setResultsPreview(null);
     try {
       const suffix = includeArchived ? "?include_archived=true" : "";
-      const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments${suffix}`);
+      const payload = await requestJson<AdminTournamentListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/ops/tournaments${suffix}`);
       setTournaments(payload.tournaments || []);
       setMessage(`Loaded ${payload.count ?? payload.tournaments?.length ?? 0} tournament(s).`);
     } catch (error) {
@@ -156,13 +201,6 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     } finally {
       setBusy(false);
     }
-  }
-
-  async function loadTournamentDetail(tournamentId: string): Promise<AdminTournamentDetailResponse> {
-    const payload = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`);
-    setDetail(payload);
-    if (!drawEventOptionId && payload.event_options?.length) setDrawEventOptionId(String(payload.event_options[0].id || ""));
-    return payload;
   }
 
   async function loadOps(tournamentId = selectedTournamentId, drawId = selectedDrawId) {
@@ -173,12 +211,12 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     try {
-      await loadTournamentDetail(tournamentId);
       const params = new URLSearchParams();
       if (drawId) params.set("draw_id", drawId);
       const suffix = params.toString() ? `?${params.toString()}` : "";
       const payload = await requestJson<AdminTournamentOpsSnapshotResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops${suffix}`);
       setSnapshot(payload);
+      if (!drawEventOptionId && payload.event_options?.length) setDrawEventOptionId(String(payload.event_options[0].id || ""));
       resetTeamEditor(payload, drawId);
       resetScoreEditor(payload);
       setGameConfirm("");
@@ -188,6 +226,9 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       setPublishConfirm("");
       setRegistrationImportConfirm("");
       setBulkTeamConfirm("");
+      setResultsPreview(null);
+      setResultsConfirm("");
+      setResultsReviewDirty(true);
       setMessage("Tournament operations snapshot loaded.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load tournament operations.");
@@ -204,16 +245,16 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     try {
-      const selectedEvent = detail?.event_options?.find((row) => String(row.id || "") === drawEventOptionId) || null;
+      const selectedEvent = snapshot?.event_options?.find((row) => String(row.id || "") === drawEventOptionId) || null;
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws`, {
         method: "POST",
-        body: JSON.stringify({ event_option_id: drawEventOptionId || null, registration_day_id: String(selectedEvent?.registration_day_id || "") || null, name: drawName, confirmation_text: drawConfirm, source: "next_tournament_ops_create_draw" })
+        body: JSON.stringify({ event_option_id: drawEventOptionId || null, registration_day_id: String(selectedEvent?.registration_day_id || "") || null, name: drawName, expected_state_fingerprint: reviewedState, confirmation_text: drawConfirm, source: "next_tournament_ops_create_draw" })
       });
       const nextDrawId = payload.draw?.id || "";
       setSelectedDrawId(nextDrawId);
       setDrawConfirm("");
       await loadOps(selectedTournamentId, nextDrawId);
-      setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.`);
+      setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to create draw.");
     } finally {
@@ -231,11 +272,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams/import-registrations`, {
         method: "POST",
-        body: JSON.stringify({ import_mode: registrationImportMode, confirmation_text: registrationImportConfirm, source: "next_tournament_ops_import_registrations" })
+        body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: registrationImportConfirm, source: "next_tournament_ops_import_registrations" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setRegistrationImportConfirm("");
-      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.`);
+      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to import registrations.");
     } finally {
@@ -253,11 +294,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams/import-bulk`, {
         method: "POST",
-        body: JSON.stringify({ raw_text: bulkTeamText, import_mode: bulkTeamMode, confirmation_text: bulkTeamConfirm, source: "next_tournament_ops_import_bulk_teams" })
+        body: JSON.stringify({ raw_text: bulkTeamText, import_mode: bulkTeamMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: bulkTeamConfirm, source: "next_tournament_ops_import_bulk_teams" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setBulkTeamConfirm("");
-      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} bulk team(s) with ${payload.import_mode || bulkTeamMode} mode.`);
+      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} bulk team(s) with ${payload.import_mode || bulkTeamMode} mode.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to import bulk teams.");
     } finally {
@@ -286,11 +327,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/teams`, {
         method: "PUT",
-        body: JSON.stringify({ teams, confirmation_text: teamConfirm, source: "next_tournament_ops_team_editor" })
+        body: JSON.stringify({ teams, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: teamConfirm, source: "next_tournament_ops_team_editor" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setTeamConfirm("");
-      setMessage(`Saved ${payload.updated_count ?? payload.teams?.length ?? teams.length} team(s).`);
+      setMessage(`Saved ${payload.updated_count ?? payload.teams?.length ?? teams.length} team(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save teams.");
     } finally {
@@ -308,11 +349,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/games/round-robin`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: gameConfirm, source: "next_tournament_ops_generate_round_robin" })
+        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: gameConfirm, source: "next_tournament_ops_generate_round_robin" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setGameConfirm("");
-      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).`);
+      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate games.");
     } finally {
@@ -335,11 +376,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/games/playoffs`, {
         method: "POST",
-        body: JSON.stringify({ advance_count: advanceCount, confirmation_text: playoffConfirm, source: "next_tournament_ops_generate_playoffs" })
+        body: JSON.stringify({ advance_count: advanceCount, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: playoffConfirm, source: "next_tournament_ops_generate_playoffs" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setPlayoffConfirm("");
-      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} playoff game(s).`);
+      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} playoff game(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate playoffs.");
     } finally {
@@ -361,13 +402,14 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     try {
+      const selectedGame = (snapshot?.games || []).find((row) => String(row.id || "") === scoreGameId) || null;
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/games/${encodeURIComponent(scoreGameId)}/score`, {
         method: "PATCH",
-        body: JSON.stringify({ score_a: nextA, score_b: nextB, confirmation_text: scoreConfirm, source: "next_tournament_ops_score_game" })
+        body: JSON.stringify({ score_a: nextA, score_b: nextB, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: scoreConfirm, source: "next_tournament_ops_score_game" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setScoreConfirm("");
-      setMessage(`Saved score for game ${String(payload.game?.id || scoreGameId)}.`);
+      setMessage(`Saved score for game ${String(payload.game?.id || scoreGameId)}.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save score.");
     } finally {
@@ -385,11 +427,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/podium`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: podiumConfirm, source: "next_tournament_ops_generate_podium" })
+        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: podiumConfirm, source: "next_tournament_ops_generate_podium" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setPodiumConfirm("");
-      setMessage(`Generated ${payload.podium?.length ?? 0} ${payload.podium_source || "draw"} podium placement(s).`);
+      setMessage(`Generated ${payload.podium?.length ?? 0} ${payload.podium_source || "draw"} podium placement(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to generate podium.");
     } finally {
@@ -407,11 +449,11 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/podium/awards`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: awardConfirm, source: "next_tournament_ops_award_podium" })
+        body: JSON.stringify({ expected_state_fingerprint: reviewedState, confirmation_text: awardConfirm, source: "next_tournament_ops_award_podium" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setAwardConfirm("");
-      setMessage(`Awarded ${payload.awarded_count ?? 0} new badge(s) from ${payload.candidate_count ?? 0} podium candidate(s).`);
+      setMessage(`Awarded ${payload.awarded_count ?? 0} new badge(s) from ${payload.candidate_count ?? 0} podium candidate(s).${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to award podium trophies.");
     } finally {
@@ -434,15 +476,102 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/matches/publish`, {
         method: "POST",
-        body: JSON.stringify({ confirmation_text: publishConfirm, playoff_winner_bonus_elo: bonusElo, source: "next_tournament_ops_publish_matches" })
+        body: JSON.stringify({ confirmation_text: publishConfirm, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: "next_tournament_ops_publish_matches" })
       });
       await loadOps(selectedTournamentId, selectedDrawId);
       setPublishConfirm("");
-      setMessage(`Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.`);
+      setMessage(`Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function previewResultsImport() {
+    if (!selectedTournamentId || !selectedDrawId) {
+      setMessage("Select a tournament and draw before previewing results.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentResultsImportPreviewResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/results-import/preview`, {
+        method: "POST",
+        body: JSON.stringify({
+          raw_text: resultsRawText,
+          import_mode: resultsImportMode,
+          mapping_decisions: Object.keys(resultsMappings).length ? resultsMappings : null,
+          match_reviews: Object.keys(resultsMatchReviews).length ? resultsMatchReviews : null,
+          podium_refs: Object.keys(resultsPodiumRefs).length ? resultsPodiumRefs : null,
+          allow_duplicate_mapping: allowDuplicateMapping
+        })
+      });
+      setResultsPreview(payload);
+      setResultsMappings(payload.mapping_decisions || {});
+      setResultsMatchReviews(payload.match_reviews || {});
+      setResultsPodiumRefs(payload.podium_refs || {});
+      setResultsReviewDirty(false);
+      setResultsConfirm("");
+      setMessage(payload.ok
+        ? `Reviewed ${payload.summary.matches} match(es) across ${payload.summary.teams} team(s). No data was written.`
+        : `Preview found ${payload.errors.length} blocking issue(s). Resolve mappings or match review choices, then preview again.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to preview tournament results.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function commitResultsImport() {
+    if (!selectedTournamentId || !selectedDrawId || !resultsPreview) {
+      setMessage("Create and review a results preview before committing.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/draws/${encodeURIComponent(selectedDrawId)}/results-import/commit`, {
+        method: "POST",
+        body: JSON.stringify({
+          raw_text: resultsRawText,
+          import_mode: resultsImportMode,
+          mapping_decisions: resultsMappings,
+          match_reviews: resultsMatchReviews,
+          podium_refs: resultsPodiumRefs,
+          allow_duplicate_mapping: allowDuplicateMapping,
+          expected_review_fingerprint: resultsPreview.review_fingerprint,
+          expected_state_fingerprint: reviewedState,
+          expected_draw_updated_at: reviewedDrawUpdatedAt,
+          confirmation_text: resultsConfirm,
+          source: "next_tournament_ops_results_import"
+        })
+      });
+      await loadOps(selectedTournamentId, selectedDrawId);
+      setResultsConfirm("");
+      setResultsReviewDirty(true);
+      setMessage(`Imported ${payload.game_count ?? 0} reviewed result(s), ${payload.team_count ?? 0} team(s), and ${payload.podium_count ?? 0} podium row(s).${operationSuffix(payload)}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to commit tournament results.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadResultsFile(file: File | null) {
+    if (!file) return;
+    if (file.size > 1_000_000) {
+      setMessage("Results CSV files are capped at 1 MB.");
+      return;
+    }
+    try {
+      setResultsRawText(await file.text());
+      setResultsPreview(null);
+      setResultsReviewDirty(true);
+      setResultsConfirm("");
+      setMessage(`Loaded ${file.name}. Preview it before committing.`);
+    } catch {
+      setMessage("Unable to read the selected results CSV.");
     }
   }
 
@@ -471,6 +600,13 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Tournament Ops</h2>
         <p style={{ color: "#475569" }}>Operations visibility plus guarded writes for creating draws, importing or maintaining teams, generating/scoring games, podiums, trophies, and official rating match publication.</p>
+        <nav aria-label="Tournament operations workflows" style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          <Link href="/admin/tournaments/ops/draws">Draws and scoring</Link>
+          <Link href="/admin/tournaments/ops/import">Team imports</Link>
+          <Link href="/admin/tournaments/ops/results">Results CSV</Link>
+          <Link href="/admin/tournaments/ops/publish">Official publish</Link>
+          {workflow !== "all" ? <Link href="/admin/tournaments/ops">All operations</Link> : null}
+        </nav>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to load guarded tournament operations data." : sessionLoading ? "Checking admin session…" : "Sign in before loading ops data."}</p>
@@ -485,23 +621,23 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Select tournament</h2>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 240px) auto", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>Tournament</strong><br /><select value={selectedTournamentId} onChange={(event) => { setSelectedTournamentId(event.target.value); setSelectedDrawId(""); setSnapshot(null); setDetail(null); setDrawEventOptionId(""); }} style={inputStyle}><option value="">Choose a tournament…</option>{tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}</select></label>
+            <label><strong>Tournament</strong><br /><select value={selectedTournamentId} onChange={(event) => { setSelectedTournamentId(event.target.value); setSelectedDrawId(""); setSnapshot(null); setDrawEventOptionId(""); setResultsPreview(null); setResultsReviewDirty(true); }} style={inputStyle}><option value="">Choose a tournament…</option>{tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status}</option>)}</select></label>
             <label><strong>Draw ID filter</strong><br /><input value={selectedDrawId} onChange={(event) => setSelectedDrawId(event.target.value)} placeholder="optional" style={inputStyle} /></label>
             <button type="button" onClick={() => loadOps()} disabled={busy || !selectedTournamentId} style={ghostButtonStyle}>Load ops snapshot</button>
           </div>
         </article>
       ) : null}
 
-      {detail ? (
+      {snapshot && shows("draws") ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
           <p style={{ color: "#475569" }}>This creates a DRAFT draw shell scoped to the selected registration division.</p>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(180px, 1fr) minmax(160px, 220px)", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{detail.event_options.map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
+            <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
             <label><strong>Draw name</strong><br /><input value={drawName} onChange={(event) => setDrawName(event.target.value)} placeholder="optional" style={inputStyle} /></label>
             <label><strong>Type CREATE DRAW</strong><br /><input value={drawConfirm} onChange={(event) => setDrawConfirm(event.target.value)} style={inputStyle} /></label>
           </div>
-          <p><button type="button" onClick={createDraw} disabled={busy || !accessToken || drawConfirm.trim().toUpperCase() !== "CREATE DRAW"} style={buttonStyle}>{busy ? "Creating…" : "Create draw"}</button></p>
+          <p><button type="button" onClick={createDraw} disabled={busy || !accessToken || !operationsWriteReady || !reviewedState || drawConfirm.trim().toUpperCase() !== "CREATE DRAW"} style={buttonStyle}>{busy ? "Creating…" : "Create draw"}</button></p>
         </article>
       ) : null}
 
@@ -517,6 +653,14 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
               <div><strong>Podium rows</strong><br />{snapshot.summary.podium}</div>
             </div>
             {snapshot.warnings?.length ? <ul style={{ color: "#92400e" }}>{snapshot.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+            <div style={{ marginTop: "1rem", padding: "0.75rem", borderRadius: "10px", background: operationsWriteReady && reviewedState ? "#f0fdf4" : "#fff7ed", color: operationsWriteReady && reviewedState ? "#166534" : "#9a3412" }}>
+              <strong>{operationsWriteReady && reviewedState ? "Guarded staging writes ready" : "Writes remain closed"}</strong>
+              <div>Reviewed state: <code>{reviewedState ? reviewedState.slice(0, 16) : "unavailable"}</code></div>
+              <div>Official publish: {officialPublishReady ? "gate open" : "gate closed"} · email handoff: {snapshot.operation_runtime?.email_handoff_enabled ? "gate open" : "gate closed"} · email mode: {snapshot.operation_runtime?.email_mode || "unknown"}</div>
+              {!operationsWriteReady ? <p style={{ marginBottom: 0 }}>The FastAPI service-role and Tournament Ops mutation flag must both be enabled in staging.</p> : null}
+              {!reviewedState ? <p style={{ marginBottom: 0 }}>The authoritative state could not be fingerprinted, so mutations fail closed.</p> : null}
+              <p style={{ marginBottom: 0 }}>For uncertain outcomes, preserve the exact request and operation key. <a href={snapshot.streamlit_fallback_url || status.streamlit_fallback_url || "https://juprtrespalapas.streamlit.app"} target="_blank" rel="noreferrer">Open the Streamlit fallback</a>.</p>
+            </div>
           </article>
 
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
@@ -527,13 +671,14 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
             </div>
           </article>
 
+          {shows("import") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
             <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Each registration must already be linked to a JUPR player.</p>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(200px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
               <label><strong>Mode</strong><br /><select value={registrationImportMode} onChange={(event) => setRegistrationImportMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
               <label><strong>Type IMPORT REGISTRATIONS</strong><br /><input value={registrationImportConfirm} onChange={(event) => setRegistrationImportConfirm(event.target.value)} style={inputStyle} /></label>
-              <button type="button" onClick={importRegistrations} disabled={busy || !accessToken || !selectedDrawId || registrationImportConfirm.trim().toUpperCase() !== "IMPORT REGISTRATIONS"} style={buttonStyle}>{busy ? "Importing…" : "Import registrations"}</button>
+              <button type="button" onClick={importRegistrations} disabled={drawCasWriteDisabled || !selectedDrawId || registrationImportConfirm.trim().toUpperCase() !== "IMPORT REGISTRATIONS"} style={buttonStyle}>{busy ? "Importing…" : "Import registrations"}</button>
             </div>
           </article>
 
@@ -544,10 +689,12 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
               <label><strong>Mode</strong><br /><select value={bulkTeamMode} onChange={(event) => setBulkTeamMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
               <label><strong>Type IMPORT TEAMS</strong><br /><input value={bulkTeamConfirm} onChange={(event) => setBulkTeamConfirm(event.target.value)} style={inputStyle} /></label>
-              <button type="button" onClick={importBulkTeams} disabled={busy || !accessToken || !selectedDrawId || bulkTeamConfirm.trim().toUpperCase() !== "IMPORT TEAMS"} style={buttonStyle}>{busy ? "Importing…" : "Import teams"}</button>
+              <button type="button" onClick={importBulkTeams} disabled={drawCasWriteDisabled || !selectedDrawId || bulkTeamConfirm.trim().toUpperCase() !== "IMPORT TEAMS"} style={buttonStyle}>{busy ? "Importing…" : "Import teams"}</button>
             </div>
           </article>
+          </> : null}
 
+          {shows("draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
             <p style={{ color: "#475569" }}>Assign players manually, then type <code>SAVE TEAMS</code>.</p>
@@ -555,12 +702,12 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
                   <label><strong>Type SAVE TEAMS</strong><br /><input value={teamConfirm} onChange={(event) => setTeamConfirm(event.target.value)} style={inputStyle} /></label>
-                  <button type="button" onClick={saveTeams} disabled={busy || !accessToken || teamConfirm.trim().toUpperCase() !== "SAVE TEAMS"} style={buttonStyle}>{busy ? "Saving…" : "Save teams"}</button>
+                  <button type="button" onClick={saveTeams} disabled={drawCasWriteDisabled || teamConfirm.trim().toUpperCase() !== "SAVE TEAMS"} style={buttonStyle}>{busy ? "Saving…" : "Save teams"}</button>
                 </div>
                 <div style={{ overflowX: "auto", marginTop: "1rem" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "920px" }}>
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
-                    <tbody>{teamRows.map((row, index) => <tr key={index}>
+                    <tbody>{teamRows.map((row, index) => <tr key={row.editor_key}>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.team_number} onChange={(event) => updateTeamRow(index, { team_number: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{snapshot.players?.length ? <select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select> : <input value={row.player1_id} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} placeholder="player id" style={inputStyle} />}</td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{snapshot.players?.length ? <select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}><option value="">Singles / no partner</option>{snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select> : <input value={row.player2_id} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} placeholder="optional player id" style={inputStyle} />}</td>
@@ -570,17 +717,104 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
                     </tr>)}</tbody>
                   </table>
                 </div>
-                <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={() => setTeamRows((current) => [...current, { team_number: String(current.length + 1), player1_id: "", player2_id: "", seed: String(current.length + 1), notes: "" }])} style={ghostButtonStyle}>Add team row</button><button type="button" onClick={() => resetTeamEditor(snapshot, selectedDrawId)} style={ghostButtonStyle}>Reset from snapshot</button></p>
+                <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={() => setTeamRows((current) => [...current, { editor_key: `new-team-${Date.now()}`, team_number: String(current.length + 1), player1_id: "", player2_id: "", seed: String(current.length + 1), notes: "" }])} style={ghostButtonStyle}>Add team row</button><button type="button" onClick={() => resetTeamEditor(snapshot, selectedDrawId)} style={ghostButtonStyle}>Reset from snapshot</button></p>
               </>
             ) : <p style={{ color: "#64748b" }}>Create or select a draw before editing teams.</p>}
           </article>
 
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate round-robin games</h2><p style={{ color: "#475569" }}>After teams are saved and team numbers are contiguous, type <code>GENERATE GAMES</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE GAMES</strong><br /><input value={gameConfirm} onChange={(event) => setGameConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generateGames} disabled={busy || !accessToken || !selectedDrawId || gameConfirm.trim().toUpperCase() !== "GENERATE GAMES"} style={buttonStyle}>{busy ? "Generating…" : "Generate games"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a game, enter the score, then type <code>SAVE SCORE</code>. Ties are blocked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Game</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a game…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><label><strong>Type SAVE SCORE</strong><br /><input value={scoreConfirm} onChange={(event) => setScoreConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={saveScore} disabled={busy || !accessToken || !scoreGameId || scoreConfirm.trim().toUpperCase() !== "SAVE SCORE"} style={buttonStyle}>{busy ? "Saving…" : "Save score"}</button></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance and type <code>GENERATE PLAYOFFS</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><label><strong>Type GENERATE PLAYOFFS</strong><br /><input value={playoffConfirm} onChange={(event) => setPlayoffConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePlayoffs} disabled={busy || !accessToken || !selectedDrawId || playoffConfirm.trim().toUpperCase() !== "GENERATE PLAYOFFS"} style={buttonStyle}>{busy ? "Generating…" : "Generate playoffs"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE PODIUM</strong><br /><input value={podiumConfirm} onChange={(event) => setPodiumConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePodium} disabled={busy || !accessToken || !selectedDrawId || podiumConfirm.trim().toUpperCase() !== "GENERATE PODIUM"} style={buttonStyle}>{busy ? "Generating…" : "Generate podium"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type AWARD PODIUM</strong><br /><input value={awardConfirm} onChange={(event) => setAwardConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={awardPodium} disabled={busy || !accessToken || !selectedDrawId || awardConfirm.trim().toUpperCase() !== "AWARD PODIUM"} style={buttonStyle}>{busy ? "Awarding…" : "Award podium"}</button></div></article>
-          <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}><h2 style={{ marginTop: 0 }}>Publish official rating matches</h2><p style={{ color: "#7c2d12" }}>This creates official Match Log rows from finalized tournament games and immediately applies the same rating update path used by regular matches. Optional medal-playoff bonus is winner-only: it adds Elo to winners of semifinal, bronze, and gold medal matches without subtracting bonus points from losing teams.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR. Applied only to SF/Bronze/Gold winners.</small></label><label><strong>Type PUBLISH MATCHES</strong><br /><input value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={publishOfficialMatches} disabled={busy || !accessToken || !selectedDrawId || publishConfirm.trim().toUpperCase() !== "PUBLISH MATCHES"} style={buttonStyle}>{busy ? "Publishing…" : "Publish official matches"}</button></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate round-robin games</h2><p style={{ color: "#475569" }}>After teams are saved and team numbers are contiguous, type <code>GENERATE GAMES</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE GAMES</strong><br /><input value={gameConfirm} onChange={(event) => setGameConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generateGames} disabled={teamSnapshotCasDisabled || !selectedDrawId || gameConfirm.trim().toUpperCase() !== "GENERATE GAMES"} style={buttonStyle}>{busy ? "Generating…" : "Generate games"}</button></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a game, enter the score, then type <code>SAVE SCORE</code>. Ties are blocked; published, awarded, or downstream-finalized draws are locked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Game</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a game…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><label><strong>Type SAVE SCORE</strong><br /><input value={scoreConfirm} onChange={(event) => setScoreConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={saveScore} disabled={drawCasWriteDisabled || !scoreGameId || scoreConfirm.trim().toUpperCase() !== "SAVE SCORE"} style={buttonStyle}>{busy ? "Saving…" : "Save score"}</button></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance and type <code>GENERATE PLAYOFFS</code>.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><label><strong>Type GENERATE PLAYOFFS</strong><br /><input value={playoffConfirm} onChange={(event) => setPlayoffConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePlayoffs} disabled={gameSnapshotCasDisabled || !selectedDrawId || playoffConfirm.trim().toUpperCase() !== "GENERATE PLAYOFFS"} style={buttonStyle}>{busy ? "Generating…" : "Generate playoffs"}</button></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type GENERATE PODIUM</strong><br /><input value={podiumConfirm} onChange={(event) => setPodiumConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={generatePodium} disabled={gameSnapshotCasDisabled || !selectedDrawId || podiumConfirm.trim().toUpperCase() !== "GENERATE PODIUM"} style={buttonStyle}>{busy ? "Generating…" : "Generate podium"}</button></div></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Type AWARD PODIUM</strong><br /><input value={awardConfirm} onChange={(event) => setAwardConfirm(event.target.value)} style={inputStyle} /></label><button type="button" onClick={awardPodium} disabled={guardedWriteDisabled || !selectedDrawId || awardConfirm.trim().toUpperCase() !== "AWARD PODIUM"} style={buttonStyle}>{busy ? "Awarding…" : "Award podium"}</button></div></article>
+          </> : null}
+
+          {shows("results") ? (
+            <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+              <h2 style={{ marginTop: 0 }}>Reviewed DUPR results CSV</h2>
+              <p style={{ color: "#1e3a8a" }}>Upload or paste a DUPR-style CSV, preview every player mapping and included match without writing, then commit only the exact reviewed fingerprint. The raw CSV stays out of the durable operation ledger.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(240px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
+                <label><strong>Import mode</strong><br /><select value={resultsImportMode} onChange={(event) => { setResultsImportMode(event.target.value); setResultsPreview(null); setResultsReviewDirty(true); setResultsConfirm(""); }} style={inputStyle}><option value="REPLACE">Replace draw results</option><option value="APPEND">Append imported results</option></select></label>
+                <label><strong>CSV file (1 MB maximum)</strong><br /><input type="file" accept=".csv,text/csv" onChange={(event) => void loadResultsFile(event.target.files?.[0] || null)} style={inputStyle} /></label>
+              </div>
+              <label style={{ display: "block", marginTop: "0.75rem" }}><strong>CSV contents</strong><br /><textarea value={resultsRawText} onChange={(event) => { setResultsRawText(event.target.value); setResultsPreview(null); setResultsReviewDirty(true); setResultsConfirm(""); }} style={{ ...inputStyle, minHeight: "10rem", fontFamily: "monospace" }} /></label>
+              <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+                <button type="button" onClick={previewResultsImport} disabled={busy || !accessToken || !selectedDrawId || !resultsRawText.trim()} style={ghostButtonStyle}>{busy ? "Reviewing…" : resultsPreview ? "Re-preview exact choices" : "Preview without writing"}</button>
+                <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}><input type="checkbox" checked={allowDuplicateMapping} onChange={(event) => { setAllowDuplicateMapping(event.target.checked); setResultsReviewDirty(true); }} />Explicitly allow duplicate player mappings</label>
+              </p>
+
+              {resultsPreview ? (
+                <div style={{ display: "grid", gap: "1rem" }}>
+                  <div style={{ padding: "0.75rem", background: resultsPreview.ok && !resultsReviewDirty ? "#f0fdf4" : "#fff7ed", borderRadius: "10px" }}>
+                    <strong>{resultsPreview.ok ? "Preview parsed" : "Preview needs review"}</strong> · {resultsPreview.summary.imported_players} players · {resultsPreview.summary.teams} teams · {resultsPreview.summary.matches} matches · {resultsPreview.summary.create_players} proposed new players
+                    <div>Review fingerprint: <code>{resultsPreview.review_fingerprint.slice(0, 16)}</code>{resultsReviewDirty ? " · choices changed; preview again" : " · exact review current"}</div>
+                    {resultsPreview.errors.length ? <ul style={{ color: "#b91c1c" }}>{resultsPreview.errors.map((error) => <li key={error}>{error}</li>)}</ul> : null}
+                    {resultsPreview.warnings.length ? <ul style={{ color: "#92400e" }}>{resultsPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <h3>Player mappings</h3>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "760px" }}>
+                      <thead><tr>{["Imported player", "Decision", "Existing JUPR player", "Suggestion"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #93c5fd" }}>{header}</th>)}</tr></thead>
+                      <tbody>{resultsPreview.players.map((player, index) => {
+                        const importKey = String(player.import_key || index);
+                        const decision = resultsMappings[importKey] || {};
+                        const suggestion = resultsPreview.suggestions[importKey] || {};
+                        return <tr key={importKey}>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(player.display_name || player.name || importKey)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={decision.action || "unresolved"} onChange={(event) => { const action = event.target.value; setResultsMappings((current) => ({ ...current, [importKey]: { action, player_id: action === "use_existing" ? current[importKey]?.player_id ?? null : null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="unresolved">Resolve before commit</option><option value="use_existing">Use existing player</option><option value="create_new">Create new player</option></select></td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{decision.action === "use_existing" ? <select value={String(decision.player_id || "")} onChange={(event) => { setResultsMappings((current) => ({ ...current, [importKey]: { action: "use_existing", player_id: event.target.value || null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">Choose player…</option>{resultsPreview.player_options.map((option) => <option key={String(option.id)} value={String(option.id)}>{option.name}</option>)}</select> : <span>—</span>}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(suggestion.suggested_player_name || suggestion.suggested_name || suggestion.reason)}</td>
+                        </tr>;
+                      })}</tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <h3>Match review</h3>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "760px" }}>
+                      <thead><tr>{["Source row", "Include", "Stage", "Team A", "Team B", "Score"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #93c5fd" }}>{header}</th>)}</tr></thead>
+                      <tbody>{resultsPreview.matches.map((match, index) => {
+                        const rowKey = String(match.source_row || index + 1);
+                        const review = resultsMatchReviews[rowKey] || { include: true, stage: String(match.stage || "PLAYOFF") };
+                        return <tr key={rowKey}>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{rowKey}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><input type="checkbox" checked={review.include !== false} onChange={(event) => { setResultsMatchReviews((current) => ({ ...current, [rowKey]: { ...review, include: event.target.checked } })); setResultsReviewDirty(true); }} /></td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={review.stage || "PLAYOFF"} onChange={(event) => { setResultsMatchReviews((current) => ({ ...current, [rowKey]: { ...review, stage: event.target.value } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="ROUND_ROBIN">Round robin</option><option value="PLAYOFF">Playoff</option><option value="BRONZE">Bronze</option><option value="FINAL">Final</option></select></td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.team_a_label || match.team_a_ref)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.team_b_label || match.team_b_ref)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.score_a)}–{shortValue(match.score_b)}</td>
+                        </tr>;
+                      })}</tbody>
+                    </table>
+                  </div>
+
+                  <div>
+                    <h3>Podium review</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>{["1", "2", "3"].map((placement) => <label key={placement}><strong>Place {placement}</strong><br /><select value={resultsPodiumRefs[placement] || ""} onChange={(event) => { setResultsPodiumRefs((current) => ({ ...current, [placement]: event.target.value || null })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">No placement</option>{resultsPreview.podium_candidates.map((teamRef) => <option key={teamRef} value={teamRef}>{teamRef}</option>)}</select></label>)}</div>
+                  </div>
+
+                  <div style={{ padding: "0.9rem", border: "1px solid #93c5fd", borderRadius: "10px", background: "white" }}>
+                    <label><strong>Type {resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS"}</strong><br /><input value={resultsConfirm} onChange={(event) => setResultsConfirm(event.target.value)} style={inputStyle} /></label>
+                    <p style={{ marginBottom: 0 }}><button type="button" onClick={commitResultsImport} disabled={drawCasWriteDisabled || !selectedDrawId || !resultsPreview.ok || resultsReviewDirty || resultsConfirm.trim().toUpperCase() !== (resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS")} style={buttonStyle}>{busy ? "Importing…" : "Commit reviewed results"}</button></p>
+                  </div>
+                </div>
+              ) : null}
+            </article>
+          ) : null}
+
+          {shows("publish") ? (
+            <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
+              <h2 style={{ marginTop: 0 }}>Publish official rating matches</h2>
+              <p style={{ color: "#7c2d12" }}>Creates official Match Log rows from finalized tournament games and applies the regular rating path for both doubles and singles. Optional medal-playoff bonus adds Elo only to semifinal, bronze, and gold winners. Publishing needs both tournament and match-management permissions, a separate staging gate, and a safe email mode when automatic player updates are enabled.</p>
+              {!officialPublishReady ? <p style={{ color: "#b91c1c", fontWeight: 700 }}>Official publish is gated off in this environment.</p> : null}
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) minmax(180px, 260px) auto", gap: "0.75rem", alignItems: "end" }}>
+                <label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR.</small></label>
+                <label><strong>Type PUBLISH MATCHES</strong><br /><input value={publishConfirm} onChange={(event) => setPublishConfirm(event.target.value)} style={inputStyle} /></label>
+                <button type="button" onClick={publishOfficialMatches} disabled={guardedWriteDisabled || !officialPublishReady || !selectedDrawId || publishConfirm.trim().toUpperCase() !== "PUBLISH MATCHES"} style={buttonStyle}>{busy ? "Publishing…" : "Publish official matches"}</button>
+              </div>
+            </article>
+          ) : null}
 
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>
           <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Teams</h2><GenericRowsTable rows={snapshot.teams} preferredColumns={["team_number", "player1_id", "player2_id", "source", "draw_id", "event_option_id"]} /></article>
@@ -589,7 +823,7 @@ export default function TournamentOpsPanel({ apiBase, clubId, status }: Props) {
         </>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" aria-live="polite" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }

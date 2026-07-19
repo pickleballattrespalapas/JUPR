@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
+from jupr_app.config import get_email_mode
+from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+from jupr_app.services.admin_player_updates_service import is_auto_player_updates_enabled
+from jupr_app.services.admin_tournament_guarded_operation import tournament_admin_guarded_runtime_enabled
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
     _clean_text,
@@ -16,6 +21,17 @@ OPS_TABLES = {
     "games": "tournament_games",
     "podium": "tournament_podium",
 }
+OPS_STATE_TABLES = (
+    "tournament_event_draws",
+    "tournament_teams",
+    "tournament_games",
+    "tournament_podium",
+    "tournament_registration_days",
+    "tournament_event_options",
+    "tournament_registrations",
+    "tournament_registration_selections",
+)
+TRUTHY = {"1", "true", "yes", "y", "on"}
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -49,6 +65,10 @@ def _player_options(supabase: Any, *, club_id: str) -> tuple[list[dict[str, Any]
         )
     except Exception as exc:  # noqa: BLE001 - player options are helpful but not required for the ops snapshot
         return [], [f"players unavailable: {exc.__class__.__name__}"]
+    return _player_options_from_rows(rows), []
+
+
+def _player_options_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     players: list[dict[str, Any]] = []
     for row in rows:
         try:
@@ -60,7 +80,7 @@ def _player_options(supabase: Any, *, club_id: str) -> tuple[list[dict[str, Any]
             continue
         active_value = row.get("active", row.get("is_active", True))
         players.append({"id": player_id, "name": name, "active": bool(active_value)})
-    return sorted(players, key=lambda row: str(row.get("name") or "").lower()), []
+    return sorted(players, key=lambda row: str(row.get("name") or "").lower())
 
 
 def _sort_rows(rows: list[dict[str, Any]], *keys: str) -> list[dict[str, Any]]:
@@ -68,6 +88,172 @@ def _sort_rows(rows: list[dict[str, Any]], *keys: str) -> list[dict[str, Any]]:
         return tuple(str(row.get(key) or "") for key in keys)
 
     return sorted(rows, key=sort_key)
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in TRUTHY
+
+
+def _canonical_state_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove no fields, but impose a stable order before hashing DB state."""
+
+    return sorted(
+        [dict(row) for row in rows],
+        key=lambda row: (
+            str(row.get("id") or ""),
+            str(row.get("draw_id") or ""),
+            str(row.get("registration_id") or ""),
+            str(row.get("team_number") or ""),
+            str(row.get("placement") or ""),
+        ),
+    )
+
+
+def _strict_paginated_rows(
+    supabase: Any,
+    table_name: str,
+    *,
+    filters: tuple[tuple[str, Any], ...],
+    page_size: int = 500,
+) -> list[dict[str, Any]]:
+    """Read a complete deterministic table slice or fail closed.
+
+    Real Supabase builders expose ``range``; small in-memory test doubles do not,
+    so they use one bounded read and are rejected if that bound is saturated.
+    """
+
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        query = supabase.table(table_name).select("*")
+        for key, value in filters:
+            query = query.eq(str(key), value)
+        if hasattr(query, "order"):
+            query = query.order("id", desc=False)
+        supports_range = hasattr(query, "range")
+        if supports_range:
+            query = query.range(offset, offset + int(page_size) - 1)
+        else:
+            query = query.limit(int(page_size))
+        page = _safe_rows(query.execute())
+        rows.extend(page)
+        if not supports_range:
+            if len(page) >= int(page_size):
+                raise RuntimeError(f"{table_name} state exceeded the safe non-paginated read bound")
+            break
+        if len(page) < int(page_size):
+            break
+        offset += int(page_size)
+        if offset > 100_000:
+            raise RuntimeError(f"{table_name} state exceeded the Tournament Ops safety bound")
+    return rows
+
+
+def _load_admin_tournament_ops_state(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    tournament: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    clean_tournament_id = _clean_text(tournament_id, limit=120)
+    current_tournament = tournament or _first_row(
+        supabase,
+        "tournaments",
+        TOURNAMENT_SELECT,
+        key="id",
+        value=clean_tournament_id,
+    )
+    if not current_tournament or str(current_tournament.get("club_id") or "") != str(club_id):
+        raise ValueError("tournament not found")
+
+    state: dict[str, Any] = {"tournament": dict(current_tournament), "tables": {}}
+    for table_name in OPS_STATE_TABLES:
+        state["tables"][table_name] = _canonical_state_rows(
+            _strict_paginated_rows(
+                supabase,
+                table_name,
+                filters=(("tournament_id", clean_tournament_id),),
+            )
+        )
+    player_rows = _strict_paginated_rows(supabase, "players", filters=(("club_id", str(club_id)),))
+    published_rows = _strict_paginated_rows(
+        supabase,
+        "matches",
+        filters=(("club_id", str(club_id)), ("tournament_id", clean_tournament_id)),
+    )
+    badge_rows = _strict_paginated_rows(
+        supabase,
+        "player_badges",
+        filters=(("club_id", str(club_id)), ("context_type", "tournament")),
+    )
+    badge_prefix = f"{clean_tournament_id}:"
+    state["players"] = _canonical_state_rows(player_rows)
+    state["published_matches"] = _canonical_state_rows(published_rows)
+    state["podium_badges"] = _canonical_state_rows(
+        [row for row in badge_rows if str(row.get("context_id") or "").startswith(badge_prefix)]
+    )
+    return state
+
+
+def get_admin_tournament_ops_state_fingerprint(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+) -> str:
+    """Fingerprint every authoritative input/output touched by Tournament Ops.
+
+    Unlike the display snapshot, this helper is strict: an unavailable table
+    aborts a staging mutation before intent is recorded. The operation ledger
+    and activity log are deliberately excluded so a guard can recheck state
+    after acquiring its per-tournament lock.
+    """
+
+    state = _load_admin_tournament_ops_state(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+    )
+    return stable_tournament_admin_fingerprint(state)
+
+
+def require_admin_tournament_official_publish_runtime() -> None:
+    """Apply the extra rating/email gates used only by official publishing."""
+
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if environment == "production":
+        raise PermissionError(
+            "Tournament official publishing is staging-only until manual parity acceptance is complete."
+        )
+    if environment != "staging":
+        return
+    if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"):
+        raise PermissionError(
+            "Tournament official publishing is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH only for the approved staging exercise."
+        )
+    if is_auto_player_updates_enabled():
+        if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"):
+            raise PermissionError(
+                "Automatic tournament player-update email handoff is disabled. Open its separate staging gate before official publish."
+            )
+        if get_email_mode() not in {"dry_run", "staging_redirect"}:
+            raise PermissionError(
+                "Tournament staging publish requires JUPR_EMAIL_MODE=dry_run or staging_redirect; live delivery is refused."
+            )
+
+
+def build_admin_tournament_ops_runtime_status() -> dict[str, Any]:
+    environment = os.getenv("JUPR_ENV", "").strip().lower() or "local"
+    return {
+        "environment": environment,
+        "operations_mutations_enabled": tournament_admin_guarded_runtime_enabled("operations"),
+        "official_publish_enabled": environment == "staging" and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"),
+        "email_handoff_enabled": environment == "staging" and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"),
+        "auto_player_updates_enabled": is_auto_player_updates_enabled(),
+        "email_mode": get_email_mode(),
+        "staging_only": True,
+    }
 
 
 def get_admin_tournament_ops_snapshot(
@@ -87,12 +273,33 @@ def get_admin_tournament_ops_snapshot(
         raise ValueError("tournament not found")
 
     warnings: list[str] = []
-    draws, draw_warnings = _table_rows(supabase, OPS_TABLES["draws"], tournament_id=clean_tournament_id)
-    teams, team_warnings = _table_rows(supabase, OPS_TABLES["teams"], tournament_id=clean_tournament_id)
-    games, game_warnings = _table_rows(supabase, OPS_TABLES["games"], tournament_id=clean_tournament_id)
-    podium, podium_warnings = _table_rows(supabase, OPS_TABLES["podium"], tournament_id=clean_tournament_id)
-    players, player_warnings = _player_options(supabase, club_id=str(club_id))
-    warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings, *player_warnings])
+    state_fingerprint: str | None = None
+    try:
+        state = _load_admin_tournament_ops_state(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            tournament=tournament,
+        )
+        state_tables = dict(state.get("tables") or {})
+        draws = list(state_tables.get(OPS_TABLES["draws"]) or [])
+        teams = list(state_tables.get(OPS_TABLES["teams"]) or [])
+        games = list(state_tables.get(OPS_TABLES["games"]) or [])
+        podium = list(state_tables.get(OPS_TABLES["podium"]) or [])
+        registration_days = list(state_tables.get("tournament_registration_days") or [])
+        event_options = list(state_tables.get("tournament_event_options") or [])
+        players = _player_options_from_rows(list(state.get("players") or []))
+        state_fingerprint = stable_tournament_admin_fingerprint(state)
+    except Exception as exc:  # retain read-only recovery, but never pair it with an accepted write fingerprint
+        warnings.append(f"Tournament Ops state fingerprint unavailable: {exc.__class__.__name__}")
+        draws, draw_warnings = _table_rows(supabase, OPS_TABLES["draws"], tournament_id=clean_tournament_id)
+        teams, team_warnings = _table_rows(supabase, OPS_TABLES["teams"], tournament_id=clean_tournament_id)
+        games, game_warnings = _table_rows(supabase, OPS_TABLES["games"], tournament_id=clean_tournament_id)
+        podium, podium_warnings = _table_rows(supabase, OPS_TABLES["podium"], tournament_id=clean_tournament_id)
+        registration_days, day_warnings = _table_rows(supabase, "tournament_registration_days", tournament_id=clean_tournament_id)
+        event_options, event_warnings = _table_rows(supabase, "tournament_event_options", tournament_id=clean_tournament_id)
+        players, player_warnings = _player_options(supabase, club_id=str(club_id))
+        warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings, *day_warnings, *event_warnings, *player_warnings])
 
     clean_draw_id = _clean_text(draw_id, limit=120) or None
     if clean_draw_id:
@@ -105,6 +312,8 @@ def get_admin_tournament_ops_snapshot(
     teams = _sort_rows(teams, "draw_id", "team_number", "id")
     games = _sort_rows(games, "draw_id", "stage", "rr_round_number", "rr_slot_number", "game_number", "id")
     podium = _sort_rows(podium, "draw_id", "placement", "id")
+    registration_days = _sort_rows(registration_days, "event_date", "sort_order", "id")
+    event_options = _sort_rows(event_options, "registration_day_id", "sort_order", "id")
 
     return {
         "ok": True,
@@ -122,6 +331,12 @@ def get_admin_tournament_ops_snapshot(
         "teams": teams,
         "games": games,
         "podium": podium,
+        "registration_days": registration_days,
+        "event_options": event_options,
         "players": players,
+        "state_fingerprint": state_fingerprint,
+        "state_ready": bool(state_fingerprint),
+        "operation_runtime": build_admin_tournament_ops_runtime_status(),
+        "streamlit_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "").strip() or "https://juprtrespalapas.streamlit.app",
         "warnings": warnings,
     }

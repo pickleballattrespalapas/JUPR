@@ -7,6 +7,8 @@ import uuid
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
+from jupr_app.services.admin_tournament_game_service import _require_reviewed_draw_version
+from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
     _clean_text,
@@ -52,8 +54,8 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw; team replacement was refused.") from exc
     return rows[0] if rows else None
 
 
@@ -66,8 +68,8 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not verify whether this draw already has games; team replacement was refused.") from exc
 
 
 def _existing_teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[dict[str, Any]]:
@@ -79,9 +81,34 @@ def _existing_teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str)
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load current draw teams; team replacement was refused.") from exc
     return sorted(rows, key=lambda row: int(_safe_int(row.get("team_number")) or 0))
+
+
+def _require_club_player_ids(supabase: Any, *, club_id: str, team_rows: list[dict[str, Any]]) -> None:
+    requested = {
+        int(player_id)
+        for row in team_rows
+        for player_id in (_safe_int(row.get("player1_id")), _safe_int(row.get("player2_id")))
+        if player_id is not None
+    }
+    if not requested:
+        return
+    try:
+        rows = _safe_rows(
+            supabase.table("players")
+            .select("id")
+            .eq("club_id", str(club_id))
+            .in_("id", sorted(requested))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Could not verify team player ownership; team replacement was refused.") from exc
+    found = {int(float(row.get("id"))) for row in rows if row.get("id") not in (None, "")}
+    missing = sorted(requested - found)
+    if missing:
+        raise ValueError(f"Team player IDs do not belong to this club: {', '.join(str(value) for value in missing)}")
 
 
 def _team_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -98,6 +125,48 @@ def _team_payload(row: dict[str, Any]) -> dict[str, Any]:
         "source": _clean_text(row.get("source") or "MANUAL", limit=60),
         "notes": _clean_text(row.get("notes"), limit=500),
     }
+
+
+def write_admin_tournament_draw_teams_atomic(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+    expected_draw_updated_at: str,
+    rows: list[dict[str, Any]],
+    replace: bool,
+) -> list[dict[str, Any]]:
+    """Write one reviewed team set through the service-role-only SQL RPC."""
+
+    try:
+        response = supabase.rpc(
+            "admin_write_tournament_draw_teams_cas",
+            {
+                "p_club_id": str(club_id),
+                "p_tournament_id": str(tournament_id),
+                "p_draw_id": str(draw_id),
+                "p_expected_draw_updated_at": str(expected_draw_updated_at),
+                "p_replace": bool(replace),
+                "p_teams": list(rows),
+            },
+        ).execute()
+    except Exception as exc:
+        if any(marker in str(exc) for marker in ("JUPR_TOURNAMENT_DRAW_STALE", "JUPR_TOURNAMENT_DRAW_HAS_GAMES")):
+            raise StaleTournamentAdminStateError(
+                "The draw changed while teams were being saved. Reload the Ops snapshot before continuing."
+            ) from exc
+        raise RuntimeError("Atomic tournament team write failed; no team set was committed.") from exc
+    data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        saved = data.get("teams")
+    elif isinstance(data, list) and data and isinstance(data[0], dict):
+        saved = data[0].get("teams")
+    else:
+        saved = None
+    if not isinstance(saved, list):
+        raise RuntimeError("Atomic tournament team RPC returned no saved team set.")
+    return [dict(row) for row in saved if isinstance(row, dict)]
 
 
 def _normalize_team_rows(team_rows: list[dict[str, Any]], *, draw: dict[str, Any], tournament_id: str) -> list[dict[str, Any]]:
@@ -151,7 +220,10 @@ def replace_admin_tournament_draw_teams(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_draw_updated_at: str | None = None,
     source: str = "next_tournament_admin_replace_teams",
+    dry_run: bool = False,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -166,20 +238,50 @@ def replace_admin_tournament_draw_teams(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    reviewed_draw_version = _require_reviewed_draw_version(
+        draw,
+        expected_draw_updated_at=expected_draw_updated_at,
+        atomic=atomic,
+    )
     if _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id):
         raise ValueError("This draw already has games. Clear or recreate the games before replacing teams.")
 
     before_rows = _existing_teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     next_rows = _normalize_team_rows(list(teams or []), draw=draw, tournament_id=clean_tournament_id)
+    _require_club_player_ids(supabase, club_id=str(club_id), team_rows=next_rows)
 
-    (
-        supabase.table("tournament_teams")
-        .delete()
-        .eq("tournament_id", clean_tournament_id)
-        .eq("draw_id", clean_draw_id)
-        .execute()
-    )
-    inserted = _safe_rows(supabase.table("tournament_teams").insert(next_rows).execute()) if next_rows else []
+    if dry_run:
+        output_rows = [_team_payload(row) for row in next_rows]
+        return {
+            "ok": True,
+            "mode": "tournament_draw_team_replace_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "teams": output_rows,
+            "updated_count": len(output_rows),
+            "warnings": [],
+        }
+
+    if atomic:
+        inserted = write_admin_tournament_draw_teams_atomic(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=clean_tournament_id,
+            draw_id=clean_draw_id,
+            expected_draw_updated_at=reviewed_draw_version,
+            rows=next_rows,
+            replace=True,
+        )
+    else:
+        (
+            supabase.table("tournament_teams")
+            .delete()
+            .eq("tournament_id", clean_tournament_id)
+            .eq("draw_id", clean_draw_id)
+            .execute()
+        )
+        inserted = _safe_rows(supabase.table("tournament_teams").insert(next_rows).execute()) if next_rows else []
     output_rows = [_team_payload(row) for row in (inserted or next_rows)]
 
     audit_payload = build_activity_payload(

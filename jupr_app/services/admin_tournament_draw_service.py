@@ -24,8 +24,8 @@ def _now_iso() -> str:
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in (resp.data or [])]
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("Could not verify existing tournament draws; draw creation was refused.") from exc
 
 
 def _event_label(row: dict[str, Any] | None) -> str:
@@ -89,6 +89,7 @@ def create_admin_tournament_draw(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_admin_create_draw",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -134,6 +135,15 @@ def create_admin_tournament_draw(
         "created_at": now,
         "updated_at": now,
     }
+    if dry_run:
+        return {
+            "ok": True,
+            "mode": "tournament_draw_create_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw": _draw_payload(insert_payload),
+            "warnings": [],
+        }
     rows = _safe_rows(supabase.table("tournament_event_draws").insert(insert_payload).execute())
     draw = _draw_payload(rows[0] if rows else insert_payload)
 

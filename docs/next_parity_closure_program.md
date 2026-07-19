@@ -73,6 +73,8 @@ executed.
 
 Order 26 is automated-ready/manual-ready on its branch: dedicated setup, Python templates and impact review, stale-safe tournament/registration edits, durable audit/replay semantics, imported-draw refusal, and the read-only Operations import handoff are covered. The three tournament rows intentionally remain `Partial` until the consolidated staging book is executed.
 
+Order 27 has automated implementation and focused recovery evidence on its branch: route-specific draw/import/results/publish workflows, Python-authoritative lifecycle checks, reviewed DUPR import, atomic result/player persistence, game score CAS, and deterministic exact-set official-publish reconciliation are covered. The tournament rows intentionally remain `Partial`; no `Done` marker is allowed until the disposable staging acceptance and cumulative Order-29 evidence are recorded.
+
 ## Page-level closure contracts
 
 The automated column defines evidence that can be built before the final manual test

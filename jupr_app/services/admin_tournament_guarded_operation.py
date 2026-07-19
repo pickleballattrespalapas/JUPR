@@ -14,6 +14,7 @@ SURFACE_MUTATION_FLAGS = {
     "setup": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS",
     "registration": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS",
     "import_handoff": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF",
+    "operations": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS",
 }
 TRUTHY = {"1", "true", "yes", "y", "on"}
 
@@ -240,6 +241,7 @@ def run_tournament_admin_guarded_operation(
     actor_role: str,
     source: str,
     preflight: Callable[[], Any] | None = None,
+    reconcile: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     mutate: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
     """Run one tournament mutation with intent, replay, and recovery state.
@@ -276,6 +278,25 @@ def run_tournament_admin_guarded_operation(
             return _public_result(existing, stored_result, replay=True)
         status = str(existing.get("status") or "")
         has_reconcilable_result = isinstance(stored_result, dict) and bool(stored_result)
+        if status == "recovery_required" and not has_reconcilable_result and reconcile is not None:
+            # A durable intent exists but the response/result marker was lost.  The
+            # callback is deliberately read-only: it may reconstruct a result only
+            # from exact authoritative evidence and must never repeat the mutation.
+            reconciled_result = reconcile(existing)
+            if isinstance(reconciled_result, dict) and reconciled_result:
+                existing = _update_operation(
+                    supabase,
+                    club_id=str(club_id),
+                    operation_key=operation_request["operation_key"],
+                    patch={
+                        "status": "mutated",
+                        "result_json": reconciled_result,
+                        "error_text": None,
+                    },
+                )
+                stored_result = reconciled_result
+                status = "mutated"
+                has_reconcilable_result = True
         if (status == "mutated" and isinstance(stored_result, dict)) or (status == "recovery_required" and has_reconcilable_result):
             try:
                 _write_required_audit(
@@ -335,7 +356,8 @@ def run_tournament_admin_guarded_operation(
                 ) from exc
             return _public_result(completed, stored_result, replay=True, reconciled=True)
         raise TournamentAdminRecoveryRequiredError(
-            "A prior attempt with this operation key has unresolved recovery state. Reload the authoritative detail and use the Streamlit fallback if reconciliation cannot be verified."
+            "A prior attempt with this operation key has unresolved recovery state. "
+            f"Operation key: {operation_request['operation_key']}. Reload authoritative detail; do not repeat the mutation."
         )
 
     authoritative_state = str(current_state() or "").strip()
@@ -405,6 +427,36 @@ def run_tournament_admin_guarded_operation(
 
     try:
         result = dict(mutate() or {})
+    except StaleTournamentAdminStateError as exc:
+        error_text = str(exc)[:1000]
+        try:
+            _update_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=operation_request["operation_key"],
+                patch={"status": "failed", "error_text": error_text},
+            )
+        except Exception as state_exc:
+            raise TournamentAdminRecoveryRequiredError(
+                "A SQL compare-and-swap rejected stale Tournament Admin state without a domain write, but the failed marker did not persist. Reconcile the operation before continuing."
+            ) from state_exc
+        audit_error = _attempt_failure_audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            operation=operation_request,
+            source=source,
+            error_text=error_text,
+        )
+        if audit_error is not None:
+            raise TournamentAdminRecoveryRequiredError(
+                "A SQL compare-and-swap rejected stale Tournament Admin state without a domain write, but its required failure audit did not persist."
+            ) from audit_error
+        raise
     except Exception as exc:
         error_text = str(exc)[:1000]
         recovery_state_error: Exception | None = None
@@ -440,6 +492,7 @@ def run_tournament_admin_guarded_operation(
             "Tournament Admin raised after durable intent, so the write outcome may be partial or response-lost. Reload authoritative state and reconcile; do not submit a new operation."
             + " "
             + " ".join(suffix_parts)
+            + f" Operation key: {operation_request['operation_key']}."
         ) from exc
 
     try:

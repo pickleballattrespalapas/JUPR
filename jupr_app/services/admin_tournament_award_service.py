@@ -34,8 +34,8 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw; podium awards were refused.") from exc
     return rows[0] if rows else None
 
 
@@ -48,8 +48,8 @@ def _podium_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load the draw podium; podium awards were refused.") from exc
     return rows
 
 
@@ -63,6 +63,7 @@ def award_admin_tournament_draw_podium(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_tournament_admin_award_podium",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -85,6 +86,18 @@ def award_admin_tournament_draw_podium(
     candidates = build_tournament_podium_candidates(ctx, clean_tournament_id, str(tournament.get("name") or ""), draw_id=clean_draw_id)
     if not candidates:
         raise ValueError("No podium badge candidates could be built for this draw.")
+    if dry_run:
+        return {
+            "ok": True,
+            "mode": "tournament_draw_podium_award_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "candidate_count": len(candidates),
+            "awarded_count": 0,
+            "badge_ids": sorted({str(candidate.badge_id) for candidate in candidates}),
+            "warnings": [],
+        }
     awarded = award_tournament_trophies_from_podium(ctx, clean_tournament_id, str(tournament.get("name") or ""), draw_id=clean_draw_id)
 
     audit_payload = build_activity_payload(

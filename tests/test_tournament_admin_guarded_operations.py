@@ -33,11 +33,12 @@ def _enable_staging(monkeypatch, surface: str = "registration") -> None:
         "registration": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS",
         "tournament": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS",
         "setup": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS",
+        "operations": "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS",
     }[surface]
     monkeypatch.setenv(flag, "1")
 
 
-def _run(supabase, *, mutate, expected_state: str = "v1", preflight=None, current_state=None):
+def _run(supabase, *, mutate, expected_state: str = "v1", preflight=None, current_state=None, reconcile=None):
     return run_tournament_admin_guarded_operation(
         supabase,
         club_id="club",
@@ -52,6 +53,7 @@ def _run(supabase, *, mutate, expected_state: str = "v1", preflight=None, curren
         actor_role="club_owner",
         source="test_tournament_admin_guard",
         preflight=preflight,
+        reconcile=reconcile,
         mutate=mutate,
     )
 
@@ -176,6 +178,25 @@ def test_state_is_rechecked_after_atomic_lock_acquisition_before_intent_audit(mo
     assert tables["domain_rows"] == []
 
 
+def test_sql_cas_stale_after_intent_marks_failed_and_releases_recovery_lock(monkeypatch) -> None:
+    _enable_staging(monkeypatch)
+    tables = {"tournament_admin_operations": [], "admin_activity_log": [], "domain_rows": []}
+    supabase = FakeSupabase(tables)
+
+    def stale_cas():
+        raise StaleTournamentAdminStateError("exact child snapshot changed under lock")
+
+    with pytest.raises(StaleTournamentAdminStateError, match="child snapshot changed"):
+        _run(supabase, mutate=stale_cas)
+
+    assert tables["domain_rows"] == []
+    assert tables["tournament_admin_operations"][0]["status"] == "failed"
+    assert [row["action_type"] for row in tables["admin_activity_log"]] == [
+        "tournament_registration_update_intent",
+        "tournament_registration_update_failure",
+    ]
+
+
 def test_partial_mutation_exception_is_recovery_required_and_never_blindly_retried(monkeypatch) -> None:
     _enable_staging(monkeypatch)
     tables = {"tournament_admin_operations": [], "admin_activity_log": [], "domain_rows": []}
@@ -199,6 +220,73 @@ def test_partial_mutation_exception_is_recovery_required_and_never_blindly_retri
     with pytest.raises(TournamentAdminRecoveryRequiredError, match="unresolved recovery state"):
         _run(supabase, mutate=response_lost_after_write)
     assert mutation_calls == 1
+
+
+def test_empty_recovery_result_reconciles_only_from_callback_without_second_mutation(monkeypatch) -> None:
+    _enable_staging(monkeypatch)
+    tables = {"tournament_admin_operations": [], "admin_activity_log": [], "domain_rows": []}
+    supabase = FakeSupabase(tables)
+    mutation_calls = 0
+    reconcile_calls = 0
+
+    def response_lost_after_write():
+        nonlocal mutation_calls
+        mutation_calls += 1
+        tables["domain_rows"].append({"id": "official-1"})
+        raise TimeoutError("response lost")
+
+    with pytest.raises(TournamentAdminRecoveryRequiredError):
+        _run(supabase, mutate=response_lost_after_write)
+
+    def exact_readback(_operation):
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        assert tables["domain_rows"] == [{"id": "official-1"}]
+        return {"ok": True, "match_count": 1}
+
+    reconciled = _run(supabase, mutate=response_lost_after_write, reconcile=exact_readback)
+
+    assert reconciled["reconciled"] is True
+    assert reconciled["idempotent_replay"] is True
+    assert mutation_calls == 1
+    assert reconcile_calls == 1
+    assert tables["tournament_admin_operations"][0]["status"] == "completed"
+
+
+def test_empty_or_partial_reconciliation_evidence_stays_recovery_required(monkeypatch) -> None:
+    _enable_staging(monkeypatch)
+    tables = {"tournament_admin_operations": [], "admin_activity_log": []}
+    supabase = FakeSupabase(tables)
+    mutation_calls = 0
+
+    def ambiguous_mutation():
+        nonlocal mutation_calls
+        mutation_calls += 1
+        raise TimeoutError("unknown outcome")
+
+    with pytest.raises(TournamentAdminRecoveryRequiredError):
+        _run(supabase, mutate=ambiguous_mutation)
+
+    def partial_readback(_operation):
+        raise TournamentAdminRecoveryRequiredError("partial evidence")
+
+    with pytest.raises(TournamentAdminRecoveryRequiredError, match="partial evidence"):
+        _run(supabase, mutate=ambiguous_mutation, reconcile=partial_readback)
+    assert mutation_calls == 1
+    assert tables["tournament_admin_operations"][0]["status"] == "recovery_required"
+
+
+def test_recovery_replay_refuses_tampered_request_fingerprint(monkeypatch) -> None:
+    _enable_staging(monkeypatch)
+    tables = {"tournament_admin_operations": [], "admin_activity_log": []}
+    supabase = FakeSupabase(tables)
+
+    with pytest.raises(TournamentAdminRecoveryRequiredError):
+        _run(supabase, mutate=lambda: (_ for _ in ()).throw(TimeoutError("unknown outcome")))
+    tables["tournament_admin_operations"][0]["request_fingerprint"] = "different-request"
+
+    with pytest.raises(ValueError, match="conflicts with a different request"):
+        _run(supabase, mutate=lambda: {"ok": True}, reconcile=lambda _operation: {"ok": True})
 
 
 def test_post_intent_failure_audit_is_attempted_when_recovery_state_update_is_lost(monkeypatch) -> None:

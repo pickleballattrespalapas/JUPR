@@ -8,6 +8,8 @@ import uuid
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import compute_podium_from_playoffs, compute_podium_from_rr
 from jupr_app.services.admin_tournament_draw_service import _draw_payload
+from jupr_app.services.admin_tournament_game_service import _require_reviewed_row_versions
+from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_GENERATE_PODIUM = "GENERATE PODIUM"
@@ -47,8 +49,8 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
             .limit(1)
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not verify the tournament draw; podium generation was refused.") from exc
     return rows[0] if rows else None
 
 
@@ -61,8 +63,8 @@ def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load draw teams; podium generation was refused.") from exc
     return sorted(rows, key=lambda row: int(_safe_int(row.get("team_number")) or 0))
 
 
@@ -75,8 +77,8 @@ def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load draw games; podium generation was refused.") from exc
     return rows
 
 
@@ -89,9 +91,73 @@ def _podium_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list
             .eq("draw_id", str(draw_id))
             .execute()
         )
-    except Exception:
-        rows = []
+    except Exception as exc:
+        raise RuntimeError("Could not load the current draw podium; podium generation was refused.") from exc
     return rows
+
+
+def _awarded_badges_for_draw(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+) -> list[dict[str, Any]]:
+    try:
+        rows = _safe_rows(
+            supabase.table("player_badges")
+            .select("id,context_type,context_id")
+            .eq("club_id", str(club_id))
+            .eq("context_type", "tournament")
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Could not verify tournament badge state; podium generation was refused.") from exc
+    prefix = f"{tournament_id}:draw:{draw_id}:podium:"
+    return [row for row in rows if str(row.get("context_id") or "").startswith(prefix)]
+
+
+def _atomic_replace_podium(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    draw_id: str,
+    expected_draw_updated_at: str,
+    expected_team_versions: list[dict[str, str]],
+    expected_source_game_versions: list[dict[str, str]],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    try:
+        response = supabase.rpc(
+            "admin_replace_tournament_draw_podium_cas",
+            {
+                "p_club_id": str(club_id),
+                "p_tournament_id": str(tournament_id),
+                "p_draw_id": str(draw_id),
+                "p_expected_draw_updated_at": str(expected_draw_updated_at),
+                "p_expected_teams": list(expected_team_versions),
+                "p_expected_source_games": list(expected_source_game_versions),
+                "p_podium": list(rows),
+            },
+        ).execute()
+    except Exception as exc:
+        detail = str(exc)
+        if "JUPR_TOURNAMENT_DRAW_STALE" in detail or "JUPR_TOURNAMENT_PODIUM_SNAPSHOT_STALE" in detail:
+            raise StaleTournamentAdminStateError(
+                "The draw, team set, or source game set changed while the podium was being saved. Reload the Ops snapshot."
+            ) from exc
+        raise
+    data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        saved = data.get("podium")
+    elif isinstance(data, list) and data and isinstance(data[0], dict):
+        saved = data[0].get("podium")
+    else:
+        saved = None
+    if not isinstance(saved, list):
+        raise RuntimeError("Atomic tournament podium RPC returned no saved podium.")
+    return [dict(row) for row in saved if isinstance(row, dict)]
 
 
 def _podium_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -120,7 +186,12 @@ def generate_admin_tournament_draw_podium(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_draw_updated_at: str | None = None,
+    expected_team_versions: list[dict[str, Any]] | None = None,
+    expected_source_game_versions: list[dict[str, Any]] | None = None,
     source: str = "next_tournament_admin_generate_podium",
+    dry_run: bool = False,
+    atomic: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -135,10 +206,40 @@ def generate_admin_tournament_draw_podium(
     draw = _fetch_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not draw:
         raise ValueError("draw not found for this tournament")
+    reviewed_draw_version = str(expected_draw_updated_at or "").strip()
+    if atomic and not reviewed_draw_version:
+        raise StaleTournamentAdminStateError(
+            "A reviewed draw version is required for staging podium generation. Reload the Ops snapshot."
+        )
+    if reviewed_draw_version and str(draw.get("updated_at") or "") != reviewed_draw_version:
+        raise StaleTournamentAdminStateError(
+            "This tournament draw changed after it was reviewed. Reload the Ops snapshot before generating the podium."
+        )
 
     teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    reviewed_team_versions = _require_reviewed_row_versions(
+        teams,
+        expected_team_versions,
+        label="team set",
+        atomic=atomic,
+    )
+    reviewed_source_game_versions = _require_reviewed_row_versions(
+        games,
+        expected_source_game_versions,
+        label="source game set",
+        atomic=atomic,
+    )
     existing_podium = _podium_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    if _awarded_badges_for_draw(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=clean_tournament_id,
+        draw_id=clean_draw_id,
+    ):
+        raise ValueError(
+            "Podium badges have already been awarded for this draw. Use badge recovery before replacing the podium."
+        )
     playoff_games = [row for row in games if _clean_text(row.get("stage"), limit=80).upper() == "PLAYOFF"]
     round_robin_games = [row for row in games if _clean_text(row.get("stage"), limit=80).upper() == "ROUND_ROBIN"]
 
@@ -176,9 +277,36 @@ def generate_admin_tournament_draw_podium(
     if not rows:
         raise ValueError("No valid podium placements could be saved for this draw.")
 
+    if dry_run:
+        saved = [_podium_payload(row) for row in rows]
+        return {
+            "ok": True,
+            "mode": "tournament_draw_podium_generate_preview",
+            "dry_run": True,
+            "write_count": 0,
+            "draw_id": clean_draw_id,
+            "podium_source": podium_source,
+            "podium": saved,
+            "warnings": [],
+        }
+
     try:
-        supabase.table("tournament_podium").delete().eq("tournament_id", clean_tournament_id).eq("draw_id", clean_draw_id).execute()
-        saved_rows = _safe_rows(supabase.table("tournament_podium").insert(rows).execute())
+        if atomic:
+            saved_rows = _atomic_replace_podium(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=clean_tournament_id,
+                draw_id=clean_draw_id,
+                expected_draw_updated_at=reviewed_draw_version,
+                expected_team_versions=reviewed_team_versions,
+                expected_source_game_versions=reviewed_source_game_versions,
+                rows=rows,
+            )
+        else:
+            supabase.table("tournament_podium").delete().eq("tournament_id", clean_tournament_id).eq("draw_id", clean_draw_id).execute()
+            saved_rows = _safe_rows(supabase.table("tournament_podium").insert(rows).execute())
+    except StaleTournamentAdminStateError:
+        raise
     except Exception as exc:  # noqa: BLE001 - surface schema/cache problems as operator-visible API errors
         raise RuntimeError(f"Could not save draw-scoped podium: {exc.__class__.__name__}") from exc
     saved = [_podium_payload(row) for row in (saved_rows or rows)]
