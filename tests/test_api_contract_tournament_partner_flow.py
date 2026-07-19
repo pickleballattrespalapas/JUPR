@@ -39,6 +39,8 @@ def _register(api: TestClient, storage: dict, *, first_name: str, email: str, ne
             "last_name": "Player",
             "email": email,
             "doubles_skill": 4.0,
+            "age": 34,
+            "gender": "Mixed",
             "wants_partner_board_contact": needs_partner,
             "terms_accepted": True,
             "selections": [
