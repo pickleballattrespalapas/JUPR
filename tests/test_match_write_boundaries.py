@@ -1,5 +1,6 @@
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -111,12 +112,38 @@ def test_fastapi_admin_batch_uses_submit_match_batch(monkeypatch):
         return ServiceResult.success(data={"processed": len(matches)})
 
     monkeypatch.setattr(api_main, "is_next_admin_score_entry_enabled", lambda: True)
+    monkeypatch.setattr(api_main, "_has_supabase_service_role_key", lambda: True)
     monkeypatch.setattr(api_main, "authenticate_bearer", lambda _auth: FakeUser())
     monkeypatch.setattr(api_main, "get_supabase_client", lambda: object())
     monkeypatch.setattr(api_main, "resolve_admin_role", lambda **_kwargs: FakeRole())
     monkeypatch.setattr(api_main, "has_permission", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(api_main, "load_data", lambda *_args, **_kwargs: ("players", None, "leagues", None, "meta", None, None, None, None, {"A": 1}))
-    monkeypatch.setattr(api_main, "write_admin_activity_log", lambda *_args, **_kwargs: ServiceResult.success(data={}))
+    monkeypatch.setattr(api_main, "_validate_score_entry_match", lambda _matches: None)
+    monkeypatch.setattr(api_main, "_score_entry_player_ids", lambda _matches: [])
+    monkeypatch.setattr(api_main, "_fetch_score_entry_players", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(api_main, "_latest_score_entry_match_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_main, "_score_entry_feedback", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        api_main,
+        "load_data",
+        lambda *_args, **_kwargs: (
+            "players",
+            None,
+            "leagues",
+            None,
+            "meta",
+            None,
+            None,
+            {"A": 1},
+            None,
+            False,
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main,
+        "write_admin_activity_log",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=True, warning=None),
+    )
     monkeypatch.setattr(api_main, "submit_match_batch", fake_submit)
 
     payload = api_main.MatchBatchRequest(matches=[{"winner": "A"}], source="test")

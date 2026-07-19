@@ -570,31 +570,11 @@ def _dedupe_badges(df: Any) -> Any:
 
 
 def _theme_variables_css() -> str:
-    try:
-        import streamlit as st
-
-        base = _clean_text(st.get_option("theme.base")).lower()
-    except Exception:
-        base = ""
-    if base == "dark":
-        return """
-        :root{
-          --text-primary:#f8fafc; --text-secondary:#cbd5e1; --text-muted:#cbd5e1;
-          --panel:#111827; --border:#334155; --pill-bg:#1f2937;
-          --shadow:none;
-        }
-        html,body{background:transparent;color:#f8fafc;}
-        .trophy-case-card,.trophy-chip,.badge-card,.badge-stat{color:#f8fafc;}
-        .trophy-case-meta,.trophy-body,.badge-subtext{color:#cbd5e1;}
-        .trophy-case-header,.trophy-title,.badge-card-header{color:#f8fafc;}
-        """
     return """
-    :root{
-      --text-primary:#111827; --text-secondary:#4b5563; --text-muted:#374151;
-      --panel:#ffffff; --border:#e5e7eb; --pill-bg:#f8fafc;
-      --shadow:none;
-    }
-    html,body{background:transparent;color:#111827;}
+    html,body{background:transparent;color:var(--text-primary, CanvasText);}
+    .trophy-case-card,.trophy-chip,.badge-card,.badge-stat{color:var(--text-primary, CanvasText);}
+    .trophy-case-meta,.trophy-body,.badge-subtext{color:var(--text-secondary, GrayText);}
+    .trophy-case-header,.trophy-title,.badge-card-header{color:var(--text-primary, CanvasText);}
     """
 
 

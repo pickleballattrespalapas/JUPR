@@ -31,8 +31,10 @@ def _submit(supabase, *, first_name: str, email: str, mode: str = "NONE", board:
 
 def test_public_pairing_interest_emails_player_and_organizer(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-secret-for-partner-flow-1234567890")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://next.example.com")
     storage = fake_storage()
     supabase = FakeSupabase(storage)
+    supabase.rpc = None
     requester_registration_id, requester_selection_id = _submit(supabase, first_name="Alex", email="alex@example.com")
     _target_registration_id, target_selection_id = _submit(supabase, first_name="Casey", email="casey@example.com", mode="NEEDS_PARTNER", board=True)
     token = build_registration_edit_token(
@@ -106,6 +108,7 @@ def test_duplicate_interest_is_idempotent_and_does_not_repeat_email(monkeypatch)
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", secret)
     storage = fake_storage()
     supabase = FakeSupabase(storage)
+    supabase.rpc = None
     requester_registration_id, requester_selection_id = _submit(supabase, first_name="Alex", email="alex@example.com")
     _target_registration_id, target_selection_id = _submit(supabase, first_name="Casey", email="casey@example.com", mode="NEEDS_PARTNER", board=True)
     token = build_registration_edit_token(
@@ -152,6 +155,7 @@ def test_interest_write_survives_notification_failure(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", secret)
     storage = fake_storage()
     supabase = FakeSupabase(storage)
+    supabase.rpc = None
     requester_registration_id, requester_selection_id = _submit(supabase, first_name="Alex", email="alex@example.com")
     _target_registration_id, target_selection_id = _submit(supabase, first_name="Casey", email="casey@example.com", mode="NEEDS_PARTNER", board=True)
     token = build_registration_edit_token(
@@ -186,6 +190,7 @@ def test_contact_denylist_suppresses_player_delivery_without_exposing_email(monk
     monkeypatch.setenv("JUPR_TOURNAMENT_PARTNER_CONTACT_DENYLIST", "@example.com")
     storage = fake_storage()
     supabase = FakeSupabase(storage)
+    supabase.rpc = None
     requester_registration_id, requester_selection_id = _submit(supabase, first_name="Alex", email="alex@example.com")
     _target_registration_id, target_selection_id = _submit(supabase, first_name="Casey", email="casey@example.com", mode="NEEDS_PARTNER", board=True)
     token = build_registration_edit_token(
@@ -221,6 +226,7 @@ def test_disabled_partner_board_refuses_request_before_write_or_email(monkeypatc
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", secret)
     storage = fake_storage()
     supabase = FakeSupabase(storage)
+    supabase.rpc = None
     requester_registration_id, requester_selection_id = _submit(
         supabase,
         first_name="Alex",

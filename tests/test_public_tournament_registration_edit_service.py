@@ -45,7 +45,7 @@ def _registered_supabase(monkeypatch):
         tournament_id="t1",
         registration_id=result["registration_id"],
         email="alex@example.com",
-        secret="test-secret",
+        secret="test-registration-edit-secret-32bytes",
     )
     return supabase, storage, result["registration_id"], token
 
@@ -512,7 +512,7 @@ def test_registration_edit_locks_player_link_and_revalidates_eligibility(monkeyp
         tournament_id="t1",
         registration_id=created["registration_id"],
         email="alex@example.com",
-        secret="test-secret",
+        secret="test-registration-edit-secret-32bytes",
     )
 
     edit_page = build_public_tournament_registration_edit_page(

@@ -41,7 +41,7 @@ def test_registration_resolve_public_tournament_id_falls_back_to_slug_then_first
 
 
 def test_partner_board_resolve_public_tournament_id_matches_rules():
-    selected = partner_board._resolve_public_tournament_id(
+    selected = partner_board.tournament_roster._resolve_public_tournament_id(
         _choices(),
         qp_tournament_id="",
         qp_slug="b-open",

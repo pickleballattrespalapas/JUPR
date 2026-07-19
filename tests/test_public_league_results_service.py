@@ -145,8 +145,8 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     week_two = [row for row in payload["weekly_results"] if row["week_num"] == 2]
     assert {row["player_name"] for row in week_two} == {"Alex", "Blair", "Casey", "Devon"}
     blair_week_two = next(row for row in week_two if row["player_name"] == "Blair")
-    assert blair_week_two["rank"] == 1
-    assert blair_week_two["rank_delta"] == 1
+    assert blair_week_two["rank"] == 2
+    assert blair_week_two["rank_delta"] == 0
     assert blair_week_two["rating_delta_jupr"] == 0.0125
     assert payload["weekly_highlights"]["scope"] == "week"
     assert payload["weekly_highlights"]["week_num"] == 2

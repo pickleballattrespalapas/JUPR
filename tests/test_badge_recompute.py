@@ -315,7 +315,14 @@ def test_recompute_append_only_uses_hybrid_safe_legacy_rows():
                 }
             ]
         ),
-        df_players_all=pd.DataFrame(),
+        # Participation badges intentionally use persisted standings totals;
+        # match-derived badges below exercise the hybrid legacy fact source.
+        df_players_all=pd.DataFrame(
+            [
+                {"id": 1, "wins": 1, "losses": 0, "matches_played": 1},
+                {"id": 2, "wins": 0, "losses": 1, "matches_played": 1},
+            ]
+        ),
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
         df_badges=pd.DataFrame(

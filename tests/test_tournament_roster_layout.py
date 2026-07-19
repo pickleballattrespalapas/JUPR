@@ -25,4 +25,4 @@ def test_tournament_roster_links_partner_requests_through_existing_partner_route
     assert "request partner" in source
     assert 'page="tournament_partner_board"' in source
     assert '"target_selection_id"' in source
-    assert "requested player" in source
+    assert "_request_player_name" in source

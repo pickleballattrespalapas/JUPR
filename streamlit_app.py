@@ -79,12 +79,18 @@ def get_secret(path: list[str], default=None):
     except Exception:
         return default
 
-    for k in path:
-        if not isinstance(cur, Mapping):
-            return default
-        if k not in cur:
-            return default
-        cur = cur[k]
+    try:
+        for k in path:
+            if not isinstance(cur, Mapping):
+                return default
+            if k not in cur:
+                return default
+            cur = cur[k]
+    except Exception:
+        # Streamlit parses its secrets lazily. A missing secrets.toml therefore
+        # raises while checking membership, not while reading ``st.secrets``.
+        # Local imports and non-Streamlit workers should still use defaults.
+        return default
 
     return cur
 

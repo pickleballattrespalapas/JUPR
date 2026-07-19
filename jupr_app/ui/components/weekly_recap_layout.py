@@ -63,86 +63,86 @@ def _inject_baja_styles(print_view: bool) -> None:
     border-radius: 18px;
     padding: 20px;
     margin-bottom: 20px;
-    box-shadow: 0 8px 22px rgba(0,0,0,0.08);
-    color: #000;
+    box-shadow: var(--shadow-lg);
+    color: var(--text-primary);
   }
 
   .baja-card * {
-    color: #000;
+    color: var(--text-primary);
   }
 
   .baja-top {
-    background: linear-gradient(135deg, #FFF3E6, #FFE0C2);
-    border-left: 6px solid #FF7A00;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-warning) 10%, var(--panel)), color-mix(in srgb, var(--status-warning) 22%, var(--panel)));
+    border-left: 6px solid var(--status-warning);
   }
 
   .baja-jump {
-    background: linear-gradient(135deg, #E6FAF7, #C8F3EE);
-    border-left: 6px solid #00B3A4;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-success) 8%, var(--panel)), color-mix(in srgb, var(--status-success) 18%, var(--panel)));
+    border-left: 6px solid var(--status-success);
   }
 
   .baja-slayer {
-    background: linear-gradient(135deg, #F3E8FF, #E3D4FF);
-    border-left: 6px solid #7E57C2;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, var(--panel)), color-mix(in srgb, var(--accent) 18%, var(--panel)));
+    border-left: 6px solid var(--accent);
   }
 
   .baja-grind {
-    background: linear-gradient(135deg, #F1F1F1, #E2E2E2);
-    border-left: 6px solid #444444;
+    background: linear-gradient(135deg, var(--pill-bg), var(--table-stripe));
+    border-left: 6px solid var(--text-secondary);
   }
 
   .baja-perfect {
-    background: linear-gradient(135deg, #FFF0F5, #FFD6E8);
-    border-left: 6px solid #D63384;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-danger) 7%, var(--panel)), color-mix(in srgb, var(--status-danger) 16%, var(--panel)));
+    border-left: 6px solid var(--status-danger);
   }
 
   .baja-community {
-    background: linear-gradient(135deg, #E8F7FF, #D6EEFF);
-    border-left: 6px solid #1F78B4;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-info) 8%, var(--panel)), color-mix(in srgb, var(--status-info) 18%, var(--panel)));
+    border-left: 6px solid var(--status-info);
   }
 
   .baja-social-grind {
-    background: linear-gradient(135deg, #ECFFF1, #D8FBE4);
-    border-left: 6px solid #2E8B57;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-success) 7%, var(--panel)), color-mix(in srgb, var(--status-success) 16%, var(--panel)));
+    border-left: 6px solid var(--status-success);
   }
 
   .baja-league {
-    background: linear-gradient(135deg, #EAF4FF, #D4E8FF);
-    border-left: 6px solid #1976D2;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-info) 8%, var(--panel)), color-mix(in srgb, var(--status-info) 18%, var(--panel)));
+    border-left: 6px solid var(--status-info);
   }
 
   .baja-roundrobin {
-    background: linear-gradient(135deg, #E8FFF4, #D2F7E7);
-    border-left: 6px solid #1B9E77;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-success) 8%, var(--panel)), color-mix(in srgb, var(--status-success) 18%, var(--panel)));
+    border-left: 6px solid var(--status-success);
   }
 
   .baja-pop {
-    background: linear-gradient(135deg, #FFFBE6, #FFF1B8);
-    border-left: 6px solid #C48F00;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-warning) 8%, var(--panel)), color-mix(in srgb, var(--status-warning) 18%, var(--panel)));
+    border-left: 6px solid var(--status-warning);
   }
 
   .baja-social-event {
-    background: linear-gradient(135deg, #EAFBFF, #D9F4FF);
-    border-left: 6px solid #0077B6;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-info) 7%, var(--panel)), color-mix(in srgb, var(--status-info) 16%, var(--panel)));
+    border-left: 6px solid var(--status-info);
   }
 
   .baja-tournament {
-    background: linear-gradient(135deg, #FFF4E6, #FFE8CC);
-    border-left: 6px solid #E67700;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-warning) 10%, var(--panel)), color-mix(in srgb, var(--status-warning) 22%, var(--panel)));
+    border-left: 6px solid var(--status-warning);
   }
 
   .baja-podium {
-    background: linear-gradient(135deg, #FFE7A3, #FFD166);
-    border: 2px solid #E0A100;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-warning) 18%, var(--panel)), color-mix(in srgb, var(--status-warning) 34%, var(--panel)));
+    border: 2px solid var(--status-warning);
     border-radius: 14px;
     padding: 28px;
     margin-bottom: 24px;
-    box-shadow: 0 10px 26px rgba(0,0,0,0.1);
-    color: #000;
+    box-shadow: var(--shadow-lg);
+    color: var(--text-primary);
   }
 
   .baja-podium * {
-    color: #000;
+    color: var(--text-primary);
   }
 
   .podium-grid {

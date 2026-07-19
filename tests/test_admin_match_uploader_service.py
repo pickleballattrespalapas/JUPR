@@ -266,7 +266,7 @@ def test_submit_match_uploader_popup_context_name_creates_event(monkeypatch) -> 
     assert result["ok"] is True
     assert storage["events"][0]["name"] == "Saturday Social"
     assert calls[0]["matches"][0]["context_type"] == "event"
-    assert calls[0]["matches"][0]["context_id"] == storage["events"][0]["id"]
+    assert calls[0]["matches"][0]["context_id"] == str(storage["events"][0]["id"])
     assert "context_name" not in calls[0]["matches"][0]
 
 

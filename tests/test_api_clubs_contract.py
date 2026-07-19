@@ -113,7 +113,7 @@ def test_club_legacy_players_fallback_returns_minimal_public_shape(client):
     assert response.json() == {
         "id": "legacy-club",
         "slug": "legacy-club",
-        "name": "legacy-club",
+        "name": "Legacy Club",
         "tagline": None,
         "support_email": None,
         "public_base_url": None,
@@ -142,7 +142,7 @@ def test_club_players_fallback_works_when_clubs_table_is_missing(monkeypatch):
     assert legacy_response.json() == {
         "id": "legacy-club",
         "slug": "legacy-club",
-        "name": "legacy-club",
+        "name": "Legacy Club",
         "tagline": None,
         "support_email": None,
         "public_base_url": None,

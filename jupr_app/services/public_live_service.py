@@ -318,10 +318,15 @@ def public_live_session_detail(row: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def public_live_sessions_from_rows(rows: list[dict[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+def public_live_sessions_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     sessions: list[dict[str, Any]] = []
     for row in rows or []:
-        if not is_public_live_session_row(row):
+        if not is_public_live_session_row(row, now=now):
             continue
         summary = public_live_session_summary(row)
         if not summary.get("session_key"):

@@ -298,7 +298,8 @@ def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     assert payload["duplicate_delete_preview"]["recommended_replay_scope"] == "ALL"
     assert payload["duplicate_delete_preview"]["recompute_scope"] == {"standings": True, "ratings": True}
     assert payload["matches"][0]["team1"][0]["name"] in {"Alex", "Devon"}
-    assert payload["matches"][0]["notes"] == "operator correction context"
+    original = next(match for match in payload["matches"] if match["id"] == 1)
+    assert original["notes"] == "operator correction context"
     assert payload["summary"]["scanned_matches"] == 3
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == []

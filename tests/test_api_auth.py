@@ -7,7 +7,8 @@ from services.api import auth
 def _token_with_alg(alg: str) -> str:
     header = base64.urlsafe_b64encode(json.dumps({"alg": alg, "kid": "test"}).encode()).rstrip(b"=").decode()
     body = base64.urlsafe_b64encode(json.dumps({"sub": "user-1", "email": "ADMIN@example.com", "exp": 4_102_444_800}).encode()).rstrip(b"=").decode()
-    return f"{header}.{body}.signature"
+    signature = base64.urlsafe_b64encode(b"signature").rstrip(b"=").decode()
+    return f"{header}.{body}.{signature}"
 
 
 def test_auto_decoder_uses_jwks_for_asymmetric_token_even_when_secret_exists(monkeypatch):

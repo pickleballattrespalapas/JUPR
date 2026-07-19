@@ -68,6 +68,7 @@ def test_public_tournament_roster_projection_denies_private_fields_and_contact_v
             "dupr_id": "PRIVATE-DUPR-42",
             "doubles_skill": 3.75,
             "age": 47,
+            "wants_partner_board_contact": True,
             "terms_accepted": True,
             "selections": [
                 {
@@ -119,9 +120,14 @@ def test_public_tournament_roster_projection_denies_private_fields_and_contact_v
 
 def test_public_tournament_roster_reports_missing_schema() -> None:
     storage = fake_storage()
-    del storage["tournament_registration_selections"]
 
-    payload = build_public_tournament_roster_page(FakeSupabase(storage), club_id="club-1", registration_slug="tres-open")
+    class MissingSelectionsSupabase(FakeSupabase):
+        def table(self, name):
+            if name == "tournament_registration_selections":
+                raise RuntimeError('relation "tournament_registration_selections" does not exist')
+            return super().table(name)
+
+    payload = build_public_tournament_roster_page(MissingSelectionsSupabase(storage), club_id="club-1", registration_slug="tres-open")
 
     assert payload["available"] is False
     assert payload["tournament"] is None
