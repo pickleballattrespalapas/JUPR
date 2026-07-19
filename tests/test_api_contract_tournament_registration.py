@@ -20,6 +20,10 @@ def client(monkeypatch):
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "api-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     return TestClient(app)
 
 
@@ -43,6 +47,10 @@ def integrity_client(monkeypatch):
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "api-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     return TestClient(app), storage
 
 
@@ -79,15 +87,32 @@ def test_public_tournament_registration_submit_and_confirmation_contract(client)
     assert payload["ok"] is True
     assert payload["registration_id"]
     assert payload["selection_count"] == 1
+    assert payload["confirmation_token"]
+    assert payload["email_delivery"]["status"] == "dry_run"
 
     confirm = client.get(
-        f"/clubs/tres-palapas/tournament-registration/confirmations/{payload['registration_id']}?registration_slug=tres-open"
+        "/clubs/tres-palapas/tournament-registration/confirmation",
+        params={"confirmation_token": payload["confirmation_token"]},
     )
     assert confirm.status_code == 200
     confirm_payload = confirm.json()
     assert confirm_payload["registration"]["display_name"] == "Alex Rivera"
     assert confirm_payload["selections"][0]["event_label"] == "Open"
     assert "phone" not in confirm_payload["registration"]
+    assert "email" not in confirm_payload["registration"]
+    assert "id" not in confirm_payload["registration"]
+    assert "selection_id" not in confirm_payload["selections"][0]
+
+    raw_id_lookup = client.get(
+        f"/clubs/tres-palapas/tournament-registration/confirmations/{payload['registration_id']}"
+    )
+    assert raw_id_lookup.status_code == 404
+
+    tampered = client.get(
+        "/clubs/tres-palapas/tournament-registration/confirmation",
+        params={"confirmation_token": f"{payload['confirmation_token']}x"},
+    )
+    assert tampered.status_code == 404
 
 
 def test_public_tournament_registration_honeypot_contract(client):

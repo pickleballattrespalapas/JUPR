@@ -156,10 +156,13 @@ export default function TournamentRegistrationForm({ clubSlug, tournamentId, reg
       setError(response.error || "Unable to submit registration.");
       return;
     }
+    if (!response.data.confirmation_token) {
+      setError(response.data.email_delivery?.message || "Your registration was saved, but secure confirmation access is unavailable. Please contact tournament staff before submitting again.");
+      return;
+    }
 
-    const query = new URLSearchParams({ registration_id: String(response.data.registration_id) });
-    if (registrationSlug) query.set("tournament", registrationSlug);
-    else query.set("tournament_id", tournamentId);
+    const query = new URLSearchParams({ confirmation_token: response.data.confirmation_token });
+    if (response.data.email_delivery?.status) query.set("email_status", response.data.email_delivery.status);
     window.location.href = `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`;
   }
 

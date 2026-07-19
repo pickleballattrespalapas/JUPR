@@ -53,7 +53,7 @@ def _event_view(selection: dict[str, Any], day: dict[str, Any] | None = None, ev
     }
 
 
-def build_registration_confirmation_view_model(*, tournament: dict[str, Any] | None = None, registration: dict[str, Any] | None = None, selections: list[dict[str, Any]] | None = None, days: list[dict[str, Any]] | None = None, event_options: list[dict[str, Any]] | None = None, tournament_name: str | None = None, registration_id: str | None = None, display_name: str | None = None, email: str | None = None, confirmation_url: str | None = None, sender_from_name: str | None = None, sender_from_email: str | None = None) -> dict[str, Any]:
+def build_registration_confirmation_view_model(*, tournament: dict[str, Any] | None = None, registration: dict[str, Any] | None = None, selections: list[dict[str, Any]] | None = None, days: list[dict[str, Any]] | None = None, event_options: list[dict[str, Any]] | None = None, tournament_name: str | None = None, registration_id: str | None = None, display_name: str | None = None, email: str | None = None, confirmation_url: str | None = None, roster_url: str | None = None, sender_from_name: str | None = None, sender_from_email: str | None = None) -> dict[str, Any]:
     tournament = tournament or {}
     registration = registration or {}
     day_lookup = {str(row.get("id")): row for row in (days or [])}
@@ -75,6 +75,7 @@ def build_registration_confirmation_view_model(*, tournament: dict[str, Any] | N
         "total_price_usd": total,
         "payment_note": PAYMENT_NOTE,
         "confirmation_url": _safe_text(confirmation_url),
+        "roster_url": _safe_text(roster_url),
         "sender_from_name": _safe_text(sender_from_name),
         "sender_from_email": _safe_text(sender_from_email),
     }
@@ -115,8 +116,11 @@ def build_tournament_registration_confirmation_html(view_model: dict) -> str:
             f"<td>{escape(_partner_display(event))}</td>",
             f"<td>{escape(format_money(event.get('price_usd')))}</td>",
         ]) + "</tr>")
+    rows_html = "".join(rows) if rows else '<tr><td colspan="5">No event selections were found. Contact tournament staff if this is unexpected.</td></tr>'
     url = _safe_text(view_model.get("confirmation_url"))
     link = f'<p><a href="{escape(url)}">View your registration confirmation</a></p>' if url else ""
+    roster_url = _safe_text(view_model.get("roster_url"))
+    roster_link = f'<p><a href="{escape(roster_url)}">View the public tournament roster</a></p>' if roster_url else ""
     sender = ""
     if _safe_text(view_model.get("sender_from_email")):
         sender = f"<p>This email was sent from {escape(_safe_text(view_model.get('sender_from_name')))} &lt;{escape(_safe_text(view_model.get('sender_from_email')))}&gt;.</p>"
@@ -124,9 +128,9 @@ def build_tournament_registration_confirmation_html(view_model: dict) -> str:
 <h1>Registration confirmed</h1>
 <p>Your registration for <strong>{escape(_safe_text(view_model.get('tournament_name')))}</strong> is confirmed.</p>
 <p><strong>Registrant:</strong> {escape(_safe_text(view_model.get('display_name')))}<br><strong>Email:</strong> {escape(_safe_text(view_model.get('email')))}</p>
-<table cellpadding=\"8\" cellspacing=\"0\" border=\"1\" style=\"border-collapse:collapse;width:100%\"><thead><tr><th>Day</th><th>Event</th><th>Division</th><th>Partner</th><th>Price</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
+<table cellpadding=\"8\" cellspacing=\"0\" border=\"1\" style=\"border-collapse:collapse;width:100%\"><thead><tr><th>Day</th><th>Event</th><th>Division</th><th>Partner</th><th>Price</th></tr></thead><tbody>{rows_html}</tbody></table>
 <p><strong>Total due: {escape(format_money(view_model.get('total_price_usd')))}</strong></p>
-<p>{escape(_safe_text(view_model.get('payment_note')))}</p>{link}{sender}
+<p>{escape(_safe_text(view_model.get('payment_note')))}</p>{link}{roster_link}{sender}
 </body></html>"""
 
 
@@ -140,9 +144,13 @@ def build_tournament_registration_confirmation_text(view_model: dict) -> str:
     ]
     for event in view_model.get("selected_events") or []:
         lines.append(f"- {_safe_text(event.get('day_label'))} | {_safe_text(event.get('family_label'))} | {_division_display(event)} | {_partner_display(event)} | {format_money(event.get('price_usd'))}")
+    if not (view_model.get("selected_events") or []):
+        lines.append("- No event selections were found. Contact tournament staff if this is unexpected.")
     lines.extend([f"Total due: {format_money(view_model.get('total_price_usd'))}", _safe_text(view_model.get("payment_note"))])
     if _safe_text(view_model.get("confirmation_url")):
         lines.append(f"Confirmation page: {_safe_text(view_model.get('confirmation_url'))}")
+    if _safe_text(view_model.get("roster_url")):
+        lines.append(f"Public roster: {_safe_text(view_model.get('roster_url'))}")
     return "\n".join(lines)
 
 

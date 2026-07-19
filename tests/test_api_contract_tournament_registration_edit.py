@@ -167,6 +167,8 @@ def test_public_registration_edit_submit_contract(client_and_storage):
     assert payload["ok"] is True
     assert payload["registration_id"] == registration_id
     assert payload["confirmation_delivery"] == {"status": "dry_run", "delivered": False}
+    assert payload["confirmation_token"]
+    assert payload["email_delivery"]["status"] == "dry_run"
     assert "provider_message_id" not in str(payload)
     assert "to_email" not in str(payload)
     assert storage["tournament_registrations"][0]["display_name"] == "Alexis R"

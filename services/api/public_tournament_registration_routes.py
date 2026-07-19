@@ -167,6 +167,7 @@ def install_public_tournament_registration_routes(
             result = submit_public_tournament_registration_edit(
                 supabase,
                 club_id=club_id,
+                club_slug=club_slug,
                 edit_token=payload.edit_token,
                 payload=_dump_model(payload),
             )
@@ -211,29 +212,29 @@ def install_public_tournament_registration_routes(
             result = submit_public_tournament_registration(
                 supabase,
                 club_id=club_id,
+                club_slug=club_slug,
                 payload=_dump_model(payload),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
 
-    @app.get("/clubs/{club_slug}/tournament-registration/confirmations/{registration_id}")
+    @app.get("/clubs/{club_slug}/tournament-registration/confirmation")
     def get_club_tournament_registration_confirmation(
         club_slug: str,
-        registration_id: str,
-        tournament_id: str | None = Query(default=None),
-        registration_slug: str | None = Query(default=None),
+        confirmation_token: str = Query(...),
     ) -> dict[str, Any]:
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
-        confirmation = build_public_tournament_registration_confirmation(
-            supabase,
-            club_id=club_id,
-            registration_id=registration_id,
-            tournament_id=tournament_id,
-            registration_slug=registration_slug,
-        )
+        try:
+            confirmation = build_public_tournament_registration_confirmation(
+                supabase,
+                club_id=club_id,
+                confirmation_token=confirmation_token,
+            )
+        except ValueError:
+            confirmation = None
         if not confirmation:
             raise HTTPException(status_code=404, detail="registration confirmation not found")
         return {"club": public_club_payload(club, club_slug), **confirmation}

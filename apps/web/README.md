@@ -25,7 +25,7 @@ Current public and staff-facing routes include:
 - `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.
 - `/clubs/[clubSlug]/weekly-recap` public published weekly recap with spotlight reel, around-the-club highlights, tournament podiums, print view, and PDF download.
 - `/clubs/[clubSlug]/tournament-registration` public tournament registration intake, including secure edit-link request.
-- `/clubs/[clubSlug]/tournament-registration/confirmation?registration_id=...` public registration confirmation page.
+- `/clubs/[clubSlug]/tournament-registration/confirmation?confirmation_token=...` signed, registrant-specific confirmation page.
 - `/clubs/[clubSlug]/tournament-registration/edit?edit_token=...` tokenized registration edit page.
 - `/clubs/[clubSlug]/tournament-roster` public-safe tournament roster.
 - `/clubs/[clubSlug]/tournament-partner-board` public-safe tournament board with token-gated interest flow.

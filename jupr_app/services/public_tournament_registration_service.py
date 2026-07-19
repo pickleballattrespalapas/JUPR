@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import urlencode
 
+from jupr_app.config import get_env_or_default
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
+    PAYMENT_NOTE,
+    build_registration_confirmation_view_model,
+    send_tournament_registration_confirmation_email,
+)
+from jupr_app.domain.tournament_registration_confirmation_tokens import (
+    build_registration_confirmation_token,
+    verify_registration_confirmation_token,
+)
 from jupr_app.domain.tournament_registration_repo import (
     build_public_tournament_roster_state,
     get_public_tournament_bundle,
@@ -32,6 +45,7 @@ _PARTNER_IDENTITY_RATING_AGE_FIELDS = (
 
 _WOMEN_GENDERS = {"f", "female", "woman", "women", "womens", "girl", "girls"}
 _MEN_GENDERS = {"m", "male", "man", "men", "mens", "boy", "boys"}
+LOGGER = logging.getLogger(__name__)
 
 
 def _json_safe(value: Any) -> Any:
@@ -290,6 +304,177 @@ def _open_tournament_choices(supabase: Any, *, club_id: str) -> list[dict[str, A
         if tournament and settings:
             choices.append({"tournament": tournament, "settings": settings})
     return choices
+
+
+def _public_web_base_url(public_base_url: str | None = None) -> str:
+    """Return an explicitly configured Next.js origin.
+
+    Do not inherit ``get_public_base_url()`` here: its localhost:8501 default
+    and ``JUPR_PUBLIC_BASE_URL`` compatibility value belong to the Streamlit
+    surface. Confirmation email links must either target the Next.js site or
+    fail visibly after the registration has been saved.
+    """
+
+    for candidate in (
+        public_base_url,
+        get_env_or_default("JUPR_WEB_BASE_URL"),
+        get_env_or_default("STAGING_WEB_BASE_URL"),
+        get_env_or_default("NEXT_PUBLIC_JUPR_WEB_BASE_URL"),
+    ):
+        value = str(candidate or "").strip().rstrip("/")
+        if value:
+            return value
+    return ""
+
+
+def _confirmation_page_url(
+    *,
+    club_slug: str,
+    confirmation_token: str,
+    email_status: str | None = None,
+    public_base_url: str | None = None,
+) -> str:
+    query = {"confirmation_token": str(confirmation_token)}
+    if email_status:
+        query["email_status"] = str(email_status)
+    return (
+        f"{_public_web_base_url(public_base_url)}/clubs/{club_slug}/"
+        f"tournament-registration/confirmation?{urlencode(query)}"
+    )
+
+
+def _roster_page_url(
+    *,
+    club_slug: str,
+    tournament_id: str,
+    registration_slug: str | None,
+    public_base_url: str | None = None,
+) -> str:
+    query = {
+        "tournament": str(registration_slug)
+    } if registration_slug else {"tournament_id": str(tournament_id)}
+    return (
+        f"{_public_web_base_url(public_base_url)}/clubs/{club_slug}/"
+        f"tournament-roster?{urlencode(query)}"
+    )
+
+
+def build_registration_confirmation_delivery(
+    supabase: Any,
+    *,
+    club_id: str,
+    club_slug: str,
+    tournament_id: str,
+    registration_id: str,
+    public_base_url: str | None = None,
+) -> dict[str, Any]:
+    """Build signed confirmation access and attempt email after persistence.
+
+    This function is deliberately called only after `save_registration` returns.
+    A token/config/mail failure therefore cannot roll back or disguise a saved
+    registration.
+    """
+
+    try:
+        bundle = get_registration_confirmation_bundle(
+            supabase,
+            str(tournament_id),
+            str(registration_id),
+        )
+    except Exception:
+        LOGGER.exception("Tournament registration was saved but confirmation details could not be loaded")
+        return {
+            "confirmation_available": False,
+            "confirmation_token": None,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but confirmation details could not be prepared.",
+            },
+        }
+    registration = bundle.get("registration") or {}
+    tournament = bundle.get("tournament") or {}
+    settings = bundle.get("settings") or {}
+    if not registration or str(tournament.get("club_id") or club_id) != str(club_id):
+        return {
+            "confirmation_available": False,
+            "confirmation_token": None,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but confirmation details could not be prepared.",
+            },
+        }
+
+    try:
+        token = build_registration_confirmation_token(
+            tournament_id=str(tournament_id),
+            registration_id=str(registration_id),
+            email=_clean_email(registration.get("email")),
+        )
+    except Exception:
+        LOGGER.exception("Unable to create a tournament registration confirmation token")
+        return {
+            "confirmation_available": False,
+            "confirmation_token": None,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but secure confirmation access is not configured.",
+            },
+        }
+
+    web_base = _public_web_base_url(public_base_url)
+    if not web_base:
+        return {
+            "confirmation_available": True,
+            "confirmation_token": token,
+            "email_delivery": {
+                "status": "failed",
+                "message": "Registration was saved, but the confirmation email link is not configured.",
+            },
+        }
+
+    try:
+        smtp_status = get_smtp_config_status()
+        confirmation_url = _confirmation_page_url(
+            club_slug=str(club_slug),
+            confirmation_token=token,
+            public_base_url=web_base,
+        )
+        roster_url = _roster_page_url(
+            club_slug=str(club_slug),
+            tournament_id=str(tournament_id),
+            registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or None,
+            public_base_url=web_base,
+        )
+        view_model = build_registration_confirmation_view_model(
+            tournament=tournament,
+            registration=registration,
+            selections=bundle.get("selections") or [],
+            days=bundle.get("days") or [],
+            event_options=bundle.get("event_options") or [],
+            confirmation_url=confirmation_url,
+            roster_url=roster_url,
+            sender_from_name=smtp_status.get("from_name"),
+            sender_from_email=smtp_status.get("from_email"),
+        )
+        send_result = send_tournament_registration_confirmation_email(
+            view_model=view_model
+        )
+        status = _clean_text(send_result.get("status"), limit=40) or "sent"
+        message = {
+            "dry_run": "Registration was saved; confirmation email was safely dry-run.",
+            "staging_redirect": "Registration was saved; confirmation email was sent to the staging redirect.",
+            "sent": "Registration was saved and the confirmation email was sent.",
+        }.get(status, "Registration was saved and confirmation delivery was accepted.")
+    except Exception:
+        LOGGER.exception("Tournament registration was saved but confirmation email failed")
+        status = "failed"
+        message = "Registration was saved, but the confirmation email could not be sent."
+
+    return {
+        "confirmation_available": True,
+        "confirmation_token": token,
+        "email_delivery": {"status": status, "message": message},
+    }
 
 
 def build_public_tournament_registration_page(
@@ -754,6 +939,7 @@ def submit_public_tournament_registration(
     supabase: Any,
     *,
     club_id: str,
+    club_slug: str | None = None,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     page = build_public_tournament_registration_page(
@@ -778,6 +964,13 @@ def submit_public_tournament_registration(
         payload=payload,
     )
     result = save_registration(supabase, tournament_id=tournament_id, payload=save_payload)
+    delivery = build_registration_confirmation_delivery(
+        supabase,
+        club_id=str(club_id),
+        club_slug=str(club_slug or club_id),
+        tournament_id=tournament_id,
+        registration_id=str(result.get("registration_id") or ""),
+    )
     return {
         "ok": True,
         "tournament": tournament,
@@ -785,6 +978,7 @@ def submit_public_tournament_registration(
         "registration_id": result.get("registration_id"),
         "submitted_at": result.get("submitted_at"),
         "selection_count": result.get("selection_count"),
+        **delivery,
     }
 
 
@@ -792,18 +986,11 @@ def build_public_tournament_registration_confirmation(
     supabase: Any,
     *,
     club_id: str,
-    registration_id: str,
-    tournament_id: str | None = None,
-    registration_slug: str | None = None,
+    confirmation_token: str,
 ) -> dict[str, Any] | None:
-    page = build_public_tournament_registration_page(
-        supabase,
-        club_id=str(club_id),
-        tournament_id=tournament_id,
-        registration_slug=registration_slug,
-    )
-    tournament = page.get("tournament") or {}
-    tid = str(tournament.get("id") or tournament_id or "").strip()
+    verified = verify_registration_confirmation_token(confirmation_token)
+    tid = str(verified.get("tournament_id") or "").strip()
+    registration_id = str(verified.get("registration_id") or "").strip()
     if not tid:
         return None
     bundle = get_registration_confirmation_bundle(supabase, tid, str(registration_id))
@@ -812,6 +999,12 @@ def build_public_tournament_registration_confirmation(
         return None
     if str((bundle.get("tournament") or {}).get("club_id") or club_id) != str(club_id):
         return None
+    verify_registration_confirmation_token(
+        confirmation_token,
+        expected_tournament_id=tid,
+        expected_registration_id=registration_id,
+        expected_email=_clean_email(registration.get("email")),
+    )
     event_lookup = {str(row.get("id")): row for row in (bundle.get("event_options") or [])}
     day_lookup = {str(row.get("id")): row for row in (bundle.get("days") or [])}
     selections = []
@@ -820,26 +1013,34 @@ def build_public_tournament_registration_confirmation(
         day = day_lookup.get(str(selection.get("registration_day_id") or "")) or {}
         selections.append(
             {
-                "selection_id": str(selection.get("id") or ""),
                 "event_label": _clean_text(event.get("division_name") or event.get("label") or "Division"),
                 "event_family_label": _clean_text(event.get("event_family_label") or event.get("label") or "Event"),
                 "day_label": _clean_text(day.get("label") or "Day"),
+                "event_date": _json_safe(day.get("event_date")),
+                "skill_label": _clean_text(event.get("skill_label"), limit=80),
+                "age_label": _clean_text(event.get("age_label"), limit=80),
+                "price_usd": _safe_float(event.get("price_usd")) or 0,
                 "partner_mode": _clean_text(selection.get("partner_mode")),
                 "partner_name": _clean_text(selection.get("partner_name")),
                 "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
             }
         )
+    sender_status = get_smtp_config_status()
     return {
         "tournament": _public_tournament(bundle.get("tournament") or {}),
         "settings": _public_settings(bundle.get("settings") or {}),
         "registration": {
-            "id": str(registration.get("id") or ""),
             "display_name": _clean_text(registration.get("display_name") or "Player"),
-            "email": _clean_email(registration.get("email")),
             "status": _clean_text(registration.get("status")),
             "payment_status": _clean_text(registration.get("payment_status")),
             "submitted_at": _json_safe(registration.get("submitted_at")),
         },
         "selections": selections,
         "total_price_usd": float(bundle.get("total_price_usd") or 0),
+        "payment_note": PAYMENT_NOTE,
+        "confirmation_expires_at": verified.get("exp"),
+        "notification_sender": {
+            "from_name": _clean_text(sender_status.get("from_name"), limit=120),
+            "from_email": _clean_email(sender_status.get("from_email")),
+        },
     }

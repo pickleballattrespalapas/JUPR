@@ -299,7 +299,11 @@ def test_public_tournament_registration_page_is_public_safe() -> None:
     assert "builder_draft_json" not in payload["settings"]
 
 
-def test_public_tournament_registration_submit_and_confirmation() -> None:
+def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     storage = fake_storage()
     supabase = FakeSupabase(storage)
 
@@ -321,17 +325,117 @@ def test_public_tournament_registration_submit_and_confirmation() -> None:
     assert result["selection_count"] == 1
     assert len(storage["tournament_registrations"]) == 1
     assert len(storage["tournament_registration_selections"]) == 1
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "dry_run"
 
     confirmation = build_public_tournament_registration_confirmation(
         supabase,
         club_id="club-1",
-        registration_id=result["registration_id"],
-        registration_slug="tres-open",
+        confirmation_token=result["confirmation_token"],
     )
     assert confirmation is not None
     assert confirmation["registration"]["display_name"] == "Alex Rivera"
     assert confirmation["selections"][0]["event_label"] == "Open"
+    assert confirmation["selections"][0]["price_usd"] == 50
     assert "phone" not in confirmation["registration"]
+    assert "email" not in confirmation["registration"]
+    assert "id" not in confirmation["registration"]
+    assert "selection_id" not in confirmation["selections"][0]
+
+
+def test_registration_stays_saved_when_confirmation_email_fails(monkeypatch) -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.send_tournament_registration_confirmation_email",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("simulated delivery failure")),
+    )
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Saved",
+            "last_name": "Player",
+            "email": "saved@example.com",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "failed"
+    assert any(row["email"] == "saved@example.com" for row in storage["tournament_registrations"])
+    assert len(storage["tournament_registration_selections"]) == 1
+
+
+def test_registration_stays_saved_when_confirmation_reload_fails(monkeypatch) -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.get_registration_confirmation_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("simulated reload failure")),
+    )
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Saved",
+            "last_name": "Before Reload",
+            "email": "saved-before-reload@example.com",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["confirmation_available"] is False
+    assert result["email_delivery"]["status"] == "failed"
+    assert any(row["email"] == "saved-before-reload@example.com" for row in storage["tournament_registrations"])
+    assert len(storage["tournament_registration_selections"]) == 1
+
+
+def test_confirmation_link_requires_explicit_next_web_origin(monkeypatch) -> None:
+    storage = fake_storage()
+    supabase = FakeSupabase(storage)
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_PUBLIC_BASE_URL", "https://streamlit.example.test")
+    for name in ("JUPR_WEB_BASE_URL", "STAGING_WEB_BASE_URL", "NEXT_PUBLIC_JUPR_WEB_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.send_tournament_registration_confirmation_email",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("email should not be attempted")),
+    )
+
+    result = submit_public_tournament_registration(
+        supabase,
+        club_id="club-1",
+        club_slug="tres-palapas",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Saved",
+            "last_name": "Without Next Origin",
+            "email": "saved-no-origin@example.com",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "failed"
+    assert "link is not configured" in result["email_delivery"]["message"]
+    assert any(row["email"] == "saved-no-origin@example.com" for row in storage["tournament_registrations"])
 
 
 def test_public_tournament_registration_blocks_honeypot() -> None:

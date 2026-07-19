@@ -6,10 +6,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 from jupr_app.config import get_env_or_default, get_explicit_registration_edit_token_secret, get_public_base_url
-from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
-    build_registration_confirmation_view_model,
-    send_tournament_registration_confirmation_email,
-)
 from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token, verify_registration_edit_token
 from jupr_app.domain.tournament_registration_repo import (
@@ -31,6 +27,7 @@ from jupr_app.services.public_tournament_registration_service import (
     _safe_bool,
     _safe_float,
     _safe_int,
+    build_registration_confirmation_delivery,
     build_validated_public_registration_save_payload,
     build_public_tournament_registration_page,
 )
@@ -244,38 +241,6 @@ def _versioned_edit_selections(
     return versioned, expected_versions
 
 
-def _post_edit_confirmation_delivery(
-    supabase: Any,
-    *,
-    tournament_id: str,
-    registration_id: str,
-) -> dict[str, Any]:
-    try:
-        bundle = get_registration_confirmation_bundle(supabase, tournament_id, registration_id)
-        registration = bundle.get("registration") or {}
-        if not registration:
-            raise RuntimeError("Updated registration could not be reloaded.")
-        view_model = build_registration_confirmation_view_model(
-            tournament=bundle.get("tournament") or {},
-            registration=registration,
-            selections=bundle.get("selections") or [],
-            days=bundle.get("days") or [],
-            event_options=bundle.get("event_options") or [],
-        )
-        send_result = send_tournament_registration_confirmation_email(view_model=view_model)
-        status = str(send_result.get("status") or "unknown").strip().lower()
-        if status not in {"sent", "staging_redirect", "dry_run"}:
-            status = "unknown"
-        return {
-            "status": status,
-            "delivered": status in {"sent", "staging_redirect"},
-        }
-    except Exception:
-        # The database edit has already committed. Delivery failure must be
-        # visible and retryable without falsely reporting the save as failed.
-        return {"status": "failed", "delivered": False}
-
-
 def request_public_tournament_registration_edit_link(
     supabase: Any,
     *,
@@ -432,6 +397,7 @@ def submit_public_tournament_registration_edit(
     supabase: Any,
     *,
     club_id: str,
+    club_slug: str | None = None,
     edit_token: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -507,11 +473,22 @@ def submit_public_tournament_registration_edit(
         expected_selection_versions=expected_selection_versions,
         atomic_edit=True,
     )
-    confirmation_delivery = _post_edit_confirmation_delivery(
+    delivery = build_registration_confirmation_delivery(
         supabase,
+        club_id=str(club_id),
+        club_slug=str(club_slug or club_id),
         tournament_id=tournament_id,
-        registration_id=registration_id,
+        registration_id=str(result.get("registration_id") or ""),
     )
+    delivery_status = str(
+        (delivery.get("email_delivery") or {}).get("status") or "unknown"
+    ).strip().lower()
+    if delivery_status not in {"sent", "staging_redirect", "dry_run", "failed"}:
+        delivery_status = "unknown"
+    confirmation_delivery = {
+        "status": delivery_status,
+        "delivered": delivery_status in {"sent", "staging_redirect"},
+    }
     return {
         "ok": True,
         "mode": "registration_edit",
@@ -531,4 +508,5 @@ def submit_public_tournament_registration_edit(
         "updated_at": result.get("updated_at"),
         "selection_count": result.get("selection_count"),
         "confirmation_delivery": confirmation_delivery,
+        **delivery,
     }

@@ -24,6 +24,7 @@ from tests.test_public_tournament_registration_service import FakeSupabase, fake
 def _registered_supabase(monkeypatch):
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "test-registration-edit-secret-32bytes")
     monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://next.example.com")
     storage = fake_storage()
     supabase = FakeSupabase(storage)
     result = submit_public_tournament_registration(
@@ -115,6 +116,8 @@ def test_registration_edit_submit_updates_existing_registration_and_locks_email(
     assert result["ok"] is True
     assert result["registration_id"] == registration_id
     assert result["confirmation_delivery"] == {"status": "dry_run", "delivered": False}
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "dry_run"
     assert "provider_message_id" not in str(result)
     assert "to_email" not in str(result)
     assert supabase.rpc_calls[0][0] == PUBLIC_REGISTRATION_EDIT_RPC
@@ -201,10 +204,15 @@ def test_registration_edit_switches_division_in_place_within_event_family(monkey
 def test_registration_edit_save_survives_confirmation_delivery_failure(monkeypatch) -> None:
     supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
 
-    def fail_delivery(**_kwargs):
-        raise RuntimeError("mail unavailable")
-
-    monkeypatch.setattr(edit_service, "send_tournament_registration_confirmation_email", fail_delivery)
+    monkeypatch.setattr(
+        edit_service,
+        "build_registration_confirmation_delivery",
+        lambda *_args, **_kwargs: {
+            "confirmation_available": True,
+            "confirmation_token": "confirmation-token",
+            "email_delivery": {"status": "failed", "message": "Registration was saved, but email failed."},
+        },
+    )
 
     result = submit_public_tournament_registration_edit(
         supabase,

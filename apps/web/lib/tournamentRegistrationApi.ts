@@ -264,6 +264,12 @@ export type PublicRegistrationSubmitResponse = {
     status: "sent" | "staging_redirect" | "dry_run" | "failed" | "unknown";
     delivered: boolean;
   } | null;
+  confirmation_available?: boolean | null;
+  confirmation_token?: string | null;
+  email_delivery?: {
+    status?: "dry_run" | "staging_redirect" | "sent" | "failed" | string | null;
+    message?: string | null;
+  } | null;
 };
 
 export type PublicRegistrationConfirmationResponse = {
@@ -271,23 +277,30 @@ export type PublicRegistrationConfirmationResponse = {
   tournament: PublicTournamentSummary;
   settings?: PublicTournamentSettings | null;
   registration: {
-    id: string;
     display_name: string;
-    email: string;
     status?: string | null;
     payment_status?: string | null;
     submitted_at?: string | null;
   };
   selections: Array<{
-    selection_id: string;
     event_label: string;
     event_family_label: string;
     day_label: string;
+    event_date?: string | null;
+    skill_label?: string | null;
+    age_label?: string | null;
+    price_usd?: number | null;
     partner_mode?: string | null;
     partner_name?: string | null;
     show_on_partner_board?: boolean | null;
   }>;
   total_price_usd: number;
+  payment_note: string;
+  confirmation_expires_at?: string | null;
+  notification_sender?: {
+    from_name?: string | null;
+    from_email?: string | null;
+  } | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -398,14 +411,10 @@ export async function submitClubTournamentRegistrationEdit(
 
 export async function getClubTournamentRegistrationConfirmation(
   clubSlug: string,
-  registrationId: string,
-  params?: { tournamentId?: string | null; registrationSlug?: string | null }
+  confirmationToken: string
 ): Promise<ApiResult<PublicRegistrationConfirmationResponse>> {
-  const query = new URLSearchParams();
-  if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
-  if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const query = new URLSearchParams({ confirmation_token: confirmationToken });
   return fetchJson<PublicRegistrationConfirmationResponse>(
-    `/clubs/${clubSlug}/tournament-registration/confirmations/${encodeURIComponent(registrationId)}${suffix}`
+    `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`
   );
 }

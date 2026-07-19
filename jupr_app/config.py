@@ -185,3 +185,34 @@ def get_registration_edit_token_secret() -> str:
         "JUPR_REGISTRATION_EDIT_SECRET is required for registration edit links. "
         "Set it directly, or configure Supabase credentials so the app can derive a stable signing secret."
     )
+
+
+def get_registration_confirmation_token_secret() -> str:
+    """Return a server-only signing secret for confirmation access tokens.
+
+    Confirmation tokens protect a registrant-specific projection. Never derive
+    them from the publishable/anonymous key because that key is intentionally
+    delivered to browsers.
+    """
+
+    for candidate in (
+        get_env_or_default("JUPR_REGISTRATION_CONFIRMATION_SECRET"),
+        _streamlit_secret_value("registration", "confirmation_token_secret"),
+        get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),
+        _streamlit_secret_value("registration", "edit_token_secret"),
+    ):
+        if candidate:
+            return candidate
+
+    for candidate in (
+        get_env_or_default("SUPABASE_SERVICE_ROLE_KEY"),
+        _streamlit_secret_value("supabase", "service_role_key"),
+    ):
+        if candidate:
+            return f"registration-confirmation-token:{candidate}"
+
+    raise ValueError(
+        "JUPR_REGISTRATION_CONFIRMATION_SECRET is required for registration "
+        "confirmation links. Set it directly, reuse the server-only registration "
+        "edit secret, or configure the Supabase service-role credential."
+    )

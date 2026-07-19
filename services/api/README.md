@@ -50,6 +50,8 @@ Production backend runtime:
 - `SUPABASE_URL=<production Supabase project URL>`
 - `SUPABASE_SERVICE_ROLE_KEY=<production Supabase service role key>`
 - `SUPABASE_ANON_KEY=<production anon key if needed>`
+- `JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com` (Next.js origin used in server-generated links)
+- `JUPR_REGISTRATION_CONFIRMATION_SECRET=<server-only high-entropy signing secret>`
 - `JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=0`
 - `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=0`
 - `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY=0`
@@ -66,6 +68,11 @@ For the online-only deploy workflow, set these GitHub Actions repository secrets
 - `SUPABASE_ANON_KEY`
 
 Staging backend runtime should use `JUPR_ENV=staging` and staging Supabase credentials only.
+Set `JUPR_WEB_BASE_URL` to the staging Vercel origin and keep
+`JUPR_EMAIL_MODE=dry_run` (or an explicitly configured staging redirect) until
+the registration-email smoke test is approved. The confirmation signing secret
+must be stable within each environment and must never be exposed to Vercel or a
+browser bundle.
 
 Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-only secrets in Vercel frontend environment variables.
 
@@ -114,7 +121,7 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `POST /clubs/{club_slug}/tournament-registration/edit-link/request`
 - `GET /clubs/{club_slug}/tournament-registration/edit?edit_token=...`
 - `POST /clubs/{club_slug}/tournament-registration/edit`
-- `GET /clubs/{club_slug}/tournament-registration/confirmations/{registration_id}`
+- `GET /clubs/{club_slug}/tournament-registration/confirmation?confirmation_token=...`
 - `GET /clubs/{club_slug}/tournament-roster?registration_slug=...&tournament_id=...`
 - `POST /clubs/{club_slug}/tournament-registration/pairing-interest`
 - `GET /clubs/{club_slug}/players`

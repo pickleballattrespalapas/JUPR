@@ -74,7 +74,7 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
   const [singlesSkill, setSinglesSkill] = useState(String(registration.singles_skill ?? ""));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<{ registrationId: string; deliveryStatus: string } | null>(null);
+  const [success, setSuccess] = useState<{ confirmationToken: string; deliveryStatus: string } | null>(null);
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
@@ -186,17 +186,20 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
       setError(response.error || "Unable to save registration changes.");
       return;
     }
+    if (!response.data.confirmation_token) {
+      setError(response.data.email_delivery?.message || "Your changes were saved, but secure confirmation access is unavailable. Please contact tournament staff before submitting again.");
+      return;
+    }
 
     setSuccess({
-      registrationId: String(response.data.registration_id),
-      deliveryStatus: response.data.confirmation_delivery?.status || "unknown"
+      confirmationToken: response.data.confirmation_token,
+      deliveryStatus: response.data.email_delivery?.status || response.data.confirmation_delivery?.status || "unknown"
     });
   }
 
   if (success) {
-    const query = new URLSearchParams({ registration_id: success.registrationId });
-    if (registrationSlug) query.set("tournament", registrationSlug);
-    else query.set("tournament_id", tournamentId);
+    const query = new URLSearchParams({ confirmation_token: success.confirmationToken });
+    if (success.deliveryStatus) query.set("email_status", success.deliveryStatus);
     return (
       <section style={{ ...cardStyle, background: "#f0fdf4", borderColor: "#bbf7d0" }}>
         <h2 style={{ marginTop: 0 }}>Registration changes saved</h2>
