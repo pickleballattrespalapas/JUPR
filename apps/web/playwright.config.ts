@@ -3,6 +3,12 @@ import { defineConfig, devices } from "@playwright/test";
 const remoteBaseUrl = String(process.env.STAGING_WEB_BASE_URL || "").trim().replace(/\/$/, "");
 const baseURL = remoteBaseUrl || "http://127.0.0.1:3000";
 const bypassSecret = String(process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
+const protectedVercelRun = Boolean(
+  remoteBaseUrl &&
+    bypassSecret &&
+    new URL(remoteBaseUrl).protocol === "https:" &&
+    new URL(remoteBaseUrl).hostname.toLowerCase().endsWith(".vercel.app")
+);
 const productionHosts = new Set([
   "pickleballclubsandwich.com",
   "www.pickleballclubsandwich.com",
@@ -30,14 +36,8 @@ export default defineConfig({
   use: {
     ...devices["Desktop Chrome"],
     baseURL,
-    extraHTTPHeaders: bypassSecret
-      ? {
-          "x-vercel-protection-bypass": bypassSecret,
-          "x-vercel-set-bypass-cookie": "true"
-        }
-      : undefined,
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    trace: protectedVercelRun ? "off" : "retain-on-failure",
     video: "retain-on-failure"
   },
   webServer: remoteBaseUrl

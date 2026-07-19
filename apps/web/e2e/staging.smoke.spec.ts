@@ -10,6 +10,16 @@ const expectedApiOrigin = String(
 const expectedAuthOrigin = String(process.env.JUPR_EXPECTED_STAGING_AUTH_ORIGIN || "")
   .trim()
   .replace(/\/$/, "");
+const remoteBaseUrl = String(process.env.STAGING_WEB_BASE_URL || "").trim().replace(/\/$/, "");
+const bypassSecret = String(process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
+const vercelBypassOrigin = (() => {
+  if (!remoteBaseUrl || !bypassSecret) return "";
+  const parsed = new URL(remoteBaseUrl);
+  if (parsed.protocol !== "https:" || !parsed.hostname.toLowerCase().endsWith(".vercel.app")) {
+    return "";
+  }
+  return parsed.origin;
+})();
 
 type Surface = {
   name: string;
@@ -63,6 +73,24 @@ const adminSurfaces: Surface[] = [
   { name: "admin tools", path: "/admin/tools", expected: /admin tools/i }
 ];
 
+test.beforeEach(async ({ context }) => {
+  if (!vercelBypassOrigin || !bypassSecret) return;
+  await context.route(`${vercelBypassOrigin}/**`, async (route) => {
+    // Do not continue the routed request with these headers: Playwright would
+    // carry them across redirects. Fulfilling the no-follow response makes each
+    // redirect a fresh request that is intercepted only when it stays on this origin.
+    const response = await route.fetch({
+      headers: {
+        ...route.request().headers(),
+        "x-vercel-protection-bypass": bypassSecret,
+        "x-vercel-set-bypass-cookie": "true"
+      },
+      maxRedirects: 0
+    });
+    await route.fulfill({ response });
+  });
+});
+
 async function expectHealthySurface(page: Page, surface: Surface): Promise<void> {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -81,8 +109,10 @@ async function expectHealthySurface(page: Page, surface: Surface): Promise<void>
   expect(consoleErrors, `${surface.name} emitted console errors`).toEqual([]);
 }
 
-test("preview environment is isolated from production", async ({ request }) => {
-  const response = await request.get("/api/environment");
+test("preview environment is isolated from production", async ({ page }) => {
+  const response = await page.goto("/api/environment", { waitUntil: "domcontentloaded" });
+  expect(response).not.toBeNull();
+  if (!response) return;
   expect(response.ok()).toBeTruthy();
   const environment = await response.json();
 
