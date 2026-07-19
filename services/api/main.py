@@ -18,7 +18,7 @@ from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, bu
 from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_write_service import PublicLiveSessionError, create_public_round_robin_session, update_public_round_robin_scores
-from jupr_app.services.public_player_service import get_public_match_detail, get_public_matches, get_public_player_profile, get_public_players
+from jupr_app.services.public_player_service import build_public_player_directory, get_public_match_detail, get_public_matches, get_public_player_profile
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
 from services.api.public_badge_codex_routes import install_public_badge_codex_routes
@@ -576,19 +576,46 @@ def get_club_leaderboard_compat(
 
 
 @app.get("/clubs/{club_slug}/players")
-def get_club_players(club_slug: str, q: str | None = Query(default=None), limit: int = Query(default=500, ge=1, le=1000)) -> dict[str, Any]:
+def get_club_players(
+    club_slug: str,
+    q: str | None = Query(default=None, max_length=80),
+    status: str = Query(default="active", max_length=16),
+    sort: str = Query(default="rating", max_length=16),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
-    return {"club": _public_club_payload(club, club_slug), "players": get_public_players(supabase, club_id=club_id, search=q, limit=limit)}
+    directory = build_public_player_directory(
+        supabase,
+        club_id=club_id,
+        search=q,
+        status=status,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    return {"club": _public_club_payload(club, club_slug), **directory}
 
 
 @app.get("/clubs/{club_slug}/players/{player_id}")
-def get_club_player_profile(club_slug: str, player_id: str) -> dict[str, Any]:
+def get_club_player_profile(
+    club_slug: str,
+    player_id: str,
+    recent_limit: int = Query(default=12, ge=1, le=25),
+    history_limit: int = Query(default=500, ge=12, le=500),
+) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
-    profile = get_public_player_profile(supabase, club_id=club_id, player_id=player_id)
+    profile = get_public_player_profile(
+        supabase,
+        club_id=club_id,
+        player_id=player_id,
+        recent_match_limit=recent_limit,
+        history_limit=history_limit,
+    )
     if profile is None:
         raise HTTPException(status_code=404, detail="player not found")
     return {"club": _public_club_payload(club, club_slug), **profile}

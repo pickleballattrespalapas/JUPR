@@ -30,8 +30,8 @@ Current public and staff-facing routes include:
 - `/clubs/[clubSlug]/tournament-roster` public-safe tournament roster.
 - `/clubs/[clubSlug]/tournament-partner-board` public-safe tournament board with token-gated interest flow.
 - `/clubs/[clubSlug]/match-explorer` public matchup odds and projected rating movement preview.
-- `/clubs/[clubSlug]/players` public player directory.
-- `/clubs/[clubSlug]/players/[playerId]` public player profile.
+- `/clubs/[clubSlug]/players` active-by-default public player directory with visible search, status/sort controls, paging, and stable profile/row links.
+- `/clubs/[clubSlug]/players/[playerId]` public-display-only profile with rating trend and format/league breakdowns, badges/trophies, partner/rival summaries, Club Social aggregates, verified-update entry, and recent/full match history.
 - `/clubs/[clubSlug]/players/[playerId]/matches` public player match history.
 - `/clubs/[clubSlug]/matches` public match history.
 - `/clubs/[clubSlug]/matches/[matchId]` public match detail.

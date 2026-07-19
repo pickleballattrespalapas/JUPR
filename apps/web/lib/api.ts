@@ -77,13 +77,17 @@ export type LeaderboardResponse = {
 
 export type PublicPlayer = {
   id: string | number;
-  club_id?: string;
   name: string;
+  display_name?: string;
   rating?: number | null;
+  rating_jupr?: number | null;
+  starting_rating?: number | null;
+  starting_rating_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
   singles_rating?: number | null;
+  singles_rating_jupr?: number | null;
   singles_wins?: number | null;
   singles_losses?: number | null;
   singles_matches_played?: number | null;
@@ -96,7 +100,10 @@ export type PublicLeagueRating = {
   id?: string | number | null;
   league_name?: string | null;
   rating?: number | null;
+  rating_jupr?: number | null;
   starting_rating?: number | null;
+  starting_rating_jupr?: number | null;
+  rating_gain_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
@@ -119,15 +126,19 @@ export type PublicMatch = {
   week_tag?: string | null;
   match_type?: string | null;
   match_format?: string | null;
+  match_format_label?: string | null;
   rating_scope?: string | null;
   context_type?: string | null;
-  context_id?: string | null;
   team_1: PublicMatchPlayer[];
   team_2: PublicMatchPlayer[];
   score_t1?: number | null;
   score_t2?: number | null;
   winner?: string | null;
   elo_delta?: number | null;
+  player_result?: "win" | "loss" | null;
+  player_rating_before_jupr?: number | null;
+  player_rating_after_jupr?: number | null;
+  player_rating_delta_jupr?: number | null;
   rating_snapshot?: {
     team_1: PublicRatingSnapshotEntry[];
     team_2: PublicRatingSnapshotEntry[];
@@ -137,13 +148,99 @@ export type PublicMatch = {
 export type PlayersResponse = {
   club: { id: string; slug: string; name: string };
   players: PublicPlayer[];
+  filters?: { search: string; status: "active" | "inactive" | "all"; sort: string };
+  summary?: { public_players: number; active_players: number; inactive_players: number; filtered_players: number };
+  pagination?: { total: number; limit: number; offset: number; has_more: boolean };
+};
+
+export type PublicRatingHistoryPoint = {
+  match_number: number;
+  match_id?: string | number | null;
+  date?: string | null;
+  league?: string | null;
+  match_type?: string | null;
+  match_format: "doubles" | "singles";
+  match_format_label: string;
+  result?: "win" | "loss" | null;
+  rating_before_jupr?: number | null;
+  rating_after_jupr?: number | null;
+  rating_delta_jupr?: number | null;
+};
+
+export type PublicRatingBreakdown = {
+  format: "doubles" | "singles";
+  label: string;
+  matches: number;
+  wins: number;
+  losses: number;
+  win_pct?: number | null;
+  rating_delta_jupr?: number | null;
+};
+
+export type PublicBadgeAward = {
+  badge_id: string;
+  name: string;
+  category: string;
+  prestige: number;
+  rarity?: string | null;
+  icon_key?: string | null;
+  description?: string | null;
+  requirements?: string | null;
+  count: number;
+  last_earned_at?: string | null;
+};
+
+export type PublicTrophy = {
+  badge_id: string;
+  title: string;
+  placement?: number | null;
+  context_type?: string | null;
+  context_label?: string | null;
+  earned_at?: string | null;
+};
+
+export type PublicRelationship = {
+  player_id: string | number;
+  player_name: string;
+  matches: number;
+  wins: number;
+  losses: number;
+  win_pct?: number | null;
+  balance?: number | null;
+};
+
+export type PublicSocialProjection = {
+  available: boolean;
+  identity: { linked: boolean; label: string };
+  summary?: { events: number; matches: number; wins: number; losses: number; score_diff: number; last_appearance?: string | null } | null;
+  skill_breakdown: Array<{ label: string; events: number; matches: number; wins: number; losses: number; score_diff: number }>;
+  recent_events: Array<{ date?: string | null; name: string; event_type: string; skill_labels: string[]; matches: number; wins: number; losses: number; score_diff: number }>;
 };
 
 export type PlayerProfileResponse = {
   club: { id: string; slug: string; name: string };
   player: PublicPlayer;
+  identity: { display_name: string; public_name_policy: "public_display_name"; verification_status: "enabled" | "pending" | "available" };
+  verified_updates: { status: "enabled" | "pending" | "available"; can_request: boolean };
+  rating_summary: {
+    current_rating_jupr?: number | null;
+    current_singles_rating_jupr?: number | null;
+    starting_rating_jupr?: number | null;
+    highest_rating_jupr?: number | null;
+    lowest_rating_jupr?: number | null;
+    last_10_record: string;
+    last_10_delta_jupr?: number | null;
+    current_streak?: string | null;
+  };
+  rating_breakdowns: PublicRatingBreakdown[];
+  rating_history: PublicRatingHistoryPoint[];
   league_ratings: PublicLeagueRating[];
+  awards: { badge_count: number; badge_award_count: number; prestige_total: number; badges: PublicBadgeAward[]; trophies: PublicTrophy[] };
+  relationships: { best_partner?: PublicRelationship | null; rival?: PublicRelationship | null; partners: PublicRelationship[]; rivals: PublicRelationship[] };
+  social: PublicSocialProjection;
   recent_matches: PublicMatch[];
+  match_history: PublicMatch[];
+  history: { total_matches: number; recent_limit: number; history_limit: number; has_more: boolean };
 };
 
 export type MatchesResponse = {
@@ -400,12 +497,30 @@ export async function getClubLeaderboard(
   return fetchJson<LeaderboardResponse>(`/clubs/${clubSlug}/leaderboards${query ? `?${query}` : ""}`);
 }
 
-export async function getClubPlayers(clubSlug: string): Promise<ApiResult<PlayersResponse>> {
-  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players`);
+export async function getClubPlayers(
+  clubSlug: string,
+  filters: { q?: string | null; status?: "active" | "inactive" | "all" | null; sort?: string | null; limit?: number | null; offset?: number | null } = {}
+): Promise<ApiResult<PlayersResponse>> {
+  const params = new URLSearchParams();
+  if (filters.q) params.set("q", filters.q);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.sort) params.set("sort", filters.sort);
+  if (filters.limit != null) params.set("limit", String(filters.limit));
+  if (filters.offset != null) params.set("offset", String(filters.offset));
+  const query = params.toString();
+  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players${query ? `?${query}` : ""}`);
 }
 
-export async function getClubPlayerProfile(clubSlug: string, playerId: string): Promise<ApiResult<PlayerProfileResponse>> {
-  return fetchJson<PlayerProfileResponse>(`/clubs/${clubSlug}/players/${playerId}`);
+export async function getClubPlayerProfile(
+  clubSlug: string,
+  playerId: string,
+  limits: { recent?: number; history?: number } = {}
+): Promise<ApiResult<PlayerProfileResponse>> {
+  const params = new URLSearchParams();
+  if (limits.recent != null) params.set("recent_limit", String(limits.recent));
+  if (limits.history != null) params.set("history_limit", String(limits.history));
+  const query = params.toString();
+  return fetchJson<PlayerProfileResponse>(`/clubs/${clubSlug}/players/${playerId}${query ? `?${query}` : ""}`);
 }
 
 export async function getClubMatches(clubSlug: string): Promise<ApiResult<MatchesResponse>> {

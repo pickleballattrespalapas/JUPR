@@ -124,8 +124,8 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `GET /clubs/{club_slug}/tournament-registration/confirmation?confirmation_token=...`
 - `GET /clubs/{club_slug}/tournament-roster?registration_slug=...&tournament_id=...`
 - `POST /clubs/{club_slug}/tournament-registration/pairing-interest` with token-gated `requester_selection_id` and public `board_entry_key`
-- `GET /clubs/{club_slug}/players`
-- `GET /clubs/{club_slug}/players/{player_id}`
+- `GET /clubs/{club_slug}/players?q=...&status=active|inactive|all&sort=rating|singles|matches|name|win_pct|recent&limit=...&offset=...` public-display-only directory; defaults to active players
+- `GET /clubs/{club_slug}/players/{player_id}?recent_limit=...&history_limit=...` privacy-safe profile projection with rating trend/breakdowns, awards, relationships, Club Social aggregates, verified-update state, and explicit match-format history
 - `GET /clubs/{club_slug}/matches`
 - `GET /clubs/{club_slug}/matches/{match_id}`
 - `GET /clubs/{club_slug}/players/{player_id}/matches`

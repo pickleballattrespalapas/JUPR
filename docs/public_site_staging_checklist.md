@@ -108,8 +108,8 @@ Review these pages on staging and the primary public domain:
 | Registration Edit | `/clubs/tres-palapas/tournament-registration/edit` | Invalid token state and valid-token edit flow. |
 | Tournament Roster | `/clubs/tres-palapas/tournament-roster` | Public-safe roster fields only. |
 | Tournament Board | `/clubs/tres-palapas/tournament-partner-board` | Public-safe board entries and token-gated action state. |
-| Players | `/clubs/tres-palapas/players` | Search, empty state, profile links. |
-| Player Profile | `/clubs/tres-palapas/players/<id>` | Ratings, records, match links. |
+| Players | `/clubs/tres-palapas/players` | Active default, visible search, status/sort/paging, empty/error states, stable profile/row links. |
+| Player Profile | `/clubs/tres-palapas/players/<id>` | Rating trend and Singles/Doubles breakdown, full/recent history, badges/trophies, partner/rival facts, Club Social aggregates, verified-update/privacy entry, public-field denylist. |
 | Player Matches | `/clubs/tres-palapas/players/<id>/matches` | Match list and empty state. |
 | Match List | `/clubs/tres-palapas/matches` | Filters and match detail links. |
 | Match Detail | `/clubs/tres-palapas/matches/<id>` | Public-safe match fields. |

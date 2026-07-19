@@ -8,11 +8,12 @@ type PlayersPageProps = {
 };
 
 type SortKey = "rating" | "singles" | "matches" | "name" | "win_pct" | "recent";
-type StatusKey = "all" | "active" | "inactive";
+type StatusKey = "active" | "inactive" | "all";
 
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.6rem", whiteSpace: "nowrap" as const, color: "#475569", fontSize: "0.82rem" };
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpace: "nowrap" as const };
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
+const pillStyle = { border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", color: "#0f172a", textDecoration: "none" };
 
 function firstParam(searchParams: PlayersPageProps["searchParams"], key: string): string | null {
   const value = searchParams?.[key];
@@ -26,16 +27,39 @@ function normalizeSort(value: string | null): SortKey {
 }
 
 function normalizeStatus(value: string | null): StatusKey {
-  if (value === "active" || value === "inactive") return value;
-  return "all";
+  if (value === "inactive" || value === "all") return value;
+  return "active";
 }
 
-function pageHref({ clubSlug, q, status, sort, player }: { clubSlug: string; q?: string | null; status?: StatusKey | null; sort?: SortKey | null; player?: string | number | null }): string {
+function positiveInt(value: string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function pageHref({
+  clubSlug,
+  q,
+  status,
+  sort,
+  player,
+  page,
+  perPage
+}: {
+  clubSlug: string;
+  q?: string | null;
+  status?: StatusKey | null;
+  sort?: SortKey | null;
+  player?: string | number | null;
+  page?: number | null;
+  perPage?: number | null;
+}): string {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
-  if (status && status !== "all") params.set("status", status);
+  if (status && status !== "active") params.set("status", status);
   if (sort && sort !== "rating") params.set("sort", sort);
-  if (player) params.set("player", String(player));
+  if (player != null && String(player)) params.set("player", String(player));
+  if (page && page > 1) params.set("page", String(page));
+  if (perPage && perPage !== 50) params.set("per_page", String(perPage));
   const query = params.toString();
   return `/clubs/${clubSlug}/players${query ? `?${query}` : ""}`;
 }
@@ -44,181 +68,152 @@ function playerAnchor(playerId: string | number): string {
   return `player-${encodeURIComponent(String(playerId))}`;
 }
 
-function normalizedRating(value?: number | null): number | null {
-  if (value == null || Number.isNaN(Number(value))) return null;
-  const n = Number(value);
-  return n > 20 ? n / 400 : n;
+function ratingValue(raw?: number | null, normalized?: number | null): number | null {
+  if (normalized != null && !Number.isNaN(Number(normalized))) return Number(normalized);
+  if (raw == null || Number.isNaN(Number(raw))) return null;
+  const value = Number(raw);
+  return Math.abs(value) > 20 ? value / 400 : value;
 }
 
-function ratingValue(player: PublicPlayer): number | null {
-  return normalizedRating(player.rating);
-}
-
-function singlesRatingValue(player: PublicPlayer): number | null {
-  return normalizedRating(player.singles_rating);
-}
-
-function ratingLabel(value?: number | null): string {
-  return value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toFixed(3);
-}
-
-function winPct(player: PublicPlayer): number | null {
-  const wins = player.wins ?? 0;
-  const losses = player.losses ?? 0;
-  const total = wins + losses;
-  return total > 0 ? (wins / total) * 100 : null;
+function ratingLabel(raw?: number | null, normalized?: number | null): string {
+  const value = ratingValue(raw, normalized);
+  return value == null ? "—" : value.toFixed(3);
 }
 
 function winPctLabel(player: PublicPlayer): string {
-  const pct = winPct(player);
-  return pct == null ? "—" : `${pct.toFixed(1)}%`;
-}
-
-function matchesPlayed(player: PublicPlayer): number {
-  return player.matches_played ?? (player.wins ?? 0) + (player.losses ?? 0);
-}
-
-function singlesMatchesPlayed(player: PublicPlayer): number {
-  return player.singles_matches_played ?? (player.singles_wins ?? 0) + (player.singles_losses ?? 0);
+  const wins = player.wins ?? 0;
+  const losses = player.losses ?? 0;
+  return wins + losses > 0 ? `${((wins / (wins + losses)) * 100).toFixed(1)}%` : "—";
 }
 
 function dateLabel(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toISOString().slice(0, 10);
-}
-
-function sortPlayers(players: PublicPlayer[], sort: SortKey): PublicPlayer[] {
-  const sorted = [...players];
-  sorted.sort((a, b) => {
-    if (sort === "matches") return matchesPlayed(b) - matchesPlayed(a);
-    if (sort === "singles") return Number(singlesRatingValue(b) ?? -1) - Number(singlesRatingValue(a) ?? -1);
-    if (sort === "name") return a.name.localeCompare(b.name);
-    if (sort === "win_pct") return Number(winPct(b) ?? -1) - Number(winPct(a) ?? -1);
-    if (sort === "recent") return String(b.last_game_at ?? "").localeCompare(String(a.last_game_at ?? ""));
-    return Number(ratingValue(b) ?? -1) - Number(ratingValue(a) ?? -1);
-  });
-  return sorted;
+  return Number.isNaN(date.getTime()) ? String(value).slice(0, 10) : date.toISOString().slice(0, 10);
 }
 
 export default async function ClubPlayersPage({ params, searchParams }: PlayersPageProps) {
   const { clubSlug } = params;
-  const q = (firstParam(searchParams, "q") ?? "").trim();
-  const selectedStatus = normalizeStatus(firstParam(searchParams, "status"));
-  const selectedSort = normalizeSort(firstParam(searchParams, "sort"));
+  const q = (firstParam(searchParams, "q") ?? "").trim().slice(0, 80);
+  const status = normalizeStatus(firstParam(searchParams, "status"));
+  const sort = normalizeSort(firstParam(searchParams, "sort"));
   const selectedPlayer = firstParam(searchParams, "player");
-  const { data, error } = await getClubPlayers(clubSlug);
+  const page = positiveInt(firstParam(searchParams, "page"), 1);
+  const requestedPerPage = positiveInt(firstParam(searchParams, "per_page"), 50);
+  const perPage = [25, 50, 100].includes(requestedPerPage) ? requestedPerPage : 50;
+  const offset = (page - 1) * perPage;
+  const { data, error } = await getClubPlayers(clubSlug, { q, status, sort, limit: perPage, offset });
   const clubName = data?.club?.name ?? clubSlug;
   const players = data?.players ?? [];
-  const activePlayers = players.filter((player) => player.is_active !== false);
-  const inactivePlayers = players.length - activePlayers.length;
-  const filteredPlayers = sortPlayers(players, selectedSort).filter((player) => {
-    const textOk = !q || player.name.toLowerCase().includes(q.toLowerCase());
-    const statusOk = selectedStatus === "all" || (selectedStatus === "active" ? player.is_active !== false : player.is_active === false);
-    return textOk && statusOk;
-  });
-  const totalMatches = players.reduce((sum, player) => sum + matchesPlayed(player), 0);
-  const totalSinglesMatches = players.reduce((sum, player) => sum + singlesMatchesPlayed(player), 0);
-  const topRated = sortPlayers(activePlayers, "rating")[0];
-  const topSingles = sortPlayers(activePlayers, "singles")[0];
-  const mostActive = sortPlayers(players, "matches")[0];
+  const summary = data?.summary;
+  const pagination = data?.pagination;
+  const pageCount = Math.max(1, Math.ceil((pagination?.total ?? 0) / perPage));
 
   return (
-    <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Player profiles
-      </p>
+    <section data-testid="players-directory">
+      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Player profiles</p>
       <h1 style={{ marginTop: 0 }}>{clubName} players</h1>
-      <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Player profiles connect doubles/overall ratings, singles ratings, match history, league-specific performance, and leaderboards.
+      <p style={{ color: "#334155", maxWidth: "780px" }}>
+        Find a public player profile, then explore doubles and singles ratings, verified match history, awards, and club connections. Active players are shown by default.
       </p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>Players are temporarily unavailable. {error}</p> : null}
-      {!error && players.length === 0 ? <p>No public players are available yet.</p> : null}
+      {error ? (
+        <article data-testid="players-error-state" style={{ ...cardStyle, background: "#fef2f2", color: "#991b1b", marginBottom: "1rem" }}>
+          Players are temporarily unavailable. No private player data was exposed. Please try again shortly.
+        </article>
+      ) : null}
 
-      {players.length > 0 ? (
+      {!error ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-            <article style={cardStyle}><strong>Public players</strong><br />{players.length}</article>
-            <article style={cardStyle}><strong>Active players</strong><br />{activePlayers.length}</article>
-            <article style={cardStyle}><strong>Recorded doubles</strong><br />{totalMatches}</article>
-            <article style={cardStyle}><strong>Recorded singles</strong><br />{totalSinglesMatches}</article>
-            <article style={cardStyle}><strong>Top rating</strong><br />{topRated ? <Link href={`/clubs/${clubSlug}/players/${topRated.id}`}>{topRated.name}</Link> : "—"}</article>
-            <article style={cardStyle}><strong>Top singles</strong><br />{topSingles ? <Link href={`/clubs/${clubSlug}/players/${topSingles.id}`}>{topSingles.name}</Link> : "—"}</article>
-            <article style={cardStyle}><strong>Most active</strong><br />{mostActive ? <Link href={`/clubs/${clubSlug}/players/${mostActive.id}`}>{mostActive.name}</Link> : "—"}</article>
-            <article style={cardStyle}><strong>Inactive players</strong><br />{inactivePlayers}</article>
+            <article style={cardStyle}><strong>Public players</strong><br />{summary?.public_players ?? 0}</article>
+            <article style={cardStyle}><strong>Active players</strong><br />{summary?.active_players ?? 0}</article>
+            <article style={cardStyle}><strong>Inactive players</strong><br />{summary?.inactive_players ?? 0}</article>
+            <article style={cardStyle}><strong>Matching this view</strong><br />{summary?.filtered_players ?? 0}</article>
           </div>
 
-          <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
-            {q ? <p style={{ margin: 0, color: "#475569" }}>Search filter: <strong>{q}</strong> · <Link href={pageHref({ clubSlug, status: selectedStatus, sort: selectedSort })}>clear search</Link></p> : null}
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {(["all", "active", "inactive"] as StatusKey[]).map((status) => {
-                const active = status === selectedStatus;
-                return (
-                  <Link key={status} href={pageHref({ clubSlug, q, status, sort: selectedSort, player: selectedPlayer })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                    {status === "all" ? "All statuses" : status === "active" ? "Active" : "Inactive"}
-                  </Link>
-                );
-              })}
-              {(["rating", "singles", "matches", "win_pct", "recent", "name"] as SortKey[]).map((sort) => {
-                const active = sort === selectedSort;
-                return (
-                  <Link key={sort} href={pageHref({ clubSlug, q, status: selectedStatus, sort, player: selectedPlayer })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                    Sort: {sort === "win_pct" ? "Win %" : sort === "recent" ? "Recent" : sort === "singles" ? "Singles" : sort[0].toUpperCase() + sort.slice(1)}
-                  </Link>
-                );
-              })}
+          <form method="get" action={`/clubs/${clubSlug}/players`} data-testid="players-search-form" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.65rem", alignItems: "end" }}>
+            <label htmlFor="players-search"><strong>Find player</strong><br />
+              <input id="players-search" name="q" defaultValue={q} type="search" placeholder="Search public display name" style={{ width: "100%", padding: "0.6rem", border: "1px solid #94a3b8", borderRadius: "8px", font: "inherit" }} />
+            </label>
+            <input type="hidden" name="status" value={status} />
+            <input type="hidden" name="sort" value={sort} />
+            <input type="hidden" name="per_page" value={perPage} />
+            <button type="submit" style={{ padding: "0.65rem 1rem", border: "1px solid #0f172a", borderRadius: "999px", background: "#0f172a", color: "white", fontWeight: 800 }}>Search</button>
+          </form>
+
+          <div data-testid="players-status-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.65rem" }}>
+            {(["active", "inactive", "all"] as StatusKey[]).map((item) => (
+              <Link
+                key={item}
+                data-testid={`players-status-${item}`}
+                aria-current={item === status ? "page" : undefined}
+                href={pageHref({ clubSlug, q, status: item, sort, perPage })}
+                style={{ ...pillStyle, background: item === status ? "#dbeafe" : "white", fontWeight: item === status ? 800 : 600 }}
+              >
+                {item === "active" ? "Active" : item === "inactive" ? "Inactive" : "All statuses"}
+              </Link>
+            ))}
+          </div>
+
+          <div data-testid="players-sort-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+            {(["rating", "singles", "matches", "win_pct", "recent", "name"] as SortKey[]).map((item) => (
+              <Link
+                key={item}
+                aria-current={item === sort ? "page" : undefined}
+                href={pageHref({ clubSlug, q, status, sort: item, perPage })}
+                style={{ ...pillStyle, background: item === sort ? "#dcfce7" : "white", fontWeight: item === sort ? 800 : 600 }}
+              >
+                Sort: {item === "win_pct" ? "Win %" : item === "recent" ? "Recent" : item === "singles" ? "Singles" : item[0].toUpperCase() + item.slice(1)}
+              </Link>
+            ))}
+          </div>
+
+          {players.length === 0 ? (
+            <article data-testid="players-filter-empty-state" style={cardStyle}>
+              <h2 style={{ marginTop: 0 }}>No players match this view</h2>
+              <p>Try a different public display name or status.</p>
+              <Link href={pageHref({ clubSlug, status: "active", sort: "rating" })}>Reset to active players</Link>
+            </article>
+          ) : (
+            <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "1020px" }}>
+                <thead><tr><th style={thStyle}>Player</th><th style={thStyle}>Doubles / overall</th><th style={thStyle}>Singles</th><th style={thStyle}>Doubles MP</th><th style={thStyle}>Singles MP</th><th style={thStyle}>Doubles W/L</th><th style={thStyle}>Singles W/L</th><th style={thStyle}>Win %</th><th style={thStyle}>Last played</th><th style={thStyle}>Status</th><th style={thStyle}>Stable links</th></tr></thead>
+                <tbody>
+                  {players.map((player) => {
+                    const selected = String(player.id) === String(selectedPlayer);
+                    const profileHref = `/clubs/${clubSlug}/players/${encodeURIComponent(String(player.id))}`;
+                    return (
+                      <tr key={String(player.id)} id={playerAnchor(player.id)} data-testid="players-row" data-status={player.is_active === false ? "inactive" : "active"} style={{ background: selected ? "#eff6ff" : undefined }}>
+                        <td style={tdStyle}><Link aria-label={`Open ${player.name} profile`} href={profileHref}><strong>{player.name}</strong></Link></td>
+                        <td style={tdStyle}>{ratingLabel(player.rating, player.rating_jupr)}</td>
+                        <td style={tdStyle}>{ratingLabel(player.singles_rating, player.singles_rating_jupr)}</td>
+                        <td style={tdStyle}>{player.matches_played ?? (player.wins ?? 0) + (player.losses ?? 0)}</td>
+                        <td style={tdStyle}>{player.singles_matches_played ?? (player.singles_wins ?? 0) + (player.singles_losses ?? 0)}</td>
+                        <td style={tdStyle}>{player.wins ?? 0}/{player.losses ?? 0}</td>
+                        <td style={tdStyle}>{player.singles_wins ?? 0}/{player.singles_losses ?? 0}</td>
+                        <td style={tdStyle}>{winPctLabel(player)}</td>
+                        <td style={tdStyle}>{dateLabel(player.last_game_at)}</td>
+                        <td style={tdStyle}>{player.is_active === false ? "Inactive" : "Active"}</td>
+                        <td style={tdStyle}>
+                          <Link href={profileHref}>profile</Link><span style={{ color: "#64748b" }}> · </span>
+                          <Link aria-label={`${player.name} stable row link`} href={`${pageHref({ clubSlug, q, status, sort, player: player.id, page, perPage })}#${playerAnchor(player.id)}`}>row link</Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          </div>
+          )}
 
-          <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "980px" }}>
-              <thead>
-                <tr>
-                  <th style={thStyle}>Player</th>
-                  <th style={thStyle}>Doubles rating</th>
-                  <th style={thStyle}>Singles rating</th>
-                  <th style={thStyle}>Doubles MP</th>
-                  <th style={thStyle}>Singles MP</th>
-                  <th style={thStyle}>Doubles W/L</th>
-                  <th style={thStyle}>Singles W/L</th>
-                  <th style={thStyle}>Win %</th>
-                  <th style={thStyle}>Last played</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={thStyle}>Links</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPlayers.map((player) => {
-                  const wins = player.wins ?? 0;
-                  const losses = player.losses ?? 0;
-                  const selected = String(player.id) === String(selectedPlayer);
-                  return (
-                    <tr key={String(player.id)} id={playerAnchor(player.id)} style={{ background: selected ? "#eff6ff" : undefined }}>
-                      <td style={tdStyle}><Link href={`/clubs/${clubSlug}/players/${player.id}`}>{player.name}</Link></td>
-                      <td style={tdStyle}>{ratingLabel(ratingValue(player))}</td>
-                      <td style={tdStyle}>{ratingLabel(singlesRatingValue(player))}</td>
-                      <td style={tdStyle}>{matchesPlayed(player)}</td>
-                      <td style={tdStyle}>{singlesMatchesPlayed(player)}</td>
-                      <td style={tdStyle}>{wins}/{losses}</td>
-                      <td style={tdStyle}>{player.singles_wins ?? 0}/{player.singles_losses ?? 0}</td>
-                      <td style={tdStyle}>{winPctLabel(player)}</td>
-                      <td style={tdStyle}>{dateLabel(player.last_game_at)}</td>
-                      <td style={tdStyle}>{player.is_active === false ? "Inactive" : "Active"}</td>
-                      <td style={tdStyle}>
-                        <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`}>leaderboard</Link>
-                        <span style={{ color: "#64748b" }}> · </span>
-                        <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`}>updates</Link>
-                        <span style={{ color: "#64748b" }}> · </span>
-                        <Link href={pageHref({ clubSlug, q, status: selectedStatus, sort: selectedSort, player: player.id }) + `#${playerAnchor(player.id)}`}>row link</Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {pageCount > 1 ? (
+            <nav data-testid="players-pagination" aria-label="Player directory pages" style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginTop: "1rem" }}>
+              {page > 1 ? <Link href={pageHref({ clubSlug, q, status, sort, page: page - 1, perPage })}>Previous</Link> : <span style={{ color: "#94a3b8" }}>Previous</span>}
+              <span>Page {Math.min(page, pageCount)} of {pageCount}</span>
+              {pagination?.has_more ? <Link href={pageHref({ clubSlug, q, status, sort, page: page + 1, perPage })}>Next</Link> : <span style={{ color: "#94a3b8" }}>Next</span>}
+            </nav>
+          ) : null}
         </>
       ) : null}
     </section>
