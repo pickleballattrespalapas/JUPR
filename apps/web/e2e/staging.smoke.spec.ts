@@ -1,4 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIResponse,
+  type BrowserContext,
+  type Page
+} from "@playwright/test";
 
 const clubSlug = String(process.env.JUPR_SMOKE_CLUB_SLUG || "tres-palapas").trim();
 const expectAuthIsolation = /^(1|true|yes|on)$/i.test(
@@ -10,15 +16,16 @@ const expectedApiOrigin = String(
 const expectedAuthOrigin = String(process.env.JUPR_EXPECTED_STAGING_AUTH_ORIGIN || "")
   .trim()
   .replace(/\/$/, "");
+const expectedStagingWebOrigin =
+  "https://jupr-git-staging-pickleballattrespalapas1.vercel.app";
 const remoteBaseUrl = String(process.env.STAGING_WEB_BASE_URL || "").trim().replace(/\/$/, "");
 const bypassSecret = String(process.env.VERCEL_AUTOMATION_BYPASS_SECRET || "").trim();
 const vercelBypassOrigin = (() => {
   if (!remoteBaseUrl || !bypassSecret) return "";
-  const parsed = new URL(remoteBaseUrl);
-  if (parsed.protocol !== "https:" || !parsed.hostname.toLowerCase().endsWith(".vercel.app")) {
-    return "";
+  if (remoteBaseUrl !== expectedStagingWebOrigin) {
+    throw new Error("Refusing to send Vercel bypass credentials to a non-staging web origin.");
   }
-  return parsed.origin;
+  return expectedStagingWebOrigin;
 })();
 
 type Surface = {
@@ -73,46 +80,60 @@ const adminSurfaces: Surface[] = [
   { name: "admin tools", path: "/admin/tools", expected: /admin tools/i }
 ];
 
+async function installVercelBypassCookie(context: BrowserContext): Promise<void> {
+  const bootstrapUrl = `${vercelBypassOrigin}/api/environment`;
+  let bootstrap: APIResponse;
+  try {
+    bootstrap = await context.request.get(bootstrapUrl, {
+      headers: {
+        "x-vercel-protection-bypass": bypassSecret,
+        "x-vercel-set-bypass-cookie": "true"
+      },
+      maxRedirects: 0,
+      failOnStatusCode: false
+    });
+  } catch {
+    throw new Error("Unable to establish the Vercel automation bypass cookie.");
+  }
+
+  try {
+    expect(
+      bootstrap.status(),
+      "Vercel bypass-cookie bootstrap did not redirect"
+    ).toBeGreaterThanOrEqual(300);
+    expect(
+      bootstrap.status(),
+      "Vercel bypass-cookie bootstrap did not redirect"
+    ).toBeLessThan(400);
+    expect(
+      bootstrap.headersArray().some(({ name }) => name.toLowerCase() === "set-cookie"),
+      "Vercel bypass-cookie bootstrap did not issue a cookie"
+    ).toBeTruthy();
+  } finally {
+    await bootstrap.dispose().catch(() => {});
+  }
+
+  let verification: APIResponse;
+  try {
+    verification = await context.request.get(bootstrapUrl, {
+      maxRedirects: 0,
+      failOnStatusCode: false
+    });
+  } catch {
+    throw new Error("Unable to verify the Vercel automation bypass cookie.");
+  }
+
+  try {
+    expect(verification.status(), "Vercel bypass cookie was not accepted").toBe(200);
+    expect(verification.headers()["content-type"] || "").toContain("application/json");
+  } finally {
+    await verification.dispose().catch(() => {});
+  }
+}
+
 test.beforeEach(async ({ context }) => {
   if (!vercelBypassOrigin || !bypassSecret) return;
-  await context.route(`${vercelBypassOrigin}/**`, async (route) => {
-    // Do not follow redirects: route.fetch headers otherwise propagate to the
-    // redirected request. A redirect therefore fails closed instead of carrying
-    // the bypass secret to another origin.
-    const fetched = await route.fetch({
-      headers: {
-        ...route.request().headers(),
-        "x-vercel-protection-bypass": bypassSecret
-      },
-      maxRedirects: 0
-    });
-    try {
-      // Materialize the response before fulfilling the route. Passing the
-      // APIResponse handle through can race with Playwright disposing it.
-      const status = fetched.status();
-      const headers = { ...fetched.headers() };
-      const body = await fetched.body();
-
-      // route.fetch returns the decompressed body, so transport headers must be
-      // recalculated by route.fulfill rather than copied from the upstream response.
-      const transportHeaders = new Set([
-        "content-encoding",
-        "content-length",
-        "transfer-encoding"
-      ]);
-      for (const name of Object.keys(headers)) {
-        if (transportHeaders.has(name.toLowerCase())) delete headers[name];
-      }
-
-      await route.fulfill({ status, headers, body });
-    } finally {
-      try {
-        await fetched.dispose();
-      } catch {
-        // The browser context may already have released the response during teardown.
-      }
-    }
-  });
+  await installVercelBypassCookie(context);
 });
 
 async function expectHealthySurface(page: Page, surface: Surface): Promise<void> {
