@@ -8,6 +8,15 @@ export type AdminTournamentStatusResponse = {
   bulk_registration_update_endpoint?: string | null;
   registration_export_endpoint?: string | null;
   broadcast_preview_endpoint?: string | null;
+  tournament_update_endpoint?: string | null;
+  import_handoff_endpoint?: string | null;
+  mutation_runtime?: {
+    environment: string;
+    staging_only: boolean;
+    service_role_ready: boolean;
+    surface_flags: Record<string, { name: string; enabled: boolean }>;
+  };
+  streamlit_fallback_url?: string;
   tournament_count?: number | null;
   warnings: string[];
 };
@@ -111,6 +120,7 @@ export type AdminTournamentDetailResponse = {
     by_registration_status: Record<string, number>;
     by_payment_status: Record<string, number>;
   };
+  state_fingerprint?: string;
   warnings?: string[];
 };
 
@@ -167,6 +177,10 @@ export type AdminTournamentWriteResponse = {
   updated_count?: number;
   registration_ids?: string[];
   skipped?: string[];
+  operation_key?: string;
+  request_fingerprint?: string;
+  idempotent_replay?: boolean;
+  reconciled?: boolean;
   warnings?: string[];
 };
 

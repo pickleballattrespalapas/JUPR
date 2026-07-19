@@ -39,6 +39,7 @@ export default async function AdminTournamentsPage() {
       ) : null}
 
       <p style={{ marginTop: "1rem" }}><Link href="/admin">Back to operations cockpit</Link></p>
+      {data?.streamlit_fallback_url ? <p><a href={data.streamlit_fallback_url} target="_blank" rel="noreferrer">Open Streamlit tournament recovery fallback</a></p> : null}
     </section>
   );
 }

@@ -34,6 +34,8 @@ type SelectionEdit = {
   confirm: string;
 };
 
+type TournamentEdit = { name: string; startDate: string; endDate: string; confirm: string };
+
 const REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"];
 const PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "refunded"];
 const EDITABLE_PARTNER_MODE_OPTIONS = ["NONE", "NEEDS_PARTNER"];
@@ -54,6 +56,10 @@ class ApiRequestError extends Error {
     this.name = "ApiRequestError";
     this.status = status;
   }
+}
+
+function isRecoveryConflict(error: ApiRequestError): boolean {
+  return /recovery|reconcil|partial|response-lost|completion audit|durable (?:result|completed)|stored result|operation key/i.test(error.message);
 }
 
 function dateLabel(value?: string | null): string {
@@ -103,6 +109,10 @@ function editStateFromSelection(row: AdminTournamentSelection | null): Selection
   };
 }
 
+function editStateFromTournament(row: AdminTournament | null): TournamentEdit {
+  return { name: row?.name || "", startDate: row?.start_date || "", endDate: row?.end_date || "", confirm: "" };
+}
+
 export default function TournamentAdminPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -113,6 +123,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
   const [selectedSelectionId, setSelectedSelectionId] = useState("");
   const [registrationEdit, setRegistrationEdit] = useState<RegistrationEdit>(() => editStateFromRegistration(null));
   const [selectionEdit, setSelectionEdit] = useState<SelectionEdit>(() => editStateFromSelection(null));
+  const [tournamentEdit, setTournamentEdit] = useState<TournamentEdit>(() => editStateFromTournament(null));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selectedRegistration = detail?.registrations.find((row) => row.id === selectedRegistrationId) || null;
@@ -164,11 +175,31 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
     try {
       const payload = await refreshDetail(tournamentId);
       setDetail(payload);
+      setTournamentEdit(editStateFromTournament(payload.tournament));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load tournament detail.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveTournamentEdit() {
+    if (!detail?.tournament.updated_at) { setMessage("Reload: this tournament is missing its write version."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(detail.tournament.id)}`,
+        { method: "PATCH", body: JSON.stringify({ name: tournamentEdit.name, start_date: tournamentEdit.startDate || null, end_date: tournamentEdit.endDate || null, expected_updated_at: detail.tournament.updated_at, confirmation_text: tournamentEdit.confirm, source: "next_tournament_admin_tournament_editor" }) }
+      );
+      const refreshed = await refreshDetail(detail.tournament.id); setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament));
+      setMessage(payload.idempotent_replay ? "Tournament response reconciled from the durable operation." : "Tournament details saved and audit-completed.");
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) {
+        if (isRecoveryConflict(error)) { setMessage(`${error.message} Keep these reviewed values and retry only this identical request to reconcile, or use the Streamlit fallback.`); }
+        else try { const refreshed = await refreshDetail(detail.tournament.id); setDetail(refreshed); setTournamentEdit(editStateFromTournament(refreshed.tournament)); setMessage("Tournament data changed. The authoritative values were reloaded; review before submitting a new request."); }
+        catch (refreshError) { setMessage(refreshError instanceof Error ? refreshError.message : "Unable to recover tournament state."); }
+      } else setMessage(error instanceof Error ? error.message : "Unable to save tournament details.");
+    } finally { setBusy(false); }
   }
 
   function selectRegistration(row: AdminTournamentRegistration) {
@@ -192,6 +223,10 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setMessage("Select a registration before saving.");
       return;
     }
+    if (!selectedRegistration.updated_at) {
+      setMessage("Reload: this registration is missing its write version.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -203,6 +238,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             registration_status: registrationEdit.registrationStatus,
             payment_status: registrationEdit.paymentStatus,
             notes: registrationEdit.notes,
+            expected_updated_at: selectedRegistration.updated_at,
             confirmation_text: registrationEdit.confirm,
             source: "next_tournament_admin_registration_editor"
           })
@@ -212,9 +248,13 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setDetail(refreshed);
       setSelectedRegistrationId(payload.registration?.id || selectedRegistration.id);
       setRegistrationEdit(editStateFromRegistration(payload.registration || selectedRegistration));
-      setMessage("Registration saved and audit-flagged for review.");
+      setMessage(payload.idempotent_replay ? "Registration response reconciled from the durable operation." : "Registration saved and audit-completed.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save registration.");
+      if (error instanceof ApiRequestError && error.status === 409) {
+        if (isRecoveryConflict(error)) { setMessage(`${error.message} Keep these reviewed values and retry only this identical request to reconcile, or use the Streamlit fallback.`); }
+        else try { const refreshed = await refreshDetail(detail.tournament.id); const latest = refreshed.registrations.find((row) => row.id === selectedRegistration.id) || null; setDetail(refreshed); setRegistrationEdit(editStateFromRegistration(latest)); setMessage("Registration data changed. The authoritative row was reloaded; review before submitting a new request."); }
+        catch (refreshError) { setMessage(refreshError instanceof Error ? refreshError.message : "Unable to recover registration state."); }
+      } else setMessage(error instanceof Error ? error.message : "Unable to save registration.");
     } finally {
       setBusy(false);
     }
@@ -250,10 +290,12 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
       setDetail(refreshed);
       setSelectedSelectionId(payload.selection?.id || selectedSelection.id);
       setSelectionEdit(editStateFromSelection(payload.selection || selectedSelection));
-      setMessage("Event entry saved and audit-flagged for review.");
+      setMessage(payload.idempotent_replay ? "Event-entry response reconciled from the durable operation." : "Event entry saved and audit-completed.");
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 409) {
-        try {
+        if (isRecoveryConflict(error)) {
+          setMessage(`${error.message} Keep these reviewed values and retry only this identical request to reconcile, or use the Streamlit fallback.`);
+        } else try {
           const refreshed = await refreshDetail(detail.tournament.id);
           const latestSelection = refreshed.selections.find((row) => row.id === selectedSelection.id) || null;
           setDetail(refreshed);
@@ -340,6 +382,18 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
             <p style={{ color: "#64748b" }}><strong>By payment status:</strong> {kvList(detail.summary.by_payment_status)}</p>
           </article>
 
+          <article style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h2 style={{ marginTop: 0 }}>Edit tournament shell</h2>
+            <p style={{ color: "#475569" }}>Name and date edits use the loaded tournament version. Type <code>SAVE TOURNAMENT</code>; a stale response reloads authoritative data before another attempt.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
+              <label><strong>Name</strong><br /><input value={tournamentEdit.name} onChange={(event) => setTournamentEdit((current) => ({ ...current, name: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Start date</strong><br /><input type="date" value={dateLabel(tournamentEdit.startDate) === "—" ? "" : dateLabel(tournamentEdit.startDate)} onChange={(event) => setTournamentEdit((current) => ({ ...current, startDate: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>End date</strong><br /><input type="date" value={dateLabel(tournamentEdit.endDate) === "—" ? "" : dateLabel(tournamentEdit.endDate)} onChange={(event) => setTournamentEdit((current) => ({ ...current, endDate: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Type SAVE TOURNAMENT</strong><br /><input value={tournamentEdit.confirm} onChange={(event) => setTournamentEdit((current) => ({ ...current, confirm: event.target.value }))} style={inputStyle} /></label>
+            </div>
+            <p><button type="button" onClick={saveTournamentEdit} disabled={busy || !detail.tournament.updated_at || tournamentEdit.confirm.trim().toUpperCase() !== "SAVE TOURNAMENT"} style={buttonStyle}>Save tournament</button></p>
+          </article>
+
           {selectedRegistration ? (
             <article style={{ ...cardStyle, background: "#f8fafc" }}>
               <h2 style={{ marginTop: 0 }}>Edit registration</h2>
@@ -365,7 +419,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
                 <textarea value={registrationEdit.notes} onChange={(event) => setRegistrationEdit((current) => ({ ...current, notes: event.target.value }))} rows={3} style={inputStyle} />
               </label>
               <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <button type="button" onClick={saveRegistrationEdit} disabled={busy || !accessToken || registrationEdit.confirm.trim().toUpperCase() !== "SAVE REGISTRATION"} style={buttonStyle}>{busy ? "Saving…" : "Save registration"}</button>
+                <button type="button" onClick={saveRegistrationEdit} disabled={busy || !accessToken || !selectedRegistration.updated_at || registrationEdit.confirm.trim().toUpperCase() !== "SAVE REGISTRATION"} style={buttonStyle}>{busy ? "Saving…" : "Save registration"}</button>
                 <button type="button" onClick={() => selectedRegistration ? setRegistrationEdit(editStateFromRegistration(selectedRegistration)) : undefined} disabled={busy} style={ghostButtonStyle}>Reset fields</button>
               </p>
             </article>
@@ -439,7 +493,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
         </>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") || message.toLowerCase().includes("changed") || message.toLowerCase().includes("reload") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }

@@ -17,6 +17,7 @@ type Props = {
   clubId: string;
   status: AdminTournamentStatusResponse;
 };
+type ImportHandoff = { ok: boolean; dry_run: true; write_count: 0; state_fingerprint: string; confirmed_registration_count: number; imported_selection_count: number; direct_import_available: false; ops_path: string; required_ops_confirmation: string; integrity_notice: string };
 
 const REGISTRATION_STATUS_OPTIONS = ["", "confirmed", "waitlist", "cancelled"];
 const PAYMENT_STATUS_OPTIONS = ["", "unpaid", "paid", "refunded"];
@@ -59,6 +60,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
   const [selectedTournamentId, setSelectedTournamentId] = useState("");
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
+  const [importHandoff, setImportHandoff] = useState<ImportHandoff | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -103,6 +105,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
   async function loadDetail(tournamentId: string): Promise<void> {
     setSelectedTournamentId(tournamentId);
     setDetail(null);
+    setImportHandoff(null);
     setBroadcastPreview(null);
     setRegistrationStatus("");
     setPaymentStatus("");
@@ -114,7 +117,11 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
     setBusy(true);
     setMessage(null);
     try {
-      setDetail(await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`));
+      const [detailPayload, handoffPayload] = await Promise.all([
+        requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}`),
+        requestJson<ImportHandoff>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/registrations/import-handoff`)
+      ]);
+      setDetail(detailPayload); setImportHandoff(handoffPayload);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load registration reporting data.");
     } finally {
@@ -260,6 +267,12 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
 
       {detail ? (
         <>
+          <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
+            <h2 style={{ marginTop: 0 }}>Operations import handoff</h2>
+            <p><strong>Registration Admin cannot bypass draw integrity.</strong> This is a read-only handoff, not an import button.</p>
+            <p>{importHandoff?.integrity_notice || "Load the handoff before importing registrations."}</p>
+            {importHandoff ? <><p><strong>{importHandoff.confirmed_registration_count}</strong> confirmed registrations · <strong>{importHandoff.imported_selection_count}</strong> entries already represented in a registration-sourced draw.</p><p>This page performs <strong>{importHandoff.write_count} writes</strong>. Tournament Ops owns the separate <code>{importHandoff.required_ops_confirmation}</code> mutation and refuses imports after games exist.</p><Link href={importHandoff.ops_path}>Open guarded Tournament Ops import</Link></> : <p>Handoff unavailable; do not import from this surface.</p>}
+          </article>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Filters and CSV export</h2>
             <p style={{ color: "#475569" }}>Filters apply to the table, authenticated CSV export, and broadcast recipient preview.</p>
@@ -318,7 +331,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
         </>
       ) : null}
 
-      {message ? <p role="status" style={{ color: /unable|error|sign in|not configured/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" style={{ color: /unable|error|sign in|not configured|reload|changed/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }

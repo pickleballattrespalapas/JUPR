@@ -100,6 +100,8 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE=1` enables one-off JUPR Live administration; Tournament Live remains separate.
 - `JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES=1` permits one-off session mutations only when `JUPR_ENV=staging`.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS=1`
+- `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS=1`, `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS=1`, and `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS=1` independently open the order-26 staging-only mutation surfaces. They require `JUPR_ENV=staging`, `SUPABASE_SERVICE_ROLE_KEY`, the private operation migration, reviewed row/state versions, and strict audit intent/completion. Production refuses them.
+- `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF=1` documents the separate staging Operations handoff gate; Registration Admin itself remains no-write for draw teams.
 - `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`
 - `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`
 - `JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL=0` keeps Next live delivery blocked independently of the admin UI flag
@@ -169,6 +171,8 @@ Challenge Ladder, Moneyball, and JUPR Live mutations additionally require the pr
 - `POST /admin/clubs/{club_id}/player-updates/subscriptions/{subscription_id}/replace` and `/deactivate`
 
 The recap and communications admin routes require `SUPABASE_SERVICE_ROLE_KEY` on FastAPI and reject stale versions. Keep email acceptance in `dry_run` or `staging_redirect`; see `docs/communications_parity_runbook.md`.
+
+Tournament Setup/Admin mutations also require the FastAPI-only service role and separate staging flags. Exact retries use deterministic operation keys and stored results; any exception after intent is recovery-required, never blindly retryable. See `docs/tournament_admin_parity_evidence.md`.
 
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 

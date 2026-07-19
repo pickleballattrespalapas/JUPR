@@ -122,6 +122,8 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
             registration_status: registrationStatus,
             payment_status: paymentStatus,
             append_note: appendNote,
+            expected_state_fingerprint: detail.state_fingerprint,
+            expected_versions: Object.fromEntries(detail.registrations.filter((row) => selectedIds.includes(row.id)).map((row) => [row.id, row.updated_at || ""])),
             confirmation_text: confirm,
             source: "next_tournament_admin_bulk_registration_editor"
           })
@@ -131,7 +133,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
       setDetail(refreshed);
       setSelectedIds([]);
       setConfirm("");
-      setMessage(`Updated ${payload.updated_count ?? payload.registration_ids?.length ?? 0} registration(s).`);
+      setMessage(payload.idempotent_replay ? "Bulk response reconciled from the durable operation." : `Updated ${payload.updated_count ?? payload.registration_ids?.length ?? 0} registration(s).`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update registrations.");
     } finally {
@@ -200,7 +202,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
               <textarea value={appendNote} onChange={(event) => setAppendNote(event.target.value)} rows={3} style={inputStyle} />
             </label>
             <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={saveBulkUpdate} disabled={busy || !selectedIds.length || confirm.trim().toUpperCase() !== "BULK UPDATE REGISTRATIONS"} style={buttonStyle}>{busy ? "Saving…" : "Apply bulk update"}</button>
+              <button type="button" onClick={saveBulkUpdate} disabled={busy || !selectedIds.length || !detail.state_fingerprint || detail.registrations.filter((row) => selectedIds.includes(row.id)).some((row) => !row.updated_at) || confirm.trim().toUpperCase() !== "BULK UPDATE REGISTRATIONS"} style={buttonStyle}>{busy ? "Saving…" : "Apply bulk update"}</button>
               <button type="button" onClick={() => setSelectedIds(detail.registrations.map((row) => row.id))} disabled={busy} style={ghostButtonStyle}>Select all loaded</button>
               <button type="button" onClick={() => setSelectedIds([])} disabled={busy} style={ghostButtonStyle}>Clear selection</button>
             </p>
@@ -220,7 +222,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
         </>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") || message.toLowerCase().includes("reload") || message.toLowerCase().includes("changed") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }

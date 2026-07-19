@@ -13,9 +13,9 @@ export default async function AdminTournamentRegistrationManagementPage() {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Tournament Admin
       </p>
-      <h1 style={{ marginTop: 0 }}>Registration reporting</h1>
+      <h1 style={{ marginTop: 0 }}>Registration management and reporting</h1>
       <p style={{ color: "#334155", maxWidth: "900px" }}>
-        Review and filter tournament registrations, download an authenticated operational CSV, and preview a deduplicated broadcast recipient list. This surface cannot create registrations, update entries, or send email.
+        Review list/detail state, export safely, preview recipients, and hand confirmed registrations to guarded Tournament Ops. Single, selection, and bulk edits remain linked admin workflows; this reporting surface never writes draw teams or sends email.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}
@@ -35,6 +35,8 @@ export default async function AdminTournamentRegistrationManagementPage() {
         <Link href="/admin/tournaments">Tournament Admin</Link>
         <Link href="/admin/tournaments/bulk">Bulk registration status/payment</Link>
         <Link href="/admin/tournaments/status">Tournament status actions</Link>
+        <Link href="/admin/tournaments/ops">Guarded operations import</Link>
+        {data?.streamlit_fallback_url ? <a href={data.streamlit_fallback_url} target="_blank" rel="noreferrer">Streamlit registration recovery</a> : null}
         <Link href="/admin">Operations cockpit</Link>
       </nav>
     </section>

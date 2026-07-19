@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import uuid
@@ -25,6 +26,10 @@ class SelectionWriteConflict(RuntimeError):
 
 class StaleTournamentRegistrationSelectionError(SelectionWriteConflict):
     """Backward-compatible name for an admin selection write conflict."""
+
+
+class StaleTournamentRegistrationAdminError(SelectionWriteConflict):
+    """An admin registration write lost its compare-and-swap version."""
 
 
 class TournamentRegistrationEditConflictError(ValueError):
@@ -730,6 +735,182 @@ def _event_identity_key(event: dict[str, Any]) -> tuple[str, ...]:
     )
 
 
+DAY_CONFIGURATION_WRITE_FIELDS = {
+    "id",
+    "tournament_id",
+    "sort_order",
+    "label",
+    "event_date",
+    "enabled",
+}
+EVENT_CONFIGURATION_WRITE_FIELDS = {
+    "id",
+    "tournament_id",
+    "registration_day_id",
+    "sort_order",
+    "label",
+    "event_type",
+    "gender_restriction",
+    "skill_label",
+    "age_label",
+    "partner_required",
+    "capacity_teams",
+    "public_partner_board",
+    "price_usd",
+    "event_family_label",
+    "division_name",
+    "event_format_default",
+    "scoring_default",
+    "event_format_override",
+    "scoring_override",
+    "skill_mode",
+    "age_mode",
+    "age_rules",
+    "waitlist_enabled",
+    "partner_board_enabled",
+    "status",
+    "enabled",
+}
+
+
+def _deterministic_configuration_id(
+    *,
+    tournament_id: str,
+    kind: str,
+    index: int,
+    row: dict[str, Any],
+) -> str:
+    canonical = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
+    return f"{kind}_{uuid.uuid5(uuid.NAMESPACE_URL, f'jupr:{tournament_id}:{kind}:{index}:{canonical}').hex[:12]}"
+
+
+def normalize_registration_configuration_payload(
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+    published_events: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return deterministic, tournament-scoped rows safe for service-role writes."""
+
+    tournament_id = str(tournament_id)
+    raw_days = _json_safe_value(list(days or []))
+    raw_events = _json_safe_value(list(event_options or []))
+    normalized_days: list[dict[str, Any]] = []
+    day_aliases: dict[str, str] = {}
+    day_ids: set[str] = set()
+    for index, raw in enumerate(raw_days, start=1):
+        supplied_tournament_id = str(raw.get("tournament_id") or "").strip()
+        if supplied_tournament_id and supplied_tournament_id != tournament_id:
+            raise ValueError(f"Invalid day payload at row {index}: tournament_id mismatch.")
+        row_id = str(raw.get("id") or "").strip() or _deterministic_configuration_id(
+            tournament_id=tournament_id,
+            kind="day",
+            index=index,
+            row=raw,
+        )
+        if row_id in day_ids:
+            raise ValueError(f"Invalid day payload at row {index}: duplicate id '{row_id}'.")
+        day_ids.add(row_id)
+        day_aliases[f"day_{index}"] = row_id
+        clean = {key: raw.get(key) for key in DAY_CONFIGURATION_WRITE_FIELDS if key in raw}
+        clean.update(
+            {
+                "id": row_id,
+                "tournament_id": tournament_id,
+                "sort_order": raw.get("sort_order") or index,
+                "label": str(raw.get("label") or f"Day {index}"),
+                "enabled": _coerce_bool(raw.get("enabled", True)),
+            }
+        )
+        event_date = raw.get("event_date") or raw.get("date") or raw.get("start_date")
+        if event_date not in (None, ""):
+            clean["event_date"] = event_date
+        normalized_days.append(clean)
+
+    published_ids_by_identity = {
+        _event_identity_key(row): str(row.get("id"))
+        for row in (published_events or [])
+        if str(row.get("id") or "").strip()
+    }
+    normalized_events: list[dict[str, Any]] = []
+    event_ids: set[str] = set()
+    for index, raw in enumerate(raw_events, start=1):
+        supplied_tournament_id = str(raw.get("tournament_id") or "").strip()
+        if supplied_tournament_id and supplied_tournament_id != tournament_id:
+            raise ValueError(f"Invalid event payload at row {index}: tournament_id mismatch.")
+        row_id = str(raw.get("id") or "").strip()
+        if not row_id:
+            row_id = published_ids_by_identity.get(_event_identity_key(raw)) or _deterministic_configuration_id(
+                tournament_id=tournament_id,
+                kind="event",
+                index=index,
+                row=raw,
+            )
+        if row_id in event_ids:
+            raise ValueError(f"Invalid event payload at row {index}: duplicate id '{row_id}'.")
+        event_ids.add(row_id)
+        registration_day_id = str(raw.get("registration_day_id") or "").strip()
+        registration_day_id = day_aliases.get(registration_day_id, registration_day_id)
+        if not registration_day_id and len(normalized_days) == 1:
+            registration_day_id = str(normalized_days[0]["id"])
+        if registration_day_id not in day_ids:
+            raise ValueError(
+                f"Invalid event payload at row {index}: registration_day_id '{registration_day_id}' is not present in day payload."
+            )
+        clean = {key: raw.get(key) for key in EVENT_CONFIGURATION_WRITE_FIELDS if key in raw}
+        event_type = str(raw.get("event_type") or "").strip().upper()
+        clean.update(
+            {
+                "id": row_id,
+                "tournament_id": tournament_id,
+                "registration_day_id": registration_day_id,
+                "sort_order": raw.get("sort_order") or index,
+                "label": str(raw.get("label") or raw.get("division_name") or raw.get("event_family_label") or f"Event {index}"),
+                "event_type": event_type,
+                "gender_restriction": str(raw.get("gender_restriction") or "ANY").strip().upper(),
+                "partner_required": _coerce_bool(raw.get("partner_required", event_type != "SINGLES")),
+                "public_partner_board": _coerce_bool(raw.get("public_partner_board", raw.get("partner_board_enabled", True))),
+                "waitlist_enabled": _coerce_bool(raw.get("waitlist_enabled", True)),
+                "partner_board_enabled": _coerce_bool(raw.get("partner_board_enabled", True)),
+                "enabled": _coerce_bool(raw.get("enabled", True)),
+                "status": str(raw.get("status") or "draft").strip().lower(),
+            }
+        )
+        if isinstance(clean.get("age_rules"), (dict, list)):
+            clean["age_rules"] = json.dumps(clean["age_rules"], sort_keys=True, separators=(",", ":"))
+        normalized_events.append(clean)
+    return normalized_days, normalized_events
+
+
+def assert_registration_configuration_row_ownership(
+    supabase,
+    *,
+    tournament_id: str,
+    days: list[dict[str, Any]],
+    event_options: list[dict[str, Any]],
+) -> None:
+    """Reject an ID already owned by another tournament before any write."""
+
+    for table_name, rows in (
+        ("tournament_registration_days", days),
+        ("tournament_event_options", event_options),
+    ):
+        for row in rows:
+            row_id = str(row.get("id") or "").strip()
+            existing = _safe_first(
+                supabase.table(table_name)
+                .select("id,tournament_id")
+                .eq("id", row_id)
+                .limit(1)
+                .execute()
+            )
+            if existing and str(existing.get("tournament_id") or "") != str(tournament_id):
+                raise ValueError(
+                    f"Configuration row '{row_id}' belongs to another tournament and cannot be published here."
+                )
+
+
 def analyze_registration_publish_impact(
     supabase,
     *,
@@ -738,37 +919,30 @@ def analyze_registration_publish_impact(
     event_options: list[dict[str, Any]],
 ) -> dict[str, Any]:
     tournament_id = str(tournament_id)
-    days = _json_safe_value(list(days or []))
-    event_options = _json_safe_value(list(event_options or []))
     published_days = list_registration_days(supabase, tournament_id)
     published_events = list_event_options(supabase, tournament_id)
+    days, event_options = normalize_registration_configuration_payload(
+        tournament_id=tournament_id,
+        days=days,
+        event_options=event_options,
+        published_events=published_events,
+    )
+    assert_registration_configuration_row_ownership(
+        supabase,
+        tournament_id=tournament_id,
+        days=days,
+        event_options=event_options,
+    )
     usage_by_event = list_registration_usage_by_event_option(supabase, tournament_id)
     usage_by_day = list_registration_usage_by_day(supabase, tournament_id)
 
     published_days_by_id = {str(row.get("id")): row for row in published_days if str(row.get("id") or "").strip()}
     published_events_by_id = {str(row.get("id")): row for row in published_events if str(row.get("id") or "").strip()}
-    published_event_ids_by_identity = {_event_identity_key(row): str(row.get("id")) for row in published_events if str(row.get("id") or "").strip()}
 
-    draft_days: list[dict[str, Any]] = []
-    draft_day_ids: set[str] = set()
-    for row in days or []:
-        row_id = str(row.get("id") or "").strip()
-        if not row_id:
-            row = {**row, "id": _uid("day")}
-            row_id = str(row.get("id"))
-        draft_day_ids.add(row_id)
-        draft_days.append({**row, "id": row_id})
-
-    draft_events: list[dict[str, Any]] = []
-    draft_event_ids: set[str] = set()
-    for row in event_options or []:
-        row_id = str(row.get("id") or "").strip()
-        if not row_id:
-            fallback_id = published_event_ids_by_identity.get(_event_identity_key(row))
-            row_id = fallback_id or _uid("event")
-            row = {**row, "id": row_id}
-        draft_event_ids.add(row_id)
-        draft_events.append({**row, "id": row_id})
+    draft_days = list(days)
+    draft_day_ids = {str(row.get("id")) for row in draft_days}
+    draft_events = list(event_options)
+    draft_event_ids = {str(row.get("id")) for row in draft_events}
 
     creates: list[str] = []
     updates: list[str] = []
@@ -906,8 +1080,18 @@ def replace_registration_configuration(
     event_options: list[dict[str, Any]],
     allow_replace_with_registrations: bool = False,
 ) -> None:
-    days = _json_safe_value(list(days or []))
-    event_options = _json_safe_value(list(event_options or []))
+    days, event_options = normalize_registration_configuration_payload(
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+        published_events=list_event_options(supabase, str(tournament_id)),
+    )
+    assert_registration_configuration_row_ownership(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+    )
     assert_registration_schema_contract(
         supabase,
         required_tables=["tournament_registration_settings", "tournament_registration_days", "tournament_event_options"],
@@ -1001,8 +1185,18 @@ def publish_registration_configuration(
       and convert removed populated rows into soft-closed/disabled records.
     - Public registration continues to consume published day/event rows only.
     """
-    days = _json_safe_value(list(days or []))
-    event_options = _json_safe_value(list(event_options or []))
+    days, event_options = normalize_registration_configuration_payload(
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+        published_events=list_event_options(supabase, str(tournament_id)),
+    )
+    assert_registration_configuration_row_ownership(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=days,
+        event_options=event_options,
+    )
     registration_count = count_tournament_registrations(supabase, tournament_id)
     if registration_count == 0:
         replace_registration_configuration(
@@ -1047,7 +1241,6 @@ def publish_registration_configuration(
                     **row,
                     "enabled": False,
                     "status": "closed",
-                    "updated_at": _now_iso(),
                 }
             )
         else:
@@ -1062,16 +1255,47 @@ def publish_registration_configuration(
                 {
                     **row,
                     "enabled": False,
-                    "updated_at": _now_iso(),
                 }
             )
         else:
             day_delete_ids.append(row_id)
 
-    if day_upserts:
-        supabase.table("tournament_registration_days").upsert(day_upserts).execute()
-    if event_upserts:
-        supabase.table("tournament_event_options").upsert(event_upserts).execute()
+    published_day_ids = {str(row.get("id") or "") for row in published_days}
+    published_event_ids = {str(row.get("id") or "") for row in published_events}
+    day_inserts = [row for row in day_upserts if str(row.get("id") or "") not in published_day_ids]
+    day_updates = [row for row in day_upserts if str(row.get("id") or "") in published_day_ids]
+    event_inserts = [row for row in event_upserts if str(row.get("id") or "") not in published_event_ids]
+    event_updates = [row for row in event_upserts if str(row.get("id") or "") in published_event_ids]
+
+    for row in day_updates:
+        row_id = str(row.get("id") or "")
+        patch = {key: value for key, value in row.items() if key not in {"id", "tournament_id", "created_at"}}
+        updated = _safe_data(
+            supabase.table("tournament_registration_days")
+            .update(patch)
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", row_id)
+            .execute()
+        )
+        if not updated:
+            raise SelectionWriteConflict(f"Tournament day '{row_id}' changed during publish.")
+    if day_inserts:
+        supabase.table("tournament_registration_days").insert(day_inserts).execute()
+
+    for row in event_updates:
+        row_id = str(row.get("id") or "")
+        patch = {key: value for key, value in row.items() if key not in {"id", "tournament_id", "created_at"}}
+        updated = _safe_data(
+            supabase.table("tournament_event_options")
+            .update(patch)
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", row_id)
+            .execute()
+        )
+        if not updated:
+            raise SelectionWriteConflict(f"Tournament event '{row_id}' changed during publish.")
+    if event_inserts:
+        supabase.table("tournament_event_options").insert(event_inserts).execute()
     if event_delete_ids:
         supabase.table("tournament_event_options").delete().eq("tournament_id", str(tournament_id)).in_("id", event_delete_ids).execute()
     if day_delete_ids:
@@ -1173,6 +1397,7 @@ def update_admin_registration(
     tournament_id: str,
     registration_id: str,
     payload: dict[str, Any],
+    expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
     update_payload = {
         "first_name": str(payload.get("first_name") or "").strip() or None,
@@ -1200,15 +1425,21 @@ def update_admin_registration(
         if existing and str(existing.get("id")) != str(registration_id):
             raise ValueError("Another registration already uses that email.")
 
-    resp = (
+    query = (
         supabase.table("tournament_registrations")
         .update(clean_payload)
         .eq("tournament_id", str(tournament_id))
         .eq("id", str(registration_id))
-        .execute()
     )
+    if expected_updated_at is not None:
+        query = query.eq("updated_at", str(expected_updated_at))
+    resp = query.execute()
     updated = _safe_first(resp)
     if not updated:
+        if expected_updated_at is not None:
+            raise StaleTournamentRegistrationAdminError(
+                "Registration changed after it was loaded. Refresh and try again."
+            )
         raise ValueError("Registration not found for this tournament.")
     return updated
 

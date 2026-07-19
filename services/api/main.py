@@ -140,7 +140,7 @@ app.add_middleware(
     allow_origins=get_cors_allowed_origins(),
     allow_origin_regex=get_cors_allowed_origin_regex(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 

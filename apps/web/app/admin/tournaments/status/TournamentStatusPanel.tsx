@@ -84,6 +84,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           method: "PATCH",
           body: JSON.stringify({
             action,
+            expected_updated_at: selectedTournament?.updated_at,
             confirmation_text: confirm,
             source: "next_tournament_admin_status_page"
           })
@@ -91,7 +92,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
       );
       setTournaments((current) => current.map((row) => row.id === selectedTournamentId && payload.tournament ? { ...row, ...payload.tournament } : row));
       setConfirm("");
-      setMessage(`Tournament ${payload.action || action} completed and audit-flagged for review.`);
+      setMessage(payload.idempotent_replay ? "Tournament status response reconciled from the durable operation." : `Tournament ${payload.action || action} completed and audit-completed.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update tournament status.");
     } finally {
@@ -145,13 +146,13 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
             <label><strong>Type {expectedConfirm}</strong><br />
               <input value={confirm} onChange={(event) => setConfirm(event.target.value)} style={inputStyle} />
             </label>
-            <button type="button" onClick={submitAction} disabled={busy || !selectedTournamentId || confirm.trim().toUpperCase() !== expectedConfirm} style={ghostButtonStyle}>Apply</button>
+            <button type="button" onClick={submitAction} disabled={busy || !selectedTournamentId || !selectedTournament?.updated_at || confirm.trim().toUpperCase() !== expectedConfirm} style={ghostButtonStyle}>Apply</button>
           </div>
-          {selectedTournament ? <p style={{ color: "#64748b" }}>Selected: <strong>{selectedTournament.name}</strong> <StatusChip value={selectedTournament.status} /></p> : null}
+          {selectedTournament ? <p style={{ color: selectedTournament.updated_at ? "#64748b" : "#b91c1c" }}>Selected: <strong>{selectedTournament.name}</strong> <StatusChip value={selectedTournament.status} />{selectedTournament.updated_at ? "" : " · missing version; reload"}</p> : null}
         </article>
       ) : null}
 
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("error") || message.toLowerCase().includes("sign in") || message.toLowerCase().includes("reload") || message.toLowerCase().includes("changed") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
     </section>
   );
 }

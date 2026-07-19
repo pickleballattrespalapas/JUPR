@@ -71,6 +71,8 @@ database access, exports, and a truthful view-only fallback. The `jupr_live`
 matrix row intentionally remains `Partial` until the consolidated staging book is
 executed.
 
+Order 26 is automated-ready/manual-ready on its branch: dedicated setup, Python templates and impact review, stale-safe tournament/registration edits, durable audit/replay semantics, imported-draw refusal, and the read-only Operations import handoff are covered. The three tournament rows intentionally remain `Partial` until the consolidated staging book is executed.
+
 ## Page-level closure contracts
 
 The automated column defines evidence that can be built before the final manual test
