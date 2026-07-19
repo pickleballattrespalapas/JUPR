@@ -69,7 +69,7 @@ emails use it to generate tokenized Next `/email-preferences` links. The API
 fails the individual outbox send closed when no unsubscribe token is available;
 it never falls back to a public subscription ID.
 
-The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI.
+The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI. When apply mode is enabled, guided and bulk edits carry stable idempotency keys; rating-affecting edits expose their durable Replay History job and block further editing when mandatory recovery is required.
 
 Example:
 

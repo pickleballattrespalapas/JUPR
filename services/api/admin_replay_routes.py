@@ -15,6 +15,7 @@ class AdminReplayRequest(BaseModel):
     target_reset: str = "ALL (Full System Reset)"
     confirmation_text: str = ""
     source: str = "next_replay_history"
+    idempotency_key: str | None = None
 
 
 def _resolve_replay_role_or_403(*, supabase: Any, club_id: str, authorization: str | None, source: str) -> tuple[str, str]:
@@ -80,6 +81,7 @@ def install_admin_replay_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
                 confirmation_text=payload.confirmation_text,
+                idempotency_key=payload.idempotency_key,
             )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc

@@ -15,6 +15,12 @@ class FakeQuery:
     def select(self, *_args, **_kwargs):
         return self
 
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
     def eq(self, key, value):
         self.filters.append((key, value))
         return self
@@ -97,19 +103,24 @@ def test_run_replay_calls_domain_and_audits(monkeypatch) -> None:
     storage = fake_storage()
     calls = []
 
-    def fake_replay_history(**kwargs):
+    def fake_tracked_replay(**kwargs):
         calls.append(kwargs)
         return {
-            "target_reset": kwargs["target_reset"],
-            "players_updated": False,
-            "skipped_incomplete": 0,
-            "matches_rewritten": 3,
-            "matches_snapshots_updated_rows": 3,
-            "league_ratings_rows": 4,
-            "matches_scanned_total": 5,
+            "job_id": "job-1",
+            "job_status": "succeeded",
+            "idempotent_replay": False,
+            "result": {
+                "target_reset": kwargs["target_reset"],
+                "players_updated": False,
+                "skipped_incomplete": 0,
+                "matches_rewritten": 3,
+                "matches_snapshots_updated_rows": 3,
+                "league_ratings_rows": 4,
+                "matches_scanned_total": 5,
+            },
         }
 
-    monkeypatch.setattr("jupr_app.services.admin_replay_service.replay_history", fake_replay_history)
+    monkeypatch.setattr("jupr_app.services.admin_replay_service.run_replay_with_job_tracking", fake_tracked_replay)
 
     result = run_admin_replay_history(
         FakeSupabase(storage),
@@ -123,4 +134,5 @@ def test_run_replay_calls_domain_and_audits(monkeypatch) -> None:
     assert result["ok"] is True
     assert result["result"]["matches_rewritten"] == 3
     assert calls and calls[0]["target_reset"] == "Open"
+    assert result["job_id"] == "job-1"
     assert storage["admin_activity_log"][0]["action_type"] == "replay_history"

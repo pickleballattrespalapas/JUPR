@@ -73,27 +73,33 @@ def test_admin_replay_post_contract(monkeypatch):
         lambda **_kwargs: SimpleNamespace(role="super_admin"),
     )
 
-    def fake_replay_history(**kwargs):
+    def fake_tracked_replay(**kwargs):
         return {
-            "target_reset": kwargs["target_reset"],
-            "players_updated": kwargs["target_reset"].startswith("ALL"),
-            "skipped_incomplete": 0,
-            "matches_rewritten": 3,
-            "matches_snapshots_updated_rows": 3,
-            "league_ratings_rows": 4,
-            "matches_scanned_total": 5,
+            "job_id": "job-api",
+            "job_status": "succeeded",
+            "idempotent_replay": False,
+            "result": {
+                "target_reset": kwargs["target_reset"],
+                "players_updated": kwargs["target_reset"].startswith("ALL"),
+                "skipped_incomplete": 0,
+                "matches_rewritten": 3,
+                "matches_snapshots_updated_rows": 3,
+                "league_ratings_rows": 4,
+                "matches_scanned_total": 5,
+            },
         }
 
-    monkeypatch.setattr("jupr_app.services.admin_replay_service.replay_history", fake_replay_history)
+    monkeypatch.setattr("jupr_app.services.admin_replay_service.run_replay_with_job_tracking", fake_tracked_replay)
 
     response = TestClient(app).post(
         "/admin/clubs/club/replay-history",
         headers={"Authorization": "Bearer local"},
-        json={"target_reset": "Open", "confirmation_text": "REPLAY", "source": "test"},
+        json={"target_reset": "Open", "confirmation_text": "REPLAY", "source": "test", "idempotency_key": "api-test"},
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
     assert payload["result"]["matches_rewritten"] == 3
+    assert payload["job_id"] == "job-api"
     assert storage["admin_activity_log"][0]["action_type"] == "replay_history"

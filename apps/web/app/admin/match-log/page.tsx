@@ -281,6 +281,7 @@ export default function AdminMatchLogPage({ searchParams }: MatchLogPageProps) {
             duplicatePreview={data.duplicate_delete_preview}
             duplicateGroups={data.duplicate_groups}
             matches={data.matches}
+            recentOperations={data.recent_edit_operations || []}
           />
 
           <div style={{ marginTop: "1rem" }}>

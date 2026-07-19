@@ -15,6 +15,7 @@ export type AdminMatchLogMatch = {
   league?: string | null;
   week_tag?: string | null;
   match_type?: string | null;
+  notes?: string | null;
   score: { team1: number; team2: number; display: string };
   team1: AdminMatchLogPlayer[];
   team2: AdminMatchLogPlayer[];
@@ -70,6 +71,19 @@ export type AdminCorrectionPlan = {
   safety_rules: string[];
 };
 
+export type AdminMatchEditOperation = {
+  id: string;
+  status: string;
+  recompute_scope?: { standings?: boolean; ratings?: boolean } | null;
+  replay_target?: string | null;
+  replay_job_id?: string | null;
+  error_text?: string | null;
+  actor_email?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+  finished_at?: string | null;
+};
+
 export type AdminMatchLogResponse = {
   enabled: boolean;
   apply_enabled?: boolean | null;
@@ -96,6 +110,7 @@ export type AdminMatchLogResponse = {
   duplicate_rows: AdminMatchLogMatch[];
   duplicate_delete_preview?: AdminDuplicateDeletePreview | null;
   resolved_duplicate_groups?: AdminDuplicateGroup[];
+  recent_edit_operations?: AdminMatchEditOperation[];
   correction_plan: AdminCorrectionPlan;
   warnings: string[];
 };
@@ -151,6 +166,13 @@ export type AdminMatchLogWriteResult = {
   warnings?: string[];
   badge_summary?: Record<string, unknown>;
   replay_error?: string | null;
+  atomic?: boolean | null;
+  operation_id?: string | null;
+  operation_status?: string | null;
+  idempotent?: boolean | null;
+  replay_job_id?: string | null;
+  replay_status?: string | null;
+  replay_result?: Record<string, unknown> | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };

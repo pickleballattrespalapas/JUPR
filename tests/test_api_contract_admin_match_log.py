@@ -65,7 +65,7 @@ def test_admin_match_log_enabled_contract(monkeypatch):
     assert payload["duplicate_groups"][0]["delete_ids"] == [2]
     assert payload["duplicate_delete_preview"]["delete_count"] == 1
     assert payload["correction_plan"]["apply_endpoint"] is None
-    assert "notes" not in payload["matches"][0]
+    assert payload["matches"][0]["notes"] == "operator correction context"
     assert payload["summary"]["scanned_matches"] == 3
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == []
@@ -487,16 +487,33 @@ def test_admin_match_log_apply_edits_contract(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
     _patch_admin_auth(monkeypatch, supabase)
 
+    def fake_atomic(_supabase, **kwargs):
+        tables["matches"][0]["week_tag"] = kwargs["patches"][0]["week_tag"]
+        return {
+            "ok": True,
+            "mode": "applied",
+            "atomic": True,
+            "operation_id": "operation-1",
+            "operation_status": "succeeded",
+            "updated_count": 1,
+            "updated_ids": [1],
+            "recompute_scope": {"standings": True, "ratings": False},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("jupr_app.services.admin_match_log_service.apply_atomic_match_edits", fake_atomic)
+
     response = TestClient(app).patch(
         "/admin/clubs/club/match-log/edits",
         headers={"Authorization": "Bearer local"},
-        json={"confirmation_text": "APPLY", "patches": [{"id": 1, "week_tag": "Week 2"}], "correction_note": "Fix week"},
+        json={"confirmation_text": "APPLY", "patches": [{"id": 1, "week_tag": "Week 2"}], "correction_note": "Fix week", "idempotency_key": "api-edit-1"},
     )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
     assert payload["updated_count"] == 1
+    assert payload["atomic"] is True
     assert tables["matches"][0]["week_tag"] == "Week 2"
 
 
@@ -514,6 +531,34 @@ def test_admin_match_log_apply_rejects_activity_edits_contract(monkeypatch):
 
     assert response.status_code == 400
     assert "guarded rated-match exclude workflow" in response.json()["detail"]
+
+
+def test_admin_match_log_recovery_contract(monkeypatch):
+    tables = fake_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    _patch_admin_auth(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "services.api.admin_match_log_routes.recover_atomic_match_edit",
+        lambda *_args, **kwargs: {
+            "ok": True,
+            "mode": "recovered",
+            "operation_id": kwargs["operation_id"],
+            "operation_status": "succeeded",
+            "replay_job_id": "job-1",
+            "warnings": [],
+        },
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-log/edits/operation-1/recover",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RECOVER"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "recovered"
+    assert response.json()["operation_id"] == "operation-1"
 
 
 def test_admin_match_log_duplicate_cleanup_contract(monkeypatch):

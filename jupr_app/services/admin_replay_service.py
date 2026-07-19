@@ -6,7 +6,8 @@ from typing import Any
 import pandas as pd
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
+from jupr_app.domain.replay_history import FULL_RESET_LABEL
+from jupr_app.services.replay_service import run_replay_with_job_tracking
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 
@@ -63,6 +64,34 @@ def _fallback_league_names(supabase: Any, *, club_id: str) -> list[str]:
     return sorted(names)
 
 
+def _recent_replay_jobs(supabase: Any, *, club_id: str, limit: int = 20) -> tuple[list[dict[str, Any]], str | None]:
+    try:
+        rows = _safe_rows(
+            supabase.table("replay_jobs")
+            .select("id,target_reset,status,actor_email,source,created_at,started_at,finished_at,error_text")
+            .eq("club_id", str(club_id))
+            .order("created_at", desc=True)
+            .limit(max(1, min(int(limit), 50)))
+            .execute()
+        )
+    except Exception as exc:
+        return [], f"Replay job history is unavailable: {exc.__class__.__name__}"
+    return [
+        {
+            "id": str(row.get("id") or ""),
+            "target_reset": _clean_text(row.get("target_reset"), limit=160),
+            "status": _clean_text(row.get("status") or "unknown", limit=40),
+            "actor_email": _clean_text(row.get("actor_email"), limit=240),
+            "source": _clean_text(row.get("source"), limit=120),
+            "created_at": row.get("created_at"),
+            "started_at": row.get("started_at"),
+            "finished_at": row.get("finished_at"),
+            "error_text": _clean_text(row.get("error_text"), limit=500),
+        }
+        for row in rows
+    ], None
+
+
 def build_admin_replay_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
     if not is_admin_replay_enabled():
         return {
@@ -73,6 +102,7 @@ def build_admin_replay_status(supabase: Any | None, *, club_id: str) -> dict[str
             "default_target_reset": FULL_RESET_LABEL,
             "confirmation_text": "REPLAY",
             "warnings": ["Next replay is disabled. Use Streamlit Admin Tools until JUPR_ENABLE_NEXT_ADMIN_REPLAY is enabled for the pilot."],
+            "recent_jobs": [],
             "safety_rules": _safety_rules(),
         }
 
@@ -88,6 +118,9 @@ def build_admin_replay_status(supabase: Any | None, *, club_id: str) -> dict[str
         )
     if not league_names:
         league_names = _fallback_league_names(supabase, club_id=str(club_id))
+    recent_jobs, jobs_warning = _recent_replay_jobs(supabase, club_id=str(club_id))
+    if jobs_warning:
+        warnings.append(jobs_warning)
     return {
         "enabled": True,
         "status": "replay_enabled",
@@ -96,6 +129,7 @@ def build_admin_replay_status(supabase: Any | None, *, club_id: str) -> dict[str
         "default_target_reset": FULL_RESET_LABEL,
         "confirmation_text": "REPLAY",
         "warnings": warnings,
+        "recent_jobs": recent_jobs,
         "safety_rules": _safety_rules(),
     }
 
@@ -103,6 +137,7 @@ def build_admin_replay_status(supabase: Any | None, *, club_id: str) -> dict[str
 def _safety_rules() -> list[str]:
     return [
         "Replay runs server-side through FastAPI and the Python replay_history domain function.",
+        "Every replay creates a durable replay_jobs record and client retries reuse an idempotency key.",
         "League replay rewrites snapshots and rebuilds league_ratings for the selected league.",
         "Full reset also updates overall player ratings, wins, losses, and matches played.",
         "Replay requires Supabase JWT authorization with run_replay permission.",
@@ -119,6 +154,8 @@ def run_admin_replay_history(
     actor_role: str,
     source: str = "next_replay_history",
     confirmation_text: str = "",
+    idempotency_key: str | None = None,
+    retry_failed: bool = False,
 ) -> dict[str, Any]:
     if not is_admin_replay_enabled():
         raise PermissionError("Next replay is disabled.")
@@ -127,7 +164,18 @@ def run_admin_replay_history(
     target = _clean_text(target_reset or FULL_RESET_LABEL, limit=160) or FULL_RESET_LABEL
     df_meta, warnings = _fetch_league_metadata(supabase, club_id=str(club_id))
     before_json = {"target_reset": target, "source_client": "fastapi/nextjs", "source_page": source}
-    result = replay_history(supabase=supabase, club_id=str(club_id), df_meta=df_meta, target_reset=target)
+    tracked = run_replay_with_job_tracking(
+        supabase=supabase,
+        club_id=str(club_id),
+        df_meta=df_meta,
+        target_reset=target,
+        actor_email=str(actor_email or ""),
+        actor_role=str(actor_role or ""),
+        idempotency_key=idempotency_key,
+        source=source,
+        retry_failed=retry_failed,
+    )
+    result = dict(tracked.get("result") or {})
     audit_payload = build_activity_payload(
         club_id=str(club_id),
         actor_email=str(actor_email or ""),
@@ -136,7 +184,14 @@ def run_admin_replay_history(
         entity_type="replay_history",
         entity_id=target,
         before_json=before_json,
-        after_json={"source_client": "fastapi/nextjs", "source_page": source, "result": result},
+        after_json={
+            "source_client": "fastapi/nextjs",
+            "source_page": source,
+            "job_id": tracked.get("job_id"),
+            "job_status": tracked.get("job_status"),
+            "idempotent_replay": bool(tracked.get("idempotent_replay")),
+            "result": result,
+        },
         note=f"Replay History from Next/FastAPI for {target}",
         source_page=source,
         flagged_for_review=True,
@@ -146,4 +201,13 @@ def run_admin_replay_history(
         warnings.append(audit_result.warning)
     if not audit_result.ok and is_api_audit_log_required():
         raise RuntimeError("audit log write required but unavailable")
-    return {"ok": True, "mode": "replayed", "target_reset": target, "result": result, "warnings": warnings}
+    return {
+        "ok": str(tracked.get("job_status")) == "succeeded",
+        "mode": "replayed" if str(tracked.get("job_status")) == "succeeded" else "replay_in_progress",
+        "target_reset": target,
+        "job_id": tracked.get("job_id"),
+        "job_status": tracked.get("job_status"),
+        "idempotent_replay": bool(tracked.get("idempotent_replay")),
+        "result": result,
+        "warnings": warnings,
+    }

@@ -105,6 +105,7 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `GET /admin/operations/status`
 - `GET /admin/clubs/{club_id}/match-log`
 - `PATCH /admin/clubs/{club_id}/match-log/edits` guarded by `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY` plus Supabase JWT role authorization
+- `POST /admin/clubs/{club_id}/match-log/edits/{operation_id}/recover` guarded replay recovery for an atomically committed edit
 - `POST /admin/clubs/{club_id}/match-log/duplicates/cleanup` guarded by `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY` plus Supabase JWT role authorization
 - `GET /clubs/{club_slug}`
 - `GET /clubs/{club_slug}/leaderboards?league_name=OVERALL&status=active&q=...&sort=rank&player_id=...&limit=50&offset=0`

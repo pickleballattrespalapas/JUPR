@@ -7,12 +7,28 @@ export type AdminReplayStatusResponse = {
   confirmation_text: string;
   warnings: string[];
   safety_rules: string[];
+  recent_jobs: AdminReplayJob[];
+};
+
+export type AdminReplayJob = {
+  id: string;
+  target_reset?: string | null;
+  status: string;
+  actor_email?: string | null;
+  source?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error_text?: string | null;
 };
 
 export type AdminReplayResultResponse = {
   ok: boolean;
   mode: string;
   target_reset: string;
+  job_id?: string | null;
+  job_status?: string | null;
+  idempotent_replay?: boolean | null;
   result: {
     target_reset: string;
     players_updated: boolean;
@@ -21,7 +37,7 @@ export type AdminReplayResultResponse = {
     matches_snapshots_updated_rows: number;
     league_ratings_rows: number;
     matches_scanned_total: number;
-  };
+  } | Record<string, never>;
   warnings: string[];
 };
 
