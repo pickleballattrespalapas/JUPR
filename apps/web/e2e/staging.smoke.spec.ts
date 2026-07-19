@@ -76,18 +76,42 @@ const adminSurfaces: Surface[] = [
 test.beforeEach(async ({ context }) => {
   if (!vercelBypassOrigin || !bypassSecret) return;
   await context.route(`${vercelBypassOrigin}/**`, async (route) => {
-    // Do not continue the routed request with these headers: Playwright would
-    // carry them across redirects. Fulfilling the no-follow response makes each
-    // redirect a fresh request that is intercepted only when it stays on this origin.
-    const response = await route.fetch({
+    // Do not follow redirects: route.fetch headers otherwise propagate to the
+    // redirected request. A redirect therefore fails closed instead of carrying
+    // the bypass secret to another origin.
+    const fetched = await route.fetch({
       headers: {
         ...route.request().headers(),
-        "x-vercel-protection-bypass": bypassSecret,
-        "x-vercel-set-bypass-cookie": "true"
+        "x-vercel-protection-bypass": bypassSecret
       },
       maxRedirects: 0
     });
-    await route.fulfill({ response });
+    try {
+      // Materialize the response before fulfilling the route. Passing the
+      // APIResponse handle through can race with Playwright disposing it.
+      const status = fetched.status();
+      const headers = { ...fetched.headers() };
+      const body = await fetched.body();
+
+      // route.fetch returns the decompressed body, so transport headers must be
+      // recalculated by route.fulfill rather than copied from the upstream response.
+      const transportHeaders = new Set([
+        "content-encoding",
+        "content-length",
+        "transfer-encoding"
+      ]);
+      for (const name of Object.keys(headers)) {
+        if (transportHeaders.has(name.toLowerCase())) delete headers[name];
+      }
+
+      await route.fulfill({ status, headers, body });
+    } finally {
+      try {
+        await fetched.dispose();
+      } catch {
+        // The browser context may already have released the response during teardown.
+      }
+    }
   });
 });
 

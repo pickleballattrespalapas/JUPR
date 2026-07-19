@@ -225,9 +225,21 @@ def test_browser_smoke_scopes_bypass_headers_and_disables_protected_traces():
     assert "context.route(`${vercelBypassOrigin}/**`" in spec
     assert 'parsed.hostname.toLowerCase().endsWith(".vercel.app")' in spec
     assert '"x-vercel-protection-bypass": bypassSecret' in spec
+    assert "x-vercel-set-bypass-cookie" not in spec
     assert "route.continue" not in spec
     assert "maxRedirects: 0" in spec
-    assert "route.fulfill({ response })" in spec
+    assert "route.fulfill({ response })" not in spec
+    assert "const status = fetched.status()" in spec
+    assert "const headers = { ...fetched.headers() }" in spec
+    assert "const body = await fetched.body()" in spec
+    assert "const transportHeaders = new Set([" in spec
+    assert '"content-encoding"' in spec
+    assert '"content-length"' in spec
+    assert '"transfer-encoding"' in spec
+    assert "transportHeaders.has(name.toLowerCase())" in spec
+    assert "delete headers[name]" in spec
+    assert "route.fulfill({ status, headers, body })" in spec
+    assert "await fetched.dispose()" in spec
 
 
 def test_schema_copy_workflow_has_explicit_apply_confirmation():
