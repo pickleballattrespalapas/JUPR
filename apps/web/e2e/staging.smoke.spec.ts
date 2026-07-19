@@ -132,6 +132,45 @@ test("tournament roster filters and public deep links remain navigable", async (
   }
 });
 
+test("badge codex: authoritative buckets, filters, anchors, and trophy room", async ({ page }) => {
+  const response = await page.goto(`/clubs/${clubSlug}/badge-codex`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(page.getByRole("heading", { name: /badge codex/i })).toBeVisible();
+  await expect(page.locator("[data-badge-bucket]")).toHaveCount(4);
+  await expect(page.getByText(/Complete definitions/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent trophy room" })).toBeVisible();
+
+  const firstBadge = page.locator("[data-badge-id]").first();
+  await expect(firstBadge).toBeVisible();
+  const badgeId = await firstBadge.getAttribute("data-badge-id");
+  expect(badgeId).toBeTruthy();
+  const directHref = await firstBadge.getByRole("link", { name: "Link directly to this badge" }).getAttribute("href");
+  expect(directHref).toContain(`badge=${badgeId}`);
+  expect(directHref).toContain(`#badge-${badgeId}`);
+  await page.goto(String(directHref), { waitUntil: "domcontentloaded" });
+  await expect(page.locator(`[data-badge-id="${badgeId}"]`)).toBeVisible();
+});
+
+test("challenge ladder: Python eligibility, deep links, rulebook, and status legend", async ({ page }) => {
+  let response = await page.goto(`/clubs/${clubSlug}/challenge-ladder?section=rules`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(page.locator('[data-rulebook-authority="python"]')).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Swing Partner Swap format" })).toBeVisible();
+  await expect(page.getByText(/exact tie favors the defender/i)).toBeVisible();
+  await expect(page.locator("[data-ladder-status]")).toHaveCount(8);
+
+  response = await page.goto(`/clubs/${clubSlug}/challenge-ladder?tier=PREM#tier-PREM`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  await expect(page.locator("#tier-PREM")).toBeVisible();
+  response = await page.goto(`/clubs/${clubSlug}/challenge-ladder`, { waitUntil: "domcontentloaded" });
+  expect(response?.status()).toBeLessThan(400);
+  const playerLink = page.locator('a[href*="player="][href*="#ladder-player-"]').first();
+  await expect(playerLink).toBeVisible();
+  await playerLink.click();
+  await expect(page.locator('[data-python-eligibility="python"]')).toBeVisible();
+  await expect(page.getByText(/Python ladder policy/i)).toBeVisible();
+});
+
 for (const surface of adminSurfaces) {
   test(`admin shell: ${surface.name}`, async ({ page }) => {
     await expectHealthySurface(page, surface);

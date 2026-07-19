@@ -96,14 +96,25 @@ def test_public_badge_codex_contract(client):
     assert payload["club"] == {"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas"}
     assert payload["summary"]["badge_count"] == 1
     assert payload["sections"][0]["name"] == "Participation"
+    assert [bucket["name"] for bucket in payload["catalog_buckets"]] == [
+        "Live Now",
+        "Seasonal / League Close",
+        "Manual / Curated",
+        "Tracked / Disabled",
+    ]
 
     badge = payload["sections"][0]["badges"][0]
     assert badge["badge_id"] == "participant"
     assert badge["earners_count"] == 2
+    assert badge["catalog_bucket"] == "Live Now"
+    assert badge["badge_scope"] == "lifetime"
+    assert badge["requirements"] == "Play 1 recorded match (lifetime)."
     assert badge["recent_earners"][0]["player_name"] == "Alex"
     assert "internal_rule_sql" not in badge
     assert "raw_eval_payload" not in badge["recent_earners"][0]
     assert "admin_notes" not in payload["club"]
+    assert payload["trophy_room"][0]["player_name"] == "Alex"
+    assert "private_email" not in str(payload["trophy_room"])
 
 
 def test_public_badge_earners_contract(client):
@@ -114,4 +125,12 @@ def test_public_badge_earners_contract(client):
     assert payload["badge_id"] == "participant"
     assert payload["total"] == 2
     assert payload["earners"] == [{"player_id": 1, "player_name": "Alex", "earned_at": "2026-01-03T00:00:00Z"}]
+    assert payload["badge"]["catalog_bucket"] == "Live Now"
     assert "private_email" not in payload["earners"][0]
+
+
+def test_public_badge_earners_rejects_unknown_badges(client):
+    response = client.get("/clubs/tres-palapas/badges/not-a-real-badge/earners")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "badge not found"

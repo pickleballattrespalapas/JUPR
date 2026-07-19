@@ -19,6 +19,77 @@ LADDER_OPEN_STATUSES = {
 }
 LADDER_FINAL_STATUSES = {"COMPLETED", "FORFEITED"}
 
+LADDER_INITIATOR_STATUSES = {"Ready to Defend", "Protected"}
+LADDER_RECEIVER_STATUSES = {"Ready to Defend", "Cooldown"}
+
+
+def ladder_can_initiate_challenge(status: str | None) -> bool:
+    """Return whether a computed ladder status may initiate a challenge."""
+
+    return str(status or "").strip() in LADDER_INITIATOR_STATUSES
+
+
+def ladder_can_receive_challenge(status: str | None) -> bool:
+    """Return whether a computed ladder status may be challenged."""
+
+    return str(status or "").strip() in LADDER_RECEIVER_STATUSES
+
+
+def ladder_pair_eligibility(
+    *,
+    challenger_tier: str,
+    challenger_rank: int | None,
+    challenger_status: str | None,
+    defender_tier: str,
+    defender_rank: int | None,
+    defender_status: str | None,
+    challenge_range: int,
+) -> dict[str, Any]:
+    """Evaluate a public/admin challenge pairing from canonical ladder state.
+
+    This is intentionally pure so public hints and guarded admin creation use the
+    same Python policy instead of reimplementing status/rank rules in a browser.
+    """
+
+    reasons: list[str] = []
+    challenger_tier_id = normalize_tier_id(challenger_tier)
+    defender_tier_id = normalize_tier_id(defender_tier)
+    try:
+        challenger_rank_value = int(challenger_rank) if challenger_rank is not None else None
+    except (TypeError, ValueError):
+        challenger_rank_value = None
+    try:
+        defender_rank_value = int(defender_rank) if defender_rank is not None else None
+    except (TypeError, ValueError):
+        defender_rank_value = None
+    try:
+        range_value = max(1, int(challenge_range))
+    except (TypeError, ValueError):
+        range_value = 7
+
+    if challenger_tier_id != defender_tier_id:
+        reasons.append("Players must be in the same tier.")
+    if challenger_rank_value is None or defender_rank_value is None:
+        reasons.append("Both players need a current ladder rank.")
+    elif defender_rank_value >= challenger_rank_value:
+        reasons.append("Opponent must be ranked above the challenger.")
+    elif challenger_rank_value - defender_rank_value > range_value:
+        reasons.append("Opponent is outside the configured challenge range.")
+    if not ladder_can_initiate_challenge(challenger_status):
+        reasons.append(f"Challenger status {str(challenger_status or 'Unknown')} cannot initiate.")
+    if not ladder_can_receive_challenge(defender_status):
+        reasons.append(f"Opponent status {str(defender_status or 'Unknown')} cannot receive.")
+
+    return {
+        "eligible": not reasons,
+        "reasons": reasons,
+        "rank_gap": (
+            challenger_rank_value - defender_rank_value
+            if challenger_rank_value is not None and defender_rank_value is not None
+            else None
+        ),
+    }
+
 
 # -------------------------
 # Time helpers (pure)

@@ -11,7 +11,15 @@ import pandas as pd
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.build_challenge_notice_message import build_challenge_notice_message
-from jupr_app.domain.challenge_ladder import TIER_ORDER, ladder_bucket_challenge, ladder_compute_status_map, month_key_utc, normalize_tier_id
+from jupr_app.domain.challenge_ladder import (
+    TIER_ORDER,
+    ladder_bucket_challenge,
+    ladder_can_initiate_challenge,
+    ladder_can_receive_challenge,
+    ladder_compute_status_map,
+    month_key_utc,
+    normalize_tier_id,
+)
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
 from jupr_app.services.context import ServiceContext
 from jupr_app.services.match_service import submit_match_batch
@@ -462,9 +470,9 @@ def create_admin_challenge_ladder_challenge(
         )
         challenger_status = str(status_map.get(challenger, {}).get("status") or "Unknown")
         defender_status = str(status_map.get(defender, {}).get("status") or "Unknown")
-        if challenger_status != "Ready to Defend":
+        if not ladder_can_initiate_challenge(challenger_status):
             errors.append(f"Challenger is not eligible to initiate (status: {challenger_status}).")
-        if defender_status not in {"Ready to Defend", "Cooldown"}:
+        if not ladder_can_receive_challenge(defender_status):
             errors.append(f"Defender is not eligible to be challenged (status: {defender_status}).")
     if errors and not override:
         raise ValueError("Cannot create challenge: " + "; ".join(errors))

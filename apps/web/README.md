@@ -21,8 +21,8 @@ Current public and staff-facing routes include:
 - `/clubs/[clubSlug]` club landing page.
 - `/clubs/[clubSlug]/leaderboards` public Overall/league leaderboards with Active-by-default status, search/snapshot links, qualification and badge context, stable filters, and pagination.
 - `/clubs/[clubSlug]/league-results` public league standings, weekly results, and season summaries.
-- `/clubs/[clubSlug]/badge-codex` public badge definitions, unlock paths, prestige, and recent badge earners.
-- `/clubs/[clubSlug]/challenge-ladder` public ladder tiers, player status, active challenge buckets, and quick rules.
+- `/clubs/[clubSlug]/badge-codex` Python-authoritative badge definitions grouped by availability/timing, category and scope filters, direct anchors, paged public earners, and privacy-safe trophy-room context.
+- `/clubs/[clubSlug]/challenge-ladder` public tiers/status/challenge deep links, Python-computed eligible-opponent hints, a complete rulebook, and the canonical status legend.
 - `/clubs/[clubSlug]/weekly-recap` public published weekly recap with spotlight reel, around-the-club highlights, tournament podiums, print view, and PDF download.
 - `/clubs/[clubSlug]/tournament-registration` public tournament registration intake, including secure edit-link request.
 - `/clubs/[clubSlug]/tournament-registration/confirmation?confirmation_token=...` signed, registrant-specific confirmation page.

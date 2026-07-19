@@ -101,6 +101,10 @@ def test_public_challenge_ladder_contract(client):
     assert payload["tiers"][0]["tier_id"] == "PREM"
     assert payload["tiers"][0]["players"][0]["player_name"] == "Alex"
     assert payload["tiers"][0]["players"][0]["status"] == "Locked"
+    assert payload["tiers"][0]["players"][0]["eligibility"]["authority"] == "python"
+    assert payload["eligibility_authority"] == "python"
+    assert len(payload["status_legend"]) == 8
+    assert any(section["title"] == "Swing Partner Swap format" for section in payload["rulebook"])
 
     pending = next(section for section in payload["challenge_sections"] if section["name"] == "Pending Acceptance")
     assert pending["challenges"][0]["defender"] == {"player_id": 1, "player_name": "Alex"}
@@ -110,3 +114,4 @@ def test_public_challenge_ladder_contract(client):
     assert "private_email" not in payload["tiers"][0]["players"][0]
     assert "ledger_ref" not in pending["challenges"][0]
     assert "challenger_contact" not in pending["challenges"][0]
+    assert "private" not in str(payload).lower()

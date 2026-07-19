@@ -24,27 +24,6 @@ const sectionLabels: Record<SectionKey, string> = {
   rules: "Quick rules"
 };
 
-const statusLegend = [
-  { label: "Ready to Defend", short: "Ready", publicMeaning: "Can initiate and receive challenges when otherwise eligible." },
-  { label: "Locked", short: "Locked", publicMeaning: "Already involved in an active challenge; cannot start another." },
-  { label: "Cooldown", short: "Cooldown", publicMeaning: "Can receive a challenge, but cannot initiate during the cooldown window." },
-  { label: "Protected", short: "Protected", publicMeaning: "Can initiate, but cannot be challenged during the protection window." },
-  { label: "Vacation", short: "Vacation", publicMeaning: "Temporarily unavailable for ladder activity." },
-  { label: "Pass Hold", short: "Pass Hold", publicMeaning: "Monthly pass was used; challenge timing is temporarily restricted." },
-  { label: "Reinstate Required", short: "Reinstate", publicMeaning: "Requires staff-managed reinstatement before normal ladder activity." }
-];
-
-const rulebook = [
-  "The Challenge Ladder is an in-season challenge-anytime ranking system.",
-  "You move up by challenging and defeating players ranked above you within your tier.",
-  "Challenges are official only after staff records them in the Pro Shop Challenge Ledger.",
-  "The defender must accept within the configured acceptance window; no response can become a forfeit.",
-  "Once accepted, the challenge should be completed inside the configured play window.",
-  "A ranked player may only be involved in one active challenge at a time.",
-  "Monthly passes, vacation, reinstatement, disputes, and enforcement remain staff-managed.",
-  "Swing partners never move on the ladder; only the ranked challenger/defender positions are affected."
-];
-
 function firstParam(searchParams: ChallengeLadderPageProps["searchParams"], key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
@@ -112,31 +91,6 @@ function challengeAnchor(challengeId?: string | number | null): string {
 
 function flattenPlayers(tiers: PublicLadderTier[]): FlatPlayer[] {
   return tiers.flatMap((tier) => tier.players.map((player) => ({ ...player, tier_id: tier.tier_id, tier_label: tier.label })));
-}
-
-function statusText(player: PublicLadderPlayer): string {
-  return String(player.status || player.status_short || "").toLowerCase();
-}
-
-function canInitiateChallenge(player: PublicLadderPlayer): boolean {
-  const text = statusText(player);
-  return text.includes("ready") || text.includes("protected");
-}
-
-function canReceiveChallenge(player: PublicLadderPlayer): boolean {
-  const text = statusText(player);
-  return text.includes("ready") || text.includes("cooldown");
-}
-
-function eligibleOpponents(player: FlatPlayer, allPlayers: FlatPlayer[], challengeRange: number): FlatPlayer[] {
-  if (!canInitiateChallenge(player) || player.rank == null) return [];
-  const rank = Number(player.rank);
-  return allPlayers
-    .filter((candidate) => candidate.tier_id === player.tier_id)
-    .filter((candidate) => String(candidate.player_id) !== String(player.player_id))
-    .filter((candidate) => candidate.rank != null && Number(candidate.rank) < rank && rank - Number(candidate.rank) <= challengeRange)
-    .filter(canReceiveChallenge)
-    .sort((a, b) => Number(a.rank ?? 9999) - Number(b.rank ?? 9999));
 }
 
 function PlayerRow({ player, clubSlug, selected }: { player: PublicLadderPlayer; clubSlug: string; selected: boolean }) {
@@ -217,28 +171,38 @@ function ChallengeCard({ challenge, clubSlug, selected }: { challenge: PublicLad
   );
 }
 
-function PlayerChallengePanel({ player, opponents, clubSlug }: { player: FlatPlayer; opponents: FlatPlayer[]; clubSlug: string }) {
+function PlayerChallengePanel({ player, clubSlug }: { player: FlatPlayer; clubSlug: string }) {
+  const eligibility = player.eligibility;
+  if (!eligibility) {
+    return (
+      <article style={{ ...cardStyle, borderColor: "#f59e0b", marginBottom: "1rem" }}>
+        <h2 style={{ marginTop: 0 }}>{player.player_name} challenge window</h2>
+        <p style={{ color: "#92400e", marginBottom: 0 }}>Eligibility hints are temporarily unavailable. Staff remains the authority for official challenges.</p>
+      </article>
+    );
+  }
+  const opponents = eligibility.eligible_opponents;
   return (
-    <article style={{ ...cardStyle, borderColor: "#2563eb", marginBottom: "1rem" }}>
+    <article style={{ ...cardStyle, borderColor: "#2563eb", marginBottom: "1rem" }} data-python-eligibility={eligibility.authority}>
       <h2 style={{ marginTop: 0 }}>{player.player_name} challenge window</h2>
       <p style={{ color: "#475569" }}>
         Rank {player.rank ?? "—"} in {player.tier_label}; current status is <strong>{player.status_short || player.status}</strong>.
       </p>
-      {!canInitiateChallenge(player) ? (
-        <p style={{ color: "#b45309" }}>This public view shows the player as not currently able to initiate a challenge. Staff still owns final eligibility decisions.</p>
+      {!eligibility.can_initiate ? (
+        <p style={{ color: "#b45309" }}>{eligibility.hint} Staff still owns final official eligibility decisions.</p>
       ) : null}
-      {canInitiateChallenge(player) && !opponents.length ? <p style={{ color: "#64748b" }}>No eligible public opponents are visible in range right now.</p> : null}
+      {eligibility.can_initiate && !opponents.length ? <p style={{ color: "#64748b" }}>{eligibility.hint}</p> : null}
       {opponents.length ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
           {opponents.map((opponent) => (
             <div key={String(opponent.player_id)} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
               <strong><Link href={pageHref({ clubSlug, player: opponent.player_id, anchor: playerAnchor(opponent.player_id) })}>{opponent.player_name}</Link></strong>
-              <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>Rank {opponent.rank} · {opponent.status_short || opponent.status}</p>
+              <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>Rank {opponent.rank} · {opponent.status_short || opponent.status} · {opponent.rank_gap} rank{opponent.rank_gap === 1 ? "" : "s"} up</p>
             </div>
           ))}
         </div>
       ) : null}
-      <p style={{ marginBottom: 0, color: "#64748b", fontSize: "0.9rem" }}>Public eligibility is informational only; official challenges must still be recorded by staff.</p>
+      <p style={{ marginBottom: 0, color: "#64748b", fontSize: "0.9rem" }}>Opponent hints are computed by the Python ladder policy from public status, tier, rank, and the configured range. Official challenges must still be recorded by staff.</p>
     </article>
   );
 }
@@ -255,7 +219,6 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
   const hasChallenges = Boolean(data?.challenge_sections?.some((challengeSection) => challengeSection.challenges.length > 0));
   const allPlayers = data ? flattenPlayers(data.tiers) : [];
   const selectedPlayer = selectedPlayerId ? allPlayers.find((player) => String(player.player_id) === String(selectedPlayerId)) ?? null : null;
-  const selectedOpponents = selectedPlayer && data ? eligibleOpponents(selectedPlayer, allPlayers, data.settings.challenge_range) : [];
   const visibleTiers = data?.tiers.filter((tier) => !selectedTier || tier.tier_id === selectedTier) ?? [];
 
   return (
@@ -278,6 +241,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
             <article style={cardStyle}><strong>Populated tiers</strong><br />{data.summary.populated_tier_count} / {data.summary.tier_count}</article>
             <article style={cardStyle}><strong>Active challenges</strong><br />{data.summary.active_challenge_count}</article>
             <article style={cardStyle}><strong>Challenge range</strong><br />Up to {data.settings.challenge_range} ranks</article>
+            <article style={cardStyle}><strong>Eligible public pairings</strong><br />{data.summary.eligible_pair_count ?? 0}</article>
           </div>
 
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -305,7 +269,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
                 })}
               </div>
               {q ? <p style={{ color: "#475569" }}>Filtering ladder by: <strong>{q}</strong></p> : null}
-              {selectedPlayer ? <PlayerChallengePanel player={selectedPlayer} opponents={selectedOpponents} clubSlug={clubSlug} /> : null}
+              {selectedPlayer ? <PlayerChallengePanel player={selectedPlayer} clubSlug={clubSlug} /> : null}
               <h2>Ladder standings</h2>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "1rem" }}>
                 {visibleTiers.map((tier) => <TierCard key={tier.tier_id} tier={tier} clubSlug={clubSlug} selectedPlayerId={selectedPlayerId} q={q} />)}
@@ -344,19 +308,30 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
           {section === "rules" ? (
             <>
               <h2>Quick rules</h2>
-              <article style={cardStyle}>
-                <ol style={{ margin: 0, paddingLeft: "1.25rem" }}>
-                  {[...data.quick_rules, ...rulebook].map((rule, index) => <li key={`${index}-${rule}`} style={{ marginBottom: "0.35rem" }}>{rule}</li>)}
-                </ol>
-              </article>
+              <p style={{ color: "#475569" }}>The complete public rulebook below is generated by the same Python service that computes ladder status and eligible-opponent hints.</p>
+              <div style={{ display: "grid", gap: "1rem" }} data-rulebook-authority={data.eligibility_authority || "unavailable"}>
+                {(data.rulebook ?? []).map((section) => (
+                  <article key={section.title} style={cardStyle}>
+                    <h3 style={{ marginTop: 0 }}>{section.title}</h3>
+                    <ol style={{ margin: 0, paddingLeft: "1.25rem" }}>
+                      {section.rules.map((rule) => (
+                        <li key={`${section.title}-${rule.title}`} style={{ marginBottom: "0.65rem" }}>
+                          <strong>{rule.title}:</strong> {rule.body}
+                        </li>
+                      ))}
+                    </ol>
+                  </article>
+                ))}
+              </div>
 
               <h2>Status legend</h2>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
-                {statusLegend.map((item) => (
-                  <article key={item.label} style={cardStyle}>
+                {(data.status_legend ?? []).map((item) => (
+                  <article key={item.status} style={cardStyle} data-ladder-status={item.status}>
                     <h3 style={{ marginTop: 0 }}>{item.short}</h3>
-                    <p style={{ margin: "0 0 0.35rem", fontWeight: 700 }}>{item.label}</p>
-                    <p style={{ color: "#475569", marginBottom: 0 }}>{item.publicMeaning}</p>
+                    <p style={{ margin: "0 0 0.35rem", fontWeight: 700 }}>{item.status}</p>
+                    <p style={{ color: "#475569", marginBottom: "0.35rem" }}>{item.meaning}</p>
+                    <p style={{ color: "#64748b", marginBottom: 0, fontSize: "0.85rem" }}>Initiate: {item.can_initiate ? "yes" : "no"} · Receive: {item.can_receive ? "yes" : "no"}</p>
                   </article>
                 ))}
               </div>

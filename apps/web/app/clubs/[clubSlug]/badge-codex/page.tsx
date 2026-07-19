@@ -1,22 +1,22 @@
 import Link from "next/link";
-import { getClubBadgeCodex } from "@/lib/badgeApi";
-import type { BadgeCodexSection, PublicBadge } from "@/lib/badgeApi";
+import { getClubBadgeCodex, getClubBadgeEarners } from "@/lib/badgeApi";
+import type {
+  BadgeCatalogBucket,
+  BadgeCodexSection,
+  BadgeEarnersResponse,
+  BadgeTrophyRoomEntry,
+  PublicBadge
+} from "@/lib/badgeApi";
 
 type BadgeCodexPageProps = {
   params: { clubSlug: string };
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-type TrophyRoomEntry = {
-  player_id: string | number;
-  player_name: string;
-  badge_count: number;
-  latest_earned_at?: string | null;
-  badges: string[];
-};
-
 const DEFAULT_BADGE_LIMIT = 12;
-const LOAD_MORE_STEP = 12;
+const BADGE_LOAD_MORE_STEP = 12;
+const DEFAULT_EARNERS_LIMIT = 25;
+const EARNERS_LOAD_MORE_STEP = 25;
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -58,11 +58,6 @@ function iconForBadge(badge: PublicBadge): string {
   return badgeIcons[String(badge.icon_key || badge.badge_id)] ?? "🏆";
 }
 
-function prestigeLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "0";
-  return String(Number(value));
-}
-
 function dateLabel(value?: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -70,87 +65,148 @@ function dateLabel(value?: string | null): string | null {
   return date.toISOString().slice(0, 10);
 }
 
-function parseLimit(value: string | null): number | "all" {
-  if (value === "all") return "all";
+function parsePositiveInt(value: string | null, fallback: number, maximum: number): number {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_BADGE_LIMIT;
-  return Math.max(1, Math.round(parsed));
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(1, Math.min(maximum, Math.round(parsed)));
 }
+
+function parseOffset(value: string | null): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.round(parsed);
+}
+
+function parseBadgeLimit(value: string | null): number | "all" {
+  if (value === "all") return "all";
+  return parsePositiveInt(value, DEFAULT_BADGE_LIMIT, 500);
+}
+
+type PageHrefOptions = {
+  clubSlug: string;
+  bucket?: string | null;
+  category?: string | null;
+  scope?: string | null;
+  badge?: string | null;
+  badgeLimit?: number | "all" | null;
+  earners?: string | null;
+  earnersOffset?: number | null;
+  earnersLimit?: number | null;
+  anchor?: string | null;
+};
 
 function pageHref({
   clubSlug,
-  section,
+  bucket,
+  category,
+  scope,
   badge,
-  limit,
+  badgeLimit,
+  earners,
+  earnersOffset,
+  earnersLimit,
   anchor
-}: {
-  clubSlug: string;
-  section?: string | null;
-  badge?: string | null;
-  limit?: number | "all" | null;
-  anchor?: string | null;
-}): string {
+}: PageHrefOptions): string {
   const params = new URLSearchParams();
-  if (section) params.set("section", section);
+  if (bucket) params.set("bucket", bucket);
+  if (category) params.set("category", category);
+  if (scope) params.set("scope", scope);
   if (badge) params.set("badge", badge);
-  if (limit != null) params.set("limit", String(limit));
+  if (badgeLimit != null) params.set("limit", String(badgeLimit));
+  if (earners) params.set("earners", earners);
+  if (earnersOffset != null && earnersOffset > 0) params.set("earners_offset", String(earnersOffset));
+  if (earnersLimit != null) params.set("earners_limit", String(earnersLimit));
   const query = params.toString();
   return `/clubs/${clubSlug}/badge-codex${query ? `?${query}` : ""}${anchor ? `#${anchor}` : ""}`;
 }
 
-function badgeAnchor(badge: PublicBadge): string {
-  return `badge-${encodeURIComponent(String(badge.badge_id))}`;
+function badgeAnchor(badgeId: string): string {
+  return `badge-${badgeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
-function buildTrophyRoom(sections: BadgeCodexSection[]): TrophyRoomEntry[] {
-  const byPlayer = new Map<string, TrophyRoomEntry>();
-  for (const section of sections) {
-    for (const badge of section.badges) {
-      for (const earner of badge.recent_earners ?? []) {
-        const key = String(earner.player_id);
-        const current = byPlayer.get(key) ?? {
-          player_id: earner.player_id,
-          player_name: earner.player_name,
-          badge_count: 0,
-          latest_earned_at: null,
-          badges: []
-        };
-        current.badge_count += 1;
-        if (!current.badges.includes(badge.name)) current.badges.push(badge.name);
-        if (earner.earned_at && (!current.latest_earned_at || String(earner.earned_at) > String(current.latest_earned_at))) {
-          current.latest_earned_at = earner.earned_at;
-        }
-        byPlayer.set(key, current);
-      }
-    }
+function allBadges(buckets: BadgeCatalogBucket[]): PublicBadge[] {
+  return buckets.flatMap((bucket) => bucket.sections.flatMap((section) => section.badges));
+}
+
+function sectionsForBadges(badges: PublicBadge[]): BadgeCodexSection[] {
+  const grouped = new Map<string, PublicBadge[]>();
+  for (const badge of badges) {
+    const category = badge.category || "Other";
+    grouped.set(category, [...(grouped.get(category) ?? []), badge]);
   }
-  return Array.from(byPlayer.values()).sort((a, b) => {
-    if (b.badge_count !== a.badge_count) return b.badge_count - a.badge_count;
-    return String(b.latest_earned_at ?? "").localeCompare(String(a.latest_earned_at ?? ""));
-  });
+  return Array.from(grouped.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, items]) => ({
+      name,
+      badges: items.sort((a, b) => a.name.localeCompare(b.name))
+    }));
 }
 
-function BadgeCard({ badge, clubSlug, selected }: { badge: PublicBadge; clubSlug: string; selected: boolean }) {
-  const stateLabel = badge.state && badge.state !== "live" ? badge.state : null;
+function filterLinkStyle(active: boolean) {
+  return {
+    border: "1px solid #cbd5e1",
+    borderRadius: "999px",
+    padding: "0.38rem 0.68rem",
+    background: active ? "#dbeafe" : "white",
+    color: "#0f172a",
+    textDecoration: "none",
+    fontWeight: active ? 800 : 600
+  };
+}
+
+function BadgeCard({
+  badge,
+  clubSlug,
+  selected,
+  bucket,
+  category,
+  scope,
+  badgeLimit
+}: {
+  badge: PublicBadge;
+  clubSlug: string;
+  selected: boolean;
+  bucket: string;
+  category: string | null;
+  scope: string | null;
+  badgeLimit: number | "all";
+}) {
+  const anchor = badgeAnchor(badge.badge_id);
   return (
-    <article id={badgeAnchor(badge)} style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: "0.65rem", borderColor: selected ? "#2563eb" : "#e2e8f0", boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.12)" : "none" }}>
+    <article
+      id={anchor}
+      data-badge-id={badge.badge_id}
+      data-catalog-bucket={badge.catalog_bucket}
+      style={{
+        ...cardStyle,
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.65rem",
+        borderColor: selected ? "#2563eb" : "#e2e8f0",
+        boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.12)" : "none"
+      }}
+    >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.75rem" }}>
         <div>
           <div style={{ fontSize: "2rem", lineHeight: 1 }}>{iconForBadge(badge)}</div>
           <h3 style={{ margin: "0.35rem 0 0", lineHeight: 1.2 }}>{badge.name}</h3>
         </div>
-        {stateLabel ? <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.15rem 0.45rem", fontSize: "0.75rem", color: "#475569" }}>{stateLabel}</span> : null}
+        <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.15rem 0.45rem", fontSize: "0.75rem", color: "#475569" }}>
+          {badge.availability || badge.lifecycle_state || badge.state || "Definition available"}
+        </span>
       </div>
-      <p style={{ margin: 0, color: "#475569" }}>{badge.description || badge.requirements || "Requirements TBD"}</p>
-      {badge.description && badge.requirements ? <p style={{ margin: 0, color: "#64748b", fontSize: "0.9rem" }}><strong>Unlock:</strong> {badge.requirements}</p> : null}
+      <p style={{ margin: 0, color: "#475569" }}>{badge.description}</p>
+      <p style={{ margin: 0, color: "#334155", fontSize: "0.9rem" }}><strong>Unlock:</strong> {badge.requirements}</p>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", fontSize: "0.82rem", color: "#475569" }}>
-        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Prestige {prestigeLabel(badge.prestige)}</span>
+        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Prestige {Number(badge.prestige || 0)}</span>
         <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>{badge.earners_count ?? 0} earners</span>
         {badge.rarity ? <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>{badge.rarity}</span> : null}
+        {badge.badge_scope ? <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Scope: {badge.badge_scope}</span> : null}
+        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Timing: {String(badge.badge_award_timing || "live").replace(/_/g, " ")}</span>
       </div>
       <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "0.6rem" }}>
         <strong style={{ fontSize: "0.9rem" }}>Recent earners</strong>
-        {!badge.recent_earners?.length ? <p style={{ color: "#64748b", margin: "0.35rem 0 0" }}>No one has earned this badge yet.</p> : null}
+        {!badge.recent_earners?.length ? <p style={{ color: "#64748b", margin: "0.35rem 0 0" }}>No public earners yet.</p> : null}
         <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.25rem" }}>
           {(badge.recent_earners ?? []).map((earner) => (
             <li key={`${badge.badge_id}-${earner.player_id}-${earner.earned_at ?? ""}`}>
@@ -159,29 +215,38 @@ function BadgeCard({ badge, clubSlug, selected }: { badge: PublicBadge; clubSlug
             </li>
           ))}
         </ul>
+        {Number(badge.earners_count || 0) > 0 ? (
+          <p style={{ marginBottom: 0 }}>
+            <Link href={pageHref({ clubSlug, bucket, category, scope, badge: badge.badge_id, badgeLimit, earners: badge.badge_id, earnersLimit: DEFAULT_EARNERS_LIMIT, anchor: `earners-${anchor}` })}>
+              Browse all earners
+            </Link>
+          </p>
+        ) : null}
       </div>
       <div style={{ marginTop: "auto", borderTop: "1px solid #f1f5f9", paddingTop: "0.55rem" }}>
-        <Link href={pageHref({ clubSlug, badge: badge.badge_id, anchor: badgeAnchor(badge), limit: "all" })}>Link directly to this badge</Link>
+        <Link href={pageHref({ clubSlug, bucket: badge.catalog_bucket, category: badge.category, scope: badge.badge_scope, badge: badge.badge_id, badgeLimit: "all", anchor })}>
+          Link directly to this badge
+        </Link>
       </div>
     </article>
   );
 }
 
-function TrophyRoom({ entries, clubSlug }: { entries: TrophyRoomEntry[]; clubSlug: string }) {
+function TrophyRoom({ entries, clubSlug }: { entries: BadgeTrophyRoomEntry[]; clubSlug: string }) {
   return (
-    <section style={{ marginTop: "1.5rem" }}>
+    <section id="trophy-room" style={{ marginTop: "1.5rem" }}>
       <h2>Recent trophy room</h2>
       <p style={{ color: "#475569", maxWidth: "760px" }}>
-        A public-safe rollup of recent badge earners from the codex feed. Open a player to see their full public profile.
+        Public badge collections ranked by prestige from recorded awards. Repeated stackable awards count toward prestige; private award context is never shown here.
       </p>
       {!entries.length ? <p style={{ color: "#64748b" }}>No recent trophy-room activity yet.</p> : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
-        {entries.slice(0, 12).map((entry) => (
-          <article key={String(entry.player_id)} style={cardStyle}>
+        {entries.map((entry) => (
+          <article key={String(entry.player_id)} style={cardStyle} data-trophy-player={entry.player_id}>
             <h3 style={{ marginTop: 0 }}><Link href={`/clubs/${clubSlug}/players/${entry.player_id}`}>{entry.player_name}</Link></h3>
-            <p style={{ margin: "0 0 0.35rem", color: "#475569" }}>{entry.badge_count} recent badge{entry.badge_count === 1 ? "" : "s"}</p>
-            {dateLabel(entry.latest_earned_at) ? <p style={{ margin: "0 0 0.35rem", color: "#64748b" }}>Latest: {dateLabel(entry.latest_earned_at)}</p> : null}
-            <p style={{ marginBottom: 0 }}>{entry.badges.slice(0, 4).join(" · ")}</p>
+            <p style={{ margin: "0 0 0.35rem", color: "#475569" }}>{entry.prestige_total} prestige · {entry.unique_badge_count} badge type{entry.unique_badge_count === 1 ? "" : "s"}</p>
+            <p style={{ margin: "0 0 0.35rem", color: "#64748b" }}>{entry.award_count} recorded award{entry.award_count === 1 ? "" : "s"}{dateLabel(entry.latest_earned_at) ? ` · latest ${dateLabel(entry.latest_earned_at)}` : ""}</p>
+            <p style={{ marginBottom: 0 }}>{entry.latest_badges.map((badge) => badge.badge_name).join(" · ")}</p>
           </article>
         ))}
       </div>
@@ -189,73 +254,195 @@ function TrophyRoom({ entries, clubSlug }: { entries: TrophyRoomEntry[]; clubSlu
   );
 }
 
+function EarnersPanel({
+  result,
+  error,
+  clubSlug,
+  bucket,
+  category,
+  scope,
+  badgeLimit
+}: {
+  result: BadgeEarnersResponse | null;
+  error: string | null;
+  clubSlug: string;
+  bucket: string;
+  category: string | null;
+  scope: string | null;
+  badgeLimit: number | "all";
+}) {
+  const badgeId = result?.badge_id ?? "selected";
+  const anchor = `earners-${badgeAnchor(badgeId)}`;
+  return (
+    <section id={anchor} style={{ ...cardStyle, margin: "1.5rem 0", borderColor: error ? "#fecaca" : "#93c5fd" }} data-badge-earners-panel>
+      <h2 style={{ marginTop: 0 }}>{result ? `${result.badge?.name || result.badge_id} earners` : "Badge earners"}</h2>
+      {error ? <p style={{ color: "#b91c1c" }}>Couldn’t load earners. {error}</p> : null}
+      {result ? (
+        <>
+          <p style={{ color: "#475569" }}>
+            Showing {result.earners.length ? result.offset + 1 : 0}–{result.offset + result.earners.length} of {result.total} public earners.
+          </p>
+          {!result.earners.length ? <p>No public earners are available for this page.</p> : null}
+          <ol start={result.offset + 1}>
+            {result.earners.map((earner) => (
+              <li key={`${earner.player_id}-${earner.earned_at ?? ""}`} style={{ marginBottom: "0.35rem" }}>
+                <Link href={`/clubs/${clubSlug}/players/${earner.player_id}`}>{earner.player_name}</Link>
+                {dateLabel(earner.earned_at) ? <span style={{ color: "#64748b" }}> · earned {dateLabel(earner.earned_at)}</span> : null}
+              </li>
+            ))}
+          </ol>
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            {result.offset > 0 ? (
+              <Link href={pageHref({ clubSlug, bucket, category, scope, badge: result.badge_id, badgeLimit, earners: result.badge_id, earnersOffset: Math.max(0, result.offset - result.limit), earnersLimit: result.limit, anchor })}>
+                Previous earners
+              </Link>
+            ) : null}
+            {result.has_more && result.offset === 0 && result.limit < 100 ? (
+              <Link data-load-more-earners href={pageHref({ clubSlug, bucket, category, scope, badge: result.badge_id, badgeLimit, earners: result.badge_id, earnersLimit: Math.min(100, result.limit + EARNERS_LOAD_MORE_STEP), anchor })}>
+                Load more earners
+              </Link>
+            ) : null}
+            {result.has_more && (result.offset > 0 || result.limit >= 100) ? (
+              <Link href={pageHref({ clubSlug, bucket, category, scope, badge: result.badge_id, badgeLimit, earners: result.badge_id, earnersOffset: result.offset + result.earners.length, earnersLimit: DEFAULT_EARNERS_LIMIT, anchor })}>
+                Next earners page
+              </Link>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export default async function BadgeCodexPage({ params, searchParams }: BadgeCodexPageProps) {
   const { clubSlug } = params;
-  const selectedSection = firstParam(searchParams, "section");
+  const requestedBucket = firstParam(searchParams, "bucket");
+  const selectedCategory = firstParam(searchParams, "category");
+  const selectedScope = firstParam(searchParams, "scope");
   const selectedBadge = firstParam(searchParams, "badge");
-  const limit = parseLimit(firstParam(searchParams, "limit"));
+  const selectedEarners = firstParam(searchParams, "earners");
+  const badgeLimit = parseBadgeLimit(firstParam(searchParams, "limit"));
+  const earnersOffset = parseOffset(firstParam(searchParams, "earners_offset"));
+  const earnersLimit = parsePositiveInt(firstParam(searchParams, "earners_limit"), DEFAULT_EARNERS_LIMIT, 100);
+
   const { data, error } = await getClubBadgeCodex(clubSlug);
-  const sections = data?.sections ?? [];
-  const visibleSections = selectedSection ? sections.filter((section) => section.name === selectedSection) : sections;
-  const trophyRoom = buildTrophyRoom(sections);
+  const buckets = data?.catalog_buckets ?? (data?.sections?.length ? [{ name: "Live Now", description: "Badge definitions currently available.", badge_count: data.summary.badge_count, sections: data.sections }] : []);
+  const badges = allBadges(buckets);
+  const directBadge = selectedBadge ? badges.find((badge) => badge.badge_id === selectedBadge) ?? null : null;
+  const bucket = requestedBucket || directBadge?.catalog_bucket || "Live Now";
+  const bucketBadges = bucket === "all"
+    ? badges
+    : allBadges(buckets.filter((item) => item.name === bucket));
+  const filteredBadges = bucketBadges.filter((badge) => {
+    if (selectedCategory && badge.category !== selectedCategory) return false;
+    if (selectedScope && badge.badge_scope !== selectedScope) return false;
+    return true;
+  });
+  const visibleSections = sectionsForBadges(filteredBadges);
+  const categories = data?.filters?.categories ?? Array.from(new Set(badges.map((badge) => badge.category || "Other"))).sort();
+  const scopes = data?.filters?.scopes ?? Array.from(new Set(badges.map((badge) => badge.badge_scope).filter((value): value is string => Boolean(value)))).sort();
+  const earnersResult = selectedEarners && data
+    ? await getClubBadgeEarners(clubSlug, selectedEarners, { offset: earnersOffset, limit: earnersLimit })
+    : { data: null, error: null };
 
   return (
     <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Badge Codex
-      </p>
+      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Badge Codex</p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} badge codex</h1>
-      <p style={{ color: "#334155", maxWidth: "760px" }}>
-        A public ledger of club badges, reels, trophies, and unlock paths. This page is read-only and shows public-safe badge metadata and recent earners.
+      <p style={{ color: "#334155", maxWidth: "800px" }}>
+        The complete public badge ledger: authoritative unlock definitions, availability and award timing, public earners, and the recent trophy room. Badge computation remains in the Python badge engine.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Badge Codex is temporarily unavailable. {error}</p> : null}
-      {!error && !data?.sections?.length ? <p>No public badges are available yet.</p> : null}
+      {!error && data && !badges.length ? <p>No public badges are available yet.</p> : null}
 
       {data ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Badges</strong><br />{data.summary.badge_count}</article>
+            <article style={cardStyle}><strong>Complete definitions</strong><br />{data.summary.complete_definition_count ?? 0} / {data.summary.badge_count}</article>
             <article style={cardStyle}><strong>Earned badge types</strong><br />{data.summary.earned_badge_count}</article>
-            <article style={cardStyle}><strong>Unclaimed badge types</strong><br />{data.summary.unclaimed_badge_count}</article>
-            <article style={cardStyle}><strong>Total badge earners</strong><br />{data.summary.total_unique_earners_by_badge}</article>
+            <article style={cardStyle}><strong>Total public earners</strong><br />{data.summary.total_unique_earners_by_badge}</article>
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-            <Link href={pageHref({ clubSlug, limit })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: !selectedSection ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedSection ? 800 : 600 }}>
-              All sections
-            </Link>
-            {sections.map((section) => {
-              const active = section.name === selectedSection;
-              return (
-                <Link key={section.name} href={pageHref({ clubSlug, section: section.name, limit })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                  {section.name}
+          <nav aria-label="Badge availability" style={{ marginBottom: "1rem" }}>
+            <strong>Availability and timing</strong>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+              <Link href={pageHref({ clubSlug, bucket: "all", category: selectedCategory, scope: selectedScope, badgeLimit })} style={filterLinkStyle(bucket === "all")}>All buckets</Link>
+              {buckets.map((item) => (
+                <Link key={item.name} href={pageHref({ clubSlug, bucket: item.name, category: selectedCategory, scope: selectedScope, badgeLimit })} style={filterLinkStyle(bucket === item.name)} data-badge-bucket={item.name}>
+                  {item.name} ({item.badge_count})
                 </Link>
-              );
-            })}
-            <Link href={pageHref({ clubSlug, section: selectedSection, limit: "all" })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: limit === "all" ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: 800 }}>
-              Show all badges
-            </Link>
-          </div>
+              ))}
+            </div>
+            {bucket !== "all" ? <p style={{ color: "#64748b", marginBottom: 0 }}>{buckets.find((item) => item.name === bucket)?.description}</p> : null}
+          </nav>
 
-          <TrophyRoom entries={trophyRoom} clubSlug={clubSlug} />
+          <nav aria-label="Badge category" style={{ marginBottom: "1rem" }}>
+            <strong>Category</strong>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+              <Link href={pageHref({ clubSlug, bucket, scope: selectedScope, badgeLimit })} style={filterLinkStyle(!selectedCategory)}>All categories</Link>
+              {categories.map((category) => (
+                <Link key={category} href={pageHref({ clubSlug, bucket, category, scope: selectedScope, badgeLimit })} style={filterLinkStyle(selectedCategory === category)}>{category}</Link>
+              ))}
+            </div>
+          </nav>
+
+          <nav aria-label="Badge scope" style={{ marginBottom: "1rem" }}>
+            <strong>Scope</strong>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+              <Link href={pageHref({ clubSlug, bucket, category: selectedCategory, badgeLimit })} style={filterLinkStyle(!selectedScope)}>All scopes</Link>
+              {scopes.map((scope) => (
+                <Link key={scope} href={pageHref({ clubSlug, bucket, category: selectedCategory, scope, badgeLimit })} style={filterLinkStyle(selectedScope === scope)}>{scope}</Link>
+              ))}
+            </div>
+          </nav>
+
+          <TrophyRoom entries={data.trophy_room ?? []} clubSlug={clubSlug} />
         </>
       ) : null}
 
+      {selectedEarners ? (
+        <EarnersPanel
+          result={earnersResult.data}
+          error={earnersResult.error}
+          clubSlug={clubSlug}
+          bucket={bucket}
+          category={selectedCategory}
+          scope={selectedScope}
+          badgeLimit={badgeLimit}
+        />
+      ) : null}
+
+      {data && !filteredBadges.length ? (
+        <p style={{ ...cardStyle, color: "#64748b" }} data-badge-empty-state>No badges match the selected availability, category, and scope filters.</p>
+      ) : null}
+
       {visibleSections.map((section) => {
-        const shownBadges = limit === "all" ? section.badges : section.badges.slice(0, limit);
-        const canLoadMore = limit !== "all" && section.badges.length > shownBadges.length;
-        const nextLimit = limit === "all" ? "all" : limit + LOAD_MORE_STEP;
+        const shownBadges = badgeLimit === "all" ? section.badges : section.badges.slice(0, badgeLimit);
+        const canLoadMore = badgeLimit !== "all" && section.badges.length > shownBadges.length;
+        const nextLimit = badgeLimit === "all" ? "all" : badgeLimit + BADGE_LOAD_MORE_STEP;
         return (
-          <section key={section.name} style={{ marginTop: "1.5rem" }}>
+          <section key={section.name} style={{ marginTop: "1.5rem" }} data-badge-category={section.name}>
             <h2>{section.name}</h2>
-            <p style={{ color: "#64748b" }}>{section.badges.length} badge type{section.badges.length === 1 ? "" : "s"} in this section.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
-              {shownBadges.map((badge) => <BadgeCard key={badge.badge_id} badge={badge} clubSlug={clubSlug} selected={String(badge.badge_id) === String(selectedBadge)} />)}
+            <p style={{ color: "#64748b" }}>{section.badges.length} badge type{section.badges.length === 1 ? "" : "s"} in this filtered section.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+              {shownBadges.map((badge) => (
+                <BadgeCard
+                  key={badge.badge_id}
+                  badge={badge}
+                  clubSlug={clubSlug}
+                  selected={badge.badge_id === selectedBadge}
+                  bucket={bucket}
+                  category={selectedCategory}
+                  scope={selectedScope}
+                  badgeLimit={badgeLimit}
+                />
+              ))}
             </div>
             {canLoadMore ? (
               <p style={{ marginTop: "1rem" }}>
-                <Link href={pageHref({ clubSlug, section: selectedSection, badge: selectedBadge, limit: nextLimit })}>Load more badges</Link>
+                <Link data-load-more-badges href={pageHref({ clubSlug, bucket, category: selectedCategory, scope: selectedScope, badge: selectedBadge, badgeLimit: nextLimit })}>Load more badges</Link>
                 <span style={{ color: "#64748b" }}> · showing {shownBadges.length} of {section.badges.length}</span>
               </p>
             ) : null}

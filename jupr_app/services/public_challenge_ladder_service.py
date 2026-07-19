@@ -10,9 +10,11 @@ from jupr_app.domain.challenge_ladder import (
     TIER_DEFS,
     TIER_ORDER,
     ladder_bucket_challenge,
+    ladder_can_initiate_challenge,
+    ladder_can_receive_challenge,
     ladder_compute_status_map,
+    ladder_pair_eligibility,
     normalize_tier_id,
-    tier_idx,
 )
 
 LADDER_SETTINGS_DEFAULTS = {
@@ -38,6 +40,64 @@ PUBLIC_BUCKETS = [
     "Acceptance Overdue",
     "Play Overdue",
     "Recently Completed",
+]
+PUBLIC_STATUS_LEGEND = [
+    {
+        "status": "Ready to Defend",
+        "short": "Ready",
+        "can_initiate": True,
+        "can_receive": True,
+        "meaning": "Normal ladder mode: may initiate and receive an otherwise eligible challenge.",
+    },
+    {
+        "status": "Protected",
+        "short": "Protected",
+        "can_initiate": True,
+        "can_receive": False,
+        "meaning": "May initiate, but cannot be challenged during the post-win protection window.",
+    },
+    {
+        "status": "Cooldown",
+        "short": "Cooldown",
+        "can_initiate": False,
+        "can_receive": True,
+        "meaning": "May receive, but cannot initiate during the post-result cooldown window.",
+    },
+    {
+        "status": "Locked",
+        "short": "Locked",
+        "can_initiate": False,
+        "can_receive": False,
+        "meaning": "Already involved in an open challenge; cannot start or receive another.",
+    },
+    {
+        "status": "Pass Hold",
+        "short": "Pass Hold",
+        "can_initiate": False,
+        "can_receive": False,
+        "meaning": "A monthly pass was used and ladder activity is paused for the configured hold.",
+    },
+    {
+        "status": "Vacation",
+        "short": "Vacation",
+        "can_initiate": False,
+        "can_receive": False,
+        "meaning": "Temporarily unavailable for ladder challenges.",
+    },
+    {
+        "status": "Reinstate Required",
+        "short": "Reinstate",
+        "can_initiate": False,
+        "can_receive": False,
+        "meaning": "Staff-managed reinstatement is required before normal ladder activity resumes.",
+    },
+    {
+        "status": "Inactive",
+        "short": "Inactive",
+        "can_initiate": False,
+        "can_receive": False,
+        "meaning": "Not shown on the active public ladder and not eligible for a challenge.",
+    },
 ]
 
 
@@ -77,6 +137,19 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return value
+
+
+def _public_status_detail(status_name: str, raw_detail: Any) -> str:
+    """Project computed status context without exposing operator-entered notes."""
+
+    if status_name == "Reinstate Required":
+        return "Staff review required before ladder activity."
+    if status_name == "Vacation":
+        return "Temporarily unavailable."
+    if status_name == "Pass Hold":
+        return "Monthly pass timing hold."
+    detail = str(raw_detail or "").replace("<", "").replace(">", "").strip()
+    return detail[:240]
 
 
 def _fetch_table(supabase: Any, table_name: str, select_cols: str, *, club_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
@@ -180,7 +253,7 @@ def _tier_payload(tier_id: str, roster: list[dict[str, Any]], status_map: dict[i
         if pid is None:
             continue
         pid = int(pid)
-        if active_ids and pid not in active_ids:
+        if pid not in active_ids:
             continue
         if normalize_tier_id(str(row.get("tier_id") or "")) != tier_id:
             continue
@@ -195,7 +268,7 @@ def _tier_payload(tier_id: str, roster: list[dict[str, Any]], status_map: dict[i
                 "rating_jupr": (rating / 400.0) if rating is not None else None,
                 "status": status_name,
                 "status_short": STATUS_SHORT.get(status_name, status_name),
-                "detail": str(status.get("detail") or ""),
+                "detail": _public_status_detail(status_name, status.get("detail")),
                 "until": _json_safe(status.get("until")),
                 "challenge_id": _safe_int(status.get("challenge_id")),
             }
@@ -262,6 +335,148 @@ def _quick_rules(settings: dict[str, int]) -> list[str]:
     ]
 
 
+def _rulebook(settings: dict[str, int]) -> list[dict[str, Any]]:
+    challenge_range = int(settings.get("challenge_range", 7))
+    accept_hours = int(settings.get("accept_window_hours", 48))
+    play_days = int(settings.get("play_window_days", 7))
+    cooldown_hours = int(settings.get("cooldown_hours", 72))
+    protected_hours = int(settings.get("protected_hours", 72))
+    return [
+        {
+            "title": "How to make a challenge",
+            "rules": [
+                {
+                    "title": "Check both statuses",
+                    "body": "Your computed public status controls whether you may initiate or receive a challenge. Staff owns the final official decision.",
+                },
+                {
+                    "title": "Pick an eligible opponent",
+                    "body": f"Choose a player ranked above you in the same tier, no more than {challenge_range} ranks away. Both players must be eligible by status.",
+                },
+                {
+                    "title": "Make it official",
+                    "body": "A challenge becomes official only after authorized staff records it in the Challenge Ledger.",
+                },
+                {
+                    "title": "Defender response",
+                    "body": f"The defender has {accept_hours} hours to accept. No response without a recorded monthly pass may become a forfeit.",
+                },
+                {
+                    "title": "Play and report",
+                    "body": f"Once accepted, complete the match within {play_days} days and submit scores to staff for ledger verification.",
+                },
+            ],
+        },
+        {
+            "title": "Eligibility and timing",
+            "rules": [
+                {
+                    "title": "One active challenge",
+                    "body": "A ranked player may be involved in only one open challenge at a time, as challenger or defender.",
+                },
+                {
+                    "title": "Monthly pass",
+                    "body": f"A defender may use one pass per calendar month without losing rank when staff records it during the acceptance window; the configured hold is {int(settings.get('pass_hold_hours', 72))} hours.",
+                },
+                {
+                    "title": "Missed deadlines",
+                    "body": "No response can become a forfeit. A missed play deadline can require a staff-determined outcome based on good-faith scheduling and the official ledger.",
+                },
+                {
+                    "title": "Post-result timers",
+                    "body": f"A challenge winner is protected for {protected_hours} hours; the non-winner cools down for {cooldown_hours} hours.",
+                },
+            ],
+        },
+        {
+            "title": "Swing Partner Swap format",
+            "rules": [
+                {
+                    "title": "Two doubles matches",
+                    "body": "Each ranked player brings a swing partner. The ranked players remain opponents for two doubles matches, and swing partners swap between matches.",
+                },
+                {
+                    "title": "Challenge winner",
+                    "body": "Win both matches to win the challenge. If split, compare total games won, then total point differential; an exact tie favors the defender.",
+                },
+                {
+                    "title": "Rank movement",
+                    "body": "If the challenger wins, the ranked challenger and defender swap ranks. A defender win leaves ranks unchanged. Swing partners never move.",
+                },
+            ],
+        },
+        {
+            "title": "Staff-managed exceptions",
+            "rules": [
+                {
+                    "title": "Vacation and reinstatement",
+                    "body": "Staff manages vacation status and reinstatement requirements. Returning players may need a reinstatement match before normal activity resumes.",
+                },
+                {
+                    "title": "Disputes and enforcement",
+                    "body": "Authorized ladder staff resolves disputes and enforces timing, pass, forfeit, and result rules using the Challenge Ledger as the official record.",
+                },
+            ],
+        },
+    ]
+
+
+def _attach_public_eligibility(tiers: list[dict[str, Any]], *, challenge_range: int) -> int:
+    """Attach privacy-safe opponent hints computed by the Python ladder policy."""
+
+    players: list[tuple[str, dict[str, Any]]] = []
+    for tier in tiers:
+        tier_id = str(tier.get("tier_id") or "")
+        for player in tier.get("players") or []:
+            players.append((tier_id, player))
+
+    eligible_pair_count = 0
+    for challenger_tier, challenger in players:
+        challenger_status = str(challenger.get("status") or "")
+        can_initiate = ladder_can_initiate_challenge(challenger_status)
+        can_receive = ladder_can_receive_challenge(challenger_status)
+        opponents: list[dict[str, Any]] = []
+        if can_initiate:
+            for defender_tier, defender in players:
+                if int(defender.get("player_id") or -1) == int(challenger.get("player_id") or -2):
+                    continue
+                decision = ladder_pair_eligibility(
+                    challenger_tier=challenger_tier,
+                    challenger_rank=_safe_int(challenger.get("rank")),
+                    challenger_status=challenger_status,
+                    defender_tier=defender_tier,
+                    defender_rank=_safe_int(defender.get("rank")),
+                    defender_status=str(defender.get("status") or ""),
+                    challenge_range=int(challenge_range),
+                )
+                if not decision["eligible"]:
+                    continue
+                opponents.append(
+                    {
+                        "player_id": int(defender["player_id"]),
+                        "player_name": str(defender.get("player_name") or "Player"),
+                        "rank": _safe_int(defender.get("rank")),
+                        "status": str(defender.get("status") or ""),
+                        "status_short": str(defender.get("status_short") or defender.get("status") or ""),
+                        "rank_gap": _safe_int(decision.get("rank_gap")),
+                    }
+                )
+            opponents.sort(key=lambda item: (int(item.get("rank") or 999999), str(item.get("player_name") or "").casefold()))
+        eligible_pair_count += len(opponents)
+        challenger["eligibility"] = {
+            "authority": "python",
+            "can_initiate": can_initiate,
+            "can_receive": can_receive,
+            "eligible_opponents": opponents,
+            "hint": (
+                f"{len(opponents)} eligible opponent{'s' if len(opponents) != 1 else ''} currently visible in range."
+                if can_initiate
+                else "Current status does not allow initiating a challenge."
+            ),
+        }
+    return eligible_pair_count
+
+
 def build_public_challenge_ladder(supabase: Any, *, club_id: str) -> dict[str, Any]:
     """Build a public-safe Challenge Ladder payload for one club."""
 
@@ -290,6 +505,10 @@ def build_public_challenge_ladder(supabase: Any, *, club_id: str) -> dict[str, A
     )
     tiers = [_tier_payload(tid, roster, status_map, id_to_name, active_ids, rating_map) for tid in TIER_ORDER]
     populated = [tier for tier in tiers if tier["players"]]
+    eligible_pair_count = _attach_public_eligibility(
+        tiers,
+        challenge_range=int(settings.get("challenge_range", 7)),
+    )
 
     active_challenge_count = sum(len(section["challenges"]) for section in _challenge_sections(challenges, id_to_name) if section["name"] != "Recently Completed")
     return {
@@ -299,8 +518,12 @@ def build_public_challenge_ladder(supabase: Any, *, club_id: str) -> dict[str, A
             "active_player_count": sum(len(tier["players"]) for tier in tiers),
             "populated_tier_count": len(populated),
             "active_challenge_count": active_challenge_count,
+            "eligible_pair_count": eligible_pair_count,
         },
         "tiers": tiers,
         "challenge_sections": _challenge_sections(challenges, id_to_name),
         "quick_rules": _quick_rules(settings),
+        "rulebook": _rulebook(settings),
+        "status_legend": PUBLIC_STATUS_LEGEND,
+        "eligibility_authority": "python",
     }

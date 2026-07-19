@@ -113,6 +113,12 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `GET /clubs/{club_slug}/badges`
 - `GET /clubs/{club_slug}/badges/{badge_id}/earners?offset=...&limit=...`
 - `GET /clubs/{club_slug}/challenge-ladder`
+
+The Badge Codex response projects canonical Python badge status, timing, scope,
+unlock copy, lifecycle availability buckets, and public-safe trophy summaries; raw
+badge-evaluation context and inactive players are not returned. The Challenge
+Ladder response computes statuses and eligible-opponent hints in Python and
+returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /clubs/{club_slug}/weekly-recaps?week_start=...`
 - `GET /clubs/{club_slug}/weekly-recaps/{week_start}`
 - `GET /clubs/{club_slug}/weekly-recaps/{week_start}/pdf`
