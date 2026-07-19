@@ -65,7 +65,8 @@ def test_admin_match_log_enabled_contract(monkeypatch):
     assert payload["duplicate_groups"][0]["delete_ids"] == [2]
     assert payload["duplicate_delete_preview"]["delete_count"] == 1
     assert payload["correction_plan"]["apply_endpoint"] is None
-    assert payload["matches"][0]["notes"] == "operator correction context"
+    match_one = next(match for match in payload["matches"] if match["id"] == 1)
+    assert match_one["notes"] == "operator correction context"
     assert payload["summary"]["scanned_matches"] == 3
     assert all(match["id"] != 99 for match in payload["matches"])
     assert payload["warnings"] == []
@@ -537,7 +538,7 @@ def test_admin_match_log_recovery_contract(monkeypatch):
     tables = fake_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
-    _patch_admin_auth(monkeypatch, supabase)
+    _patch_admin_auth(monkeypatch, supabase, role="super_admin")
     monkeypatch.setattr(
         "services.api.admin_match_log_routes.recover_atomic_match_edit",
         lambda *_args, **kwargs: {
