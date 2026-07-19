@@ -25,10 +25,19 @@ from jupr_app.services.admin_league_live_service import (
     build_admin_league_live_status,
     create_admin_league_live_session,
     get_admin_league_live_session,
+    is_admin_league_live_submit_enabled,
     list_admin_league_live_sessions,
     save_admin_league_live_round,
     suggest_admin_league_live_roster,
     update_admin_league_live_session_snapshot,
+)
+from jupr_app.services.admin_league_live_submit_service import (
+    build_admin_league_live_export,
+    compensate_admin_league_live_round_publish,
+    create_admin_league_live_guest,
+    list_admin_league_live_publish_operations,
+    reconcile_admin_league_live_round_publish,
+    submit_admin_league_live_round_publish,
 )
 from jupr_app.services.admin_league_manager_create_service import (
     create_admin_league_manager_draft,
@@ -196,6 +205,47 @@ class AdminLeagueLiveRoundPlanRequest(BaseModel):
     bench_override_reason: str | None = Field(default=None, max_length=500)
 
 
+class AdminLeagueLiveRoundPublishRequest(BaseModel):
+    round_label: str | None = Field(default=None, max_length=80)
+    match_date: str = Field(min_length=1, max_length=40)
+    preview: dict[str, Any] | None = None
+    matches: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=200)
+    expected_match_count: int = Field(ge=1, le=200)
+    movement_overrides: list[dict[str, Any]] = Field(default_factory=list)
+    override_reason: str | None = Field(default=None, max_length=500)
+    roster_change: dict[str, Any] | None = None
+    bench_player_ids: list[int] = Field(default_factory=list)
+    bench_override_reason: str | None = Field(default=None, max_length=500)
+    expected_updated_at: str = Field(min_length=1, max_length=120)
+    expected_operation_key: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    courts: list[dict[str, Any]] = Field(default_factory=list)
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_submit", max_length=120)
+
+
+class AdminLeagueLiveRoundReconcileRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_reconcile", max_length=120)
+
+
+class AdminLeagueLiveRoundCompensateRequest(BaseModel):
+    recovery_reference: str = Field(min_length=8, max_length=240)
+    reason: str = Field(min_length=10, max_length=500)
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_compensate", max_length=120)
+
+
+class AdminLeagueLiveGuestRequest(BaseModel):
+    guest_name: str = Field(min_length=2, max_length=160)
+    starting_jupr: float = Field(ge=1.0, le=7.0)
+    reason: str = Field(min_length=10, max_length=500)
+    expected_updated_at: str = Field(min_length=1, max_length=120)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_guest_create", max_length=120)
+
+
 def _dump_model(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(exclude_none=True)
@@ -360,7 +410,17 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_league_live_session_detail")
         try:
-            return get_admin_league_live_session(supabase, club_id=str(club_id), session_id=str(session_id))
+            detail = get_admin_league_live_session(supabase, club_id=str(club_id), session_id=str(session_id))
+            detail["publish_operations"] = (
+                list_admin_league_live_publish_operations(
+                    supabase,
+                    club_id=str(club_id),
+                    session_id=str(session_id),
+                )
+                if is_admin_league_live_submit_enabled()
+                else []
+            )
+            return detail
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
@@ -463,6 +523,170 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/submit")
+    def post_admin_league_live_round_publish(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundPublishRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return submit_admin_league_live_round_publish(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                round_label=payload.round_label,
+                match_date=payload.match_date,
+                preview=payload.preview,
+                matches=payload.matches,
+                expected_match_count=payload.expected_match_count,
+                movement_overrides=payload.movement_overrides,
+                override_reason=payload.override_reason,
+                roster_change=payload.roster_change,
+                bench_player_ids=payload.bench_player_ids,
+                bench_override_reason=payload.bench_override_reason,
+                expected_updated_at=payload.expected_updated_at,
+                expected_operation_key=payload.expected_operation_key,
+                idempotency_key=payload.idempotency_key,
+                courts=payload.courts,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/reconcile")
+    def post_admin_league_live_round_reconcile(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundReconcileRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return reconcile_admin_league_live_round_publish(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/compensate")
+    def post_admin_league_live_round_compensate(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundCompensateRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return compensate_admin_league_live_round_publish(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                recovery_reference=payload.recovery_reference,
+                reason=payload.reason,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/guests")
+    def post_admin_league_live_guest(
+        club_id: str,
+        session_id: str,
+        payload: AdminLeagueLiveGuestRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return create_admin_league_live_guest(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                guest_name=payload.guest_name,
+                starting_jupr=payload.starting_jupr,
+                reason=payload.reason,
+                expected_updated_at=payload.expected_updated_at,
+                idempotency_key=payload.idempotency_key,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/export")
+    def get_admin_league_live_export(
+        club_id: str,
+        session_id: str,
+        kind: str = Query(default="matches"),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_live_export",
+        )
+        try:
+            return build_admin_league_live_export(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                export_kind=kind,
             )
         except Exception as exc:
             _handle_common(exc)

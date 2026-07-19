@@ -12,7 +12,7 @@ For every scored round, Python:
 4. moves the bottom player on every court except the lowest court down one court; and
 5. keeps everyone else on the same court.
 
-The stable tie breakers make repeated plans deterministic. `POST /admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan` returns the Python plan and its SHA-256 `operation_key`. The save endpoint recomputes the plan and accepts it only when the operation key still matches.
+The stable tie breakers make repeated plans deterministic. `POST /admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan` returns the Python plan and its SHA-256 `operation_key`. The all-match submit endpoint recomputes the plan before publishing and accepts it only when the operation key still matches. Publish-only metadata such as deterministic context IDs does not alter movement identity.
 
 ## Roster and bench contract
 
@@ -24,13 +24,14 @@ The stable tie breakers make repeated plans deterministic. `POST /admin/clubs/{c
 ## Concurrency, idempotency, and recovery
 
 - Snapshot and round-plan requests carry the session's `expected_updated_at`. Stale browser state receives HTTP 409 and must be reloaded.
-- A round save carries `expected_operation_key`; FastAPI recomputes the plan and refuses a changed plan.
-- `league_live_rounds.operation_key` has a partial unique index. Retrying the same completed save returns `idempotent_replay: true`.
-- Session, round, court, and required audit writes use compensation paths. A failure response includes recovery links where available.
-- If official scores reached Match Uploader but the round-state save failed, stop and reconcile in Match Log and Replay History before retrying.
+- A complete-round publish carries `expected_operation_key`, `expected_match_count`, and a durable idempotency key. FastAPI refuses missing scores, stale versions, and changed plans before audit or official-match mutation.
+- Each match slot receives a deterministic context. Before retrying a `publishing`/`retryable` operation, FastAPI reconciles all existing contexts, blocks partial context sets, and calls Match Uploader only when none exist.
+- `league_live_rounds.operation_key` and `league_live_publish_operations` preserve snapshot and publish identity. Retrying a completed operation returns `idempotent_replay: true` without a second official match.
+- If official scores exist but snapshot save or completion audit failed, reload the operation and use Reconcile. The error explicitly says the operation may have completed and forbids a blind retry.
+- A partial publish remains `recovery_required`. After Match Log soft-exclusion and Replay History recovery, the compensation endpoint verifies zero active contexts and records the supplied recovery reference.
 
 ## Security and rollout
 
 The League Live tables are private server data. The canonical Supabase migration enables RLS, revokes `public`, `anon`, and `authenticated`, and grants table access only to `service_role`. `SUPABASE_SERVICE_ROLE_KEY` stays on FastAPI and is never exposed to Next or a browser.
 
-The workflow fails closed unless both `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1` and staging-only `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=1` are enabled. Streamlit League Manager remains the operator fallback until the manual staging book is accepted; the parity matrix remains `Partial` until then.
+Planning fails closed unless `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1` and staging-only `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=1` are enabled. Official submit additionally requires `JUPR_ENV=staging`, `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT=1`, the service role, canonical match context/deletion columns, and both League Live migrations. Production cannot enable submit through the flag alone. Streamlit League Manager remains the operator fallback until the manual staging book is accepted; the parity matrix remains `Partial` until then.

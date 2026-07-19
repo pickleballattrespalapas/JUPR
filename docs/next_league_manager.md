@@ -28,6 +28,7 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - Top Active Players matches the Streamlit export policy: active players only, at least 10 scored games in the previous UTC calendar month, ranked by current JUPR with games/wins as deterministic tie-breakers.
 - Stored Supabase admin session for the closed-club staging pilot.
 - Python-authoritative League Live roster/bench suggestion, round planning, deterministic movement, reviewed overrides, and resumable next-round state at `/admin/league-manager/live`.
+- Staging-only League Live all-match publish with durable intent, deterministic official-match contexts, response-loss reconciliation, rating readback, real-player guests, CSV exports, and verified compensation.
 
 ## Runtime flag
 
@@ -36,6 +37,8 @@ The workflow is disabled unless the FastAPI runtime enables:
 ```text
 JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1
 JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN=1  # staging pilot only
+JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT=1  # separate staging-only write gate
+JUPR_ENV=staging
 ```
 
 League Awards writes have a separate staging-first gate and require the FastAPI service-role credential:
@@ -77,8 +80,15 @@ Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` o
 - Rating, match, movement, and award calculations remain in Python services.
 - League Live snapshots use `expected_updated_at`; round saves recompute the Python plan and require its `expected_operation_key`. Manual movement and bench overrides require server validation and a reason.
 - The canonical League Live table contract is `supabase/migrations/20260719182921_league_live_domain_contract.sql`. Apply it to staging before enabling the Live domain flag.
+- The publish path refuses partial rounds, stale sessions, changed Python plans, and reused idempotency keys with different fingerprints before its first mutation. Direct round submission is disabled while the submit gate is on.
+- Every publish receives deterministic UUIDv5 match contexts. A retry first verifies those contexts: all rows reconcile without republish, some rows stop in `recovery_required`, and zero rows may retry under the same key.
+- Intent and completion audits carry the durable operation ID, request fingerprint, and recognizable audit marker. A completion-audit failure reports that the operation may already have completed and instructs the operator to reload/reconcile rather than blindly publish.
+- Guest creation persists an idempotency record and a real club player. Existing names are rejected; abandoned guests are recovered through Player Editor.
+- Compensation never deletes or rewrites matches. After Match Log soft-exclusion and Replay History recovery, FastAPI verifies zero active deterministic contexts, requires the recovery reference/reason, then records `compensated`.
+- The canonical publish coordination contract is `supabase/migrations/20260719190954_league_live_publish_reconciliation.sql`. Both migrations, canonical match context columns, and the staging-only submit flag are hard preconditions.
 
 ## Follow-up slices
 
-- Validate draft create/duplicate, the complete League Live domain manual test book, and Match Log/Replay recovery against isolated staging data. League Awards manual evidence remains deferred in `docs/league_awards_parity_evidence.md`; keep the matrix `Partial` until the consolidated manual evidence exists.
-- League Live all-match submission remains deliberately owned by the following parity slice; the authenticated print model remains read-only.
+- Validate draft create/duplicate, the complete League Live manual test book (including response loss, partial recovery, guests, rating readback, exports, and compensation), awards close, and Match Log/Replay recovery against isolated staging data. Keep the matrix `Partial` until that manual evidence exists.
+- League Awards manual evidence remains deferred in `docs/league_awards_parity_evidence.md`.
+- League Live order-21 automated evidence is recorded in `docs/league_live_submit_parity_evidence.md`; authenticated staging writes remain deferred to the consolidated manual session.

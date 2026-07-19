@@ -25,7 +25,14 @@ export type AdminLeagueLiveStatusResponse = {
   sessions_endpoint?: string | null;
   roster_suggestion_endpoint?: string | null;
   round_plan_endpoint?: string | null;
+  submit_enabled?: boolean;
+  round_submit_endpoint?: string | null;
+  round_reconcile_endpoint?: string | null;
+  round_compensate_endpoint?: string | null;
+  guest_endpoint?: string | null;
+  export_endpoint?: string | null;
   movement_authority?: string | null;
+  publish_authority?: string | null;
   service_role_configured?: boolean;
   streamlit_fallback?: string | null;
   session_count?: number | null;

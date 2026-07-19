@@ -555,12 +555,27 @@ def build_league_live_round_plan(
         )
 
     next_roster = next_active + existing_bench
+    # Publish metadata (for example deterministic context IDs) is intentionally
+    # excluded. The movement plan key covers only the scored result and court
+    # inputs that can change Python's next-round decision.
+    operation_matches = [
+        {
+            "court": int(row["court"]),
+            "t1_p1": int(row["t1_p1"]),
+            "t1_p2": int(row["t1_p2"]),
+            "t2_p1": int(row["t2_p1"]),
+            "t2_p2": int(row["t2_p2"]),
+            "score_t1": int(row["score_t1"]),
+            "score_t2": int(row["score_t2"]),
+        }
+        for row in valid_matches
+    ]
     operation_payload = {
         "session_id": str(session_id),
         "session_updated_at": str(session_updated_at),
         "round_number": safe_round,
         "courts": normalized_courts,
-        "matches": valid_matches,
+        "matches": operation_matches,
         "movement_overrides": override_rows,
         "override_reason": clean_override_reason or None,
         "roster_change": roster_change_payload,

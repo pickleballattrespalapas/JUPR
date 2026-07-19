@@ -60,6 +60,8 @@ the final evidence PR does that only after the consolidated manual session.
 | 28 | `agent/parity-tournament-live` | `tournament-admin` | Draw-scoped in-play runner progression/publish/recovery evidence, explicitly separate from JUPR Live | order 27 |
 | 29 | `agent/parity-final-evidence` | `foundation` | Consolidated CI, route-specific staging suites, manual test book, rollback ledger, readiness report, and post-manual matrix reconciliation | order 28 |
 
+Order 21 is automated-ready: durable submit/reconcile/compensation, rating readback, guest and export contracts are implemented behind a separate staging-only gate. The `league_manager` matrix row intentionally remains `Partial` until the consolidated staging book is executed.
+
 ## Page-level closure contracts
 
 The automated column defines evidence that can be built before the final manual test

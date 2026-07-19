@@ -38,6 +38,22 @@ def is_admin_league_live_domain_enabled() -> bool:
     return is_admin_league_manager_enabled() and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN")
 
 
+def is_admin_league_live_submit_enabled() -> bool:
+    runtime = str(os.getenv("JUPR_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    return (
+        runtime == "staging"
+        and is_admin_league_live_domain_enabled()
+        and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT")
+    )
+
+
+def ensure_admin_league_live_submit_enabled() -> None:
+    if not is_admin_league_live_submit_enabled():
+        raise PermissionError(
+            "Next League Live all-match publish is disabled. Keep the Streamlit League Manager fallback available."
+        )
+
+
 def _ensure_live_domain_enabled() -> None:
     if not is_admin_league_live_domain_enabled():
         raise PermissionError(
@@ -503,15 +519,45 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
                 "Python-authoritative League Live is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN on staging FastAPI only."
             ],
         }
+    submit_enabled = is_admin_league_live_submit_enabled()
     return {
         "enabled": True,
-        "status": "ready_for_python_authoritative_league_live",
+        "status": "ready_for_durable_all_match_publish" if submit_enabled else "ready_for_python_authoritative_league_live",
         "sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
         "roster_suggestion_endpoint": "/admin/clubs/{club_id}/league-manager/live/roster-suggestion",
         "round_plan_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan",
+        "submit_enabled": submit_enabled,
+        "round_submit_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/submit"
+            if submit_enabled
+            else None
+        ),
+        "round_reconcile_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/reconcile"
+            if submit_enabled
+            else None
+        ),
+        "round_compensate_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/compensate"
+            if submit_enabled
+            else None
+        ),
+        "guest_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/guests" if submit_enabled else None
+        ),
+        "export_endpoint": (
+            "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/export" if submit_enabled else None
+        ),
         "movement_authority": "python_fastapi",
+        "publish_authority": "python_fastapi",
         "streamlit_fallback": "league_manager",
-        "warnings": [],
+        "warnings": (
+            []
+            if submit_enabled
+            else [
+                "Durable all-match publish is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT on staging FastAPI only."
+            ]
+        ),
     }
 
 
@@ -906,6 +952,14 @@ def save_admin_league_live_round(
     source: str = "next_league_live_round_save",
 ) -> dict[str, Any]:
     _ensure_live_domain_enabled()
+    if (
+        is_admin_league_live_submit_enabled()
+        and source not in {"next_league_live_round_publish", "next_league_live_round_reconcile"}
+        and (_as_list(matches) or submitted_match_count is not None)
+    ):
+        raise PermissionError(
+            "Direct League Live round submission is disabled. Use the durable all-match publish endpoint."
+        )
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SAVE_ROUND:
         raise ValueError(f"Type {CONFIRM_SAVE_ROUND} to save the league live round state.")
     if _as_dict(movement):
