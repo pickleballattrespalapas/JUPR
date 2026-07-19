@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 
+from jupr_app.domain.tournament_registration_repo import PUBLIC_REGISTRATION_EDIT_RPC
 from jupr_app.services.public_tournament_registration_service import (
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
@@ -113,9 +115,106 @@ class FakeQuery:
 class FakeSupabase:
     def __init__(self, storage):
         self.storage = storage
+        self.rpc_calls: list[tuple[str, dict]] = []
 
     def table(self, name):
         return FakeQuery(self.storage, name)
+
+    def rpc(self, name, params):
+        self.rpc_calls.append((str(name), deepcopy(dict(params or {}))))
+        return FakeRegistrationEditRpc(self.storage, str(name), dict(params or {}))
+
+
+class FakeRegistrationEditRpc:
+    def __init__(self, storage, name, params):
+        self.storage = storage
+        self.name = name
+        self.params = params
+
+    def execute(self):
+        if self.name != PUBLIC_REGISTRATION_EDIT_RPC:
+            raise AssertionError(f"Unexpected fake RPC: {self.name}")
+        tournament_id = str(self.params.get("p_tournament_id") or "")
+        registration_id = str(self.params.get("p_registration_id") or "")
+        registration = next(
+            (
+                row
+                for row in self.storage.get("tournament_registrations", [])
+                if str(row.get("tournament_id")) == tournament_id and str(row.get("id")) == registration_id
+            ),
+            None,
+        )
+        if not registration:
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_NOT_FOUND"})
+        if str(registration.get("updated_at") or "") != str(self.params.get("p_expected_updated_at") or ""):
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_EDIT_CONFLICT"})
+
+        current_selections = [
+            row
+            for row in self.storage.get("tournament_registration_selections", [])
+            if str(row.get("tournament_id")) == tournament_id and str(row.get("registration_id")) == registration_id
+        ]
+        expected_versions = {
+            str(row.get("id") or ""): str(row.get("updated_at") or "")
+            for row in self.params.get("p_expected_selection_versions") or []
+        }
+        current_versions = {
+            str(row.get("id") or ""): str(row.get("updated_at") or "")
+            for row in current_selections
+        }
+        if expected_versions != current_versions:
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_EDIT_CONFLICT"})
+
+        imported_pairs = {
+            (str(row.get("registration_day_id") or ""), str(row.get("event_option_id") or ""))
+            for row in self.storage.get("tournament_teams", [])
+            if str(row.get("tournament_id")) == tournament_id and str(row.get("source") or "").upper() == "REGISTRATION"
+        }
+        if any(
+            (str(row.get("registration_day_id") or ""), str(row.get("event_option_id") or "")) in imported_pairs
+            for row in current_selections
+        ):
+            return SimpleNamespace(data={"ok": False, "code": "REGISTRATION_IMPORTED_TO_DRAW"})
+
+        if self.storage.get("_fail_public_registration_edit_rpc"):
+            raise RuntimeError("simulated atomic RPC failure")
+
+        next_version = "2099-01-01T00:00:00.000001Z"
+        registration.update(deepcopy(self.params.get("p_registration_patch") or {}))
+        registration["updated_at"] = next_version
+        retained = [
+            row
+            for row in self.storage.get("tournament_registration_selections", [])
+            if not (
+                str(row.get("tournament_id")) == tournament_id
+                and str(row.get("registration_id")) == registration_id
+            )
+        ]
+        replacements = []
+        current_by_id = {str(row.get("id") or ""): row for row in current_selections}
+        for index, desired in enumerate(self.params.get("p_selections") or []):
+            selection_id = str(desired.get("id") or "")
+            row = deepcopy(current_by_id.get(selection_id) or {})
+            row.update(deepcopy(desired))
+            row.update(
+                {
+                    "id": selection_id,
+                    "tournament_id": tournament_id,
+                    "registration_id": registration_id,
+                    "sort_order": index,
+                    "updated_at": next_version,
+                }
+            )
+            replacements.append(row)
+        self.storage["tournament_registration_selections"] = [*retained, *replacements]
+        return SimpleNamespace(
+            data={
+                "ok": True,
+                "registration_id": registration_id,
+                "updated_at": next_version,
+                "selection_count": len(replacements),
+            }
+        )
 
 
 def fake_storage():

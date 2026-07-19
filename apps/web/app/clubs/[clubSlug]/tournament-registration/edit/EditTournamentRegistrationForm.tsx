@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
 import {
   PublicRegistrationEditRegistration,
@@ -73,6 +74,7 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
   const [singlesSkill, setSinglesSkill] = useState(String(registration.singles_skill ?? ""));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<{ registrationId: string; deliveryStatus: string } | null>(null);
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
@@ -82,6 +84,14 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
     singlesSkill: linkedPlayer?.singles_skill ?? numericState(singlesSkill)
   }), [gender, linkedPlayer, doublesSkill, singlesSkill]);
   const selectionByEventId = useMemo(() => new Map(selections.map((selection) => [selection.event_option_id, selection])), [selections]);
+  const selectionByFamily = useMemo(() => {
+    const lookup = new Map<string, PublicRegistrationEditSelection>();
+    for (const selection of selections) {
+      const priorEvent = eventById.get(selection.event_option_id);
+      if (priorEvent) lookup.set(publicEventFamilyKey(priorEvent), selection);
+    }
+    return lookup;
+  }, [selections, eventById]);
   const visibleEvents = useMemo(() => events.filter((event) => event.selectable || initialSelectionIds.includes(event.id)), [events, initialSelectionIds]);
   const groupedEvents = useMemo(() => {
     return days.map((day) => ({
@@ -125,10 +135,12 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
       return;
     }
     const formData = new FormData(event.currentTarget);
-    const payloadSelections: PublicRegistrationSelectionPayload[] = selectedIds.map((eventId) => {
+    const payloadSelections: Array<PublicRegistrationSelectionPayload & { id?: string }> = selectedIds.map((eventId) => {
       const eventOption = eventById.get(eventId);
+      const prior = selectionByEventId.get(eventId) ?? (eventOption ? selectionByFamily.get(publicEventFamilyKey(eventOption)) : undefined);
       const mode = partnerModes[eventId] ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
       return {
+        id: prior?.id,
         event_option_id: eventId,
         registration_day_id: eventOption?.registration_day_id,
         partner_mode: mode,
@@ -147,6 +159,8 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
     setPending(true);
     const response = await submitClubTournamentRegistrationEdit(clubSlug, {
       edit_token: editToken,
+      expected_updated_at: registration.updated_at,
+      expected_selection_versions: selections.map((selection) => ({ id: selection.id, updated_at: selection.updated_at })),
       tournament_id: tournamentId,
       registration_slug: registrationSlug || null,
       first_name: textValue(formData, "first_name"),
@@ -173,10 +187,29 @@ export default function EditTournamentRegistrationForm({ clubSlug, tournamentId,
       return;
     }
 
-    const query = new URLSearchParams({ registration_id: String(response.data.registration_id) });
+    setSuccess({
+      registrationId: String(response.data.registration_id),
+      deliveryStatus: response.data.confirmation_delivery?.status || "unknown"
+    });
+  }
+
+  if (success) {
+    const query = new URLSearchParams({ registration_id: success.registrationId });
     if (registrationSlug) query.set("tournament", registrationSlug);
     else query.set("tournament_id", tournamentId);
-    window.location.href = `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`;
+    return (
+      <section style={{ ...cardStyle, background: "#f0fdf4", borderColor: "#bbf7d0" }}>
+        <h2 style={{ marginTop: 0 }}>Registration changes saved</h2>
+        <p style={{ color: "#166534" }}>
+          {success.deliveryStatus === "sent" || success.deliveryStatus === "staging_redirect"
+            ? "An updated confirmation was sent."
+            : success.deliveryStatus === "dry_run"
+              ? "Confirmation email delivery is in dry-run mode."
+              : "The confirmation email could not be delivered. Contact tournament staff if you need a copy."}
+        </p>
+        <Link href={`/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`}>View updated registration</Link>
+      </section>
+    );
   }
 
   return (

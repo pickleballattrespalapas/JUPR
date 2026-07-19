@@ -147,6 +147,30 @@ def _registration_edit_secret_fallback() -> str:
     return ""
 
 
+def get_explicit_registration_edit_token_secret() -> str:
+    """Return only an operator-managed, rotation-stable edit-token secret."""
+
+    for candidate in (
+        get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),
+        _streamlit_secret_value("registration", "edit_token_secret"),
+        _streamlit_secret_value("registration", "edit_secret"),
+        _streamlit_secret_value("jupr", "registration_edit_secret"),
+    ):
+        if candidate:
+            if len(candidate.encode("utf-8")) < 32:
+                raise ValueError(
+                    "JUPR_REGISTRATION_EDIT_SECRET must contain at least 32 bytes "
+                    "of operator-managed secret material."
+                )
+            return candidate
+    raise ValueError(
+        "Public registration edit links require an explicit, stable "
+        "JUPR_REGISTRATION_EDIT_SECRET. Supabase credential fallbacks are not "
+        "accepted by the public edit API because key rotation would invalidate "
+        "outstanding links."
+    )
+
+
 def get_registration_edit_token_secret() -> str:
     for candidate in (
         get_env_or_default("JUPR_REGISTRATION_EDIT_SECRET"),

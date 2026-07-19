@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import re
+import uuid
 from typing import Any
 from urllib.parse import urlencode
 
-from jupr_app.config import get_env_or_default, get_public_base_url
+from jupr_app.config import get_env_or_default, get_explicit_registration_edit_token_secret, get_public_base_url
+from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
+    build_registration_confirmation_view_model,
+    send_tournament_registration_confirmation_email,
+)
 from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token, verify_registration_edit_token
-from jupr_app.domain.tournament_registration_repo import get_registration_by_email, get_registration_confirmation_bundle, save_registration
+from jupr_app.domain.tournament_registration_repo import (
+    TournamentRegistrationEditConflictError,
+    TournamentRegistrationImportedDrawError,
+    TournamentRegistrationRelationshipLockedError,
+    get_registration_by_email,
+    get_registration_confirmation_bundle,
+    registration_has_imported_draw_selection,
+    save_registration,
+)
 from jupr_app.services.public_tournament_registration_service import (
     _clean_email,
     _clean_text,
@@ -20,6 +34,10 @@ from jupr_app.services.public_tournament_registration_service import (
     build_validated_public_registration_save_payload,
     build_public_tournament_registration_page,
 )
+
+
+class PublicRegistrationEditUnavailableError(RuntimeError):
+    """Raised when the public edit surface fails a configuration preflight."""
 
 
 def _registration_public_payload(registration: dict[str, Any]) -> dict[str, Any]:
@@ -41,6 +59,7 @@ def _registration_public_payload(registration: dict[str, Any]) -> dict[str, Any]
         "status": _clean_text(registration.get("status"), limit=40),
         "payment_status": _clean_text(registration.get("payment_status"), limit=40),
         "submitted_at": registration.get("submitted_at"),
+        "updated_at": registration.get("updated_at"),
     }
 
 
@@ -58,7 +77,17 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
         "partner_age": _safe_int(selection.get("partner_age")),
         "partner_note": _clean_text(selection.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
+        "updated_at": selection.get("updated_at"),
     }
+
+
+def _stable_edit_secret() -> str:
+    try:
+        return get_explicit_registration_edit_token_secret()
+    except ValueError as exc:
+        raise PublicRegistrationEditUnavailableError(
+            "Public registration editing is temporarily unavailable because its stable signing secret is not configured."
+        ) from exc
 
 
 def _verified_bundle(
@@ -68,8 +97,13 @@ def _verified_bundle(
     edit_token: str,
     tournament_id: str | None = None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
+    secret = _stable_edit_secret()
     expected_tournament_id = _clean_text(tournament_id, limit=120) or None
-    verified = verify_registration_edit_token(edit_token, expected_tournament_id=expected_tournament_id)
+    verified = verify_registration_edit_token(
+        edit_token,
+        expected_tournament_id=expected_tournament_id,
+        secret=secret,
+    )
     tid = str(verified.get("tournament_id") or "").strip()
     registration_id = str(verified.get("registration_id") or "").strip()
     if not tid or not registration_id:
@@ -86,6 +120,7 @@ def _verified_bundle(
         expected_tournament_id=tid,
         expected_registration_id=registration_id,
         expected_email=_clean_email(registration.get("email")),
+        secret=secret,
     )
     return verified, bundle
 
@@ -132,6 +167,115 @@ def _require_token_bound_registration_slug(bundle: dict[str, Any], registration_
         raise ValueError("Registration edit link is for a different tournament.")
 
 
+def _event_family_key(event: dict[str, Any]) -> tuple[str, str]:
+    day_id = str(event.get("registration_day_id") or "").strip()
+    family = _clean_text(
+        event.get("event_family_label") or event.get("label") or "Event",
+        limit=160,
+    )
+    return day_id, re.sub(r"\s+", " ", family).strip().lower()
+
+
+def _versioned_edit_selections(
+    *,
+    bundle: dict[str, Any],
+    payload: dict[str, Any],
+    validated_selections: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    existing = [dict(row) for row in (bundle.get("selections") or [])]
+    expected_raw = payload.get("expected_selection_versions")
+    if not isinstance(expected_raw, list):
+        raise TournamentRegistrationEditConflictError(
+            "Registration changed after it was loaded. Refresh the edit link and try again."
+        )
+    expected_versions = [
+        {
+            "id": str(row.get("id") or "").strip(),
+            "updated_at": str(row.get("updated_at") or "").strip(),
+        }
+        for row in expected_raw
+        if isinstance(row, dict)
+    ]
+    current_versions = {
+        str(row.get("id") or "").strip(): str(row.get("updated_at") or "").strip()
+        for row in existing
+    }
+    supplied_versions = {row["id"]: row["updated_at"] for row in expected_versions if row["id"]}
+    if supplied_versions != current_versions or len(expected_versions) != len(current_versions):
+        raise TournamentRegistrationEditConflictError(
+            "Registration changed after it was loaded. Refresh the edit link and try again."
+        )
+
+    events = {str(row.get("id") or ""): row for row in (bundle.get("event_options") or [])}
+    existing_by_id = {str(row.get("id") or ""): row for row in existing}
+    existing_by_event = {str(row.get("event_option_id") or ""): row for row in existing}
+    existing_by_family = {
+        _event_family_key(events.get(str(row.get("event_option_id") or "")) or {}): row
+        for row in existing
+    }
+    raw_by_event = {
+        str(row.get("event_option_id") or ""): row
+        for row in (payload.get("selections") or [])
+        if isinstance(row, dict)
+    }
+    used_ids: set[str] = set()
+    versioned: list[dict[str, Any]] = []
+    for selection in validated_selections:
+        event_id = str(selection.get("event_option_id") or "")
+        raw = raw_by_event.get(event_id) or {}
+        requested_id = str(raw.get("id") or "").strip()
+        candidate = existing_by_id.get(requested_id) if requested_id else None
+        target_family = _event_family_key(events.get(event_id) or {})
+        if candidate:
+            candidate_event = events.get(str(candidate.get("event_option_id") or "")) or {}
+            if _event_family_key(candidate_event) != target_family:
+                raise ValueError("Registration selection identity does not match the selected event family.")
+        elif requested_id:
+            raise TournamentRegistrationEditConflictError(
+                "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        if candidate is None:
+            candidate = existing_by_event.get(event_id) or existing_by_family.get(target_family)
+        selection_id = str((candidate or {}).get("id") or f"sel_{uuid.uuid4().hex}")
+        if selection_id in used_ids:
+            raise ValueError("The same registration selection cannot be used more than once.")
+        used_ids.add(selection_id)
+        versioned.append({**selection, "id": selection_id})
+    return versioned, expected_versions
+
+
+def _post_edit_confirmation_delivery(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    registration_id: str,
+) -> dict[str, Any]:
+    try:
+        bundle = get_registration_confirmation_bundle(supabase, tournament_id, registration_id)
+        registration = bundle.get("registration") or {}
+        if not registration:
+            raise RuntimeError("Updated registration could not be reloaded.")
+        view_model = build_registration_confirmation_view_model(
+            tournament=bundle.get("tournament") or {},
+            registration=registration,
+            selections=bundle.get("selections") or [],
+            days=bundle.get("days") or [],
+            event_options=bundle.get("event_options") or [],
+        )
+        send_result = send_tournament_registration_confirmation_email(view_model=view_model)
+        status = str(send_result.get("status") or "unknown").strip().lower()
+        if status not in {"sent", "staging_redirect", "dry_run"}:
+            status = "unknown"
+        return {
+            "status": status,
+            "delivered": status in {"sent", "staging_redirect"},
+        }
+    except Exception:
+        # The database edit has already committed. Delivery failure must be
+        # visible and retryable without falsely reporting the save as failed.
+        return {"status": "failed", "delivered": False}
+
+
 def request_public_tournament_registration_edit_link(
     supabase: Any,
     *,
@@ -145,6 +289,7 @@ def request_public_tournament_registration_edit_link(
 ) -> dict[str, Any]:
     if _clean_text(website, limit=200):
         return _generic_edit_link_response()
+    secret = _stable_edit_secret()
     clean_email = _clean_email(email)
     if not clean_email or "@" not in clean_email:
         raise ValueError("A valid email is required.")
@@ -164,10 +309,18 @@ def request_public_tournament_registration_edit_link(
     registration = get_registration_by_email(supabase, tid, clean_email)
     if not registration:
         return _generic_edit_link_response()
+    registration_id = str(registration.get("id") or "").strip()
+    if registration_has_imported_draw_selection(
+        supabase,
+        tournament_id=tid,
+        registration_id=registration_id,
+    ):
+        return _generic_edit_link_response()
     token = build_registration_edit_token(
         tournament_id=tid,
-        registration_id=str(registration.get("id") or ""),
+        registration_id=registration_id,
         email=clean_email,
+        secret=secret,
     )
     send_tournament_registration_edit_email(
         tournament_name=_clean_text(tournament.get("name") or "Tournament"),
@@ -211,6 +364,14 @@ def build_public_tournament_registration_edit_page(
         raise ValueError("Tournament registration was not found.")
 
     registration = bundle.get("registration") or {}
+    if registration_has_imported_draw_selection(
+        supabase,
+        tournament_id=tid,
+        registration_id=str(registration.get("id") or ""),
+    ):
+        raise TournamentRegistrationImportedDrawError(
+            "This registration is already imported into a draw and can no longer be edited publicly."
+        )
     linked_player_id = registration.get("player_id")
     linked_player = (
         _get_club_player(
@@ -286,6 +447,20 @@ def submit_public_tournament_registration_edit(
     tournament_id = str(verified.get("tournament_id") or "").strip()
     registration_id = str(verified.get("registration_id") or "").strip()
     _require_token_bound_registration_slug(bundle, payload.get("registration_slug"))
+    if registration_has_imported_draw_selection(
+        supabase,
+        tournament_id=tournament_id,
+        registration_id=registration_id,
+    ):
+        raise TournamentRegistrationImportedDrawError(
+            "This registration is already imported into a draw and can no longer be edited publicly."
+        )
+    expected_updated_at = _clean_text(payload.get("expected_updated_at"), limit=80)
+    current_updated_at = str(registration.get("updated_at") or "").strip()
+    if not expected_updated_at or expected_updated_at != current_updated_at:
+        raise TournamentRegistrationEditConflictError(
+            "Registration changed after it was loaded. Refresh the edit link and try again."
+        )
     page = build_public_tournament_registration_page(
         supabase,
         club_id=str(club_id),
@@ -313,12 +488,29 @@ def submit_public_tournament_registration_edit(
         locked_registration=registration,
         existing_event_options=existing_event_options,
     )
+    # The public edit form does not expose the derived/organizer-managed age
+    # bracket, so retain it instead of clearing it on every edit.
+    save_payload["age_bracket"] = registration.get("age_bracket")
+    versioned_selections, expected_selection_versions = _versioned_edit_selections(
+        bundle=bundle,
+        payload=payload,
+        validated_selections=list(save_payload.get("selections") or []),
+    )
+    save_payload["selections"] = versioned_selections
     result = save_registration(
         supabase,
         tournament_id=tournament_id,
         payload=save_payload,
         expected_registration_id=registration_id,
         allow_existing_unselectable_event_ids=existing_selected_ids,
+        expected_updated_at=expected_updated_at,
+        expected_selection_versions=expected_selection_versions,
+        atomic_edit=True,
+    )
+    confirmation_delivery = _post_edit_confirmation_delivery(
+        supabase,
+        tournament_id=tournament_id,
+        registration_id=registration_id,
     )
     return {
         "ok": True,
@@ -336,5 +528,7 @@ def submit_public_tournament_registration_edit(
         },
         "registration_id": result.get("registration_id"),
         "submitted_at": result.get("submitted_at"),
+        "updated_at": result.get("updated_at"),
         "selection_count": result.get("selection_count"),
+        "confirmation_delivery": confirmation_delivery,
     }

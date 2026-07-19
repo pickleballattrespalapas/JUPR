@@ -209,9 +209,13 @@ export type PublicRegistrationEditRegistration = {
   status?: string | null;
   payment_status?: string | null;
   submitted_at?: string | null;
+  updated_at: string;
 };
 
-export type PublicRegistrationEditSelection = PublicRegistrationSelectionPayload & { id: string };
+export type PublicRegistrationEditSelection = PublicRegistrationSelectionPayload & {
+  id: string;
+  updated_at: string;
+};
 
 export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   edit_mode: boolean;
@@ -222,9 +226,12 @@ export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   total_price_usd: number;
 };
 
-export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email"> & {
+export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email" | "selections"> & {
   edit_token: string;
   email?: string | null;
+  expected_updated_at: string;
+  expected_selection_versions: Array<{ id: string; updated_at: string }>;
+  selections: Array<PublicRegistrationSelectionPayload & { id?: string | null }>;
 };
 
 export type PublicRegistrationEditLinkRequestPayload = {
@@ -252,6 +259,11 @@ export type PublicRegistrationSubmitResponse = {
   registration_id: string;
   submitted_at?: string | null;
   selection_count?: number | null;
+  updated_at?: string | null;
+  confirmation_delivery?: {
+    status: "sent" | "staging_redirect" | "dry_run" | "failed" | "unknown";
+    delivered: boolean;
+  } | null;
 };
 
 export type PublicRegistrationConfirmationResponse = {
@@ -335,7 +347,9 @@ export async function getClubTournamentRegistrationEdit(
   const query = new URLSearchParams({ edit_token: params.editToken });
   if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
   if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
-  return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`);
+  return fetchJson<PublicRegistrationEditResponse>(`/clubs/${clubSlug}/tournament-registration/edit?${query.toString()}`, {
+    cache: "no-store"
+  });
 }
 
 export async function requestClubTournamentRegistrationEditLink(

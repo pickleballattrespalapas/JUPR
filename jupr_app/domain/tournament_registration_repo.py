@@ -26,13 +26,32 @@ class StaleTournamentRegistrationSelectionError(SelectionWriteConflict):
     """Backward-compatible name for an admin selection write conflict."""
 
 
+class TournamentRegistrationEditConflictError(ValueError):
+    """Raised when a token-gated edit was based on a stale registration view."""
+
+
+class TournamentRegistrationImportedDrawError(ValueError):
+    """Raised when a registration is locked because its event reached a draw."""
+
+
+class TournamentRegistrationRelationshipLockedError(ValueError):
+    """Raised when an edit would invalidate an active partner relationship."""
+
+
 ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
+PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
 SELECTION_WRITE_CONFLICT_CODE = "SELECTION_WRITE_CONFLICT"
 SELECTION_WRITE_CONFLICT_MARKER = "JUPR_SELECTION_WRITE_CONFLICT"
 SELECTION_NOT_FOUND_CODE = "SELECTION_NOT_FOUND"
 RELATION_SELECTION_NOT_FOUND_MARKER = "JUPR_RELATION_SELECTION_NOT_FOUND"
 SELECTION_INVALID_TARGET_MARKER = "JUPR_SELECTION_INVALID_TARGET"
 SELECTION_INVALID_PATCH_MARKER = "JUPR_SELECTION_INVALID_PATCH"
+REGISTRATION_EDIT_CONFLICT_CODE = "REGISTRATION_EDIT_CONFLICT"
+REGISTRATION_EDIT_CONFLICT_MARKER = "JUPR_REGISTRATION_EDIT_CONFLICT"
+REGISTRATION_EDIT_IMPORTED_CODE = "REGISTRATION_IMPORTED_TO_DRAW"
+REGISTRATION_EDIT_IMPORTED_MARKER = "JUPR_REGISTRATION_IMPORTED_TO_DRAW"
+REGISTRATION_EDIT_RELATIONSHIP_CODE = "REGISTRATION_RELATIONSHIP_LOCKED"
+REGISTRATION_EDIT_RELATIONSHIP_MARKER = "JUPR_REGISTRATION_RELATIONSHIP_LOCKED"
 
 
 REGISTRATION_SCHEMA_CONTRACT_MIGRATIONS = [
@@ -1294,7 +1313,7 @@ def registration_is_imported_to_draw(
 ) -> bool:
     if not selection_id and not registration_id:
         return False
-    selection = None
+    selections: list[dict[str, Any]] = []
     if selection_id:
         selection_resp = (
             supabase.table("tournament_registration_selections")
@@ -1305,34 +1324,52 @@ def registration_is_imported_to_draw(
             .execute()
         )
         selection = _safe_first(selection_resp)
-    if not selection and registration_id:
+        if selection:
+            selections = [selection]
+    if not selections and registration_id:
         selection_resp = (
             supabase.table("tournament_registration_selections")
             .select("*")
             .eq("tournament_id", str(tournament_id))
             .eq("registration_id", str(registration_id))
+            .execute()
+        )
+        selections = _safe_data(selection_resp)
+    if not selections:
+        return False
+    for selection in selections:
+        day_id = str(selection.get("registration_day_id") or "")
+        event_option_id = str(selection.get("event_option_id") or "")
+        if not day_id or not event_option_id:
+            continue
+        teams_resp = (
+            supabase.table("tournament_teams")
+            .select("id")
+            .eq("tournament_id", str(tournament_id))
+            .eq("registration_day_id", day_id)
+            .eq("event_option_id", event_option_id)
+            .eq("source", "REGISTRATION")
             .limit(1)
             .execute()
         )
-        selection = _safe_first(selection_resp)
-    if not selection:
-        return False
-    day_id = str(selection.get("registration_day_id") or "")
-    event_option_id = str(selection.get("event_option_id") or "")
-    if not day_id or not event_option_id:
-        return False
+        if _safe_data(teams_resp):
+            return True
+    return False
 
-    teams_resp = (
-        supabase.table("tournament_teams")
-        .select("id")
-        .eq("tournament_id", str(tournament_id))
-        .eq("registration_day_id", day_id)
-        .eq("event_option_id", event_option_id)
-        .eq("source", "REGISTRATION")
-        .limit(1)
-        .execute()
+
+def registration_has_imported_draw_selection(
+    supabase,
+    *,
+    tournament_id: str,
+    registration_id: str,
+) -> bool:
+    """Return whether any event on a registration has been imported to a draw."""
+
+    return registration_is_imported_to_draw(
+        supabase,
+        tournament_id=str(tournament_id),
+        registration_id=str(registration_id),
     )
-    return bool(_safe_data(teams_resp))
 
 
 def cancel_registration(supabase, *, tournament_id: str, registration_id: str) -> dict[str, Any]:
@@ -1443,6 +1480,9 @@ def save_registration(
     payload: dict[str, Any],
     expected_registration_id: str | None = None,
     allow_existing_unselectable_event_ids: set[str] | None = None,
+    expected_updated_at: str | None = None,
+    expected_selection_versions: list[dict[str, Any]] | None = None,
+    atomic_edit: bool = False,
 ) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
@@ -1575,8 +1615,85 @@ def save_registration(
                 "show_on_partner_board": _coerce_bool(selection.get("show_on_partner_board", False)),
                 "sort_order": index,
                 "created_at": submitted_at,
+                "updated_at": submitted_at,
             }
         )
+
+    if atomic_edit:
+        if not expected_registration_id:
+            raise ValueError("Atomic registration edits require an expected registration id.")
+        if not str(expected_updated_at or "").strip():
+            raise TournamentRegistrationEditConflictError(
+                "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        registration_patch = {
+            key: reg_row.get(key)
+            for key in (
+                "first_name",
+                "last_name",
+                "display_name",
+                "phone",
+                "dupr_id",
+                "doubles_skill",
+                "singles_skill",
+                "age",
+                "age_bracket",
+                "gender",
+                "notes",
+                "wants_partner_board_contact",
+            )
+        }
+        params = {
+            "p_tournament_id": str(tournament_id),
+            "p_registration_id": str(expected_registration_id),
+            "p_expected_updated_at": str(expected_updated_at),
+            "p_expected_selection_versions": list(expected_selection_versions or []),
+            "p_registration_patch": registration_patch,
+            "p_selections": rows,
+        }
+        try:
+            resp = supabase.rpc(PUBLIC_REGISTRATION_EDIT_RPC, params).execute()
+        except Exception as exc:
+            if _database_error_contains(exc, REGISTRATION_EDIT_CONFLICT_MARKER):
+                raise TournamentRegistrationEditConflictError(
+                    "Registration changed after it was loaded. Refresh the edit link and try again."
+                ) from exc
+            if _database_error_contains(exc, REGISTRATION_EDIT_IMPORTED_MARKER):
+                raise TournamentRegistrationImportedDrawError(
+                    "This registration is already imported into a draw and can no longer be edited publicly."
+                ) from exc
+            if _database_error_contains(exc, REGISTRATION_EDIT_RELATIONSHIP_MARKER):
+                raise TournamentRegistrationRelationshipLockedError(
+                    "This registration has an active partner relationship. Tournament staff must review the change."
+                ) from exc
+            raise RuntimeError("Tournament registration edit failed without changing the registration.") from exc
+
+        result = _rpc_object(resp)
+        if result is None:
+            raise RuntimeError("Tournament registration edit returned an invalid response.")
+        code = str(result.get("code") or "").strip().upper()
+        if code == REGISTRATION_EDIT_CONFLICT_CODE:
+            raise TournamentRegistrationEditConflictError(
+                "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        if code == REGISTRATION_EDIT_IMPORTED_CODE:
+            raise TournamentRegistrationImportedDrawError(
+                "This registration is already imported into a draw and can no longer be edited publicly."
+            )
+        if code == REGISTRATION_EDIT_RELATIONSHIP_CODE:
+            raise TournamentRegistrationRelationshipLockedError(
+                "This registration has an active partner relationship. Tournament staff must review the change."
+            )
+        if code == "REGISTRATION_NOT_FOUND":
+            raise ValueError("Expected registration was not found for this tournament.")
+        if result.get("ok") is not True:
+            raise RuntimeError("Tournament registration edit returned an invalid response.")
+        return {
+            "registration_id": str(result.get("registration_id") or registration_id),
+            "submitted_at": (expected or {}).get("submitted_at") or submitted_at,
+            "updated_at": result.get("updated_at"),
+            "selection_count": int(result.get("selection_count") or 0),
+        }
 
     (
         supabase.table("tournament_registrations")
