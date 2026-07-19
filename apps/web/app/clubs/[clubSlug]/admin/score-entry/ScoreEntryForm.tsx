@@ -28,6 +28,13 @@ type ScoreFeedback = {
   latest_match_id?: string | number | null;
 };
 
+type ScoreRecovery = {
+  match_log_route?: string;
+  match_uploader_route?: string;
+  replay_history_route?: string;
+  operator_rule?: string;
+};
+
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -59,6 +66,7 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ScoreFeedback | null>(null);
+  const [recovery, setRecovery] = useState<ScoreRecovery | null>(null);
 
   async function submitMatch() {
     if (!apiBase) {
@@ -78,9 +86,20 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
       setMessage("Select four different players.");
       return;
     }
+    const team1Score = Number(scoreT1);
+    const team2Score = Number(scoreT2);
+    if (!Number.isInteger(team1Score) || !Number.isInteger(team2Score) || team1Score < 0 || team2Score < 0 || team1Score + team2Score <= 0) {
+      setMessage("Enter non-negative whole-number scores and a non-zero result.");
+      return;
+    }
+    if (team1Score === team2Score) {
+      setMessage("Match scores cannot be tied.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     setFeedback(null);
+    setRecovery(null);
     try {
       const response = await fetch(apiUrl(apiBase, `/admin/clubs/${clubId}/matches/batch`), {
         method: "POST",
@@ -100,8 +119,8 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
               t1_p2: Number(t1p2),
               t2_p1: Number(t2p1),
               t2_p2: Number(t2p2),
-              score_t1: Number(scoreT1),
-              score_t2: Number(scoreT2)
+              score_t1: team1Score,
+              score_t2: team2Score
             }
           ]
         })
@@ -111,9 +130,10 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
         throw new Error(String(payload?.detail || `API error (${response.status})`));
       }
       setFeedback(payload?.feedback ?? null);
+      setRecovery(payload?.recovery ?? null);
       setMessage(`Match saved. Inserted ${payload?.result?.inserted ?? 0} match${payload?.result?.inserted === 1 ? "" : "es"}.`);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Unable to save match.");
+      setMessage(`${err instanceof Error ? err.message : "Unable to save match."} Outcome unknown: check Match Log before retrying.`);
     } finally {
       setSaving(false);
     }
@@ -162,6 +182,8 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
         </div>
         {message ? <p style={{ color: message.startsWith("Match saved") ? "#166534" : "#b91c1c" }}>{message}</p> : null}
       </div>
+
+      {recovery ? <p style={{ color: "#475569" }}>{recovery.operator_rule} <Link href={recovery.match_log_route || "/admin/match-log"}>Open Match Log</Link> · <Link href={recovery.match_uploader_route || "/admin/match-uploader"}>Open Match Uploader</Link></p> : null}
 
       {feedback ? (
         <div style={{ borderTop: "1px solid #e2e8f0", marginTop: "1rem", paddingTop: "1rem" }}>

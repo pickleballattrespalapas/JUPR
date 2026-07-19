@@ -70,6 +70,7 @@ PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,created_at,updated_at,last_seen_at,expires_at"
 PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
 LIVE_SESSIONS_SETUP_ERROR = "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
+SCORE_ENTRY_SETUP_ERROR = "Next score entry is not write-ready. Enable the backend flag and configure SUPABASE_SERVICE_ROLE_KEY on FastAPI; otherwise use Match Uploader or the Streamlit fallback."
 
 
 def get_jupr_env() -> str:
@@ -407,6 +408,33 @@ def _score_entry_player_ids(matches: list[dict[str, Any]]) -> list[int]:
     return ids
 
 
+def _validate_score_entry_match(matches: list[dict[str, Any]]) -> None:
+    if len(matches or []) != 1:
+        raise HTTPException(status_code=400, detail="Score Entry accepts exactly one match. Use Match Uploader for batches.")
+    match = matches[0]
+
+    def whole_number(value: Any) -> int:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not a score or player id")
+        numeric = float(value)
+        if not numeric.is_integer():
+            raise ValueError("fractional value")
+        return int(numeric)
+
+    try:
+        players = [whole_number(match[key]) for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")]
+        score_t1 = whole_number(match["score_t1"])
+        score_t2 = whole_number(match["score_t2"])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Select four players and enter both whole-number scores.") from exc
+    if any(player_id <= 0 for player_id in players) or len(set(players)) != 4:
+        raise HTTPException(status_code=400, detail="Select four different players.")
+    if score_t1 < 0 or score_t2 < 0 or score_t1 + score_t2 <= 0:
+        raise HTTPException(status_code=400, detail="Scores must be non-negative and the match score must be non-zero.")
+    if score_t1 == score_t2:
+        raise HTTPException(status_code=400, detail="Match scores cannot be tied.")
+
+
 def _fetch_score_entry_players(supabase, *, club_id: str, player_ids: list[int]) -> dict[int, dict[str, Any]]:
     if not player_ids:
         return {}
@@ -692,10 +720,33 @@ def update_club_live_session_scores(club_slug: str, session_key: str, payload: P
     return {"club": _public_club_payload(club, club_slug), **result}
 
 
+@app.get("/admin/clubs/{club_id}/score-entry/status")
+def get_admin_score_entry_status(club_id: str) -> dict[str, Any]:
+    flag_enabled = is_next_admin_score_entry_enabled()
+    service_role_configured = _has_supabase_service_role_key()
+    ready = flag_enabled and service_role_configured
+    return {
+        "enabled": flag_enabled,
+        "ready": ready,
+        "status": "ready" if ready else "fallback_required",
+        "service_role_configured": service_role_configured,
+        "submit_endpoint": "/admin/clubs/{club_id}/matches/batch" if ready else None,
+        "max_matches": 1,
+        "fallback": {
+            "match_uploader_route": "/admin/match-uploader",
+            "match_log_route": "/admin/match-log",
+            "streamlit_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "https://juprtrespalapas.streamlit.app").strip(),
+        },
+        "warnings": [] if ready else [SCORE_ENTRY_SETUP_ERROR],
+    }
+
+
 @app.post("/admin/clubs/{club_id}/matches/batch")
 def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
     if not is_next_admin_score_entry_enabled():
-        raise HTTPException(status_code=403, detail="Next admin score entry is disabled. Use Streamlit admin until Supabase JWT role auth is implemented.")
+        raise HTTPException(status_code=403, detail="Next admin score entry is disabled. Use Match Uploader or the Streamlit fallback.")
+    if not _has_supabase_service_role_key():
+        raise HTTPException(status_code=503, detail=SCORE_ENTRY_SETUP_ERROR)
     user = authenticate_bearer(authorization)
     supabase = get_supabase_client()
     role_resolution = resolve_admin_role(supabase=supabase, club_id=str(club_id), email=user.email, user_id=user.user_id, allowlist=set())
@@ -703,6 +754,7 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
         denied_payload = build_activity_payload(club_id=str(club_id), actor_email=user.email, actor_role=role_resolution.role, action_type="submit_match_batch_denied", entity_type="matches", entity_id="batch", after_json={"source_client": "fastapi/nextjs", "reason": "insufficient_permission"}, source_page=payload.source, flagged_for_review=True)
         write_admin_activity_log(supabase, denied_payload)
         raise HTTPException(status_code=403, detail="insufficient permission")
+    _validate_score_entry_match(payload.matches)
     player_ids = _score_entry_player_ids(payload.matches)
     before_players = _fetch_score_entry_players(supabase, club_id=str(club_id), player_ids=player_ids)
     (
@@ -728,5 +780,20 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
     audit_payload = build_activity_payload(club_id=str(club_id), actor_email=user.email, actor_role=role_resolution.role, action_type="submit_match_batch", entity_type="matches", entity_id="batch", after_json={"source_client": "fastapi/nextjs", "source_page": payload.source, "match_count": len(payload.matches), "result_summary": result.data if isinstance(result.data, dict) else {"ok": True}, "feedback": feedback}, source_page=payload.source)
     audit_write = write_admin_activity_log(supabase, audit_payload)
     if not audit_write.ok and is_api_audit_log_required():
-        raise HTTPException(status_code=500, detail="audit log write required but unavailable")
-    return {"ok": True, "auth_mode": "supabase_jwt", "required_permission": PERMISSION_ENTER_SCORES, "result": result.data, "feedback": feedback}
+        raise HTTPException(status_code=500, detail="Match write committed, but the required audit log write was unavailable. Check Match Log before any retry.")
+    warnings = [audit_write.warning] if audit_write.warning else []
+    return {
+        "ok": True,
+        "auth_mode": "supabase_jwt",
+        "required_permission": PERMISSION_ENTER_SCORES,
+        "match_write_committed": True,
+        "result": result.data,
+        "feedback": feedback,
+        "warnings": warnings,
+        "recovery": {
+            "match_log_route": "/admin/match-log",
+            "match_uploader_route": "/admin/match-uploader",
+            "replay_history_route": "/admin/replay-history",
+            "operator_rule": "Verify Match Log before retrying any score-entry request whose outcome is unclear.",
+        },
+    }

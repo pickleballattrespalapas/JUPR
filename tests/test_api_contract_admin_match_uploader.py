@@ -162,5 +162,43 @@ def test_match_uploader_submit_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["submitted_count"] == 1
     assert payload["result"]["inserted"] == 1
+    assert payload["match_write_committed"] is True
+    assert payload["recovery"]["match_log_route"] == "/admin/match-log"
+    assert payload["auto_player_updates"]["mode"] in {"disabled", "skipped", "auto_sent"}
     assert calls[0]["matches"][0]["score_t1"] == 11
     assert storage["admin_activity_log"][0]["action_type"] == "submit_match_uploader_batch"
+
+
+def test_match_uploader_email_failure_preserves_committed_write(monkeypatch):
+    storage = fake_storage()
+
+    def fake_submit_match_batch(_ctx, matches, **_kwargs):
+        return ServiceResult.success(data={"inserted": len(matches), "skipped_incomplete": 0, "skipped_empty": 0, "skipped_unrated": 0})
+
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
+    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.load_data", fake_load_data)
+    monkeypatch.setattr("jupr_app.services.admin_match_uploader_service.submit_match_batch", fake_submit_match_batch)
+    monkeypatch.setattr(
+        "services.api.admin_match_uploader_routes.auto_send_player_updates_for_match_payloads",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("mail provider unavailable")),
+    )
+    _install_auth(monkeypatch)
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-uploader/batch",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "source": "test_email_failure",
+            "matches": [{"date": "2026-03-01", "league": "Open", "week_tag": "Week 1", "match_type": "Live Match", "t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 7}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["match_write_committed"] is True
+    assert payload["result"]["inserted"] == 1
+    assert payload["auto_player_updates"]["mode"] == "error"
+    assert "Do not resubmit" in payload["warnings"][-1]

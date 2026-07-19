@@ -183,7 +183,7 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
             source=payload.source,
         )
         try:
-            return submit_admin_singles_match(
+            result = submit_admin_singles_match(
                 supabase,
                 club_id=str(club_id),
                 match=_dump_model(payload),
@@ -191,6 +191,13 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
             )
+            result["match_write_committed"] = True
+            result["recovery"] = {
+                "match_log_route": "/admin/match-log",
+                "replay_history_route": "/admin/replay-history",
+                "operator_rule": "Verify the new singles row in Match Log before retrying any request whose outcome is unclear.",
+            }
+            return result
         except Exception as exc:
             _handle_write_error(exc)
 
@@ -218,12 +225,41 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
             )
+        except Exception as exc:
+            _handle_write_error(exc)
+
+        # The match service has returned a committed domain result. Email is a
+        # post-commit handoff and must never turn that success into an ambiguous
+        # HTTP 500 that tempts an operator to submit duplicate matches.
+        result["match_write_committed"] = True
+        result["recovery"] = {
+            "match_log_route": "/admin/match-log",
+            "player_updates_route": "/admin/player-updates",
+            "replay_history_route": "/admin/replay-history",
+            "operator_rule": "Never resubmit committed matches solely because player-update email failed. Verify Match Log, then retry email from Player Updates.",
+        }
+        try:
             result["auto_player_updates"] = auto_send_player_updates_for_match_payloads(
                 supabase,
                 club_id=str(club_id),
                 match_payloads=payload.matches,
                 source=payload.source,
             )
-            return result
         except Exception as exc:
-            _handle_write_error(exc)
+            result["auto_player_updates"] = {
+                "mode": "error",
+                "reason": "Match rows committed, but the post-batch player-update email handoff failed.",
+                "error_code": type(exc).__name__,
+                "attempted": 0,
+                "sent": 0,
+                "skipped": 0,
+                "errors": 1,
+            }
+            warnings = result.setdefault("warnings", [])
+            if not isinstance(warnings, list):
+                warnings = []
+                result["warnings"] = warnings
+            warnings.append(
+                "Matches are committed. Do not resubmit them; use Player Updates to retry email delivery."
+            )
+        return result

@@ -77,6 +77,8 @@ def test_admin_match_uploader_singles_contract(monkeypatch):
     payload = response.json()
     assert payload["ok"] is True
     assert payload["mode"] == "singles_match_uploader"
+    assert payload["match_write_committed"] is True
+    assert payload["recovery"]["match_log_route"] == "/admin/match-log"
     assert payload["result"]["match_format"] == "singles"
     assert captured["match_list"][0]["match_format"] == "singles"
     assert captured["match_list"][0]["t1_p1"] == 1

@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 from services.api.main import app
 
 
+VALID_MATCH = {"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 7}
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -16,13 +19,14 @@ def client():
 
 def _enable(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "true")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
 
 
 def _mock_common(monkeypatch):
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: object())
     monkeypatch.setattr(
         "services.api.main.load_data",
-        lambda _supabase, _club_id: (None, None, None, None, None, None, None, None, None, {}),
+        lambda _supabase, _club_id: (None, None, None, None, None, None, None, None, None, False, ""),
     )
 
 
@@ -49,7 +53,7 @@ def test_successful_scorekeeper_write_records_audit_payload(client, monkeypatch)
 
     response = client.post(
         "/admin/clubs/club-1/matches/batch",
-        json={"matches": [{"a": 1}], "source": "next/admin/score-entry"},
+        json={"matches": [VALID_MATCH], "source": "next/admin/score-entry"},
         headers={"Authorization": "Bearer x"},
     )
 
@@ -78,7 +82,7 @@ def test_audit_payload_does_not_include_tokens_or_service_role(client, monkeypat
     monkeypatch.setattr("services.api.main.write_admin_activity_log", _write_audit)
     response = client.post(
         "/admin/clubs/club-1/matches/batch",
-        json={"matches": [{"authorization": "Bearer SECRET_TOKEN", "service_role": "SERVICE_KEY"}]},
+        json={"matches": [{**VALID_MATCH, "authorization": "Bearer SECRET_TOKEN", "service_role": "SERVICE_KEY"}]},
         headers={"Authorization": "Bearer raw-user-token"},
     )
 
@@ -98,7 +102,7 @@ def test_missing_audit_table_degrades_gracefully_by_default(client, monkeypatch)
     monkeypatch.setattr("services.api.main.submit_match_batch", lambda *_a, **_k: _Result())
     monkeypatch.setattr("services.api.main.write_admin_activity_log", lambda *_a, **_k: type("W", (), {"ok": False, "warning": "missing table"})())
 
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []}, headers={"Authorization": "Bearer x"})
+    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [VALID_MATCH]}, headers={"Authorization": "Bearer x"})
     assert response.status_code == 200
 
 
@@ -111,7 +115,7 @@ def test_strict_mode_fails_if_audit_write_fails(client, monkeypatch):
     monkeypatch.setattr("services.api.main.submit_match_batch", lambda *_a, **_k: _Result())
     monkeypatch.setattr("services.api.main.write_admin_activity_log", lambda *_a, **_k: type("W", (), {"ok": False, "warning": "boom"})())
 
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []}, headers={"Authorization": "Bearer x"})
+    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [VALID_MATCH]}, headers={"Authorization": "Bearer x"})
     assert response.status_code == 500
     assert "audit" in response.json()["detail"]
 

@@ -35,3 +35,25 @@ def test_admin_batch_endpoint_disabled_by_default_returns_403_before_auth_or_wri
 
     assert response.status_code == 403
     assert called == {"auth": False, "write": False}
+
+
+def test_score_entry_status_requires_flag_and_service_role(client, monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "1")
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+
+    response = client.get("/admin/clubs/club-1/score-entry/status")
+
+    assert response.status_code == 200
+    assert response.json()["ready"] is False
+    assert response.json()["submit_endpoint"] is None
+    assert response.json()["fallback"]["match_uploader_route"] == "/admin/match-uploader"
+
+
+def test_score_entry_write_fails_closed_without_service_role(client, monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "1")
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+
+    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": []})
+
+    assert response.status_code == 503
+    assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]

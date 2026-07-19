@@ -17,6 +17,7 @@ export type AdminMatchUploaderWriteResult = {
   ok: boolean;
   mode?: string;
   submitted_count?: number;
+  match_write_committed?: boolean;
   result?: {
     inserted?: number;
     match_format?: string;
@@ -40,6 +41,23 @@ export type AdminMatchUploaderWriteResult = {
       matches_played_before?: number | null;
       matches_played_after?: number | null;
     }>;
+  };
+  auto_player_updates?: {
+    mode?: "auto_sent" | "disabled" | "skipped" | "error" | string;
+    reason?: string;
+    error_code?: string;
+    attempted?: number;
+    sent?: number;
+    skipped?: number;
+    errors?: number;
+    email_mode?: string;
+    windows?: Array<Record<string, unknown>>;
+  };
+  recovery?: {
+    match_log_route?: string;
+    player_updates_route?: string;
+    replay_history_route?: string;
+    operator_rule?: string;
   };
   warnings?: string[];
 };

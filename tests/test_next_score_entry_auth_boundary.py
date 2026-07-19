@@ -79,3 +79,16 @@ def test_score_entry_ui_is_hidden_unless_browser_flag_is_enabled() -> None:
         source = page.read_text(encoding="utf-8")
         assert "isNextAdminScoreEntryEnabled" in source
         assert "Score entry is disabled" in source
+
+
+def test_score_entry_requires_backend_readiness_and_keeps_recovery_paths_visible() -> None:
+    page_source = CANONICAL_PAGE.read_text(encoding="utf-8")
+    form_source = CANONICAL_FORM.read_text(encoding="utf-8")
+
+    assert "getAdminScoreEntryStatus" in page_source
+    assert "readiness.data?.ready" in page_source
+    assert "Score entry is in fallback mode" in page_source
+    assert "/admin/match-uploader" in page_source
+    assert "Streamlit fallback" in page_source
+    assert "Outcome unknown: check Match Log before retrying" in form_source
+    assert "match_write_committed" not in form_source  # server decides commit state

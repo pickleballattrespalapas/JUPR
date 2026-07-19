@@ -5,6 +5,8 @@ export type AdminPlayerEditorStatusResponse = {
   player_detail_endpoint?: string | null;
   social_identities_endpoint?: string | null;
   player_merge_endpoint?: string | null;
+  merge_operation_endpoint?: string | null;
+  transactional_merge_ready?: boolean;
   player_count?: number | null;
   warnings: string[];
 };
@@ -61,9 +63,12 @@ export type AdminPlayerSocialIdentityListResponse = {
 export type AdminPlayerMergePreview = {
   ok: boolean;
   mode?: string;
+  can_merge?: boolean;
+  preview_fingerprint?: string;
   source_player?: { id: number; name: string };
   target_player?: { id: number; name: string };
   match_reference_counts?: Record<string, number>;
+  collision_match_ids?: number[];
   league_rating_plan?: {
     source_rows?: Array<Record<string, unknown>>;
     target_rows?: Array<Record<string, unknown>>;
@@ -106,7 +111,22 @@ export type AdminPlayerEditorWriteResponse = {
   moved_league_rating_count?: number;
   deleted_conflicting_league_rating_count?: number;
   social_identity_rows_updated?: number;
+  transaction_mode?: string;
+  operation_id?: string;
+  operation_status?: "merged_pending_replay" | "replay_verified" | "compensated" | string;
+  preview_fingerprint?: string;
   requires_replay?: boolean;
+  recovery?: {
+    operation_id: string;
+    status: string;
+    replay_required: boolean;
+    required_replay_scope?: string;
+    replay_route?: string;
+    tracked_replay_fallback_url?: string;
+    compensation_endpoint?: string;
+    replay_evidence_endpoint?: string;
+    operator_rule?: string;
+  };
   warnings?: string[];
 };
 

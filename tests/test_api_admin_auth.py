@@ -4,9 +4,13 @@ require_api_dependency("fastapi")
 require_api_dependency("supabase")
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from services.api.main import app
+
+
+VALID_MATCH = {"t1_p1": 1, "t1_p2": 2, "t2_p1": 3, "t2_p2": 4, "score_t1": 11, "score_t2": 7}
 
 
 @pytest.fixture
@@ -16,13 +20,14 @@ def client():
 
 def _enable(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY", "true")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
 
 
 def _mock_common(monkeypatch):
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: object())
     monkeypatch.setattr(
         "services.api.main.load_data",
-        lambda _supabase, _club_id: (None, None, None, None, None, None, None, None, None, {}),
+        lambda _supabase, _club_id: (None, None, None, None, None, None, None, None, None, False, ""),
     )
 
 
@@ -41,7 +46,7 @@ def test_missing_bearer_token_returns_401(client, monkeypatch):
 
 def test_invalid_token_returns_401(client, monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_args, **_kwargs: (_ for _ in ()).throw(Exception("bad")))
+    monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_args, **_kwargs: (_ for _ in ()).throw(HTTPException(status_code=401, detail="invalid token")))
     response = client.post(
         "/admin/clubs/club-1/matches/batch",
         json={"matches": []},
@@ -70,9 +75,39 @@ def test_scorekeeper_for_requested_club_reaches_submit(client, monkeypatch):
         called["ok"] = True
         return _Result()
     monkeypatch.setattr("services.api.main.submit_match_batch", _submit)
-    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [{"a":1}]}, headers={"Authorization": "Bearer x"})
+    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [VALID_MATCH]}, headers={"Authorization": "Bearer x"})
     assert response.status_code == 200
     assert called["ok"] is True
+    assert response.json()["match_write_committed"] is True
+    assert response.json()["recovery"]["match_log_route"] == "/admin/match-log"
+
+
+def test_scorekeeper_cannot_send_multiple_matches_through_score_entry(client, monkeypatch):
+    _enable(monkeypatch)
+    _mock_common(monkeypatch)
+    monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_a, **_k: type("U", (), {"email": "keeper@club.com", "user_id": "u1"})())
+    monkeypatch.setattr("services.api.main.resolve_admin_role", lambda **_kwargs: type("R", (), {"role": "scorekeeper"})())
+
+    response = client.post("/admin/clubs/club-1/matches/batch", json={"matches": [VALID_MATCH, VALID_MATCH]}, headers={"Authorization": "Bearer x"})
+
+    assert response.status_code == 400
+    assert "exactly one" in response.json()["detail"]
+
+
+def test_scorekeeper_cannot_send_fractional_scores_through_score_entry(client, monkeypatch):
+    _enable(monkeypatch)
+    _mock_common(monkeypatch)
+    monkeypatch.setattr("services.api.main.authenticate_bearer", lambda *_a, **_k: type("U", (), {"email": "keeper@club.com", "user_id": "u1"})())
+    monkeypatch.setattr("services.api.main.resolve_admin_role", lambda **_kwargs: type("R", (), {"role": "scorekeeper"})())
+
+    response = client.post(
+        "/admin/clubs/club-1/matches/batch",
+        json={"matches": [{**VALID_MATCH, "score_t1": 10.5}]},
+        headers={"Authorization": "Bearer x"},
+    )
+
+    assert response.status_code == 400
+    assert "whole-number" in response.json()["detail"]
 
 
 def test_role_for_different_club_returns_403(client, monkeypatch):

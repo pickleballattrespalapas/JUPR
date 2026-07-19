@@ -276,7 +276,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       setMessage(`Submitted singles match; inserted ${payload.result?.inserted ?? 0} rated singles match.`);
       setSinglesRow((current) => ({ ...newSinglesRow(), date: current.date, league: current.league, weekTag: current.weekTag }));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to submit singles match.");
+      setMessage(`${error instanceof Error ? error.message : "Unable to submit singles match."} Outcome unknown: check Match Log before retrying.`);
     } finally {
       setSaving(false);
     }
@@ -341,9 +341,15 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     try {
       const payload = await postJson<AdminMatchUploaderWriteResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/batch`, { source, matches });
       setResult(payload);
-      setMessage(`Submitted ${payload.submitted_count ?? matches.length} row(s); inserted ${payload.result?.inserted ?? 0} rated match(es).`);
+      const handoff = payload.auto_player_updates;
+      const handoffSummary = handoff?.mode === "auto_sent"
+        ? ` Player-update email: ${handoff.sent ?? 0} sent, ${handoff.skipped ?? 0} skipped, ${handoff.errors ?? 0} error(s).`
+        : handoff?.mode
+          ? ` Player-update email: ${handoff.mode}${handoff.reason ? ` — ${handoff.reason}` : ""}.`
+          : "";
+      setMessage(`Submitted ${payload.submitted_count ?? matches.length} row(s); inserted ${payload.result?.inserted ?? 0} rated match(es).${handoffSummary}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to submit matches.");
+      setMessage(`${error instanceof Error ? error.message : "Unable to submit matches."} Outcome unknown: check Match Log before retrying.`);
     } finally {
       setSaving(false);
     }
@@ -563,11 +569,14 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
           <h2 style={{ marginTop: 0 }}>Submission result</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
             <div><strong>Inserted</strong><br />{result.result?.inserted ?? 0}</div>
+            <div><strong>Match write</strong><br />{result.match_write_committed ? "Committed" : "See response"}</div>
             <div><strong>Rating type</strong><br />{result.feedback?.rating_type || result.result?.match_format || "doubles/overall"}</div>
             <div><strong>Skipped incomplete</strong><br />{result.result?.skipped_incomplete ?? 0}</div>
             <div><strong>Skipped empty</strong><br />{result.result?.skipped_empty ?? 0}</div>
             <div><strong>Skipped unrated</strong><br />{result.result?.skipped_unrated ?? 0}</div>
           </div>
+          {result.auto_player_updates ? <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #cbd5e1", borderRadius: "12px", background: result.auto_player_updates.mode === "error" ? "#fef2f2" : "#f8fafc" }}><strong>Post-batch player-update email</strong><p style={{ marginBottom: 0 }}>Mode: {result.auto_player_updates.mode || "unknown"} · Attempted: {result.auto_player_updates.attempted ?? 0} · Sent: {result.auto_player_updates.sent ?? 0} · Skipped: {result.auto_player_updates.skipped ?? 0} · Errors: {result.auto_player_updates.errors ?? 0}{result.auto_player_updates.email_mode ? ` · Delivery: ${result.auto_player_updates.email_mode}` : ""}</p>{result.auto_player_updates.reason ? <p style={{ color: "#92400e", marginBottom: 0 }}>{result.auto_player_updates.reason}</p> : null}</div> : null}
+          {result.recovery ? <p style={{ color: "#475569" }}>{result.recovery.operator_rule} {result.recovery.match_log_route ? <Link href={result.recovery.match_log_route}>Open Match Log</Link> : null}{result.recovery.player_updates_route ? <> · <Link href={result.recovery.player_updates_route}>Open Player Updates</Link></> : null}</p> : null}
           {result.feedback?.affected_players?.length ? (
             <div style={{ overflowX: "auto", marginTop: "1rem" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
