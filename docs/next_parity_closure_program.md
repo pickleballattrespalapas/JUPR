@@ -62,6 +62,8 @@ the final evidence PR does that only after the consolidated manual session.
 
 Order 21 is automated-ready: durable submit/reconcile/compensation, rating readback, guest and export contracts are implemented behind a separate staging-only gate. The `league_manager` matrix row intentionally remains `Partial` until the consolidated staging book is executed.
 
+Order 24 is automated-ready and manual-ready: Challenge Ladder, Moneyball, and one-off JUPR Live use Python/FastAPI authority, separate staging-only write gates, version leases, durable idempotent result recovery, strict audit evidence, and Match Log/Replay handoffs. The three matrix rows intentionally remain `Partial` until `docs/live_ladder_parity_runbook.md` is executed and signed off.
+
 ## Page-level closure contracts
 
 The automated column defines evidence that can be built before the final manual test

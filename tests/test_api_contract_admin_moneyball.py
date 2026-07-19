@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from jupr_app.services.admin_moneyball_service import build_moneyball_preview, compute_moneyball_settlement
+from copy import deepcopy
+
+from jupr_app.services.admin_moneyball_service import (
+    build_moneyball_preview,
+    build_moneyball_settlement_preview,
+    compute_moneyball_settlement,
+)
 
 
 class FakeQuery:
@@ -71,3 +77,39 @@ def test_moneyball_settlement_balances_net(monkeypatch):
     settlement = compute_moneyball_settlement(matches=preview["matches"], scores=scores, win_rate=5, point_rate=2)
     assert settlement["standings"]
     assert round(sum(float(row["net"]) for row in settlement["standings"]), 2) == 0.0
+
+
+def test_moneyball_settlement_preview_is_read_only_named_and_fingerprinted(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MONEYBALL", "1")
+    supabase = FakeSupabase()
+    preview = build_moneyball_preview(supabase, club_id="club", player_ids=list(range(1, 9)))
+    scores = [{"row_id": preview["matches"][0]["row_id"], "score_t1": 11, "score_t2": 7}]
+    before = deepcopy(supabase.storage)
+
+    result = build_moneyball_settlement_preview(
+        supabase,
+        club_id="club",
+        player_ids=list(range(1, 9)),
+        scores=scores,
+        win_rate=5,
+        point_rate=2,
+    )
+
+    assert result["authority"] == "python_fastapi"
+    assert len(result["settlement_fingerprint"]) == 64
+    assert result["would_publish_count"] == 1
+    assert {row["settlement_direction"] for row in result["settlement"]["standings"]} <= {"owes", "receives", "even"}
+    assert all(row["player_name"].startswith("Player ") for row in result["settlement"]["standings"])
+    assert supabase.storage == before
+
+
+def test_moneyball_settlement_does_not_count_unknown_score_rows(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MONEYBALL", "1")
+    result = build_moneyball_settlement_preview(
+        FakeSupabase(),
+        club_id="club",
+        player_ids=list(range(1, 9)),
+        scores=[{"row_id": "not-in-python-schedule", "score_t1": 11, "score_t2": 7}],
+    )
+
+    assert result["would_publish_count"] == 0

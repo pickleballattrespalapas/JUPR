@@ -23,6 +23,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
 
 export default async function JuprLiveAdminPage() {
   const clubId = "tres_palapas";
+  const clubSlug = "tres-palapas";
   const { data: status, error } = await loadStatus(clubId);
   return (
     <section>
@@ -30,7 +31,7 @@ export default async function JuprLiveAdminPage() {
       <h1 style={{ marginTop: 0 }}>JUPR Live Admin</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>Create and manage durable JUPR Live sessions. This is the one-off event surface; Tournament Live remains the tournament-specific draw runner.</p>
       {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>JUPR Live Admin status unavailable. {error}</article> : null}
-      <JuprLiveAdminPanel apiBase={apiBase()} clubId={clubId} status={status} />
+      <JuprLiveAdminPanel apiBase={apiBase()} clubId={clubId} clubSlug={clubSlug} status={status} />
       <p style={{ marginTop: "1rem" }}><Link href="/clubs/tres-palapas/live">Public JUPR Live</Link> · <Link href="/admin/match-uploader">Match Uploader</Link> · <Link href="/admin">Operations cockpit</Link></p>
     </section>
   );

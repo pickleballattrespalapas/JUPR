@@ -94,6 +94,11 @@ Individual workflow flags are intentionally separate:
 - `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1`
 - `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1` enables only the persisted League Awards mutations and additionally requires `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. Mint still fails closed until all four top-performer badge definitions from `migrations/20260215_end_league_top_performers.sql` are readable. Keep it off in production until the manual staging gate passes.
 - `JUPR_ENABLE_NEXT_ADMIN_CHALLENGE_LADDER=1`
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES=1` permits Challenge Ladder mutations only when `JUPR_ENV=staging`.
+- `JUPR_ENABLE_NEXT_ADMIN_MONEYBALL=1` enables the Python-authoritative Moneyball preview/settlement surface.
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_MONEYBALL_WRITES=1` permits Moneyball official publish only when `JUPR_ENV=staging`.
+- `JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE=1` enables one-off JUPR Live administration; Tournament Live remains separate.
+- `JUPR_ENABLE_STAGING_NEXT_ADMIN_JUPR_LIVE_WRITES=1` permits one-off session mutations only when `JUPR_ENV=staging`.
 - `JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS=1`
 - `JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP=1`
 - `JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES=1`
@@ -155,6 +160,8 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /admin/clubs/{club_id}/league-manager/top-players-printable?limit=...` authenticated, read-only previous-calendar-month ranking model
 
 League Manager create, duplicate, lifecycle, settings, and roster mutations fail closed unless FastAPI has `SUPABASE_SERVICE_ROLE_KEY`; the anonymous/publishable key is never accepted as their mutation credential.
+
+Challenge Ladder, Moneyball, and JUPR Live mutations additionally require the private `live_ladder_admin_operations` migration, a stable idempotency key, the current Python version/fingerprint, strict intent/completion/failure audit writes, and the surface-specific staging write flag. Operation status/reconcile routes live below each surface at `/operations/{operation_key}`. See `docs/live_ladder_parity_runbook.md` for exact phrases, response-loss handling, Match Log/Replay recovery, and disposable staging evidence.
 - `GET /admin/clubs/{club_id}/weekly-recap/recaps` and guarded generate/save/publish routes
 - `GET /admin/clubs/{club_id}/player-updates/workspace`
 - `POST /admin/clubs/{club_id}/player-updates/digests/preview` and `/digests/queue`

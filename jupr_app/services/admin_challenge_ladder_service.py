@@ -22,6 +22,11 @@ from jupr_app.domain.challenge_ladder import (
 )
 from jupr_app.domain.tier_movement import compute_out_of_tier_streak
 from jupr_app.services.context import ServiceContext
+from jupr_app.services.admin_live_ladder_operation_service import (
+    deterministic_match_context_id,
+    is_staging_write_gate_enabled,
+    stable_request_fingerprint,
+)
 from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_challenge_ladder_service import build_public_challenge_ladder
 
@@ -39,6 +44,7 @@ CONFIRM_ROSTER_ADD = "ADD LADDER PLAYER"
 CONFIRM_ROSTER_MOVE = "MOVE LADDER PLAYER"
 CONFIRM_ROSTER_REPLACE = "REPLACE LADDER TIER"
 CONFIRM_OVERRIDES = "SAVE LADDER OVERRIDES"
+CHALLENGE_LADDER_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_CHALLENGE_LADDER_WRITES"
 
 
 def is_admin_challenge_ladder_enabled() -> bool:
@@ -112,6 +118,7 @@ def _challenge_row(row: dict[str, Any], names: dict[int, str]) -> dict[str, Any]
         "winner_id": winner,
         "winner_name": names.get(int(winner), f"Player {winner}") if winner is not None else None,
         "resolution_notes": row.get("resolution_notes") or row.get("admin_note"),
+        "version": str(row.get("updated_at") or row.get("created_at") or ""),
     }
 
 
@@ -241,11 +248,16 @@ def build_admin_challenge_ladder_status(supabase: Any | None, *, club_id: str) -
             summary = build_public_challenge_ladder(supabase, club_id=str(club_id)).get("summary", summary)
         except Exception:
             pass
+    writes_enabled = is_staging_write_gate_enabled(CHALLENGE_LADDER_WRITE_FLAG)
     return {
         "enabled": True,
-        "status": "ready_for_challenge_ladder_admin",
+        "authority": "python_fastapi",
+        "writes_enabled": writes_enabled,
+        "status": "ready_for_challenge_ladder_admin" if writes_enabled else "read_only_streamlit_fallback",
         "summary": summary,
-        "warnings": [],
+        "warnings": [] if writes_enabled else [
+            f"Next Challenge Ladder writes require JUPR_ENV=staging and {CHALLENGE_LADDER_WRITE_FLAG}=1 on FastAPI. Use Streamlit Challenge Ladder Admin otherwise."
+        ],
         "confirmation_text": {
             "create": CONFIRM_CREATE,
             "update": CONFIRM,
@@ -259,6 +271,8 @@ def build_admin_challenge_ladder_status(supabase: Any | None, *, club_id: str) -
             "roster_replace": CONFIRM_ROSTER_REPLACE,
             "overrides": CONFIRM_OVERRIDES,
         },
+        "streamlit_fallback": "challenge_ladder_admin",
+        "recovery": {"match_log_url": "/admin/match-log", "replay_history_url": "/admin/replay-history"},
     }
 
 
@@ -301,7 +315,7 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         (_admin_player_flag_row(row, names) for row in flag_rows),
         key=lambda row: (str(row.get("player_name") or "").casefold(), int(row.get("player_id") or 0)),
     )
-    return {
+    payload = {
         "ok": True,
         "mode": "challenge_ladder_admin_dashboard",
         **public_payload,
@@ -312,6 +326,17 @@ def get_admin_challenge_ladder_dashboard(supabase: Any, *, club_id: str) -> dict
         "roster_rows": roster_rows,
         "player_flags": player_flags,
     }
+    payload["state_version"] = stable_request_fingerprint(
+        {
+            "club_id": str(club_id),
+            "settings": payload.get("settings_row") or {},
+            "challenges": challenges,
+            "roster_rows": roster_rows,
+            "player_flags": player_flags,
+        }
+    )
+    payload["authority"] = "python_fastapi"
+    return payload
 
 
 def get_admin_challenge_ladder_tier_movement_review(supabase: Any, *, club_id: str) -> dict[str, Any]:
@@ -370,7 +395,7 @@ def get_admin_challenge_ladder_tier_movement_review(supabase: Any, *, club_id: s
             str(row.get("player_name") or "").casefold(),
         )
     )
-    return {
+    payload = {
         "ok": True,
         "mode": "challenge_ladder_tier_movement_review",
         "summary": {
@@ -381,6 +406,7 @@ def get_admin_challenge_ladder_tier_movement_review(supabase: Any, *, club_id: s
         },
         "triggers": triggers,
     }
+    return payload
 
 
 def _write_ladder_audit(
@@ -502,13 +528,14 @@ def create_admin_challenge_ladder_challenge(
         admin_contact=_clean(os.getenv("LADDER_ADMIN_CONTACT", ""), limit=240),
         ledger_ref=_clean(ledger_ref, limit=500) or None,
     )
-    return {
+    payload = {
         "ok": True,
         "mode": "challenge_ladder_create",
         "challenge": _challenge_row(created, names),
         "notice": notice,
         "warnings": [warning] if warning else [],
     }
+    return payload
 
 
 def start_admin_challenge_ladder_clock(supabase: Any, *, club_id: str, challenge_id: int, actor_email: str, actor_role: str, confirmation_text: str, source: str = "next_challenge_ladder_admin_clock") -> dict[str, Any]:
@@ -1471,7 +1498,7 @@ def preview_admin_challenge_ladder_result_for_challenge(
         winner_override=winner_override,
     )
     final_winner_id = int(preview["final_winner_id"])
-    return {
+    payload = {
         "ok": True,
         "mode": "challenge_ladder_result_preview",
         "challenge": _challenge_row(challenge, names),
@@ -1484,6 +1511,20 @@ def preview_admin_challenge_ladder_result_for_challenge(
             "reason": "challenger win" if final_winner_id == int(challenge["challenger_id"]) else "defender held",
         },
     }
+    payload["preview_fingerprint"] = stable_request_fingerprint(
+        {
+            "club_id": str(club_id),
+            "challenge_version": payload["challenge"].get("version"),
+            "challenge_id": int(challenge_id),
+            "preview": preview,
+            "partner_names": payload["partner_names"],
+            "match_date": payload["match_date"],
+            "would_publish_official_matches": payload["would_publish_official_matches"],
+            "rank_result": payload["rank_result"],
+        }
+    )
+    payload["authority"] = "python_fastapi"
+    return payload
 
 
 def _load_match_context(supabase: Any, club_id: str) -> tuple[Any, Any, Any, Any]:
@@ -1491,15 +1532,23 @@ def _load_match_context(supabase: Any, club_id: str) -> tuple[Any, Any, Any, Any
     return df_players_all, df_leagues, df_meta, name_to_id
 
 
-def _official_payloads(*, challenge: dict[str, Any], preview: dict[str, Any], partners: dict[str, int], match_date: str) -> list[dict[str, Any]]:
+def _official_payloads(
+    *,
+    challenge: dict[str, Any],
+    preview: dict[str, Any],
+    partners: dict[str, int],
+    match_date: str,
+    publish_context_prefix: str | None = None,
+) -> list[dict[str, Any]]:
     chal = int(challenge["challenger_id"])
     defender = int(challenge["defender_id"])
     score_a = preview["scores"]["match_a"]
     score_b = preview["scores"]["match_b"]
-    base = {"date": match_date, "league": "OVERALL", "match_type": "ChallengeLadder", "is_popup": False, "context_type": "challenge_ladder", "context_id": int(challenge["id"])}
+    base = {"date": match_date, "league": "OVERALL", "match_type": "ChallengeLadder", "is_popup": False, "context_type": "challenge_ladder"}
+    context_prefix = _clean(publish_context_prefix, limit=80)
     return [
-        {**base, "t1_p1": chal, "t1_p2": int(partners["a_chal"]), "t2_p1": defender, "t2_p2": int(partners["a_def"]), "s1": int(score_a["score_t1"]), "s2": int(score_a["score_t2"])},
-        {**base, "t1_p1": chal, "t1_p2": int(partners["b_chal"]), "t2_p1": defender, "t2_p2": int(partners["b_def"]), "s1": int(score_b["score_t1"]), "s2": int(score_b["score_t2"])},
+        {**base, "context_id": deterministic_match_context_id(operation_key=context_prefix, slot="a") if context_prefix else int(challenge["id"]), "t1_p1": chal, "t1_p2": int(partners["a_chal"]), "t2_p1": defender, "t2_p2": int(partners["a_def"]), "s1": int(score_a["score_t1"]), "s2": int(score_a["score_t2"])},
+        {**base, "context_id": deterministic_match_context_id(operation_key=context_prefix, slot="b") if context_prefix else int(challenge["id"]), "t1_p1": chal, "t1_p2": int(partners["b_chal"]), "t2_p1": defender, "t2_p2": int(partners["b_def"]), "s1": int(score_b["score_t1"]), "s2": int(score_b["score_t2"])},
     ]
 
 
@@ -1541,6 +1590,8 @@ def record_admin_challenge_ladder_result(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    expected_preview_fingerprint: str | None = None,
+    publish_context_prefix: str | None = None,
     source: str = "next_challenge_ladder_result",
 ) -> dict[str, Any]:
     if not is_admin_challenge_ladder_enabled():
@@ -1559,10 +1610,33 @@ def record_admin_challenge_ladder_result(
         match_b_games=match_b_games,
         winner_override=winner_override,
     )
+    if expected_preview_fingerprint:
+        current_preview = preview_admin_challenge_ladder_result_for_challenge(
+            supabase,
+            club_id=str(club_id),
+            challenge_id=int(challenge_id),
+            partner_a_challenger_id=partner_a_challenger_id,
+            partner_a_defender_id=partner_a_defender_id,
+            partner_b_challenger_id=partner_b_challenger_id,
+            partner_b_defender_id=partner_b_defender_id,
+            match_a_games=match_a_games,
+            match_b_games=match_b_games,
+            match_date=match_date,
+            winner_override=winner_override,
+            publish_official_matches=publish_official_matches,
+        )
+        if str(expected_preview_fingerprint) != str(current_preview.get("preview_fingerprint") or ""):
+            raise ValueError("Ladder result preview is stale. Review the Python result again before official publish.")
     official_result: dict[str, Any] = {"inserted": 0, "skipped": True}
     payloads: list[dict[str, Any]] = []
     if publish_official_matches:
-        payloads = _official_payloads(challenge=challenge, preview=preview, partners=partners, match_date=match_date or _now_iso())
+        payloads = _official_payloads(
+            challenge=challenge,
+            preview=preview,
+            partners=partners,
+            match_date=match_date or _now_iso(),
+            publish_context_prefix=publish_context_prefix,
+        )
         df_players_all, df_leagues, df_meta, name_to_id = _load_match_context(supabase, str(club_id))
         service_ctx = ServiceContext(supabase=supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, source="challenge_ladder_admin")
         result = submit_match_batch(service_ctx, payloads, name_to_id=name_to_id, df_players_all=df_players_all, df_leagues=df_leagues, df_meta=df_meta)
@@ -1577,7 +1651,22 @@ def record_admin_challenge_ladder_result(
         rank_result = _swap_ranks(supabase, club_id=str(club_id), challenger_id=int(challenge["challenger_id"]), defender_id=int(challenge["defender_id"]))
     names = _player_names(supabase, club_id=str(club_id))
     warning = _write_ladder_audit(supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role, action_type="challenge_result_publish", entity_id=str(challenge_id), before=challenge, after={"challenge": updated, "preview": preview, "official_matches": official_result, "rank_result": rank_result, "payloads": payloads}, source=source)
-    return {"ok": True, "mode": "challenge_ladder_result", "challenge": _challenge_row(updated, names), "preview": preview, "official_matches": official_result, "rank_result": rank_result, "warnings": [warning] if warning else []}
+    contexts = [str(payload.get("context_id") or "") for payload in payloads]
+    return {
+        "ok": True,
+        "mode": "challenge_ladder_result",
+        "challenge": _challenge_row(updated, names),
+        "preview": preview,
+        "official_matches": official_result,
+        "match_context_ids": contexts,
+        "rank_result": rank_result,
+        "correction": {
+            "match_log_url": f"/admin/match-log?context_type=challenge_ladder&context_id={contexts[0] if contexts else challenge_id}",
+            "replay_history_url": f"/admin/replay-history?context_type=challenge_ladder&context_id={contexts[0] if contexts else challenge_id}",
+            "instructions": "Correct official ladder matches in Match Log, then run and verify Replay History before changing ladder state again.",
+        },
+        "warnings": [warning] if warning else [],
+    }
 
 
 def record_admin_challenge_ladder_forfeit(
