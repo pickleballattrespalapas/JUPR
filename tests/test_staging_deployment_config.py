@@ -219,30 +219,33 @@ def test_staging_smoke_does_not_print_raw_invalid_input_or_bypass_secret(tmp_pat
 def test_browser_smoke_bootstraps_an_origin_scoped_cookie_without_routing():
     config = (ROOT / "apps/web/playwright.config.ts").read_text(encoding="utf-8")
     spec = (ROOT / "apps/web/e2e/staging.smoke.spec.ts").read_text(encoding="utf-8")
+    helper = (ROOT / "apps/web/e2e/support/staging.ts").read_text(encoding="utf-8")
 
     assert "extraHTTPHeaders" not in config
     assert 'trace: protectedVercelRun ? "off" : "retain-on-failure"' in config
-    assert '"https://jupr-git-staging-pickleballattrespalapas1.vercel.app"' in spec
-    assert "remoteBaseUrl !== expectedStagingWebOrigin" in spec
-    assert spec.count("context.request.get(bootstrapUrl") == 2
-    assert "`${vercelBypassOrigin}/api/environment`" in spec
-    assert spec.count('"x-vercel-protection-bypass": bypassSecret') == 1
-    assert spec.count('"x-vercel-set-bypass-cookie": "true"') == 1
-    assert spec.count("maxRedirects: 0") == 2
-    assert spec.count("failOnStatusCode: false") == 2
-    assert "headersArray().some" in spec
-    assert 'name.toLowerCase() === "set-cookie"' in spec
-    assert 'verification.status(), "Vercel bypass cookie was not accepted"' in spec
-    assert 'verification.headers()["content-type"]' in spec
-    assert "await bootstrap.dispose()" in spec
-    assert "await verification.dispose()" in spec
-    assert "context.route" not in spec
-    assert "route.fetch" not in spec
-    assert "route.fulfill" not in spec
-    assert "route.continue" not in spec
-    assert "fetched.body" not in spec
-    assert "?x-vercel-protection-bypass" not in spec
-    assert "storageState" not in spec
+    assert '"https://jupr-git-staging-pickleballattrespalapas1.vercel.app"' in helper
+    assert "remoteBaseUrl !== expectedStagingWebOrigin" in helper
+    assert helper.count("context.request.get(bootstrapUrl") == 2
+    assert "`${vercelBypassOrigin}/api/environment`" in helper
+    assert helper.count('"x-vercel-protection-bypass": bypassSecret') == 1
+    assert helper.count('"x-vercel-set-bypass-cookie": "true"') == 1
+    assert helper.count("maxRedirects: 0") == 2
+    assert helper.count("failOnStatusCode: false") == 2
+    assert "headersArray().some" in helper
+    assert 'name.toLowerCase() === "set-cookie"' in helper
+    assert 'verification.status(), "Vercel bypass cookie was not accepted"' in helper
+    assert 'verification.headers()["content-type"]' in helper
+    assert "await bootstrap.dispose()" in helper
+    assert "await verification.dispose()" in helper
+    assert "bootstrapStagingContext(context)" in spec
+    combined = spec + helper
+    assert "context.route" not in combined
+    assert "route.fetch" not in combined
+    assert "route.fulfill" not in combined
+    assert "route.continue" not in combined
+    assert "fetched.body" not in combined
+    assert "?x-vercel-protection-bypass" not in combined
+    assert "storageState" not in combined
 
 
 def test_schema_copy_workflow_has_explicit_apply_confirmation():

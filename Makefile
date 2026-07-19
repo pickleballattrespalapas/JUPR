@@ -1,4 +1,4 @@
-.PHONY: db-migrate check-migration-sources check-next-parity-matrix api-test public-web-smoke next-staging-browser-smoke admin-pilot-smoke
+.PHONY: db-migrate check-migration-sources check-next-parity-matrix check-parity-closure-program api-test public-web-smoke next-staging-browser-smoke admin-pilot-smoke
 
 db-migrate: ## Apply pending SQL migrations (requires DATABASE_URL)
 	@bash scripts/db_migrate.sh
@@ -8,6 +8,9 @@ check-migration-sources: ## Guard: block undocumented new root migrations
 
 check-next-parity-matrix: ## Guard: every Streamlit page is represented in the Next parity matrix
 	@python scripts/check_next_parity_matrix.py
+
+check-parity-closure-program: ## Guard: every Partial page has exactly one parity closure contract
+	@python scripts/check_parity_closure_program.py
 
 
 api-test: ## Run API contract tests
