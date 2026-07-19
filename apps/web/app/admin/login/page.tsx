@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import AdminLoginForm from "./AdminLoginForm";
 
 export default function AdminLoginPage() {
@@ -11,7 +12,9 @@ export default function AdminLoginPage() {
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Sign in with Supabase Auth to use Next admin pilot workflows. Write features still remain workflow-flagged, club-scoped, FastAPI-mediated, and backed by Streamlit fallback until each pilot is proven.
       </p>
-      <AdminLoginForm />
+      <Suspense fallback={<p>Checking admin session…</p>}>
+        <AdminLoginForm />
+      </Suspense>
       <p style={{ marginTop: "1rem" }}>
         <Link href="/admin">Back to operations cockpit</Link>
       </p>

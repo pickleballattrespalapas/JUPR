@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getAdminAuthConfig, loadAdminSession, refreshAdminSession, signOutAdminSession } from "@/lib/adminAuthClient";
+import { getAdminAuthConfig, restoreAuthorizedAdminSession, signOutAdminSession } from "@/lib/adminAuthClient";
 import type { AdminSession } from "@/lib/adminAuthClient";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -18,13 +18,15 @@ export default function AdminSessionCard() {
 
   useEffect(() => {
     const load = () => {
-      const current = loadAdminSession();
-      setSession(current);
-      refreshAdminSession(current || undefined)
-        .then((refreshed) => {
-          if (refreshed) setSession(refreshed);
+      restoreAuthorizedAdminSession()
+        .then((authorized) => {
+          setSession(authorized);
+          setMessage(null);
         })
-        .catch((error) => setMessage(error instanceof Error ? error.message : "Unable to refresh admin session."));
+        .catch((error) => {
+          setSession(null);
+          setMessage(error instanceof Error ? error.message : "Unable to verify admin session.");
+        });
     };
     load();
     window.addEventListener("jupr-admin-session-change", load);
@@ -47,10 +49,10 @@ export default function AdminSessionCard() {
 
   return (
     <article style={{ ...cardStyle, marginBottom: "1rem", background: session ? "#f0fdf4" : "#f8fafc", borderColor: session ? "#bbf7d0" : "#e2e8f0" }}>
-      <strong>{session ? `Signed in as ${emailLabel(session)}` : "Admin session not signed in"}</strong>
+      <strong>{session ? `Authorized as ${emailLabel(session)}` : "Admin session not signed in"}</strong>
       <p style={{ color: "#475569" }}>
         {session
-          ? "Pilot admin pages can use this browser session token for FastAPI authorization. Feature flags still control every write workflow."
+          ? `FastAPI verified this session for ${session.capabilities?.assignments.map((item) => `${item.club_id} (${item.role})`).join(", ") || "an assigned club"}. Feature flags still control every write workflow.`
           : "Sign in before using guarded admin pilot workflows. Read-only status pages remain visible."}
       </p>
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>

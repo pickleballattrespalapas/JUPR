@@ -184,3 +184,5 @@ npm run test:e2e:staging
 The score-entry page at `/clubs/[clubSlug]/admin/score-entry` is an MVP surface only. Rated admin writes remain blocked unless the backend feature flag is explicitly enabled and Supabase JWT role authorization succeeds.
 
 Closed-club production-write pilot work may enable one workflow at a time through FastAPI-side flags. Keep the permanent safety boundaries from `docs/next_admin_operations_migration.md` in place: no browser secrets, no direct browser writes to rating tables, and no JavaScript rating logic.
+
+Admin login also requires `NEXT_PUBLIC_JUPR_API_BASE_URL` so the browser can exchange a Supabase user JWT for the caller's server-verified JUPR club capabilities. Optional `NEXT_PUBLIC_JUPR_ADMIN_CLUB_ID` selects the requested workspace and defaults to `tres_palapas`. Supabase Auth recovery redirects must allow the exact `/admin/reset-password` URL for each deployed origin; recovery requests use PKCE and the Next page retains legacy implicit recovery links only as a fallback.
