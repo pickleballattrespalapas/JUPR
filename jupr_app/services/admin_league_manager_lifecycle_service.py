@@ -9,6 +9,7 @@ from jupr_app.domain.leagues import normalize_league_status
 from jupr_app.services.admin_league_manager_service import (
     get_admin_league_manager_detail,
     is_admin_league_manager_enabled,
+    validate_admin_league_manager_lifecycle_state,
 )
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
@@ -96,6 +97,7 @@ def _rollback_transition(
     before: dict[str, Any],
     changed_fields: set[str],
     expected_status: str,
+    expected_updated_at: str,
 ) -> None:
     """Best-effort compensation when staging requires an audit row."""
 
@@ -107,6 +109,8 @@ def _rollback_transition(
             .eq("club_id", str(club_id))
             .eq("league_name", str(league_name))
             .eq("status", str(expected_status))
+            .eq("is_active", bool(expected_status == "active"))
+            .eq("updated_at", str(expected_updated_at))
             .execute()
         )
     except Exception:
@@ -141,7 +145,7 @@ def transition_admin_league_manager_lifecycle(
     if before is None:
         raise ValueError("league not found")
 
-    previous_status = normalize_league_status(before)
+    previous_status = validate_admin_league_manager_lifecycle_state(before)
     allowed_from = ALLOWED_TRANSITIONS[clean_action]
     if previous_status not in allowed_from:
         allowed_label = " or ".join(sorted(allowed_from))
@@ -164,6 +168,7 @@ def transition_admin_league_manager_lifecycle(
     raw_previous_status = before.get("status")
     if raw_previous_status not in (None, ""):
         update_query = update_query.eq("status", str(raw_previous_status))
+    update_query = update_query.eq("is_active", bool(before.get("is_active", False)))
     updated = _safe_rows(update_query.execute())
     if not updated:
         raise ValueError("League status changed before this action completed; reload and try again.")
@@ -201,6 +206,7 @@ def transition_admin_league_manager_lifecycle(
                 before=before,
                 changed_fields=set(patch),
                 expected_status=str(patch["status"]),
+                expected_updated_at=str(patch["updated_at"]),
             )
         raise
     warnings: list[str] = []
@@ -214,6 +220,7 @@ def transition_admin_league_manager_lifecycle(
             before=before,
             changed_fields=set(patch),
             expected_status=str(patch["status"]),
+            expected_updated_at=str(patch["updated_at"]),
         )
         raise RuntimeError("audit log write required but unavailable")
 

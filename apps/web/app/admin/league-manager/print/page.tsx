@@ -10,12 +10,13 @@ export default async function LeagueManagerPrintPage() {
 
   return (
     <section>
+      <style>{`@media print { nav, header, footer, .no-print { display: none !important; } @page { margin: 10mm; } }`}</style>
       <p className="no-print" style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         League Manager Printout
       </p>
       <h1 className="no-print" style={{ marginTop: 0 }}>League night printout</h1>
       <p className="no-print" style={{ color: "#334155", maxWidth: "860px" }}>
-        Browser-printable League Manager roster, schedule, and standings sheet. This is export-only and does not mutate league, match, or rating data.
+        Browser-printable schedule, weekly rating/win leaders, configured season Top Performers, standings, and attendance roster. FastAPI computes the leader model; this export never mutates league, match, award, or rating data.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {error}</p> : null}

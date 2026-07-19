@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import HTTPException, Query
@@ -19,6 +20,10 @@ from jupr_app.services.admin_league_live_service import (
 from jupr_app.services.admin_league_manager_create_service import (
     create_admin_league_manager_draft,
     duplicate_admin_league_manager_draft,
+)
+from jupr_app.services.admin_league_print_service import (
+    build_admin_league_printout,
+    build_admin_top_players_printable,
 )
 from jupr_app.services.admin_league_manager_lifecycle_service import transition_admin_league_manager_lifecycle
 from jupr_app.services.admin_league_manager_roster_service import update_admin_league_manager_roster_membership
@@ -166,6 +171,14 @@ def _handle_common(exc: Exception) -> None:
     if isinstance(exc, RuntimeError):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     raise exc
+
+
+def _require_league_manager_service_role() -> None:
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="League Manager mutations require SUPABASE_SERVICE_ROLE_KEY on FastAPI.",
+        )
 
 
 def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
@@ -325,6 +338,30 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle_common(exc)
 
+    @app.get("/admin/clubs/{club_id}/league-manager/top-players-printable")
+    def get_admin_top_players_printable(
+        club_id: str,
+        limit: int = Query(default=50, ge=1, le=200),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_top_players_printable",
+        )
+        try:
+            return build_admin_top_players_printable(
+                supabase,
+                club_id=str(club_id),
+                limit=int(limit),
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
     @app.post("/admin/clubs/{club_id}/league-manager/leagues")
     def post_admin_league_manager_league(
         club_id: str,
@@ -340,6 +377,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             authorization=authorization,
             source=payload.source,
         )
+        _require_league_manager_service_role()
         try:
             return create_admin_league_manager_draft(
                 supabase,
@@ -372,6 +410,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             authorization=authorization,
             source=payload.source,
         )
+        _require_league_manager_service_role()
         try:
             return duplicate_admin_league_manager_draft(
                 supabase,
@@ -402,6 +441,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             authorization=authorization,
             source=payload.source,
         )
+        _require_league_manager_service_role()
         try:
             return transition_admin_league_manager_lifecycle(
                 supabase,
@@ -457,6 +497,32 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         try:
             schedule_config = normalize_admin_league_schedule_config(payload.schedule_config)
             return build_admin_league_schedule_preview(schedule_config, league_name=str(league_name))
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/printout")
+    def get_admin_league_manager_printout(
+        club_id: str,
+        league_name: str,
+        week_num: int | None = Query(default=None, ge=1, le=1000),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_manager_printout",
+        )
+        try:
+            return build_admin_league_printout(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                week_num=week_num,
+            )
         except Exception as exc:
             _handle_common(exc)
 
@@ -516,6 +582,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             authorization=authorization,
             source=payload.source,
         )
+        _require_league_manager_service_role()
         patch = _dump_model(payload)
         source = str(patch.pop("source", payload.source))
         confirmation_text = str(patch.pop("confirmation_text", payload.confirmation_text))
@@ -550,6 +617,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             authorization=authorization,
             source=payload.source,
         )
+        _require_league_manager_service_role()
         try:
             return update_admin_league_manager_roster_membership(
                 supabase,

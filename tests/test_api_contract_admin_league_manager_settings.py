@@ -48,6 +48,7 @@ def _install_env(monkeypatch, supabase):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
     monkeypatch.setattr(
         "services.api.admin_league_manager_routes.authenticate_bearer",
@@ -273,6 +274,23 @@ def test_admin_league_manager_settings_allows_description_only_while_running(mon
     assert response.json()["league"]["description"] == f"Safe {status} description"
     assert tables["leagues_metadata"][0]["k_factor"] == 32
     assert tables["admin_activity_log"][0]["after_json"]["edit_policy_status"] == status
+
+
+def test_admin_league_manager_settings_rejects_inconsistent_lifecycle_state(monkeypatch):
+    tables = league_manager_tables()
+    tables["leagues_metadata"][0].update({"status": "active", "is_active": False})
+    _install_env(monkeypatch, FakeSupabase(tables))
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/league-manager/leagues/Tuesday%20Ladder",
+        headers={"Authorization": "Bearer local"},
+        json={"description": "Should not save", "confirmation_text": "SAVE LEAGUE"},
+    )
+
+    assert response.status_code == 400
+    assert "lifecycle state is inconsistent" in response.json()["detail"]
+    assert "description" not in tables["leagues_metadata"][0]
+    assert tables["admin_activity_log"] == []
 
 
 @pytest.mark.parametrize("status", ["active", "paused"])

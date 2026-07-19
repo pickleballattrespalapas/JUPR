@@ -41,6 +41,8 @@ const adminSurfaces: Surface[] = [
   { name: "verified updates", path: "/admin/player-updates/verified-requests", expected: /verified update/i },
   { name: "support requests", path: "/admin/support-requests", expected: /request queue/i },
   { name: "league manager", path: "/admin/league-manager", expected: /league manager/i },
+  { name: "league printout", path: "/admin/league-manager/print", expected: /league night printout/i },
+  { name: "top players printable", path: "/admin/top-players-printable", expected: /top active players/i },
   { name: "league live", path: "/admin/league-manager/live", expected: /league live/i },
   { name: "tournament setup", path: "/admin/tournament-setup", expected: /tournament setup/i },
   { name: "tournament admin", path: "/admin/tournaments", expected: /tournament registration management/i },

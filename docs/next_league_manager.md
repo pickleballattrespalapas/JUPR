@@ -11,6 +11,8 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - FastAPI lifecycle endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues/{league_name}/lifecycle`.
 - FastAPI league detail endpoint: `GET /admin/clubs/{club_id}/league-manager/leagues/{league_name}`.
 - FastAPI unsaved schedule preview endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues/{league_name}/schedule/preview`.
+- FastAPI read-only league print model: `GET /admin/clubs/{club_id}/league-manager/leagues/{league_name}/printout?week_num=...`.
+- FastAPI read-only previous-month ranking model: `GET /admin/clubs/{club_id}/league-manager/top-players-printable?limit=...`.
 - Next route: `/admin/league-manager`.
 - League status, K-factor, min-games, schedule preview, court-board/rules/awards configuration visibility, and standings snapshot.
 - Guarded draft creation and configuration-only duplication. Duplication never copies roster membership, standings, results, lifecycle dates, or issued awards.
@@ -20,6 +22,9 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - Server-normalized settings with bounded JSON shape/size, strict dates, times, numeric ranges, timezone characters, court constraints, and award-depth validation.
 - Authenticated, read-only schedule preview and ICS generation for unsaved form values. Preview requests do not update league metadata or write an activity-log row.
 - Authenticated league detail includes a calendar-safe ICS export that matches the schedule preview and omits blackout dates.
+- Authenticated league detail includes server-derived capabilities and validation errors/warnings. The browser consumes the allowed lifecycle actions and roster lock instead of inventing them.
+- League print output combines schedule, roster, standings, weekly rating-gain and win leaders, and configured season Top Performers. Stored rating snapshots are authoritative; Python rating replay is the explicit fallback when a scored row lacks complete snapshots.
+- Top Active Players matches the Streamlit export policy: active players only, at least 10 scored games in the previous UTC calendar month, ranked by current JUPR with games/wins as deterministic tie-breakers.
 - Stored Supabase admin session for the closed-club staging pilot.
 
 ## Runtime flag
@@ -40,6 +45,8 @@ The browser sends admin reads and guarded writes to FastAPI. FastAPI keeps club 
 
 No browser-side code writes directly to Supabase tables and no league movement, schedule generation, score submission, award minting, or rating logic is implemented in TypeScript.
 
+Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` on FastAPI. The publishable/anonymous key can never be used as a mutation fallback. Supabase service/secret credentials remain server-only and are never exposed through `NEXT_PUBLIC_*` variables.
+
 ## Current safety boundaries
 
 - Create and duplicate operations always produce inactive drafts.
@@ -49,9 +56,13 @@ No browser-side code writes directly to Supabase tables and no league movement, 
 - Settings writes are checked against the current lifecycle state on FastAPI, not only disabled in the browser. Stale saves are rejected.
 - Schedule saves derive date tags in Python while preserving existing skill tags. Unsaved previews run the same normalized Python schedule/ICS logic without mutating staging data.
 - Mutations require explicit confirmation text and an authorized club-scoped admin session.
+- Create, duplicate, lifecycle, settings, and roster endpoints fail closed with `503` if FastAPI has no service-role credential.
+- Roster writes first verify a club-scoped league and player, reject ended/archived leagues and idempotency mistakes, preserve history during reactivation, use club/league/player filters on every update, and compensate when a required audit write fails.
+- Settings, roster, and lifecycle writes reject inconsistent `status`/`is_active` pairs; lifecycle compare-and-set also matches both values before updating, so stale or corrupt state cannot silently mutate.
 - Staging requires successful API audit logging. Lifecycle and settings mutations are rolled back if their required audit write fails; Streamlit remains the production fallback.
 - Rating, match, movement, and award calculations remain in Python services.
 
 ## Follow-up slices
 
 - Validate draft create/duplicate, live rounds, court movement, awards close, and Match Log/Replay recovery against isolated staging data.
+- The awards freeze/mint wizard and League Live movement/submission remain deliberately owned by later parity slices; this core slice only reads Top Performer preview data for printing.

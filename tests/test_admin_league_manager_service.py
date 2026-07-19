@@ -131,6 +131,10 @@ def test_league_manager_list_and_detail(monkeypatch) -> None:
     assert detail["roster"][0]["player_name"] == "Alex"
     assert detail["roster"][2]["player_name"] == "Casey"
     assert detail["roster"][2]["in_league"] is False
+    assert detail["validation"]["valid"] is True
+    assert detail["capabilities"]["settings_mode"] == "description_only"
+    assert detail["capabilities"]["roster_mutable"] is True
+    assert detail["capabilities"]["lifecycle_actions"] == ["pause", "end"]
 
 
 def test_league_schedule_ics_matches_preview_blackouts_and_escapes_text() -> None:

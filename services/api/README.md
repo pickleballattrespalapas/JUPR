@@ -148,6 +148,10 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /admin/clubs/{club_id}/support-requests` guarded club-scoped review queue
 - `PATCH /admin/clubs/{club_id}/support-requests/{request_id}` guarded stale-safe status/privacy-fulfillment update
 - `POST /admin/clubs/{club_id}/matches/batch` guarded/disabled by default
+- `GET /admin/clubs/{club_id}/league-manager/leagues/{league_name}/printout?week_num=...` authenticated, read-only weekly/season leader print model
+- `GET /admin/clubs/{club_id}/league-manager/top-players-printable?limit=...` authenticated, read-only previous-calendar-month ranking model
+
+League Manager create, duplicate, lifecycle, settings, and roster mutations fail closed unless FastAPI has `SUPABASE_SERVICE_ROLE_KEY`; the anonymous/publishable key is never accepted as their mutation credential.
 
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.
 

@@ -46,6 +46,8 @@ Current public and staff-facing routes include:
 - `/profile-privacy` identity-reviewed privacy fulfillment intake with no direct public-profile mutation.
 - `/admin` staff operations cockpit for the Streamlit-to-Next migration.
 - `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, and `/admin/league-manager` guarded staff migration surfaces.
+- `/admin/league-manager/print` authenticated browser-print schedule, weekly leaders, configured Top Performers, standings, and attendance roster.
+- `/admin/top-players-printable` authenticated previous-calendar-month Top 50 browser export.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
 
 ## Environment variables

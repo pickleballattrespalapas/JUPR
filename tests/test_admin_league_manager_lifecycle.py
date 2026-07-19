@@ -110,6 +110,17 @@ def test_lifecycle_requires_action_specific_confirmation(monkeypatch) -> None:
     assert tables["leagues_metadata"][0]["status"] == "draft"
 
 
+def test_lifecycle_rejects_inconsistent_status_flag_without_write(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = lifecycle_tables(status="draft", is_active=True)
+
+    with pytest.raises(ValueError, match="lifecycle state is inconsistent"):
+        transition(FakeSupabase(tables), "start", "START LEAGUE")
+
+    assert tables["leagues_metadata"][0]["status"] == "draft"
+    assert tables["admin_activity_log"] == []
+
+
 def test_required_audit_failure_rolls_back_lifecycle_transition(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
     monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
@@ -150,6 +161,7 @@ def install_authorized_api(monkeypatch, supabase: FakeSupabase) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
     monkeypatch.setattr(
         "services.api.admin_league_manager_routes.authenticate_bearer",
