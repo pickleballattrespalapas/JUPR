@@ -62,6 +62,11 @@ Use this public web URL variable for metadata and sitemap generation:
 
 - `NEXT_PUBLIC_JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com`
 
+Set the matching server-side `JUPR_WEB_BASE_URL` on FastAPI/Fly. Player update
+emails use it to generate tokenized Next `/email-preferences` links. The API
+fails the individual outbox send closed when no unsubscribe token is available;
+it never falls back to a public subscription ID.
+
 The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI.
 
 Example:

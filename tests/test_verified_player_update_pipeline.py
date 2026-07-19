@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 import pandas as pd
+import pytest
 
 from jupr_app.domain.notifications.player_update_charts import render_player_digest_chart_png
 from jupr_app.domain.notifications.player_update_email_template import (
     build_player_update_email_html,
     build_player_update_email_text,
 )
+from jupr_app.domain.notifications.player_update_sender import _merge_links_for_send
 from jupr_app.domain.recaps import player_weekly_digest as digest_mod
 
 
@@ -57,6 +59,31 @@ class _Ctx:
         self.club_id = "club-1"
         self.supabase = None
         self.id_to_name = {1: "Ada", 2: "Joel", 3: "Keith", 4: "Natasha"}
+
+
+def test_player_update_unsubscribe_link_targets_tokenized_next_route():
+    digest = _merge_links_for_send(
+        digest={},
+        player_id=1,
+        subscription_id="subscription-id-is-not-a-credential",
+        unsubscribe_token="safe token",
+        public_base_url="https://next.example.com/",
+    )
+
+    assert digest["links"]["unsubscribe"] == "https://next.example.com/email-preferences?token=safe+token"
+    assert "sid=" not in digest["links"]["unsubscribe"]
+    assert "page=email_preferences" not in digest["links"]["unsubscribe"]
+
+
+def test_player_update_send_fails_closed_without_unsubscribe_token():
+    with pytest.raises(ValueError, match="tokenized Next email-preferences link"):
+        _merge_links_for_send(
+            digest={},
+            player_id=1,
+            subscription_id="bare-id",
+            unsubscribe_token=None,
+            public_base_url="https://next.example.com",
+        )
 
 
 def test_display_range_uses_month_day_ordinals():

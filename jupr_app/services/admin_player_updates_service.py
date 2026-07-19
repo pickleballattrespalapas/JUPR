@@ -10,7 +10,7 @@ from jupr_app.config import (
     EMAIL_MODE_STAGING_REDIRECT,
     SMTPConfig,
     get_email_mode,
-    get_public_base_url,
+    get_next_web_base_url,
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.notifications.player_profile_update_repo import (
@@ -315,7 +315,7 @@ def run_admin_player_update_range(
                 start_date=start,
                 end_date=end,
                 limit=2000,
-                public_base_url=get_public_base_url(),
+                public_base_url=get_next_web_base_url(),
             ),
         }
 
@@ -378,7 +378,7 @@ def auto_send_player_updates_for_match_payloads(
             start_date=day,
             end_date=day,
             limit=2000,
-            public_base_url=get_public_base_url(),
+            public_base_url=get_next_web_base_url(),
         )
         windows.append({"start_date": day.isoformat(), "end_date": day.isoformat(), **result})
         for key in totals:

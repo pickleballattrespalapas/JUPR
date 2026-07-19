@@ -68,6 +68,7 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     env = staging["env"]
     assert env["JUPR_ENV"] == "staging"
     assert env["JUPR_EMAIL_MODE"] == "dry_run"
+    assert env["JUPR_WEB_BASE_URL"] == EXPECTED_STAGING_WEB_ORIGIN
     assert env["JUPR_REQUIRE_API_AUDIT_LOG"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"] == "1"
     assert env["JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"] == "1"
@@ -93,9 +94,11 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
 
 
 def test_production_cors_includes_both_public_domains():
-    origins = set(_toml("fly.toml")["env"]["JUPR_ALLOWED_ORIGINS"].split(","))
+    production_env = _toml("fly.toml")["env"]
+    origins = set(production_env["JUPR_ALLOWED_ORIGINS"].split(","))
     assert "https://juprleagues.com" in origins
     assert "https://pickleballclubsandwich.com" in origins
+    assert production_env["JUPR_WEB_BASE_URL"] == "https://pickleballclubsandwich.com"
 
 
 def test_only_one_staging_smoke_workflow_remains():

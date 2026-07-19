@@ -60,6 +60,10 @@ def build_public_email_preferences(
     subscription_id: str | None = None,
 ) -> dict[str, Any]:
     clean_token, clean_sid = _normalize_identifiers(token=token, ut=ut, sid=sid, subscription_id=subscription_id)
+    if clean_sid and not clean_token:
+        raise ValueError(
+            "Legacy subscription-id preference links are no longer accepted. Use the tokenized link from a recent player update email."
+        )
     if not clean_token and not clean_sid:
         return {
             "ok": True,
@@ -73,7 +77,6 @@ def build_public_email_preferences(
     row = get_subscription_for_unsubscribe(
         supabase,
         unsubscribe_token=clean_token or None,
-        subscription_id=clean_sid or None,
     )
     return {
         "ok": True,
@@ -96,20 +99,33 @@ def apply_public_email_unsubscribe(
     scope: str = "player_updates",
 ) -> dict[str, Any]:
     clean_token, clean_sid = _normalize_identifiers(token=token, ut=ut, sid=sid, subscription_id=subscription_id)
-    if not clean_token and not clean_sid:
-        raise ValueError("An unsubscribe token or subscription id is required.")
+    if clean_sid and not clean_token:
+        raise ValueError(
+            "Legacy subscription-id preference links are no longer accepted. Use the tokenized link from a recent player update email."
+        )
+    if not clean_token:
+        raise ValueError("An unsubscribe token is required.")
     clean_scope = _clean_text(scope, limit=80).lower() or "player_updates"
     if clean_scope not in SUPPORTED_EMAIL_PREFERENCE_SCOPES:
         raise ValueError("Unsupported email preference scope.")
-    row = unsubscribe_via_public_link(
+    row, changed, effective_scope = unsubscribe_via_public_link(
         supabase,
         unsubscribe_token=clean_token or None,
-        subscription_id=clean_sid or None,
+        preference_scope=clean_scope,
     )
     return {
         "ok": True,
         "mode": "email_unsubscribe",
         "scope": clean_scope,
+        "effective_scope": effective_scope,
+        "changed": changed,
+        "already_unsubscribed": not changed,
         "subscription": _subscription_payload(row),
-        "message": "You are unsubscribed from player update emails." if clean_scope == "player_updates" else "You are unsubscribed from all JUPR optional email categories currently managed by this link.",
+        "message": (
+            "You were already unsubscribed; no additional change was needed."
+            if not changed
+            else "You are unsubscribed from player update emails."
+            if effective_scope == "player_updates"
+            else "You are unsubscribed from all optional JUPR email categories managed by this preference system."
+        ),
     }

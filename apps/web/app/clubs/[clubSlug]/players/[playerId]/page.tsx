@@ -134,6 +134,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         })}
         <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", color: "#0f172a", textDecoration: "none", fontWeight: 700 }}>Leaderboard row</Link>
         <Link href={`/clubs/${clubSlug}/badge-codex`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", color: "#0f172a", textDecoration: "none", fontWeight: 700 }}>Badge codex</Link>
+        <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", color: "#0f172a", textDecoration: "none", fontWeight: 700 }}>Request verified updates</Link>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>

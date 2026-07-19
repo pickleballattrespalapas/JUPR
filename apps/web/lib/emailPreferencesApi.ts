@@ -23,6 +23,9 @@ export type PublicEmailUnsubscribeResponse = {
   ok: boolean;
   mode?: string | null;
   scope?: string | null;
+  effective_scope?: string | null;
+  changed?: boolean | null;
+  already_unsubscribed?: boolean | null;
   subscription?: PublicEmailPreferenceSubscription | null;
   message?: string | null;
 };
@@ -75,7 +78,7 @@ export async function getEmailPreferences(params: { token?: string | null; ut?: 
   return fetchJson<PublicEmailPreferencesResponse>(`/email-preferences${query.toString() ? `?${query.toString()}` : ""}`);
 }
 
-export async function unsubscribeEmailPreferences(payload: { token?: string | null; ut?: string | null; sid?: string | null; subscription_id?: string | null; scope?: string | null }): Promise<ApiResult<PublicEmailUnsubscribeResponse>> {
+export async function unsubscribeEmailPreferences(payload: { token?: string | null; ut?: string | null; scope?: string | null }): Promise<ApiResult<PublicEmailUnsubscribeResponse>> {
   return fetchJson<PublicEmailUnsubscribeResponse>("/email-preferences/unsubscribe", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

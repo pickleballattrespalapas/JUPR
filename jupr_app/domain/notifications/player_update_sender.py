@@ -29,7 +29,7 @@ from jupr_app.config import (
     SMTPConfig,
     get_email_mode,
     get_env_or_default,
-    get_public_base_url,
+    get_next_web_base_url,
 )
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
@@ -75,7 +75,7 @@ def _safe_digest_for_week(
 
 
 def _normalize_public_base_url(public_base_url: str | None = None) -> str:
-    return str(public_base_url or get_public_base_url()).strip().rstrip("/")
+    return str(public_base_url or get_next_web_base_url()).strip().rstrip("/")
 
 
 def _build_public_players_url(params: dict[str, str], *, public_base_url: str | None = None) -> str:
@@ -95,12 +95,15 @@ def _merge_links_for_send(
 ) -> dict[str, Any]:
     links = dict((digest or {}).get("links") or {})
     links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))}, public_base_url=public_base_url)
-    unsubscribe_params = {"page": "email_preferences"}
-    if str(unsubscribe_token or "").strip():
-        unsubscribe_params["token"] = str(unsubscribe_token).strip()
-    else:
-        unsubscribe_params["sid"] = str(subscription_id)
-    links["unsubscribe"] = f"{_normalize_public_base_url(public_base_url)}/?{urlencode(unsubscribe_params)}"
+    token = str(unsubscribe_token or "").strip()
+    if not token:
+        raise ValueError(
+            "A tokenized Next email-preferences link is required before a player update email can be sent."
+        )
+    links["unsubscribe"] = (
+        f"{_normalize_public_base_url(public_base_url)}/email-preferences?"
+        f"{urlencode({'token': token})}"
+    )
     merged = dict(digest or {})
     merged["links"] = links
     return merged

@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from jupr_app.config import SMTPConfig, get_public_base_url, get_smtp_config
+from jupr_app.config import SMTPConfig, get_next_web_base_url, get_public_base_url, get_smtp_config
 
 
 def test_smtp_mailer_imports_without_streamlit(monkeypatch):
@@ -29,6 +29,13 @@ def test_get_public_base_url_from_env(monkeypatch):
     monkeypatch.setenv("JUPR_PUBLIC_BASE_URL", "https://example.org")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://fallback.example.org")
     assert get_public_base_url() == "https://example.org"
+
+
+def test_get_next_web_base_url_prefers_next_origin_over_legacy_streamlit_origin(monkeypatch):
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://next.example.org/")
+    monkeypatch.setenv("JUPR_PUBLIC_BASE_URL", "https://legacy.streamlit.app")
+
+    assert get_next_web_base_url() == "https://next.example.org"
 
 
 def test_player_update_sender_imports_without_streamlit(monkeypatch):

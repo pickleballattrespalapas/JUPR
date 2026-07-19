@@ -13,7 +13,10 @@ export default async function EmailPreferencesPage({ searchParams }: EmailPrefer
   const ut = searchParams?.ut || null;
   const sid = searchParams?.sid || null;
   const subscriptionId = searchParams?.subscription_id || null;
-  const { data, error } = await getEmailPreferences({ token, ut, sid, subscriptionId });
+  const hasLegacyIdOnly = !token && !ut && Boolean(sid || subscriptionId);
+  const { data, error } = hasLegacyIdOnly
+    ? { data: null, error: "Legacy subscription-id links are no longer accepted. Open the tokenized preference link in a recent player update email." }
+    : await getEmailPreferences({ token, ut });
 
   return (
     <section>
@@ -22,7 +25,7 @@ export default async function EmailPreferencesPage({ searchParams }: EmailPrefer
       </p>
       <h1 style={{ marginTop: 0 }}>Manage email preferences</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Manage optional JUPR player update emails from the preference link included in your email. Category-level and global optional unsubscribe choices are supported for the current player-update subscription system.
+        Manage optional JUPR emails from the tokenized preference link included in your player update email. Category scope disables player update digests; global scope also applies to future optional categories.
       </p>
 
       {error ? (
@@ -32,7 +35,7 @@ export default async function EmailPreferencesPage({ searchParams }: EmailPrefer
           <p style={{ marginBottom: 0 }}><Link href="/support">Contact support</Link></p>
         </article>
       ) : (
-        <EmailPreferencesPanel initial={data} token={token} ut={ut} sid={sid} subscriptionId={subscriptionId} />
+        <EmailPreferencesPanel initial={data} token={token} ut={ut} />
       )}
     </section>
   );

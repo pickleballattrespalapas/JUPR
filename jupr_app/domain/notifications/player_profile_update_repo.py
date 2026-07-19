@@ -19,6 +19,8 @@ DEFAULT_PREFERENCES = {
     "send_only_if_changed": True,
 }
 
+PUBLIC_UNSUBSCRIBE_SCOPES = {"player_updates", "global"}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -491,7 +493,11 @@ def unsubscribe_via_public_link(
     *,
     unsubscribe_token: str | None = None,
     subscription_id: str | None = None,
-) -> dict[str, Any]:
+    preference_scope: str = "player_updates",
+) -> tuple[dict[str, Any], bool, str]:
+    scope = str(preference_scope or "").strip().lower() or "player_updates"
+    if scope not in PUBLIC_UNSUBSCRIBE_SCOPES:
+        raise ValueError("Unsupported email preference scope.")
     row = get_subscription_for_unsubscribe(
         supabase,
         unsubscribe_token=unsubscribe_token,
@@ -499,10 +505,38 @@ def unsubscribe_via_public_link(
     )
     if row is None:
         raise ValueError("Subscription not found for this unsubscribe link.")
+
     status = str(row.get("request_status") or "").strip().lower()
-    if status == REQUEST_STATUS_UNSUBSCRIBED:
-        return row
-    return mark_unsubscribed(supabase, str(row.get("id") or ""))
+    current_preferences = row.get("preferences_json") if isinstance(row.get("preferences_json"), dict) else {}
+    preferences = dict(current_preferences)
+    already_global = (
+        preferences.get("optional_emails_enabled") is False
+        or str(preferences.get("unsubscribe_scope") or "").strip().lower() == "global"
+    )
+    effective_scope = "global" if scope == "global" or already_global else "player_updates"
+    preferences["player_updates_enabled"] = False
+    preferences["unsubscribe_scope"] = effective_scope
+    if effective_scope == "global":
+        preferences["optional_emails_enabled"] = False
+
+    changed = status != REQUEST_STATUS_UNSUBSCRIBED or preferences != current_preferences
+    if not changed:
+        return row, False, effective_scope
+
+    payload = {
+        "request_status": REQUEST_STATUS_UNSUBSCRIBED,
+        "unsubscribed_at": row.get("unsubscribed_at") or _now_iso(),
+        "preferences_json": preferences,
+    }
+    updated = _safe_first(
+        supabase.table("player_profile_update_subscriptions")
+        .update(payload)
+        .eq("id", str(row.get("id") or ""))
+        .execute()
+    )
+    if updated is None:
+        raise RuntimeError("Subscription could not be marked unsubscribed")
+    return updated, True, effective_scope
 
 
 def save_digest(

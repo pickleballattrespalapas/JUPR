@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-from jupr_app.config import get_public_base_url
+from jupr_app.config import get_next_web_base_url
 from jupr_app.data.client import make_supabase
 from jupr_app.domain.notifications.player_update_sender import send_pending_player_update_emails
 from jupr_app.services.context import ServiceContext
@@ -48,7 +48,7 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
         if not (_is_missing_table_error(exc) and not _require_worker_run_log()):
             raise
 
-    public_base_url = get_public_base_url()
+    public_base_url = get_next_web_base_url()
     ctx = ServiceContext(supabase=supabase, club_id=club_id, public_base_url=public_base_url)
 
     try:

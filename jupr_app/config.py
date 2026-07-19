@@ -71,6 +71,27 @@ def get_public_base_url(default: str = "http://localhost:8501") -> str:
     return str(default).strip().rstrip("/")
 
 
+def get_next_web_base_url(default: str = "http://localhost:3000") -> str:
+    """Return the canonical Next web origin used in generated public links.
+
+    ``JUPR_PUBLIC_BASE_URL`` predates the Next migration and may still point at
+    Streamlit.  Prefer the explicit web-origin variables, while retaining the
+    legacy variables as a last-resort compatibility fallback during rollout.
+    """
+
+    for env_name in (
+        "JUPR_NEXT_WEB_BASE_URL",
+        "JUPR_WEB_BASE_URL",
+        "NEXT_PUBLIC_JUPR_WEB_BASE_URL",
+        "JUPR_PUBLIC_BASE_URL",
+        "PUBLIC_BASE_URL",
+    ):
+        value = get_env_or_default(env_name)
+        if value:
+            return value.rstrip("/")
+    return str(default).strip().rstrip("/")
+
+
 def get_smtp_config() -> SMTPConfig:
     host = get_env_or_default("SMTP_HOST")
     port_raw = get_env_or_default("SMTP_PORT")

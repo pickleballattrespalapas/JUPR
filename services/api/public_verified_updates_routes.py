@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from jupr_app.services.public_verified_updates_service import (
     create_public_verified_update_request,
@@ -14,9 +14,9 @@ from jupr_app.services.public_verified_updates_service import (
 
 class PublicVerifiedUpdateRequest(BaseModel):
     player_id: int
-    email: str
-    request_note: str | None = None
-    website: str | None = None
+    email: str = Field(min_length=3, max_length=320)
+    request_note: str | None = Field(default=None, max_length=1000)
+    website: str | None = Field(default=None, max_length=200)
 
 
 def install_public_verified_updates_routes(app, *, get_club, get_supabase_client, public_club_payload) -> None:
@@ -67,6 +67,8 @@ def install_public_verified_updates_routes(app, *, get_club, get_supabase_client
             )
         except ValueError as exc:
             message = str(exc)
+            if "too many" in message.lower():
+                raise HTTPException(status_code=429, detail=message) from exc
             if "already" in message.lower():
                 raise HTTPException(status_code=409, detail=message) from exc
             raise HTTPException(status_code=400, detail=message) from exc

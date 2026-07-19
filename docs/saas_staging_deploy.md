@@ -50,6 +50,7 @@ SUPABASE_URL=<staging project>
 SUPABASE_SERVICE_ROLE_KEY=<staging service role>
 SUPABASE_ANON_KEY=<staging anon key if needed>
 JUPR_EMAIL_MODE=dry_run
+JUPR_WEB_BASE_URL=<Vercel staging URL>
 JUPR_REQUIRE_API_AUDIT_LOG=1
 JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT=1
 JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=1
@@ -59,7 +60,9 @@ JUPR_ALLOWED_ORIGINS=<Vercel staging URL>,http://localhost:3000
 `fly.staging.toml` enables every current Next admin workflow so the complete
 surface can be exercised against isolated staging data. Automatic player-update
 email behavior is enabled there, but `JUPR_EMAIL_MODE=dry_run` prevents external
-delivery during staging tests.
+delivery during staging tests. `JUPR_WEB_BASE_URL` is the canonical Next origin
+used for tokenized `/email-preferences` links; do not point it at the Streamlit
+fallback.
 
 ### Vercel/Next.js staging runtime
 

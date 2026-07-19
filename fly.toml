@@ -9,6 +9,7 @@ primary_region = "dfw"
 [env]
   PORT = "8080"
   JUPR_ENV = "production"
+  JUPR_WEB_BASE_URL = "https://pickleballclubsandwich.com"
   JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY = "0"
   JUPR_ALLOWED_ORIGINS = "https://juprleagues.com,https://www.juprleagues.com,https://pickleballclubsandwich.com,https://www.pickleballclubsandwich.com"
 
