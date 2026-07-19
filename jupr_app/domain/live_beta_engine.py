@@ -471,7 +471,7 @@ def apply_round_substitution(
     *,
     round_number: int,
     original_participant_id: str,
-    substitute_player_id: int,
+    substitute_player_id: int | None,
     substitute_name: str,
     created_by: str,
     created_at: str = "",
@@ -496,13 +496,14 @@ def apply_round_substitution(
         "original_player_name": str(
             _participant_map(event).get(str(original_participant_id), {}).get("name") or original_participant_id
         ),
-        "substitute_player_id": int(substitute_player_id),
         "substitute_name": normalize_name(substitute_name),
         "affected_match_ids": affected_match_ids,
         "created_by": normalize_name(created_by) or "admin",
         "created_at": str(created_at or ""),
         "note": str(note or "").strip(),
     }
+    if substitute_player_id is not None:
+        substitution["substitute_player_id"] = int(substitute_player_id)
     return substitution
 
 
@@ -512,7 +513,7 @@ def apply_single_game_substitution(
     round_number: int,
     match_id: str,
     original_participant_id: str,
-    substitute_player_id: int,
+    substitute_player_id: int | None,
     substitute_name: str,
     created_by: str,
     created_at: str = "",
@@ -537,13 +538,14 @@ def apply_single_game_substitution(
         "original_player_name": str(
             _participant_map(event).get(str(original_participant_id), {}).get("name") or original_participant_id
         ),
-        "substitute_player_id": int(substitute_player_id),
         "substitute_name": normalize_name(substitute_name),
         "affected_match_ids": [str(match_id)],
         "created_by": normalize_name(created_by) or "admin",
         "created_at": str(created_at or ""),
         "note": str(note or "").strip(),
     }
+    if substitute_player_id is not None:
+        substitution["substitute_player_id"] = int(substitute_player_id)
     return substitution
 
 

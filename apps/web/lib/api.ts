@@ -278,6 +278,8 @@ export type PublicLiveSessionSummary = {
   session_key: string;
   title: string;
   status: string;
+  version: number;
+  live_mode?: "quick" | "club_social" | string;
   event_type?: string | null;
   current_round?: number | null;
   has_event?: boolean;
@@ -285,11 +287,24 @@ export type PublicLiveSessionSummary = {
   updated_at?: string | null;
   last_seen_at?: string | null;
   expires_at?: string | null;
+  completed_at?: string | null;
 };
 
 export type PublicLiveSessionDetail = PublicLiveSessionSummary & {
   rounds: PublicLiveRound[];
   standings: Array<Record<string, string | number | boolean | null>>;
+  participants: Array<{ id: string; name: string; player_id?: string | number | null }>;
+  substitutions: Array<{
+    id: string;
+    scope: string;
+    round_number?: number | null;
+    match_id?: string | null;
+    original_participant_id: string;
+    original_player_name: string;
+    substitute_name: string;
+    affected_match_ids: string[];
+  }>;
+  social?: { enabled: boolean; skill_levels: string[]; submission_status?: string | null };
   bracket?: { champion?: string | null; rows: Array<Record<string, string | number | boolean | null>> } | null;
   court_standings?: Array<Record<string, unknown>>;
 };
@@ -297,6 +312,8 @@ export type PublicLiveSessionDetail = PublicLiveSessionSummary & {
 export type LiveSessionsResponse = {
   club: { id: string; slug: string; name: string };
   sessions: PublicLiveSessionSummary[];
+  write_enabled: boolean;
+  write_fallback_url?: string | null;
 };
 
 export type LiveSessionDetailResponse = {

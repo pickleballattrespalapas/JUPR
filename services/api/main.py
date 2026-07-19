@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
@@ -17,7 +18,20 @@ from jupr_app.services.context import ServiceContext
 from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
 from jupr_app.services.match_service import submit_match_batch
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
-from jupr_app.services.public_live_write_service import PublicLiveSessionError, create_public_round_robin_session, update_public_round_robin_scores
+from jupr_app.services.public_live_operation_service import (
+    PublicLiveConflictError,
+    PublicLiveRateLimitError,
+    PublicLiveRecoveryRequiredError,
+)
+from jupr_app.services.public_live_write_service import (
+    PublicLiveSessionError,
+    advance_public_live_session,
+    build_public_live_export,
+    complete_public_live_session,
+    create_public_live_session,
+    substitute_public_live_participant,
+    update_public_live_scores,
+)
 from jupr_app.services.public_player_service import build_public_player_directory, get_public_match_detail, get_public_matches, get_public_player_profile
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.middleware import StructuredRequestLoggingMiddleware
@@ -67,9 +81,11 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "updated_at",
 }
 PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "icon_key", "rarity", "earned_at"}
-PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,created_at,updated_at,last_seen_at,expires_at"
-PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
+PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
+PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
+PUBLIC_LIVE_SESSION_LEGACY_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
 LIVE_SESSIONS_SETUP_ERROR = "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
+PUBLIC_LIVE_WRITES_DISABLED_ERROR = "Public JUPR Live writes are not enabled in this environment. Use the Streamlit fallback or a shared view-only session."
 SCORE_ENTRY_SETUP_ERROR = "Next score entry is not write-ready. Enable the backend flag and configure SUPABASE_SERVICE_ROLE_KEY on FastAPI; otherwise use Match Uploader or the Streamlit fallback."
 
 
@@ -135,20 +151,45 @@ class MatchBatchRequest(BaseModel):
 
 
 class PublicLiveSessionCreateRequest(BaseModel):
-    event_name: str = "JUPR Live Round Robin"
-    event_type: str = "round_robin"
-    participant_names: list[str] = Field(default_factory=list)
+    event_name: str = Field(default="JUPR Live Round Robin", max_length=160)
+    event_type: str = Field(default="round_robin", max_length=32)
+    participant_names: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(min_length=4, max_length=20)
+    live_mode: str = Field(default="quick", max_length=32)
+    total_rounds: int = Field(default=3, ge=1, le=20)
+    court_sizes: list[Annotated[int, Field(ge=4, le=5)]] = Field(default_factory=list, max_length=5)
+    host_name: str | None = Field(default=None, max_length=160)
+    skill_levels: list[Annotated[str, Field(max_length=16)]] = Field(default_factory=list, max_length=7)
+    participant_player_ids: dict[Annotated[str, Field(max_length=80)], int] = Field(default_factory=dict, max_length=20)
+    idempotency_key: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$")
 
 
 class PublicLiveScorePayload(BaseModel):
-    match_id: str
+    match_id: str = Field(min_length=1, max_length=160)
     score_a: int | None = None
     score_b: int | None = None
 
 
 class PublicLiveScoreUpdateRequest(BaseModel):
-    edit_token: str
-    scores: list[PublicLiveScorePayload] = Field(default_factory=list)
+    edit_token: str = Field(min_length=1, max_length=128)
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$")
+    scores: list[PublicLiveScorePayload] = Field(min_length=1, max_length=500)
+
+
+class PublicLiveMutationRequest(BaseModel):
+    edit_token: str = Field(min_length=1, max_length=128)
+    expected_version: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$")
+
+
+class PublicLiveSubstitutionRequest(PublicLiveMutationRequest):
+    scope: str = Field(default="round", pattern=r"^(round|game)$")
+    round_number: int = Field(ge=1)
+    original_participant_id: str = Field(min_length=1, max_length=160)
+    substitute_name: str = Field(min_length=1, max_length=80)
+    substitute_player_id: int | None = None
+    match_id: str | None = Field(default=None, max_length=160)
+    note: str | None = Field(default=None, max_length=300)
 
 
 def _get_supabase_credentials() -> tuple[str, str]:
@@ -181,6 +222,92 @@ def _has_supabase_service_role_key() -> bool:
 def _require_live_sessions_service_role() -> None:
     if not _has_supabase_service_role_key():
         raise HTTPException(status_code=503, detail=LIVE_SESSIONS_SETUP_ERROR)
+
+
+def is_public_live_write_enabled() -> bool:
+    enabled = os.getenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "").strip().lower() in {"1", "true", "yes"}
+    if not enabled:
+        return False
+    if get_jupr_env() == "production":
+        return os.getenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", "").strip().lower() in {"1", "true", "yes"}
+    return True
+
+
+def _public_live_secrets_ready() -> bool:
+    token_secret = os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "").strip()
+    rate_secret = (
+        os.getenv("JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET", "").strip()
+        or token_secret
+    )
+    return len(token_secret) >= 32 and len(rate_secret) >= 32
+
+
+def is_public_live_write_ready() -> bool:
+    return bool(
+        is_public_live_write_enabled()
+        and _has_supabase_service_role_key()
+        and _public_live_secrets_ready()
+    )
+
+
+def _require_public_live_writes() -> None:
+    if not is_public_live_write_enabled():
+        raise HTTPException(status_code=403, detail=PUBLIC_LIVE_WRITES_DISABLED_ERROR)
+    if not _public_live_secrets_ready():
+        raise HTTPException(
+            status_code=503,
+            detail="Public JUPR Live secrets are unavailable; no write was attempted. Use the Streamlit fallback.",
+        )
+
+
+def _public_live_requester_hash(request: Request) -> str:
+    """Build a private rate-limit scope that survives the Vercel-to-Fly proxy hop.
+
+    Fly's client address is the Vercel egress for proxied requests, so it cannot
+    be used alone without grouping every visitor together. Keeping it in the
+    scope while also including the forwarded visitor tail preserves normal
+    per-visitor fairness. The database's per-club ceiling remains authoritative
+    if an untrusted direct caller spoofs forwarding metadata.
+    """
+
+    peer_address = str(request.client.host if request.client else "unknown")
+    fly_address = str(
+        request.headers.get("fly-client-ip")
+        or request.headers.get("x-real-ip")
+        or peer_address
+    ).strip()[:128]
+    forwarded = str(
+        request.headers.get("x-vercel-forwarded-for")
+        or request.headers.get("x-forwarded-for")
+        or ""
+    )
+    addresses = [value.strip() for value in forwarded.split(",") if value.strip()]
+    visitor_address = (addresses[-1] if addresses else fly_address)[:128]
+    address_scope = f"{fly_address}\x1f{visitor_address}"
+    secret = (
+        os.getenv("JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET", "").strip()
+        or os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "").strip()
+    )
+    if len(secret) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail="Public JUPR Live anti-abuse configuration is unavailable; no write was attempted.",
+        )
+    return hashlib.sha256(f"{secret}\x1f{address_scope}".encode("utf-8")).hexdigest()
+
+
+def _raise_public_live_write_error(exc: Exception) -> None:
+    if isinstance(exc, PublicLiveRateLimitError):
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    if isinstance(exc, PublicLiveConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, PermissionError):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, (PublicLiveSessionError, ValueError)):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, PublicLiveRecoveryRequiredError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    _raise_live_sessions_backend_error(exc)
 
 
 def _error_payload_text(exc: Exception) -> str:
@@ -218,6 +345,18 @@ def _is_live_sessions_schema_error(exc: Exception) -> bool:
     if "live_sessions" not in detail:
         return False
     return any(marker in detail for marker in ("pgrst204", "pgrst205", "42p01", "42501", "permission denied", "schema cache", "could not find", "does not exist", "undefined table", "column", "relation"))
+
+
+def _is_public_live_durability_schema_error(exc: Exception) -> bool:
+    detail = _error_payload_text(exc)
+    return "live_sessions" in detail and any(
+        marker in detail
+        for marker in (
+            "'version'", '"version"', "live_sessions.version",
+            "'edit_token_hash'", '"edit_token_hash"', "live_sessions.edit_token_hash",
+            "'completed_at'", '"completed_at"', "live_sessions.completed_at",
+        )
+    ) and any(marker in detail for marker in ("column", "schema cache", "could not find", "pgrst204"))
 
 
 def _live_sessions_backend_error_detail(exc: Exception) -> str:
@@ -367,13 +506,28 @@ def _build_live_sessions_response(club_slug: str, limit: int) -> dict[str, Any]:
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     safe_limit = max(1, min(int(limit or 20), 50))
     supabase = get_supabase_client()
+    durability_ready = True
     try:
         rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_SUMMARY_SELECT).eq("club_id", club_id).order("updated_at", desc=True).limit(safe_limit * 3).execute().data or []
     except Exception as exc:
-        if _is_live_sessions_schema_error(exc):
+        if _is_public_live_durability_schema_error(exc):
+            durability_ready = False
+            try:
+                rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_LEGACY_SELECT).eq("club_id", club_id).order("updated_at", desc=True).limit(safe_limit * 3).execute().data or []
+            except Exception as legacy_exc:
+                if _is_live_sessions_schema_error(legacy_exc):
+                    _raise_live_sessions_setup_error(legacy_exc)
+                _raise_live_sessions_backend_error(legacy_exc)
+        elif _is_live_sessions_schema_error(exc):
             _raise_live_sessions_setup_error(exc)
-        _raise_live_sessions_backend_error(exc)
-    return {"club": _public_club_payload(club, club_slug), "sessions": public_live_sessions_from_rows(rows, limit=safe_limit)}
+        else:
+            _raise_live_sessions_backend_error(exc)
+    return {
+        "club": _public_club_payload(club, club_slug),
+        "sessions": public_live_sessions_from_rows(rows, limit=safe_limit),
+        "write_enabled": bool(durability_ready and is_public_live_write_ready()),
+        "write_fallback_url": os.getenv("JUPR_STREAMLIT_FALLBACK_URL", "https://juprtrespalapas.streamlit.app").strip(),
+    }
 
 
 def _build_live_session_detail_response(club_slug: str, session_key: str) -> dict[str, Any]:
@@ -387,9 +541,17 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
     try:
         rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_DETAIL_SELECT).eq("club_id", club_id).eq("session_key", clean_session_key).limit(1).execute().data or []
     except Exception as exc:
-        if _is_live_sessions_schema_error(exc):
+        if _is_public_live_durability_schema_error(exc):
+            try:
+                rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_LEGACY_SELECT).eq("club_id", club_id).eq("session_key", clean_session_key).limit(1).execute().data or []
+            except Exception as legacy_exc:
+                if _is_live_sessions_schema_error(legacy_exc):
+                    _raise_live_sessions_setup_error(legacy_exc)
+                _raise_live_sessions_backend_error(legacy_exc)
+        elif _is_live_sessions_schema_error(exc):
             _raise_live_sessions_setup_error(exc)
-        _raise_live_sessions_backend_error(exc)
+        else:
+            _raise_live_sessions_backend_error(exc)
     if not rows or not is_public_live_session_row(rows[0]):
         raise HTTPException(status_code=404, detail="live session not found")
     return {"club": _public_club_payload(club, club_slug), "session": public_live_session_detail(rows[0])}
@@ -495,12 +657,70 @@ def health_live_sessions() -> dict[str, Any]:
     host = _supabase_host_for_diagnostics()
     if not _has_supabase_service_role_key():
         return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": False, "detail": LIVE_SESSIONS_SETUP_ERROR}
+    supabase = None
     try:
         supabase = get_supabase_client()
-        rows = supabase.table("live_sessions").select("club_id,session_key,status,updated_at").limit(1).execute().data or []
-        return {"ok": True, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": True, "sample_count": len(rows)}
+        rows = supabase.table("live_sessions").select("club_id,session_key,status,version,edit_token_hash,updated_at").limit(1).execute().data or []
     except Exception as exc:
+        if supabase is not None and _is_public_live_durability_schema_error(exc):
+            try:
+                legacy_rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_LEGACY_SELECT).limit(1).execute().data or []
+            except Exception as legacy_exc:
+                return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": False, "detail": _error_payload_text(legacy_exc) or legacy_exc.__class__.__name__}
+            return {
+                "ok": False,
+                "service": "jupr-api",
+                "supabase_host": host,
+                "service_role_configured": True,
+                "live_sessions_query_ok": True,
+                "operation_ledger_query_ok": False,
+                "durability_schema_ready": False,
+                "sample_count": len(legacy_rows),
+                "detail": "Apply the public live durability migration before enabling writes.",
+            }
         return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": False, "detail": _error_payload_text(exc) or exc.__class__.__name__}
+    try:
+        supabase.table("public_live_operations").select("operation_key,status,executor_token,lease_expires_at").limit(1).execute()
+        supabase.rpc(
+            "claim_public_live_completion_executor",
+            {
+                "p_club_id": "__healthcheck__",
+                "p_operation_key": "0" * 64,
+                "p_executor_token": "healthcheck-no-write",
+                "p_lease_seconds": 30,
+            },
+        ).execute()
+    except Exception:
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": True,
+            "live_sessions_query_ok": True,
+            "operation_ledger_query_ok": False,
+            "durability_schema_ready": False,
+            "sample_count": len(rows),
+            "detail": "Apply the public live durability migration before enabling writes.",
+        }
+    token_secret_ready = len(os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "").strip()) >= 32
+    rate_secret_ready = len(
+        (
+            os.getenv("JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET", "").strip()
+            or os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "").strip()
+        )
+    ) >= 32
+    return {
+        "ok": bool(token_secret_ready and rate_secret_ready),
+        "service": "jupr-api",
+        "supabase_host": host,
+        "service_role_configured": True,
+        "live_sessions_query_ok": True,
+        "operation_ledger_query_ok": True,
+        "durability_schema_ready": True,
+        "token_secret_configured": token_secret_ready,
+        "rate_limit_secret_configured": rate_secret_ready,
+        "sample_count": len(rows),
+    }
 
 
 @app.get("/clubs/{club_slug}")
@@ -682,19 +902,30 @@ def get_club_live_sessions(club_slug: str, limit: int = Query(default=20, ge=1, 
 
 
 @app.post("/clubs/{club_slug}/live-sessions")
-def create_club_live_session(club_slug: str, payload: PublicLiveSessionCreateRequest) -> dict[str, Any]:
+def create_club_live_session(club_slug: str, payload: PublicLiveSessionCreateRequest, request: Request) -> dict[str, Any]:
+    _require_public_live_writes()
     _require_live_sessions_service_role()
-    if str(payload.event_type or "round_robin") not in {"round_robin", "Round Robin"}:
-        raise HTTPException(status_code=400, detail="The public web version currently supports Round Robin events only.")
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     try:
-        result = create_public_round_robin_session(supabase, club_id=club_id, event_name=payload.event_name, participant_names=payload.participant_names)
-    except PublicLiveSessionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = create_public_live_session(
+            supabase,
+            club_id=club_id,
+            event_name=payload.event_name,
+            event_type=payload.event_type,
+            participant_names=payload.participant_names,
+            live_mode=payload.live_mode,
+            total_rounds=payload.total_rounds,
+            court_sizes=payload.court_sizes,
+            host_name=payload.host_name,
+            skill_levels=payload.skill_levels,
+            participant_player_ids=payload.participant_player_ids,
+            idempotency_key=payload.idempotency_key,
+            requester_hash=_public_live_requester_hash(request),
+        )
     except Exception as exc:
-        _raise_live_sessions_backend_error(exc)
+        _raise_public_live_write_error(exc)
     return {"club": _public_club_payload(club, club_slug), **result}
 
 
@@ -704,20 +935,121 @@ def get_club_live_session(club_slug: str, session_key: str) -> dict[str, Any]:
 
 
 @app.patch("/clubs/{club_slug}/live-sessions/{session_key}/scores")
-def update_club_live_session_scores(club_slug: str, session_key: str, payload: PublicLiveScoreUpdateRequest) -> dict[str, Any]:
+def update_club_live_session_scores(club_slug: str, session_key: str, payload: PublicLiveScoreUpdateRequest, request: Request) -> dict[str, Any]:
+    _require_public_live_writes()
     _require_live_sessions_service_role()
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
     try:
-        result = update_public_round_robin_scores(supabase, club_id=club_id, session_key=session_key, edit_token=payload.edit_token, scores=[score.dict() for score in payload.scores])
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except PublicLiveSessionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = update_public_live_scores(
+            supabase,
+            club_id=club_id,
+            session_key=session_key,
+            edit_token=payload.edit_token,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            requester_hash=_public_live_requester_hash(request),
+            scores=[score.model_dump() for score in payload.scores],
+        )
     except Exception as exc:
-        _raise_live_sessions_backend_error(exc)
+        _raise_public_live_write_error(exc)
     return {"club": _public_club_payload(club, club_slug), **result}
+
+
+@app.post("/clubs/{club_slug}/live-sessions/{session_key}/advance")
+def advance_club_live_session(club_slug: str, session_key: str, payload: PublicLiveMutationRequest, request: Request) -> dict[str, Any]:
+    _require_public_live_writes()
+    _require_live_sessions_service_role()
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    try:
+        result = advance_public_live_session(
+            get_supabase_client(),
+            club_id=club_id,
+            session_key=session_key,
+            edit_token=payload.edit_token,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            requester_hash=_public_live_requester_hash(request),
+        )
+    except Exception as exc:
+        _raise_public_live_write_error(exc)
+    return {"club": _public_club_payload(club, club_slug), **result}
+
+
+@app.post("/clubs/{club_slug}/live-sessions/{session_key}/substitutions")
+def substitute_club_live_session(club_slug: str, session_key: str, payload: PublicLiveSubstitutionRequest, request: Request) -> dict[str, Any]:
+    _require_public_live_writes()
+    _require_live_sessions_service_role()
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    try:
+        result = substitute_public_live_participant(
+            get_supabase_client(),
+            club_id=club_id,
+            session_key=session_key,
+            edit_token=payload.edit_token,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            requester_hash=_public_live_requester_hash(request),
+            scope=payload.scope,
+            round_number=payload.round_number,
+            original_participant_id=payload.original_participant_id,
+            substitute_name=payload.substitute_name,
+            substitute_player_id=payload.substitute_player_id,
+            match_id=payload.match_id,
+            note=payload.note,
+        )
+    except Exception as exc:
+        _raise_public_live_write_error(exc)
+    return {"club": _public_club_payload(club, club_slug), **result}
+
+
+@app.post("/clubs/{club_slug}/live-sessions/{session_key}/complete")
+def complete_club_live_session(club_slug: str, session_key: str, payload: PublicLiveMutationRequest, request: Request) -> dict[str, Any]:
+    _require_public_live_writes()
+    _require_live_sessions_service_role()
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    try:
+        result = complete_public_live_session(
+            get_supabase_client(),
+            club_id=club_id,
+            session_key=session_key,
+            edit_token=payload.edit_token,
+            expected_version=payload.expected_version,
+            idempotency_key=payload.idempotency_key,
+            requester_hash=_public_live_requester_hash(request),
+        )
+    except Exception as exc:
+        _raise_public_live_write_error(exc)
+    return {"club": _public_club_payload(club, club_slug), **result}
+
+
+@app.get("/clubs/{club_slug}/live-sessions/{session_key}/export")
+def export_club_live_session(
+    club_slug: str,
+    session_key: str,
+    format: str = Query(default="csv", pattern="^(csv|json)$"),
+) -> Response:
+    _require_live_sessions_service_role()
+    club = get_club(club_slug)
+    club_id = str(club.get("id") or club.get("club_id") or club_slug)
+    try:
+        export = build_public_live_export(
+            get_supabase_client(),
+            club_id=club_id,
+            session_key=session_key,
+            export_format=format,
+        )
+    except Exception as exc:
+        _raise_public_live_write_error(exc)
+    return Response(
+        content=str(export["content"]),
+        media_type=str(export["media_type"]),
+        headers={"Content-Disposition": f'attachment; filename="{export["filename"]}"'},
+    )
 
 
 @app.get("/admin/clubs/{club_id}/score-entry/status")

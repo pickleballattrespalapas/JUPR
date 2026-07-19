@@ -33,12 +33,13 @@ export default async function ClubLivePage({ params }: LivePageProps) {
   const { clubSlug } = params;
   const [liveResult, playersResult] = await Promise.all([
     getClubLiveSessions(clubSlug),
-    getClubPlayers(clubSlug)
+    getClubPlayers(clubSlug, { status: "active", sort: "name", limit: 100 })
   ]);
   const { data, error } = liveResult;
   const clubName = data?.club?.name ?? playersResult.data?.club?.name ?? clubSlug;
   const sessions = data?.sessions ?? [];
   const players = playersResult.data?.players ?? [];
+  const writeEnabled = data?.write_enabled === true;
 
   return (
     <section>
@@ -48,11 +49,19 @@ export default async function ClubLivePage({ params }: LivePageProps) {
         </p>
         <h1 style={{ margin: "0 0 0.5rem", fontSize: "2.2rem", lineHeight: 1.1 }}>{clubName} live sessions</h1>
         <p style={{ color: "#334155", marginTop: 0, maxWidth: "900px" }}>
-          Start a public JUPR Live quick session, enter browser-only scores, and share the live scoreboard. Official rated workflows remain separate in JUPR Live Admin.
+          Start a durable Round Robin, League / Ladder, or Club Social session; resume after refresh, substitute players, export results, and share a view-only scoreboard. Official rated workflows remain separate in JUPR Live Admin.
         </p>
       </div>
 
-      <PublicLiveCreator apiBase={apiBase()} clubSlug={clubSlug} players={players} />
+      {writeEnabled ? (
+        <PublicLiveCreator apiBase={apiBase()} clubSlug={clubSlug} players={players} />
+      ) : (
+        <div style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>New public sessions are paused here</h2>
+          <p style={{ color: "#475569" }}>Shared scoreboards remain viewable. Creation and editing stay on the guarded staging pilot until the consolidated smoke test is approved.</p>
+          {data?.write_fallback_url ? <a href={data.write_fallback_url}>Open the Streamlit JUPR Live fallback</a> : null}
+        </div>
+      )}
 
       {error ? (
         <p style={{ color: "#b91c1c" }}>Live sessions are temporarily unavailable. {error}</p>

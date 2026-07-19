@@ -64,6 +64,13 @@ Order 21 is automated-ready: durable submit/reconcile/compensation, rating readb
 
 Order 24 is automated-ready and manual-ready: Challenge Ladder, Moneyball, and one-off JUPR Live use Python/FastAPI authority, separate staging-only write gates, version leases, durable idempotent result recovery, strict audit evidence, and Match Log/Replay handoffs. The three matrix rows intentionally remain `Partial` until `docs/live_ladder_parity_runbook.md` is executed and signed off.
 
+Order 25 is automated-ready: public Quick Round Robin, League/Ladder, and Club
+Social sessions now use versioned, idempotent FastAPI writes, hashed edit
+credentials, durable recovery records, atomic completion reservations, private
+database access, exports, and a truthful view-only fallback. The `jupr_live`
+matrix row intentionally remains `Partial` until the consolidated staging book is
+executed.
+
 ## Page-level closure contracts
 
 The automated column defines evidence that can be built before the final manual test

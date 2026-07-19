@@ -37,6 +37,11 @@ Current public and staff-facing routes include:
 - `/clubs/[clubSlug]/matches/[matchId]` public match detail.
 - `/clubs/[clubSlug]/live` public live-session list.
 - `/clubs/[clubSlug]/live/[sessionKey]` public live-session detail.
+
+Public JUPR Live write parity (Round Robin, League/Ladder, Club Social, recovery,
+substitutions, and exports) is staged behind server-only gates. See
+`docs/public_live_parity_runbook.md`; no public-live token or rate-limit secret
+belongs in Vercel.
 - `/how-ratings-work` public ratings explainer.
 - `/faq` public rating FAQ.
 - `/privacy` first-party privacy policy copy.

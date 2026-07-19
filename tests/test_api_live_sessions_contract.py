@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from jupr_app.domain.live_beta_engine import create_round_robin_event, update_round_robin_score
 from services.api.main import app
+from tests.test_public_live_write_service import FakeSupabase as FakeWriteSupabase
 
 
 class FakeResponse:
@@ -85,6 +86,21 @@ class FakeUnavailableLiveSessionsSupabase:
         return FakeQuery(str(table_name), [])
 
 
+class FakeLegacyLiveSessionsQuery(FakeQuery):
+    def execute(self):
+        if "version" in self.select_expr or "completed_at" in self.select_expr:
+            raise Exception("Could not find the 'version' column of 'live_sessions' in the schema cache")
+        return super().execute()
+
+
+class FakeLegacyLiveSessionsSupabase:
+    def __init__(self, rows: list[dict]):
+        self.rows = rows
+
+    def table(self, table_name):
+        return FakeLegacyLiveSessionsQuery(str(table_name), self.rows)
+
+
 def _row() -> dict:
     event = create_round_robin_event(
         name="API Live Test",
@@ -136,7 +152,7 @@ def client(monkeypatch):
     return TestClient(app)
 
 
-def test_live_sessions_list_returns_public_summaries_without_fetching_state(client):
+def test_live_sessions_list_returns_sanitized_public_summaries_with_event_metadata(client):
     response = client.get("/clubs/test-club/live-sessions")
 
     assert response.status_code == 200
@@ -144,7 +160,8 @@ def test_live_sessions_list_returns_public_summaries_without_fetching_state(clie
     assert payload["club"] == {"id": "club-1", "slug": "test-club", "name": "Test Club"}
     assert [row["session_key"] for row in payload["sessions"]] == ["public-session"]
     assert "state" not in payload["sessions"][0]
-    assert payload["sessions"][0]["has_event"] is False
+    assert payload["sessions"][0]["has_event"] is True
+    assert payload["sessions"][0]["event_type"] == "round_robin"
 
 
 def test_live_session_detail_returns_public_scoreboard_shape(client):
@@ -202,3 +219,181 @@ def test_live_session_detail_reports_schema_unavailable(monkeypatch):
     response = TestClient(app).get("/clubs/test-club/live-sessions/public-session")
 
     assert response.status_code == 503
+
+
+def test_live_session_reads_fall_back_view_only_before_durability_migration(monkeypatch):
+    _patch_service_role(monkeypatch)
+    _patch_club(monkeypatch)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "1")
+    monkeypatch.setattr(
+        "services.api.main.get_supabase_client",
+        lambda: FakeLegacyLiveSessionsSupabase([_row()]),
+    )
+    legacy_client = TestClient(app)
+
+    listed = legacy_client.get("/clubs/test-club/live-sessions")
+    detail = legacy_client.get("/clubs/test-club/live-sessions/public-session")
+
+    assert listed.status_code == 200
+    assert listed.json()["write_enabled"] is False
+    assert detail.status_code == 200
+    assert detail.json()["session"]["version"] == 1
+
+
+@pytest.fixture
+def write_client(monkeypatch):
+    supabase = FakeWriteSupabase()
+    _patch_service_role(monkeypatch)
+    _patch_club(monkeypatch)
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "api-public-live-token-secret-long-enough")
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_RATE_LIMIT_SECRET", "api-public-live-rate-secret-long-enough")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "1")
+    monkeypatch.setattr("services.api.main.get_supabase_client", lambda: supabase)
+    return TestClient(app), supabase
+
+
+def _create_payload(key: str) -> dict:
+    return {
+        "event_name": "API Write Test",
+        "event_type": "round_robin",
+        "participant_names": ["Amy", "Brooke", "Chris", "Dana"],
+        "live_mode": "quick",
+        "idempotency_key": key,
+    }
+
+
+def test_public_live_write_api_token_stale_and_projection_contract(write_client):
+    client, _supabase = write_client
+    created_response = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={"fly-client-ip": "203.0.113.8"},
+        json=_create_payload("api-create-key-0001"),
+    )
+    assert created_response.status_code == 200
+    created = created_response.json()
+    token = created["edit_token"]
+    session = created["session"]
+    assert token
+    assert "edit_token" not in session
+
+    public_response = client.get(f"/clubs/test-club/live-sessions/{session['session_key']}")
+    assert public_response.status_code == 200
+    assert token not in public_response.text
+
+    first_match = session["rounds"][0]["matches"][0]
+    wrong = client.patch(
+        f"/clubs/test-club/live-sessions/{session['session_key']}/scores",
+        headers={"fly-client-ip": "203.0.113.8"},
+        json={
+            "edit_token": "wrong-token",
+            "expected_version": 1,
+            "idempotency_key": "api-score-wrong-0001",
+            "scores": [{"match_id": first_match["id"], "score_a": 11, "score_b": 7}],
+        },
+    )
+    assert wrong.status_code == 403
+
+    saved = client.patch(
+        f"/clubs/test-club/live-sessions/{session['session_key']}/scores",
+        headers={"fly-client-ip": "203.0.113.8"},
+        json={
+            "edit_token": token,
+            "expected_version": 1,
+            "idempotency_key": "api-score-save-0001",
+            "scores": [{"match_id": first_match["id"], "score_a": 11, "score_b": 7}],
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["session"]["version"] == 2
+
+    stale = client.patch(
+        f"/clubs/test-club/live-sessions/{session['session_key']}/scores",
+        headers={"fly-client-ip": "203.0.113.8"},
+        json={
+            "edit_token": token,
+            "expected_version": 1,
+            "idempotency_key": "api-score-stale-0001",
+            "scores": [{"match_id": first_match["id"], "score_a": 11, "score_b": 8}],
+        },
+    )
+    assert stale.status_code == 409
+
+
+def test_public_live_write_api_validates_idempotency_key(write_client):
+    client, supabase = write_client
+    response = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={"fly-client-ip": "203.0.113.9"},
+        json=_create_payload("short"),
+    )
+    assert response.status_code == 422
+    assert supabase.tables["live_sessions"] == []
+
+
+def test_public_live_write_api_bounds_public_collections_before_service_work(write_client):
+    client, supabase = write_client
+    payload = _create_payload("api-bounded-roster-0001")
+    payload["participant_names"] = [f"Player {index}" for index in range(21)]
+    response = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={"fly-client-ip": "203.0.113.12"},
+        json=payload,
+    )
+    assert response.status_code == 422
+    assert supabase.tables["live_sessions"] == []
+    assert supabase.tables["public_live_operations"] == []
+
+
+def test_public_live_write_api_maps_durable_rate_limit(write_client, monkeypatch):
+    client, supabase = write_client
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_CREATE_LIMIT_PER_HOUR", "1")
+    first = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={"fly-client-ip": "203.0.113.10"},
+        json=_create_payload("api-rate-create-0001"),
+    )
+    second = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={"fly-client-ip": "203.0.113.10"},
+        json=_create_payload("api-rate-create-0002"),
+    )
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert len(supabase.tables["live_sessions"]) == 1
+
+
+def test_public_live_rate_scope_keeps_vercel_visitors_separate(write_client, monkeypatch):
+    client, supabase = write_client
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_CREATE_LIMIT_PER_HOUR", "1")
+    shared_fly_headers = {"fly-client-ip": "198.51.100.7"}
+
+    first = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={**shared_fly_headers, "x-vercel-forwarded-for": "203.0.113.21"},
+        json=_create_payload("api-vercel-visitor-one"),
+    )
+    second = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={**shared_fly_headers, "x-vercel-forwarded-for": "203.0.113.22"},
+        json=_create_payload("api-vercel-visitor-two"),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len({row["requester_hash"] for row in supabase.tables["public_live_operations"]}) == 2
+
+
+def test_public_live_write_api_needs_separate_production_gate(write_client, monkeypatch):
+    client, supabase = write_client
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES", "1")
+    monkeypatch.delenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", raising=False)
+    response = client.post(
+        "/clubs/test-club/live-sessions",
+        headers={"fly-client-ip": "203.0.113.11"},
+        json=_create_payload("api-prod-gate-0001"),
+    )
+    assert response.status_code == 403
+    assert supabase.tables["live_sessions"] == []
