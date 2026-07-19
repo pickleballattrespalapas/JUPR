@@ -123,7 +123,7 @@ Do not enable high-risk workflow flags broadly until the workflow has server-sid
 - `POST /clubs/{club_slug}/tournament-registration/edit`
 - `GET /clubs/{club_slug}/tournament-registration/confirmation?confirmation_token=...`
 - `GET /clubs/{club_slug}/tournament-roster?registration_slug=...&tournament_id=...`
-- `POST /clubs/{club_slug}/tournament-registration/pairing-interest`
+- `POST /clubs/{club_slug}/tournament-registration/pairing-interest` with token-gated `requester_selection_id` and public `board_entry_key`
 - `GET /clubs/{club_slug}/players`
 - `GET /clubs/{club_slug}/players/{player_id}`
 - `GET /clubs/{club_slug}/matches`

@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 
 from jupr_app.domain.notifications.tournament_pairing_interest_email import send_pairing_interest_emails
 from jupr_app.domain.tournament_partner_service import accept_partner_request, create_partner_request
+from jupr_app.domain.tournament_public_references import public_tournament_reference_matches
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token
 from jupr_app.services.public_tournament_registration_edit_service import _public_web_base_url, _verified_bundle
 from jupr_app.services.public_tournament_registration_service import _clean_email, _clean_text, _safe_bool
@@ -30,6 +31,30 @@ def _selection_by_id(supabase: Any, selection_id: str) -> dict[str, Any] | None:
         .limit(1)
         .execute()
     )
+
+
+def _selection_by_public_entry_key(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    board_entry_key: str,
+) -> dict[str, Any] | None:
+    rows = _safe_rows(
+        supabase.table("tournament_registration_selections")
+        .select("*")
+        .eq("tournament_id", str(tournament_id))
+        .execute()
+    )
+    for row in rows:
+        selection_id = str(row.get("id") or "").strip()
+        if public_tournament_reference_matches(
+            board_entry_key,
+            tournament_id=str(tournament_id),
+            namespace="partner-board-selection",
+            source_id=selection_id,
+        ):
+            return row
+    return None
 
 
 def _event_by_id(supabase: Any, event_option_id: str) -> dict[str, Any] | None:
@@ -177,7 +202,8 @@ def create_public_tournament_partner_request(
     club_id: str,
     edit_token: str,
     requester_selection_id: str,
-    target_selection_id: str,
+    target_selection_id: str | None = None,
+    target_public_entry_key: str | None = None,
     tournament_id: str | None = None,
     website: str | None = None,
     club_slug: str = "tres-palapas",
@@ -204,6 +230,16 @@ def create_public_tournament_partner_request(
     settings = bundle.get("settings") or {}
     selections = bundle.get("selections") or []
     requester_selection_id = _clean_text(requester_selection_id, limit=160)
+    public_target_key = _clean_text(target_public_entry_key, limit=80)
+    if public_target_key:
+        public_target = _selection_by_public_entry_key(
+            supabase,
+            tournament_id=tid,
+            board_entry_key=public_target_key,
+        )
+        if not public_target:
+            raise ValueError("Target partner-board entry was not found.")
+        target_selection_id = str(public_target.get("id") or "")
     target_selection_id = _clean_text(target_selection_id, limit=160)
     if not requester_selection_id or not target_selection_id:
         raise ValueError("Requester and target selections are required.")

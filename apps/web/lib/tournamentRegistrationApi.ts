@@ -85,44 +85,30 @@ export type TournamentRegistrationResponse = {
 };
 
 export type PublicTournamentRosterMember = {
-  registration_id?: string | null;
-  selection_id?: string | null;
-  player_id?: string | number | null;
   display_name: string;
   skill?: string | number | null;
-  age?: number | null;
   age_bracket?: string | null;
-  dupr_id?: string | null;
 };
 
 export type PublicTournamentRosterEntry = {
-  event_day_id?: string | null;
+  public_entry_key?: string | null;
   event_day_label?: string | null;
   event_family: string;
   division: string;
   event_label: string;
   status?: string | null;
   entry_type?: string | null;
-  partner_request_id?: string | null;
-  partner_link_id?: string | null;
-  source_registration_ids?: string[];
-  source_selection_ids?: string[];
-  source_player_ids?: Array<string | number>;
   members: PublicTournamentRosterMember[];
 };
 
 export type PublicTournamentNeedsPartnerEntry = {
   player_name?: string | null;
-  selection_id?: string | null;
-  registration_id?: string | null;
-  player_id?: string | number | null;
-  event_option_id?: string | null;
+  board_entry_key?: string | null;
   event_day_label?: string | null;
   event_family?: string | null;
   division?: string | null;
   event_label?: string | null;
   skill?: string | number | null;
-  age?: number | null;
   age_bracket?: string | null;
   note?: string | null;
 };

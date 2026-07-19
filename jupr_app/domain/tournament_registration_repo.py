@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from typing import Any
 import math
 import re
 import uuid
+from datetime import date, datetime, timezone
+from typing import Any
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
+from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
 from .tournament_registration_compiler import compile_tournament_registration_state, validate_selection_against_skill
 
@@ -1817,26 +1818,74 @@ def build_public_tournament_roster_state(
     event_lookup = {str(row.get("id")): row for row in (state.get("event_options") or [])}
 
     status_map = {
-        "CONFIRMED": None,
-        "ADMIN_CONFIRMED": None,
+        "CONFIRMED": "Registered",
+        "ADMIN_CONFIRMED": "Registered",
         "WAITLIST": "Waitlist",
-        "REVIEW": None,
-        "PARTNER_MISSING": None,
+        "REVIEW": "Review",
+        "PARTNER_MISSING": "Review",
         "NEEDS_PARTNER": "Needs Partner",
         "PENDING_PARTNER_REQUEST": "Pending Partner Request",
-        "LEGACY_PARTNER_UNRESOLVED": None,
+        "LEGACY_PARTNER_UNRESOLVED": "Review",
     }
+
+    email_pattern = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+    phone_pattern = re.compile(r"(?<!\w)(?:\+?\d[\s().-]*){7,}\d(?!\w)")
+
+    def _public_text(value: Any, *, limit: int = 160) -> str:
+        return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
+
+    def _public_display_name(value: Any) -> str:
+        text = _public_text(value)
+        if not text or email_pattern.search(text) or phone_pattern.search(text):
+            return "Player"
+        return text
+
+    def _public_age_bracket(member: dict[str, Any]) -> str | None:
+        explicit = _public_text(member.get("age_bracket"), limit=40)
+        if explicit:
+            return explicit
+        try:
+            age = int(member.get("age"))
+        except (TypeError, ValueError):
+            return None
+        if age < 18:
+            return "Under 18"
+        if age >= 60:
+            return "60+"
+        lower = (age // 10) * 10
+        return f"{lower}-{lower + 9}"
+
+    def _public_note(value: Any) -> str:
+        text = _public_text(value, limit=240)
+        text = email_pattern.sub("[contact removed]", text)
+        text = phone_pattern.sub("[contact removed]", text)
+        return text
+
+    def _public_skill(value: Any) -> str | int | float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        text = _public_text(value, limit=24)
+        return text or None
+
+    def _public_status(value: Any) -> str:
+        # Unknown and unresolved states fail closed to Review. A missing value
+        # must never be interpreted as a confirmed registration in the browser.
+        return status_map.get(str(value or "").upper(), "Review")
+
+    def _public_entry_type(value: Any) -> str:
+        return {
+            "confirmed_team": "Team",
+            "needs_partner": "Player",
+            "pending_partner_request": "Pairing",
+        }.get(str(value or "").strip().lower(), "Registration")
 
     def _public_member(member: dict[str, Any]) -> dict[str, Any]:
         return {
-            "registration_id": member.get("registration_id"),
-            "selection_id": member.get("selection_id"),
-            "player_id": member.get("player_id"),
-            "display_name": str(member.get("display_name") or "Player").strip(),
-            "skill": member.get("skill"),
-            "age": member.get("age"),
-            "age_bracket": member.get("age_bracket"),
-            "dupr_id": member.get("dupr_id"),
+            "display_name": _public_display_name(member.get("display_name")),
+            "skill": _public_skill(member.get("skill")),
+            "age_bracket": _public_age_bracket(member),
         }
 
     registrations_by_event: list[dict[str, Any]] = []
@@ -1852,56 +1901,79 @@ def build_public_tournament_roster_state(
         event_rows: list[dict[str, Any]] = []
 
         for entry in roster.get("entries", []):
-            members = [_public_member(member or {}) for member in (entry.get("members") or [])]
+            source_members = [member or {} for member in (entry.get("members") or [])]
+            members = [_public_member(member) for member in source_members]
             if not members:
                 continue
-            for member in members:
-                name_key = str(member.get("display_name") or "").strip().lower()
-                if name_key:
-                    unique_players.add(name_key)
+            for index, member in enumerate(source_members):
+                identity = next(
+                    (
+                        str(member.get(field) or "").strip()
+                        for field in ("player_id", "registration_id", "selection_id")
+                        if str(member.get(field) or "").strip()
+                    ),
+                    "",
+                )
+                if not identity:
+                    identity = str(members[index].get("display_name") or "").strip().lower()
+                if identity:
+                    unique_players.add(identity)
 
             status = str(entry.get("status") or "").upper()
+            selection_ids = sorted(
+                str(value).strip()
+                for value in (entry.get("source_selection_ids") or [])
+                if str(value or "").strip()
+            )
+            registration_ids = sorted(
+                str(value).strip()
+                for value in (entry.get("source_registration_ids") or [])
+                if str(value or "").strip()
+            )
+            entry_source = "|".join(selection_ids or registration_ids)
+            public_entry_key = build_public_tournament_reference(
+                tournament_id=str(tournament.get("id") or ""),
+                namespace="roster-entry",
+                source_id=entry_source,
+            )
             event_row = {
-                "event_day_id": str(roster.get("event_day_id") or ""),
-                "event_day_label": str(roster.get("event_day_label") or "").strip(),
-                "event_family": str(event_option.get("event_family_label") or roster.get("event_label") or "Event").strip(),
-                "division": str(event_option.get("division_name") or roster.get("event_label") or "Division").strip(),
-                "event_label": str(roster.get("event_label") or "").strip(),
-                "status": status_map.get(status),
-                "entry_type": str(entry.get("entry_type") or "").strip(),
-                "partner_request_id": entry.get("partner_request_id"),
-                "partner_link_id": entry.get("partner_link_id"),
-                "source_registration_ids": entry.get("source_registration_ids") or [],
-                "source_selection_ids": entry.get("source_selection_ids") or [],
-                "source_player_ids": entry.get("source_player_ids") or [],
+                "public_entry_key": public_entry_key or None,
+                "event_day_label": _public_text(roster.get("event_day_label"), limit=120),
+                "event_family": _public_text(event_option.get("event_family_label") or roster.get("event_label") or "Event", limit=160),
+                "division": _public_text(event_option.get("division_name") or roster.get("event_label") or "Division", limit=160),
+                "event_label": _public_text(roster.get("event_label"), limit=160),
+                "status": _public_status(status),
+                "entry_type": _public_entry_type(entry.get("entry_type")),
                 "members": members,
             }
             registrations_by_event.append(event_row)
             event_rows.append(event_row)
-            if status in {"CONFIRMED", "ADMIN_CONFIRMED", "WAITLIST"}:
+            if status in {"CONFIRMED", "ADMIN_CONFIRMED"}:
                 confirmed_teams.append(event_row)
             elif status == "PENDING_PARTNER_REQUEST":
                 pending_partner_requests.append(event_row)
-            elif status in {"LEGACY_PARTNER_UNRESOLVED", "PARTNER_MISSING", "REVIEW"}:
+            elif status not in {"NEEDS_PARTNER", "WAITLIST"}:
                 unresolved_partner_entries.append(event_row)
 
             if status == "NEEDS_PARTNER":
                 primary = members[0] if members else {}
+                source_selection_id = selection_ids[0] if selection_ids else ""
+                board_entry_key = build_public_tournament_reference(
+                    tournament_id=str(tournament.get("id") or ""),
+                    namespace="partner-board-selection",
+                    source_id=source_selection_id,
+                )
                 players_needing_partners.append(
                     {
                         "player_name": primary.get("display_name"),
-                        "selection_id": primary.get("selection_id") or (entry.get("source_selection_ids") or [None])[0],
-                        "registration_id": primary.get("registration_id") or (entry.get("source_registration_ids") or [None])[0],
-                        "player_id": primary.get("player_id") or (entry.get("source_player_ids") or [None])[0],
-                        "event_option_id": event_option_id,
+                        "board_entry_key": board_entry_key or None,
                         "event_day_label": event_row["event_day_label"],
                         "event_family": event_row["event_family"],
                         "division": event_row["division"],
                         "event_label": event_row["event_label"],
                         "skill": primary.get("skill"),
-                        "age": primary.get("age"),
                         "age_bracket": primary.get("age_bracket"),
-                        "note": str(entry.get("notes") or "").strip(),
+                        "note": _public_note(entry.get("notes")),
                     }
                 )
 

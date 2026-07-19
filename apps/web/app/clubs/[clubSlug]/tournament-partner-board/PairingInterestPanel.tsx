@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { PublicRegistrationEditSelection, PublicTournamentNeedsPartnerEntry } from "@/lib/tournamentRegistrationApi";
 
 type PairingInterestPanelProps = {
@@ -25,16 +25,6 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const selectionsByEvent = useMemo(() => {
-    const map = new Map<string, PublicRegistrationEditSelection[]>();
-    for (const selection of requesterSelections) {
-      const eventId = String(selection.event_option_id || "");
-      if (!eventId) continue;
-      map.set(eventId, [...(map.get(eventId) || []), selection]);
-    }
-    return map;
-  }, [requesterSelections]);
-
   async function sendInterest(entry: PublicTournamentNeedsPartnerEntry) {
     setMessage(null);
     setError(null);
@@ -42,8 +32,8 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
       setError("API base URL is not configured.");
       return;
     }
-    const entryKey = String(entry.selection_id || "");
-    const requesterSelectionId = selectionByEntry[entryKey] || selectionsByEvent.get(String(entry.event_option_id || ""))?.[0]?.id || "";
+    const entryKey = String(entry.board_entry_key || "");
+    const requesterSelectionId = selectionByEntry[entryKey] || requesterSelections[0]?.id || "";
     if (!entryKey || !requesterSelectionId) {
       setError("Choose one of your registrations for this division before sending a request.");
       return;
@@ -58,7 +48,7 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
           registration_slug: registrationSlug || null,
           edit_token: editToken,
           requester_selection_id: requesterSelectionId,
-          board_entry_selection_id: entryKey
+          board_entry_key: entryKey
         })
       });
       const payload = await response.json().catch(() => null);
@@ -78,8 +68,8 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
   return (
     <div style={{ display: "grid", gap: "0.75rem" }}>
       {boardEntries.map((entry) => {
-        const entryKey = String(entry.selection_id || "");
-        const possibleSelections = selectionsByEvent.get(String(entry.event_option_id || "")) || [];
+        const entryKey = String(entry.board_entry_key || "");
+        const possibleSelections = requesterSelections;
         if (!entryKey || !possibleSelections.length) return null;
         return (
           <div key={entryKey} style={{ borderTop: "1px solid #e2e8f0", paddingTop: "0.75rem", marginTop: "0.75rem" }}>

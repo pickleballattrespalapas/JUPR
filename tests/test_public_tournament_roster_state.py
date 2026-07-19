@@ -1,4 +1,5 @@
 from jupr_app.domain import tournament_registration_repo as repo
+from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
 
 def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_list(monkeypatch):
@@ -25,10 +26,12 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
                     {
                         "status": "CONFIRMED",
                         "members": [{"display_name": "Confirmed Player"}],
+                        "source_selection_ids": ["sel-confirmed"],
                     },
                     {
                         "status": "WAITLIST",
                         "members": [{"display_name": "Waitlist Player"}],
+                        "source_selection_ids": ["sel-waitlist"],
                     },
                     {
                         "status": "NEEDS_PARTNER",
@@ -45,14 +48,22 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
                             }
                         ],
                         "notes": "Can play either side",
+                        "source_selection_ids": ["sel-joe"],
                     },
                     {
                         "status": "REVIEW",
                         "members": [{"display_name": "Review Player"}],
+                        "source_selection_ids": ["sel-review"],
                     },
                     {
                         "status": "PARTNER_MISSING",
                         "members": [{"display_name": "Partner Missing Player"}],
+                        "source_selection_ids": ["sel-missing"],
+                    },
+                    {
+                        "status": None,
+                        "members": [{"display_name": "Unknown State Player"}],
+                        "source_selection_ids": ["sel-unknown"],
                     },
                     {
                         "status": "CONFIRMED",
@@ -76,6 +87,7 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
                                 "player_id": 88,
                             }
                         ],
+                        "source_selection_ids": ["sel-mixed"],
                     },
                 ],
             },
@@ -103,14 +115,16 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
         "Joe Baumann",
         "Review Player",
         "Partner Missing Player",
+        "Unknown State Player",
         "Mixed Needs Partner",
     ]
     assert [row["status"] for row in roster_rows] == [
-        None,
+        "Registered",
         "Waitlist",
         "Needs Partner",
-        None,
-        None,
+        "Review",
+        "Review",
+        "Review",
         "Needs Partner",
     ]
     assert "Pending Review" not in {row["status"] for row in roster_rows}
@@ -120,7 +134,6 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
         for row in roster_rows
         if row["members"][0]["display_name"] == "Joe Baumann"
     )
-    assert needs_partner_row["event_day_id"] == "day-3"
     assert needs_partner_row["event_day_label"] == "Day 3"
     assert needs_partner_row["event_family"] == "Men's Doubles"
     assert needs_partner_row["division"] == "3.5"
@@ -129,39 +142,83 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
     assert state["players_needing_partners"] == [
         {
             "player_name": "Joe Baumann",
-            "selection_id": "sel-joe",
-            "registration_id": "reg-joe",
-            "player_id": 42,
-            "event_option_id": "event-1",
+            "board_entry_key": build_public_tournament_reference(
+                tournament_id="t-1",
+                namespace="partner-board-selection",
+                source_id="sel-joe",
+            ),
             "event_day_label": "Day 3",
             "event_family": "Men's Doubles",
             "division": "3.5",
             "event_label": "Men's Doubles 3.5",
             "skill": "3.5",
-            "age": 42,
             "age_bracket": "40+",
             "note": "Can play either side",
         },
         {
             "player_name": "Mixed Needs Partner",
-            "selection_id": "sel-mixed",
-            "registration_id": "reg-mixed",
-            "player_id": 88,
-            "event_option_id": "event-2",
+            "board_entry_key": build_public_tournament_reference(
+                tournament_id="t-1",
+                namespace="partner-board-selection",
+                source_id="sel-mixed",
+            ),
             "event_day_label": "Day 4/5",
             "event_family": "Mixed Doubles",
             "division": "4.0",
             "event_label": "Mixed Doubles 4.0",
             "skill": None,
-            "age": None,
             "age_bracket": None,
             "note": "",
         },
     ]
     assert state["summary"]["waitlist"] == 1
-    assert [row["members"][0]["display_name"] for row in state["confirmed_teams"]] == ["Confirmed Player", "Waitlist Player"]
+    assert [row["members"][0]["display_name"] for row in state["confirmed_teams"]] == ["Confirmed Player"]
     assert state["pending_partner_requests"] == []
-    assert [row["members"][0]["display_name"] for row in state["unresolved_partner_entries"]] == ["Review Player", "Partner Missing Player"]
+    assert [row["members"][0]["display_name"] for row in state["unresolved_partner_entries"]] == ["Review Player", "Partner Missing Player", "Unknown State Player"]
+
+
+def test_public_roster_null_state_and_email_fallback_fail_closed(monkeypatch):
+    compiled_state = {
+        "event_options": [{"id": "event-1", "event_family_label": "Doubles", "division_name": "Open"}],
+        "event_rosters": [
+            {
+                "event_option_id": "event-1",
+                "event_day_label": "Saturday",
+                "event_label": "Open Doubles",
+                "entries": [
+                    {
+                        "status": None,
+                        "members": [
+                            {
+                                "display_name": "private@example.com",
+                                "email": "private@example.com",
+                                "phone": "555-010-1234",
+                                "dupr_id": "PRIVATE-DUPR",
+                                "player_id": 99,
+                                "age": 34,
+                            }
+                        ],
+                        "source_registration_ids": ["reg-private"],
+                        "source_selection_ids": ["sel-private"],
+                        "source_player_ids": [99],
+                    }
+                ],
+            }
+        ],
+        "summary": {},
+    }
+    monkeypatch.setattr(repo, "build_registration_state", lambda *_args, **_kwargs: compiled_state)
+
+    state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
+    row = state["registrations_by_event"][0]
+
+    assert row["status"] == "Review"
+    assert row["members"] == [{"display_name": "Player", "skill": None, "age_bracket": "30-39"}]
+    assert row["public_entry_key"].startswith("tr_")
+    assert "source_selection_ids" not in row
+    assert "registration_id" not in row["members"][0]
+    assert state["confirmed_teams"] == []
+    assert state["unresolved_partner_entries"] == [row]
 
 from types import SimpleNamespace
 

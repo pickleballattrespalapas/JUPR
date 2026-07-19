@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token
 from jupr_app.services import public_tournament_partner_request_service as pairing_service
 from jupr_app.services.public_tournament_partner_request_service import create_public_tournament_partner_request
@@ -55,7 +56,11 @@ def test_public_pairing_interest_emails_player_and_organizer(monkeypatch) -> Non
         tournament_id="t1",
         edit_token=token,
         requester_selection_id=requester_selection_id,
-        target_selection_id=target_selection_id,
+        target_public_entry_key=build_public_tournament_reference(
+            tournament_id="t1",
+            namespace="partner-board-selection",
+            source_id=target_selection_id,
+        ),
     )
 
     assert result["ok"] is True

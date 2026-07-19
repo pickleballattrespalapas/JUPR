@@ -93,6 +93,45 @@ for (const surface of publicSurfaces) {
   });
 }
 
+test("tournament roster filters and public deep links remain navigable", async ({ page }) => {
+  const response = await page.goto(`/clubs/${clubSlug}/tournament-roster`, { waitUntil: "domcontentloaded" });
+  expect(response).not.toBeNull();
+  expect(response?.ok()).toBeTruthy();
+  await expect(page.getByRole("heading", { name: /tournament roster|open/i }).first()).toBeVisible();
+
+  const filterForm = page.getByRole("form", { name: "Tournament roster filters" });
+  const rowLink = page.getByRole("link", { name: /roster entry/i }).first();
+  const unavailable = page.getByRole("alert").filter({ hasText: /temporarily unavailable|not configured/i });
+  const empty = page.getByRole("heading", { name: /no roster entries yet|no matching roster entries/i });
+
+  if (await filterForm.count()) {
+    await expect(filterForm.getByLabel("Day")).toBeVisible();
+    await expect(filterForm.getByLabel("Event")).toBeVisible();
+    await expect(filterForm.getByLabel("Division")).toBeVisible();
+    await expect(filterForm.getByLabel("Status")).toBeVisible();
+    await expect(filterForm.getByRole("button", { name: "Apply filters" })).toBeVisible();
+  }
+
+  if (await rowLink.count()) {
+    const href = await rowLink.getAttribute("href");
+    expect(href).toBeTruthy();
+    const target = new URL(String(href), page.url());
+    expect(target.hash).toMatch(/^#entry-/);
+    await page.goto(target.toString(), { waitUntil: "domcontentloaded" });
+    await expect(page.locator(target.hash)).toBeVisible();
+  } else {
+    await expect(empty.or(unavailable).or(page.getByText(/No tournament roster is currently published|No published tournament roster was found/i)).first()).toBeVisible();
+  }
+
+  const partnerLink = page.getByRole("link", { name: "View on partner board" }).first();
+  if (await partnerLink.count()) {
+    const href = String(await partnerLink.getAttribute("href"));
+    expect(href).toContain("/tournament-partner-board");
+    expect(href).toMatch(/#partner-tr-[a-f0-9]{24}$/);
+    expect(href).not.toMatch(/selection_id|registration_id|player_id/);
+  }
+});
+
 for (const surface of adminSurfaces) {
   test(`admin shell: ${surface.name}`, async ({ page }) => {
     await expectHealthySurface(page, surface);
