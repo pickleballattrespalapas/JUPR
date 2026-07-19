@@ -15,7 +15,7 @@ export default async function AdminPlayersPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Player Editor</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Next/FastAPI foundation for player roster/detail, add-player, and basic player profile edits. High-risk merge, league-rating edit, and social identity linking workflows remain on Streamlit until replay/correction safety is proven.
+        Guarded Next/FastAPI workflows for player roster/detail, add-player, profile and league-rating edits, social identity linking, and reviewed merge preview/execute. Use Replay History immediately after a merge if recovery is required.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Player Editor status is unavailable. {error}</p> : null}
@@ -24,7 +24,7 @@ export default async function AdminPlayersPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
           <article style={cardStyle}><strong>Status</strong><br />{status.status.replace(/_/g, " ")}</article>
           <article style={cardStyle}><strong>Players</strong><br />{status.player_count ?? "—"}</article>
-          <article style={cardStyle}><strong>Writes</strong><br />Create + basic update</article>
+          <article style={cardStyle}><strong>Writes</strong><br />Create, update, link + guarded merge</article>
           <article style={cardStyle}><strong>Gate</strong><br /><code>manage_players</code></article>
         </div>
       ) : null}

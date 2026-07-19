@@ -1,102 +1,46 @@
-"use client";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getClub } from "@/lib/api";
+import { isNextAdminScoreEntryEnabled } from "@/lib/scoreEntry";
 
-import { useState } from "react";
-
-type MatchPayload = {
-  league: string;
-  t1_p1: string;
-  t1_p2: string;
-  t2_p1: string;
-  t2_p2: string;
-  s1: number;
-  s2: number;
+type LegacyScoreEntryPageProps = {
+  params: { clubId: string };
 };
 
-export default function ScoreEntryPage({ params }: { params: { clubId: string } }) {
-  const isEnabled = (() => {
-    const value = (process.env.NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY || "").trim().toLowerCase();
-    return value === "1" || value === "true" || value === "yes";
-  })();
-  const [match, setMatch] = useState<MatchPayload>({
-    league: "",
-    t1_p1: "",
-    t1_p2: "",
-    t2_p1: "",
-    t2_p2: "",
-    s1: 11,
-    s2: 0,
-  });
-  const [status, setStatus] = useState<string>("");
-  const [busy, setBusy] = useState(false);
+export default async function LegacyScoreEntryPage({ params }: LegacyScoreEntryPageProps) {
+  if (!isNextAdminScoreEntryEnabled()) {
+    return (
+      <section>
+        <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
+          Admin score entry
+        </p>
+        <h1 style={{ marginTop: 0 }}>Score entry is disabled</h1>
+        <p style={{ color: "#475569" }}>
+          This guarded workflow is available only in explicitly enabled staff environments.
+        </p>
+        <p><Link href="/admin">Return to the operations cockpit</Link></p>
+      </section>
+    );
+  }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setStatus("");
-    try {
-      const response = await fetch(`/api/admin/clubs/${params.clubId}/matches/batch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matches: [match], source: "next_admin_score_entry" }),
-      });
-      const body = await response.json();
-      if (!response.ok) {
-        setStatus(`Error: ${body?.error || body?.detail || "Unable to submit"}`);
-      } else {
-        const inserted = body?.result?.inserted ?? 0;
-        const skipped = body?.result?.skipped_incomplete ?? 0;
-        setStatus(`Submitted. Inserted: ${inserted}, skipped: ${skipped}`);
-      }
-    } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : "Unknown error"}`);
-    } finally {
-      setBusy(false);
-    }
+  const { data, error } = await getClub(params.clubId);
+  const clubSlug = String(data?.slug || "").trim();
+
+  if (clubSlug) {
+    redirect(`/clubs/${encodeURIComponent(clubSlug)}/admin/score-entry`);
   }
 
   return (
-    <main style={{ maxWidth: 700, margin: "2rem auto", padding: "0 1rem" }}>
-      <h1>Score Entry</h1>
-      <p>Club: {params.clubId}</p>
-      {!isEnabled ? (
-        <p>
-          Score entry is not enabled in the Next.js admin yet. Use the Streamlit admin console for rated events.
-        </p>
-      ) : null}
-      {!isEnabled ? null : (
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: "0.75rem" }}>
-        <label>
-          League
-          <input value={match.league} onChange={(e) => setMatch({ ...match, league: e.target.value })} required />
-        </label>
-        <label>
-          Team 1 Player 1 (ID or name)
-          <input value={match.t1_p1} onChange={(e) => setMatch({ ...match, t1_p1: e.target.value })} required />
-        </label>
-        <label>
-          Team 1 Player 2 (ID or name)
-          <input value={match.t1_p2} onChange={(e) => setMatch({ ...match, t1_p2: e.target.value })} required />
-        </label>
-        <label>
-          Team 2 Player 1 (ID or name)
-          <input value={match.t2_p1} onChange={(e) => setMatch({ ...match, t2_p1: e.target.value })} required />
-        </label>
-        <label>
-          Team 2 Player 2 (ID or name)
-          <input value={match.t2_p2} onChange={(e) => setMatch({ ...match, t2_p2: e.target.value })} required />
-        </label>
-        <label>
-          Team 1 score
-          <input type="number" value={match.s1} onChange={(e) => setMatch({ ...match, s1: Number(e.target.value) })} min={0} required />
-        </label>
-        <label>
-          Team 2 score
-          <input type="number" value={match.s2} onChange={(e) => setMatch({ ...match, s2: Number(e.target.value) })} min={0} required />
-        </label>
-        <button type="submit" disabled={busy}>{busy ? "Submitting..." : "Submit"}</button>
-      </form>
-      )}
-      {status ? <p>{status}</p> : null}
-    </main>
+    <section>
+      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
+        Admin score entry
+      </p>
+      <h1 style={{ marginTop: 0 }}>Unable to resolve this club</h1>
+      <p style={{ color: "#475569" }}>
+        The older club-ID score-entry address now resolves to the auth-aware club route. No score was submitted.
+      </p>
+      {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
+      <p><Link href="/admin">Return to the operations cockpit</Link></p>
+    </section>
   );
 }

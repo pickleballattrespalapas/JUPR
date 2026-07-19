@@ -5,6 +5,9 @@ from typing import Any
 from jupr_app.domain.admin.roles import ROLE_SUPER_ADMIN, is_roles_table_missing_error, normalize_role
 
 
+ROLE_ASSIGNMENT_COLUMNS = "id,club_id,email,role,user_id,created_at,updated_at"
+
+
 def normalize_email(email: str | None) -> str:
     return str(email or "").strip().lower()
 
@@ -12,7 +15,7 @@ def normalize_email(email: str | None) -> str:
 def list_role_assignments(supabase: Any, club_id: str) -> list[dict[str, Any]]:
     response = (
         supabase.table("admin_role_assignments")
-        .select("club_id,email,role,user_id,created_at,updated_at")
+        .select(ROLE_ASSIGNMENT_COLUMNS)
         .eq("club_id", str(club_id or "").strip())
         .order("email")
         .execute()

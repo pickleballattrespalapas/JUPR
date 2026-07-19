@@ -35,7 +35,8 @@ export default async function LeagueManagerLivePage() {
           <li>Schedule generation runs through FastAPI/Python Match Uploader preview logic.</li>
           <li>Official score submission runs through FastAPI/Python Match Uploader processing and audit logging.</li>
           <li>Only valid non-tied scores are submitted; later corrections should use Match Log and Replay History.</li>
-          <li>This slice does not yet persist multi-round court movement state. Use Streamlit fallback for full live ladder movement until proven.</li>
+          <li>Session snapshots and multi-round court movement are persisted through the guarded League Manager API so an interrupted night can be resumed.</li>
+          <li>Keep Streamlit available for recovery until the persisted live workflow is proven in the staging pilot.</li>
         </ul>
       </article>
 

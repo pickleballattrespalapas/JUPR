@@ -106,6 +106,7 @@ Before enabling Next.js admin score entry for rated workflows, future implementa
 - Denied authenticated attempts are logged with `flagged_for_review=true`.
 - Unauthenticated requests are not audit-logged to avoid token leakage risk.
 - Strict mode: set `JUPR_REQUIRE_API_AUDIT_LOG=1` to fail writes when audit persistence fails.
+- Strict Admin Tools role changes require an audit-intent record before mutation, and intent/completion records share an operation ID. Target-row writes and rollback use `id` plus `updated_at` compare-and-set guards; final-super-admin removal also receives a post-write safety check. Unknown write outcomes and unsuccessful rollback are surfaced as critical manual-review conditions.
 - Default mode degrades gracefully if `admin_activity_log` is unavailable in staging.
 
 ## Next admin login foundation

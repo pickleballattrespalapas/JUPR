@@ -9,11 +9,11 @@ from typing import Any
 import pandas as pd
 
 from jupr_app.domain.admin.role_assignments import (
-    delete_role_assignment,
+    ROLE_ASSIGNMENT_COLUMNS,
+    count_super_admin_assignments,
     has_other_super_admin_support,
     list_role_assignments,
     normalize_email,
-    upsert_role_assignment,
 )
 from jupr_app.domain.admin.roles import ALL_ROLES, ROLE_SUPER_ADMIN, normalize_role
 from jupr_app.domain.admin_activity_log import (
@@ -56,6 +56,220 @@ BADGE_RECOMPUTE_MODES = ("dry-run", "append-only", "strict")
 
 def is_admin_tools_enabled() -> bool:
     return os.getenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "").strip().lower() in TRUTHY
+
+
+def _strict_audit_required() -> bool:
+    return os.getenv("JUPR_REQUIRE_API_AUDIT_LOG", "").strip().lower() in TRUTHY
+
+
+def _role_assignment_snapshot(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "email": normalize_email(row.get("email")),
+        "role": normalize_role(row.get("role")),
+        "user_id": str(row.get("user_id") or "").strip() or None,
+    }
+
+
+def _role_assignment_record(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    return {
+        "id": row.get("id"),
+        "club_id": str(row.get("club_id") or "").strip(),
+        **(_role_assignment_snapshot(row) or {}),
+        "created_at": str(row.get("created_at") or "").strip() or None,
+        "updated_at": str(row.get("updated_at") or "").strip() or None,
+    }
+
+
+def _role_assignment_write_token(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    record = _role_assignment_record(row)
+    if record is None or record.get("id") is None or not record.get("updated_at"):
+        return None
+    return {"id": record.get("id"), "updated_at": record.get("updated_at")}
+
+
+def _find_role_assignment(rows: list[dict[str, Any]], email: str) -> dict[str, Any] | None:
+    normalized_email = normalize_email(email)
+    return next(
+        (row for row in rows if normalize_email(row.get("email")) == normalized_email),
+        None,
+    )
+
+
+def _filter_role_write_token(query: Any, token: dict[str, Any]) -> Any:
+    return query.eq("id", token.get("id")).eq("updated_at", token.get("updated_at"))
+
+
+def _apply_role_assignment_change(
+    supabase: Any,
+    *,
+    club_id: str,
+    action: str,
+    before_record: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Apply one target-row mutation with optimistic concurrency control."""
+    email = normalize_email((after or before_record or {}).get("email"))
+    if not email:
+        raise RuntimeError("Role assignment target is unavailable.")
+
+    if action == "upsert":
+        payload = {
+            "club_id": str(club_id),
+            "email": email,
+            "role": str((after or {}).get("role") or ""),
+            "user_id": (after or {}).get("user_id"),
+        }
+        if before_record is None:
+            query = supabase.table("admin_role_assignments").insert(payload)
+        else:
+            token = _role_assignment_write_token(before_record)
+            if token is None:
+                raise RuntimeError("Role assignment version is unavailable; reload before changing roles.")
+            query = (
+                supabase.table("admin_role_assignments")
+                .update({"role": payload["role"], "user_id": payload["user_id"]})
+                .eq("club_id", str(club_id))
+                .eq("email", email)
+            )
+            query = _filter_role_write_token(query, token)
+    elif action == "revoke":
+        if before_record is None:
+            return None
+        token = _role_assignment_write_token(before_record)
+        if token is None:
+            raise RuntimeError("Role assignment version is unavailable; reload before changing roles.")
+        query = (
+            supabase.table("admin_role_assignments")
+            .delete()
+            .eq("club_id", str(club_id))
+            .eq("email", email)
+        )
+        query = _filter_role_write_token(query, token)
+    else:
+        raise RuntimeError("Unsupported role assignment action.")
+
+    changed = _safe_rows(query.select(ROLE_ASSIGNMENT_COLUMNS).execute())
+    if not changed:
+        return None
+    if len(changed) != 1:
+        raise RuntimeError("Role assignment mutation affected an unexpected number of rows.")
+    return _role_assignment_record(changed[0])
+
+
+def _compensate_role_assignment_change(
+    supabase: Any,
+    *,
+    club_id: str,
+    action: str,
+    before_record: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    write_record: dict[str, Any] | None,
+) -> bool:
+    """Restore one role row only when this request's exact write token is current."""
+    email = normalize_email((after or before_record or write_record or {}).get("email"))
+    if not email:
+        return False
+
+    current_rows = list_role_assignments(supabase, str(club_id))
+    current_record = _role_assignment_record(_find_role_assignment(current_rows, email))
+
+    if action == "upsert":
+        token = _role_assignment_write_token(write_record)
+        if (
+            token is None
+            or _role_assignment_snapshot(current_record) != after
+            or _role_assignment_write_token(current_record) != token
+        ):
+            return False
+        if before_record is None:
+            query = (
+                supabase.table("admin_role_assignments")
+                .delete()
+                .eq("club_id", str(club_id))
+                .eq("email", email)
+            )
+            deleted = _safe_rows(
+                _filter_role_write_token(query, token)
+                .select(ROLE_ASSIGNMENT_COLUMNS)
+                .execute()
+            )
+            if len(deleted) != 1:
+                return False
+        else:
+            query = (
+                supabase.table("admin_role_assignments")
+                .update(
+                    {
+                        "role": before_record.get("role"),
+                        "user_id": before_record.get("user_id"),
+                    }
+                )
+                .eq("club_id", str(club_id))
+                .eq("email", email)
+            )
+            restored = _safe_rows(
+                _filter_role_write_token(query, token)
+                .select(ROLE_ASSIGNMENT_COLUMNS)
+                .execute()
+            )
+            if len(restored) != 1:
+                return False
+    elif action == "revoke":
+        if before_record is None:
+            return current_record is None and write_record is None
+        if (
+            current_record is not None
+            or _role_assignment_write_token(write_record) is None
+            or _role_assignment_write_token(write_record)
+            != _role_assignment_write_token(before_record)
+        ):
+            return False
+        inserted = _safe_rows(
+            supabase.table("admin_role_assignments")
+            .insert(before_record)
+            .select(ROLE_ASSIGNMENT_COLUMNS)
+            .execute()
+        )
+        if len(inserted) != 1:
+            return False
+    else:
+        return False
+
+    verified_rows = list_role_assignments(supabase, str(club_id))
+    verified_record = _role_assignment_record(_find_role_assignment(verified_rows, email))
+    if before_record is None:
+        return verified_record is None
+    return (
+        _role_assignment_snapshot(verified_record) == _role_assignment_snapshot(before_record)
+        and verified_record.get("id") == before_record.get("id")
+    )
+
+
+def _try_compensate_role_assignment_change(
+    supabase: Any,
+    *,
+    club_id: str,
+    action: str,
+    before_record: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    write_record: dict[str, Any] | None,
+) -> bool:
+    """Attempt a stale-safe role rollback without masking the original failure."""
+    try:
+        return _compensate_role_assignment_change(
+            supabase,
+            club_id=club_id,
+            action=action,
+            before_record=before_record,
+            after=after,
+            write_record=write_record,
+        )
+    except Exception:
+        return False
 
 
 def build_admin_tools_status(*, club_id: str) -> dict[str, Any]:
@@ -878,7 +1092,9 @@ def update_admin_role_assignment(
         raise ValueError("Enter a valid email address.")
     normalized_action = str(action or "").strip().lower()
     rows = list_role_assignments(supabase, str(club_id))
-    existing = next((row for row in rows if normalize_email(row.get("email")) == normalized_email), None)
+    existing = _find_role_assignment(rows, normalized_email)
+    before_record = _role_assignment_record(existing)
+    before = _role_assignment_snapshot(before_record)
 
     if normalized_action == "upsert":
         if str(confirmation_text or "").strip().upper() != CONFIRM_ROLE:
@@ -887,7 +1103,6 @@ def update_admin_role_assignment(
         if existing and normalize_role(existing.get("role")) == ROLE_SUPER_ADMIN and selected_role != ROLE_SUPER_ADMIN:
             if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=set()):
                 raise ValueError("Unsafe change blocked: this would remove the final super_admin access.")
-        upsert_role_assignment(supabase, str(club_id), normalized_email, selected_role, user_id=str(user_id or "").strip() or None)
         after = {"email": normalized_email, "role": selected_role, "user_id": str(user_id or "").strip() or None}
         action_type = "role_assignment_upsert"
         note = "Admin role assignment create/update"
@@ -897,12 +1112,128 @@ def update_admin_role_assignment(
         if existing and normalize_role(existing.get("role")) == ROLE_SUPER_ADMIN:
             if not has_other_super_admin_support(rows=rows, target_email=normalized_email, admin_allowlist=set()):
                 raise ValueError("Unsafe revoke blocked: this would remove the final super_admin access.")
-        delete_role_assignment(supabase, str(club_id), normalized_email)
         after = None
         action_type = "role_assignment_revoke"
         note = "Admin role assignment revoked"
     else:
         raise ValueError("action must be upsert or revoke")
+
+    operation_id = hashlib.sha256(
+        (
+            f"{club_id}:{normalized_email}:{normalized_action}:{actor_email}:"
+            f"{datetime.now(timezone.utc).isoformat()}"
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    strict_audit = _strict_audit_required()
+    if strict_audit:
+        intent_result = write_admin_activity_log(
+            supabase,
+            build_activity_payload(
+                club_id=str(club_id),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                action_type=f"{action_type}_intent",
+                entity_type="admin_role_assignment",
+                entity_id=normalized_email,
+                before_json=before,
+                after_json={
+                    "source_client": "fastapi/nextjs",
+                    "operation": "intent",
+                    "operation_id": operation_id,
+                    "proposed_assignment": after,
+                },
+                note=note,
+                source_page=source,
+                flagged_for_review=True,
+            ),
+        )
+        if not intent_result.ok:
+            raise RuntimeError("audit log write required but unavailable")
+
+    try:
+        write_record = _apply_role_assignment_change(
+            supabase,
+            club_id=str(club_id),
+            action=normalized_action,
+            before_record=before_record,
+            after=after,
+        )
+    except Exception as mutation_error:
+        raise RuntimeError(
+            "Critical: the role assignment write outcome is unknown. Stop role changes and review "
+            "Admin Tools activity plus the target assignment before retrying."
+        ) from mutation_error
+
+    expected_write = after if normalized_action == "upsert" else before
+    if expected_write is not None and write_record is None:
+        raise RuntimeError("Role assignment changed concurrently. Reload Admin Tools and try again.")
+    if write_record is not None and _role_assignment_snapshot(write_record) != expected_write:
+        compensated = _try_compensate_role_assignment_change(
+            supabase,
+            club_id=str(club_id),
+            action=normalized_action,
+            before_record=before_record,
+            after=after,
+            write_record=write_record,
+        )
+        if not compensated:
+            raise RuntimeError(
+                "Critical: the role assignment write response was unexpected and the prior assignment "
+                "could not be restored. Stop role changes and review the target assignment."
+            )
+        raise RuntimeError("Role assignment write was invalid; the prior assignment was restored.")
+
+    persisted_rows = list_role_assignments(supabase, str(club_id))
+    persisted_record = _role_assignment_record(
+        _find_role_assignment(persisted_rows, normalized_email)
+    )
+    expected_persisted = after if normalized_action == "upsert" else None
+    persisted_matches = _role_assignment_snapshot(persisted_record) == expected_persisted
+    if normalized_action == "upsert" and persisted_matches:
+        persisted_matches = (
+            _role_assignment_write_token(persisted_record)
+            == _role_assignment_write_token(write_record)
+        )
+    if not persisted_matches:
+        compensated = _try_compensate_role_assignment_change(
+            supabase,
+            club_id=str(club_id),
+            action=normalized_action,
+            before_record=before_record,
+            after=after,
+            write_record=write_record,
+        )
+        if not compensated:
+            raise RuntimeError(
+                "Critical: role assignment persistence could not be verified and the prior assignment "
+                "could not be restored. Stop role changes and review the target assignment."
+            )
+        raise RuntimeError("Role assignment verification failed; the prior assignment was restored.")
+
+    removes_super_admin = (
+        normalize_role((before or {}).get("role")) == ROLE_SUPER_ADMIN
+        and (
+            normalized_action == "revoke"
+            or normalize_role((after or {}).get("role")) != ROLE_SUPER_ADMIN
+        )
+    )
+    if removes_super_admin and count_super_admin_assignments(persisted_rows) == 0:
+        compensated = _try_compensate_role_assignment_change(
+            supabase,
+            club_id=str(club_id),
+            action=normalized_action,
+            before_record=before_record,
+            after=after,
+            write_record=write_record,
+        )
+        if not compensated:
+            raise RuntimeError(
+                "Critical: concurrent role changes removed the final super_admin and this change could "
+                "not be rolled back. Stop role changes and restore super_admin access."
+            )
+        raise ValueError(
+            "Unsafe concurrent change blocked: this would remove the final super_admin access."
+        )
 
     log_result = write_admin_activity_log(
         supabase,
@@ -913,18 +1244,39 @@ def update_admin_role_assignment(
             action_type=action_type,
             entity_type="admin_role_assignment",
             entity_id=normalized_email,
-            before_json={"role": str((existing or {}).get("role") or "") or None, "user_id": (existing or {}).get("user_id")},
-            after_json=after,
+            before_json=before,
+            after_json={
+                "source_client": "fastapi/nextjs",
+                "operation": "completion",
+                "operation_id": operation_id,
+                "assignment": after,
+            },
             note=note,
             source_page=source,
             flagged_for_review=True,
         ),
     )
+    if not log_result.ok and strict_audit:
+        compensated = _try_compensate_role_assignment_change(
+            supabase,
+            club_id=str(club_id),
+            action=normalized_action,
+            before_record=before_record,
+            after=after,
+            write_record=write_record,
+        )
+        if not compensated:
+            raise RuntimeError(
+                "Critical: audit log write failed and the role assignment change could not be "
+                "rolled back. Stop role changes and review Admin Tools activity plus the target assignment."
+            )
+        raise RuntimeError("audit log write required but unavailable")
     return {
         "ok": True,
         "mode": "admin_role_assignment_update",
         "action": normalized_action,
         "target_email": normalized_email,
+        "operation_id": operation_id,
         "audit_warning": log_result.warning,
         "roles": list_role_assignments(supabase, str(club_id)),
     }

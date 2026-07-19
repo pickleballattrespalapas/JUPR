@@ -15,7 +15,7 @@ export default async function AdminTournamentOpsPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Tournament operations snapshot</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Read-only Next/FastAPI foundation for Tournament Operations. It mirrors Streamlit operational visibility for draws, teams, games, and podium rows while write workflows remain Streamlit-only until explicitly ported.
+        Guarded Next/FastAPI tournament operations for draws, team imports, game and playoff generation, scoring, podiums, awards, and reviewed official-match publishing. Writes remain feature-flagged, permission-scoped, and audited; published match and rating corrections remain recoverable through Match Log and Replay History.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Tournament Admin status is temporarily unavailable. {error}</p> : null}

@@ -863,6 +863,14 @@ Acceptance criteria:
 
 ## PR 13 — First Next.js Admin Workflow: Scorekeeper Score Entry
 
+> **Implemented contract:** The canonical score-entry route is now
+> `/clubs/[clubSlug]/admin/score-entry`. It restores the operator's Supabase
+> session and sends `Authorization: Bearer <access token>` directly to the
+> protected FastAPI endpoint. The historical shared-token Next proxy described
+> below has been retired; `/admin/clubs/[clubId]/score-entry` is compatibility
+> routing only and resolves to the auth-aware club route; FastAPI remains the
+> Supabase JWT authorization boundary.
+
 **Suggested branch:** `codex/saas-13-nextjs-scorekeeper-entry`
 
 ```text
