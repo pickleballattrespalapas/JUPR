@@ -43,6 +43,7 @@ const adminSurfaces: Surface[] = [
   { name: "league manager", path: "/admin/league-manager", expected: /league manager/i },
   { name: "league printout", path: "/admin/league-manager/print", expected: /league night printout/i },
   { name: "top players printable", path: "/admin/top-players-printable", expected: /top active players/i },
+  { name: "league awards", path: "/admin/league-manager/awards", expected: /league awards/i },
   { name: "league live", path: "/admin/league-manager/live", expected: /league live/i },
   { name: "tournament setup", path: "/admin/tournament-setup", expected: /tournament setup/i },
   { name: "tournament admin", path: "/admin/tournaments", expected: /tournament registration management/i },

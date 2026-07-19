@@ -12,6 +12,8 @@ export type AdminLeagueManagerStatusResponse = {
   league_printout_endpoint?: string | null;
   top_players_printable_endpoint?: string | null;
   league_live_sessions_endpoint?: string | null;
+  league_awards_endpoint?: string | null;
+  awards_write_enabled?: boolean;
   league_count?: number | null;
   active_count?: number | null;
   warnings: string[];

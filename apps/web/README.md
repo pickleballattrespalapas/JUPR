@@ -45,7 +45,7 @@ Current public and staff-facing routes include:
 - `/data-corrections` public correction intake with no direct data mutation.
 - `/profile-privacy` identity-reviewed privacy fulfillment intake with no direct public-profile mutation.
 - `/admin` staff operations cockpit for the Streamlit-to-Next migration.
-- `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, and `/admin/league-manager` guarded staff migration surfaces.
+- `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, `/admin/league-manager`, and `/admin/league-manager/awards` guarded staff migration surfaces.
 - `/admin/league-manager/print` authenticated browser-print schedule, weekly leaders, configured Top Performers, standings, and attendance roster.
 - `/admin/top-players-printable` authenticated previous-calendar-month Top 50 browser export.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
@@ -72,6 +72,8 @@ fails the individual outbox send closed when no unsubscribe token is available;
 it never falls back to a public subscription ID.
 
 The `/admin` cockpit reads `GET /admin/operations/status` from FastAPI. Its workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI. When apply mode is enabled, guided and bulk edits carry stable idempotency keys; rating-affecting edits expose their durable Replay History job and block further editing when mandatory recovery is required.
+
+League Awards has a separate API-only `JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE` gate. It must never be mirrored into a browser variable. The page persists freeze/preview/override/mint/archive recovery state through FastAPI, blocks mint while any required badge definition is missing, and reports mint success only after FastAPI verifies all expected badge rows.
 
 Example:
 

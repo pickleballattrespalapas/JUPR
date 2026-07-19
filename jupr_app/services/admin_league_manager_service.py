@@ -27,6 +27,10 @@ def is_admin_league_manager_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER")
 
 
+def is_admin_league_awards_write_enabled() -> bool:
+    return is_admin_league_manager_enabled() and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE")
+
+
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in (resp.data or [])]
@@ -420,6 +424,8 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
             "league_printout_endpoint": None,
             "top_players_printable_endpoint": None,
             "league_live_sessions_endpoint": None,
+            "league_awards_endpoint": None,
+            "awards_write_enabled": False,
             "warnings": ["Next League Manager is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER on FastAPI for a closed-club pilot."],
         }
     leagues: list[dict[str, Any]] = []
@@ -442,11 +448,13 @@ def build_admin_league_manager_status(supabase: Any | None, *, club_id: str) -> 
         "league_printout_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/printout",
         "top_players_printable_endpoint": "/admin/clubs/{club_id}/league-manager/top-players-printable",
         "league_live_sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",
+        "league_awards_endpoint": "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards",
+        "awards_write_enabled": is_admin_league_awards_write_enabled(),
         "league_count": len(leagues),
         "active_count": len([league for league in leagues if league.get("status") == "active"]),
         "warnings": [
             "Settings, explicit lifecycle actions, roster membership, Python-authoritative leader exports, "
-            "browser-print output, and persisted League Live sessions are enabled through guarded FastAPI. "
+            "browser-print output, persisted League Live sessions, and staging-flagged League Awards are enabled through guarded FastAPI. "
             "Corrections still route through Match Log/Replay History."
         ],
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -58,6 +59,25 @@ def _fetch_league_meta(supabase: Any, *, club_id: str, league_name: str) -> dict
         .execute()
     )
     return rows[0] if rows else None
+
+
+def _league_awards_archive_ready(row: dict[str, Any]) -> bool:
+    raw = row.get("end_awards")
+    if raw in (None, ""):
+        return True
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return True
+    workflow = raw.get("workflow") if isinstance(raw, dict) else None
+    if not isinstance(workflow, dict) or int(workflow.get("version") or 0) < 2:
+        return True
+    mint = workflow.get("mint") if isinstance(workflow.get("mint"), dict) else {}
+    return str(workflow.get("status") or "") == "minted" and str(mint.get("status") or "") in {
+        "verified",
+        "skipped_by_legacy_request",
+    }
 
 
 def _transition_patch(
@@ -152,6 +172,8 @@ def transition_admin_league_manager_lifecycle(
         raise ValueError(
             f"Cannot {clean_action} a {previous_status} league; expected {allowed_label}."
         )
+    if clean_action == "archive" and not _league_awards_archive_ready(before):
+        raise ValueError("Complete and verify the persisted League Awards mint before archiving this league.")
 
     patch = _transition_patch(
         action=clean_action,

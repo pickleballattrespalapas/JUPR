@@ -13,6 +13,7 @@ This document tracks the League Manager migration from Streamlit to Next.js and 
 - FastAPI unsaved schedule preview endpoint: `POST /admin/clubs/{club_id}/league-manager/leagues/{league_name}/schedule/preview`.
 - FastAPI read-only league print model: `GET /admin/clubs/{club_id}/league-manager/leagues/{league_name}/printout?week_num=...`.
 - FastAPI read-only previous-month ranking model: `GET /admin/clubs/{club_id}/league-manager/top-players-printable?limit=...`.
+- Recoverable League Awards endpoints under `.../leagues/{league_name}/awards`: state, freeze, persisted preview, documented overrides, verified mint, and archive.
 - Next route: `/admin/league-manager`.
 - League status, K-factor, min-games, schedule preview, court-board/rules/awards configuration visibility, and standings snapshot.
 - Guarded draft creation and configuration-only duplication. Duplication never copies roster membership, standings, results, lifecycle dates, or issued awards.
@@ -35,6 +36,15 @@ The workflow is disabled unless the FastAPI runtime enables:
 JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER=1
 ```
 
+League Awards writes have a separate staging-first gate and require the FastAPI service-role credential:
+
+```text
+JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1
+SUPABASE_SERVICE_ROLE_KEY=<server-only>
+```
+
+Never put either server credential/key in Vercel or a `NEXT_PUBLIC_` variable. Production keeps the Awards write gate off until `docs/league_awards_parity_evidence.md` is signed off.
+
 ## Authorization
 
 When enabled, League Manager reads and writes require a stored Supabase admin session whose resolved role has `manage_matches` permission. Role lookup uses `admin_role_assignments` through FastAPI.
@@ -53,6 +63,8 @@ Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` o
 - Duplication copies only whitelisted league configuration and never roster, result, lifecycle-date, or issued-award data.
 - Lifecycle actions enforce `draft → active`, `active → paused|ended`, `paused → active|ended`, and `ended → archived` transitions and require an action-specific confirmation phrase.
 - Ending a league freezes its lifecycle state; award preview, overrides, and optional badge minting remain in the separate Awards workflow.
+- League Awards stores every wizard revision in `leagues_metadata.end_awards`, rejects stale previews, persists override reasons, fails closed when any required top-performer badge definition is unavailable, and verifies every expected badge row after mint before reporting success.
+- A failed/interrupted mint remains retryable with its idempotency key; archive remains blocked until mint is verified.
 - Settings writes are checked against the current lifecycle state on FastAPI, not only disabled in the browser. Stale saves are rejected.
 - Schedule saves derive date tags in Python while preserving existing skill tags. Unsaved previews run the same normalized Python schedule/ICS logic without mutating staging data.
 - Mutations require explicit confirmation text and an authorized club-scoped admin session.
@@ -64,5 +76,5 @@ Core League Manager mutations additionally require `SUPABASE_SERVICE_ROLE_KEY` o
 
 ## Follow-up slices
 
-- Validate draft create/duplicate, live rounds, court movement, awards close, and Match Log/Replay recovery against isolated staging data.
-- The awards freeze/mint wizard and League Live movement/submission remain deliberately owned by later parity slices; this core slice only reads Top Performer preview data for printing.
+- Validate draft create/duplicate, live rounds, court movement, and Match Log/Replay recovery against isolated staging data. League Awards manual evidence remains deferred in `docs/league_awards_parity_evidence.md`.
+- League Live movement/submission remains deliberately owned by the following parity slices; the authenticated print model remains read-only.

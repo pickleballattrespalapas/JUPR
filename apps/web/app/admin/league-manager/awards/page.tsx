@@ -15,7 +15,7 @@ export default async function AdminLeagueAwardsPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>League awards</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Preview top performer awards, close a league, and award top performer badges through the guarded FastAPI League Manager workflow.
+        Recoverable freeze, Python-authoritative preview, documented override, verified badge mint, and archive steps through guarded FastAPI. Streamlit remains the fallback until the full manual staging gate passes.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>League Manager status is unavailable. {error}</p> : null}
@@ -26,6 +26,7 @@ export default async function AdminLeagueAwardsPage() {
           <article style={cardStyle}><strong>Leagues</strong><br />{status.league_count ?? "—"}</article>
           <article style={cardStyle}><strong>Active</strong><br />{status.active_count ?? "—"}</article>
           <article style={cardStyle}><strong>Gate</strong><br /><code>manage_matches</code></article>
+          <article style={cardStyle}><strong>Awards writes</strong><br />{status.awards_write_enabled ? "staging gate open" : "Streamlit fallback"}</article>
         </div>
       ) : null}
 

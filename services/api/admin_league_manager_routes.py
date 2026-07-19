@@ -8,7 +8,16 @@ from pydantic import BaseModel, Field
 
 from jupr_app.domain.admin.roles import PERMISSION_MANAGE_MATCHES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.services.admin_league_awards_service import close_admin_league_and_award, preview_admin_league_awards
+from jupr_app.services.admin_league_awards_service import (
+    archive_admin_league_awards,
+    close_admin_league_and_award,
+    freeze_admin_league_awards,
+    get_admin_league_awards_wizard,
+    mint_admin_league_awards,
+    persist_admin_league_awards_preview,
+    preview_admin_league_awards,
+    save_admin_league_award_overrides,
+)
 from jupr_app.services.admin_league_live_service import (
     build_admin_league_live_status,
     create_admin_league_live_session,
@@ -90,7 +99,28 @@ class AdminLeagueManagerRosterMembershipRequest(BaseModel):
 class AdminLeagueAwardsCloseRequest(BaseModel):
     award_badges: bool = True
     confirmation_text: str = ""
+    idempotency_key: str = Field(default="", max_length=160)
     source: str = "next_league_manager_awards_close"
+
+
+class AdminLeagueAwardsActionRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_manager_awards_action", max_length=120)
+
+
+class AdminLeagueAwardOverrideItem(BaseModel):
+    category_key: str = Field(min_length=1, max_length=80)
+    rank: int = Field(default=1, ge=1, le=3)
+    player_id: int
+    reason: str = Field(default="", max_length=500)
+
+
+class AdminLeagueAwardOverridesRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    overrides: list[AdminLeagueAwardOverrideItem] = Field(default_factory=list, max_length=12)
+    source: str = Field(default="next_league_manager_awards_overrides", max_length=120)
 
 
 class AdminLeagueLiveSessionCreateRequest(BaseModel):
@@ -526,6 +556,26 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle_common(exc)
 
+    @app.get("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards")
+    def get_admin_league_awards_wizard_state(
+        club_id: str,
+        league_name: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_manager_awards_wizard",
+        )
+        try:
+            return get_admin_league_awards_wizard(supabase, club_id=str(club_id), league_name=str(league_name))
+        except Exception as exc:
+            _handle_common(exc)
+
     @app.get("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/preview")
     def get_admin_league_awards_preview(
         club_id: str,
@@ -538,6 +588,156 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_league_manager_awards_preview")
         try:
             return preview_admin_league_awards(supabase, club_id=str(club_id), league_name=str(league_name))
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/freeze")
+    def post_admin_league_awards_freeze(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueAwardsActionRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return freeze_admin_league_awards(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                idempotency_key=payload.idempotency_key,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/preview")
+    def post_admin_league_awards_preview(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueAwardsActionRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return persist_admin_league_awards_preview(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                idempotency_key=payload.idempotency_key,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/overrides")
+    def post_admin_league_awards_overrides(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueAwardOverridesRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return save_admin_league_award_overrides(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                overrides=[_dump_model(item) for item in payload.overrides],
+                preview_fingerprint=payload.preview_fingerprint,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                idempotency_key=payload.idempotency_key,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/mint")
+    def post_admin_league_awards_mint(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueAwardsActionRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return mint_admin_league_awards(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                idempotency_key=payload.idempotency_key,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/archive")
+    def post_admin_league_awards_archive(
+        club_id: str,
+        league_name: str,
+        payload: AdminLeagueAwardsActionRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return archive_admin_league_awards(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                idempotency_key=payload.idempotency_key,
+                source=payload.source,
+            )
         except Exception as exc:
             _handle_common(exc)
 
@@ -562,6 +762,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 confirmation_text=payload.confirmation_text,
                 award_badges=payload.award_badges,
                 source=payload.source,
+                idempotency_key=payload.idempotency_key,
             )
         except Exception as exc:
             _handle_common(exc)

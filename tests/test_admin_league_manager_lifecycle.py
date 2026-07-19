@@ -100,6 +100,23 @@ def test_lifecycle_rejects_illegal_transition_without_write(monkeypatch) -> None
     assert tables["admin_activity_log"] == []
 
 
+def test_lifecycle_archive_cannot_bypass_persisted_awards_mint(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = lifecycle_tables(status="ended", is_active=False)
+    tables["leagues_metadata"][0]["end_awards"] = {
+        "workflow": {
+            "version": 2,
+            "status": "mint_failed",
+            "mint": {"status": "failed", "attempt_count": 1},
+        }
+    }
+
+    with pytest.raises(ValueError, match="verify the persisted League Awards mint"):
+        transition(FakeSupabase(tables), "archive", "ARCHIVE LEAGUE")
+
+    assert tables["leagues_metadata"][0]["status"] == "ended"
+
+
 def test_lifecycle_requires_action_specific_confirmation(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
     tables = lifecycle_tables()
