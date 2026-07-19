@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { SERVICE_LOCATION, SERVICE_OPERATOR, SUPPORT_EMAIL } from "@/lib/publicSupportContent";
+import SupportRequestForm from "./SupportRequestForm";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -6,8 +8,6 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
-
-const supportEmail = "joe@juprleagues.com";
 
 export default function SupportPage() {
   const subject = encodeURIComponent("Pickleball Club Sandwich support request");
@@ -26,7 +26,7 @@ export default function SupportPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>General support</h2>
           <p style={{ color: "#475569" }}>Questions about ratings, pages, access, tournament registration, or club setup can start here.</p>
-          <a href={`mailto:${supportEmail}?subject=${subject}&body=${body}`}>Email {supportEmail}</a>
+          <a href={`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`}>Email {SUPPORT_EMAIL}</a>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Data corrections</h2>
@@ -39,6 +39,16 @@ export default function SupportPage() {
           <Link href="/faq">Read FAQ</Link>
         </article>
       </div>
+      <article id="general-support-form" style={{ ...cardStyle, marginTop: "1rem" }}>
+        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Create a support request</h2>
+        <p style={{ color: "#475569" }}>This durable form creates a club-scoped staff queue item. Repeated requests are deduplicated, and no player, match, rating, or tournament data changes from this form.</p>
+        <SupportRequestForm />
+      </article>
+      <article id="operator" style={{ ...cardStyle, marginTop: "1rem", background: "#f8fafc" }}>
+        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Operator and policy links</h2>
+        <p style={{ color: "#475569" }}>{SERVICE_OPERATOR} operates this service for {SERVICE_LOCATION}.</p>
+        <p><Link href="/privacy">Privacy policy</Link> · <Link href="/profile-privacy">Profile privacy request</Link> · <Link href="/terms">Terms of use</Link></p>
+      </article>
     </section>
   );
 }

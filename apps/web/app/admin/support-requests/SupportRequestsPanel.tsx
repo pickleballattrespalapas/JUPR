@@ -6,7 +6,15 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type Props = { apiBase: string | null; clubId: string; status: AdminSupportRequestsStatus };
 
-type RequestEdit = { status: string; adminNote: string; confirm: string };
+type RequestEdit = {
+  status: string;
+  adminNote: string;
+  confirm: string;
+  identityStatus: string;
+  fulfillmentStatus: string;
+  resolutionAction: string;
+  resolutionEvidence: string;
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
@@ -14,6 +22,9 @@ const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const STATUS_OPTIONS = ["new", "in_review", "resolved", "dismissed"];
 const TYPE_OPTIONS = ["", "data_correction", "profile_privacy", "general_support"];
+const IDENTITY_OPTIONS = ["pending", "verified", "rejected"];
+const FULFILLMENT_OPTIONS = ["pending", "in_progress", "completed", "declined"];
+const RESOLUTION_OPTIONS = ["none", "alias", "hide", "anonymize", "contact_update", "other"];
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -48,6 +59,11 @@ function SupportRequestCard({ request, selected, onSelect }: { request: AdminSup
         <div><dt style={{ fontWeight: 800 }}>Reviewed</dt><dd style={{ margin: 0 }}>{request.reviewed_by || "—"}<br />{request.reviewed_at ? String(request.reviewed_at).slice(0, 16) : ""}</dd></div>
       </dl>
       {request.requested_action ? <p style={{ color: "#475569" }}><strong>Requested action:</strong> {request.requested_action}</p> : null}
+      {request.request_type === "profile_privacy" ? (
+        <p style={{ color: "#475569" }}>
+          <strong>Identity:</strong> {(request.identity_status || "not_required").replace(/_/g, " ")} · <strong>Fulfillment:</strong> {(request.fulfillment_status || "not_required").replace(/_/g, " ")} · <strong>Action:</strong> {(request.resolution_action || "none").replace(/_/g, " ")}
+        </p>
+      ) : null}
       {request.evidence_url ? <p><a href={request.evidence_url} target="_blank" rel="noreferrer">Open evidence link</a></p> : null}
       {request.admin_note ? <p style={{ color: "#475569" }}><strong>Admin note:</strong> {request.admin_note}</p> : null}
       <button type="button" onClick={onSelect} style={selected ? buttonStyle : ghostButtonStyle}>{selected ? "Selected" : "Review request"}</button>
@@ -62,7 +78,15 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   const [requests, setRequests] = useState<AdminSupportRequest[]>([]);
   const [summary, setSummary] = useState<AdminSupportRequestsListResponse["summary"] | null>(null);
   const [selectedId, setSelectedId] = useState("");
-  const [edit, setEdit] = useState<RequestEdit>({ status: "in_review", adminNote: "", confirm: "" });
+  const [edit, setEdit] = useState<RequestEdit>({
+    status: "in_review",
+    adminNote: "",
+    confirm: "",
+    identityStatus: "pending",
+    fulfillmentStatus: "pending",
+    resolutionAction: "none",
+    resolutionEvidence: ""
+  });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const selected = requests.find((request) => request.id === selectedId) || null;
@@ -100,7 +124,15 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
 
   function selectRequest(request: AdminSupportRequest) {
     setSelectedId(request.id);
-    setEdit({ status: request.status === "new" ? "in_review" : request.status, adminNote: request.admin_note || "", confirm: "" });
+    setEdit({
+      status: request.status === "new" ? "in_review" : request.status,
+      adminNote: request.admin_note || "",
+      confirm: "",
+      identityStatus: request.identity_status || "pending",
+      fulfillmentStatus: request.fulfillment_status || "pending",
+      resolutionAction: request.resolution_action || "none",
+      resolutionEvidence: request.resolution_evidence || ""
+    });
     setMessage(null);
   }
 
@@ -114,11 +146,29 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
     try {
       const payload = await requestJson<AdminSupportRequestUpdateResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/support-requests/${encodeURIComponent(selected.id)}`, {
         method: "PATCH",
-        body: JSON.stringify({ status: edit.status, admin_note: edit.adminNote, confirmation_text: edit.confirm, source: "next_admin_support_requests" })
+        body: JSON.stringify({
+          status: edit.status,
+          admin_note: edit.adminNote,
+          expected_updated_at: selected.updated_at,
+          identity_status: selected.request_type === "profile_privacy" ? edit.identityStatus : undefined,
+          fulfillment_status: selected.request_type === "profile_privacy" ? edit.fulfillmentStatus : undefined,
+          resolution_action: selected.request_type === "profile_privacy" ? edit.resolutionAction : undefined,
+          resolution_evidence: selected.request_type === "profile_privacy" ? edit.resolutionEvidence : undefined,
+          confirmation_text: edit.confirm,
+          source: "next_admin_support_requests"
+        })
       });
       setRequests((current) => current.map((request) => request.id === selected.id ? payload.request : request));
       setSelectedId(payload.request.id);
-      setEdit({ status: payload.request.status, adminNote: payload.request.admin_note || "", confirm: "" });
+      setEdit({
+        status: payload.request.status,
+        adminNote: payload.request.admin_note || "",
+        confirm: "",
+        identityStatus: payload.request.identity_status || "pending",
+        fulfillmentStatus: payload.request.fulfillment_status || "pending",
+        resolutionAction: payload.request.resolution_action || "none",
+        resolutionEvidence: payload.request.resolution_evidence || ""
+      });
       setMessage(`Request updated to ${payload.request.status}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update request.");
@@ -165,6 +215,18 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
             <label>Status<br /><select value={edit.status} onChange={(event) => setEdit((current) => ({ ...current, status: event.target.value }))} style={inputStyle}>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>
             <label>Confirmation<br /><input value={edit.confirm} onChange={(event) => setEdit((current) => ({ ...current, confirm: event.target.value }))} placeholder="SAVE REQUEST STATUS" style={inputStyle} /></label>
           </div>
+          {selected.request_type === "profile_privacy" ? (
+            <div style={{ ...cardStyle, marginTop: "0.75rem", background: "#f8fafc" }}>
+              <h3 style={{ marginTop: 0 }}>Privacy fulfillment checklist</h3>
+              <p style={{ color: "#475569" }}>Verify identity, apply the approved alias/hide/anonymize action through the authorized player workflow, inspect every public projection, and record non-sensitive evidence here. This queue never changes a public profile itself.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
+                <label>Identity verification<br /><select value={edit.identityStatus} onChange={(event) => setEdit((current) => ({ ...current, identityStatus: event.target.value }))} style={inputStyle}>{IDENTITY_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>
+                <label>Fulfillment<br /><select value={edit.fulfillmentStatus} onChange={(event) => setEdit((current) => ({ ...current, fulfillmentStatus: event.target.value }))} style={inputStyle}>{FULFILLMENT_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>
+                <label>Approved action<br /><select value={edit.resolutionAction} onChange={(event) => setEdit((current) => ({ ...current, resolutionAction: event.target.value }))} style={inputStyle}>{RESOLUTION_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>
+              </div>
+              <label>Fulfillment evidence<br /><textarea value={edit.resolutionEvidence} onChange={(event) => setEdit((current) => ({ ...current, resolutionEvidence: event.target.value }))} rows={3} placeholder="Identity method, authorized workflow used, and public projections checked; do not paste identity documents." style={inputStyle} /></label>
+            </div>
+          ) : null}
           <label>Admin note<br /><textarea value={edit.adminNote} onChange={(event) => setEdit((current) => ({ ...current, adminNote: event.target.value }))} rows={4} style={inputStyle} /></label>
           <button type="button" onClick={saveStatus} disabled={busy} style={{ ...buttonStyle, marginTop: "0.75rem" }}>{busy ? "Saving…" : "Save request status"}</button>
         </article>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SUPPORT_EMAIL } from "@/lib/publicSupportContent";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -6,8 +7,6 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
-
-const supportEmail = "joe@juprleagues.com";
 
 export default function TermsPage() {
   return (
@@ -61,7 +60,7 @@ export default function TermsPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Contact</h2>
           <p style={{ color: "#475569" }}>
-            Questions about these terms can be sent to <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+            Questions about these terms can be sent to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or through <Link href="/support">support</Link>.
           </p>
         </article>
       </div>

@@ -100,14 +100,14 @@ export default function DataCorrectionForm({ clubSlug = "tres-palapas" }: { club
       <label>Short subject<br /><input value={state.subject} onChange={(event) => update("subject", event.target.value)} placeholder="Wrong score, duplicate match, profile name, tournament entry…" style={inputStyle} /></label>
       <label>What looks wrong?<br /><textarea value={state.description} onChange={(event) => update("description", event.target.value)} rows={5} style={inputStyle} /></label>
       <label>What should staff change after review?<br /><textarea value={state.requestedAction} onChange={(event) => update("requestedAction", event.target.value)} rows={4} style={inputStyle} /></label>
-      <label>Evidence or screenshot link, optional<br /><input value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} style={inputStyle} /></label>
+      <label>Evidence or screenshot link, optional<br /><input type="url" value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} placeholder="https://…" style={inputStyle} /></label>
       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
         <input type="checkbox" checked={state.consent} onChange={(event) => update("consent", event.target.checked)} />
         <span>I understand this creates a staff-review request only, and staff may contact me about this correction.</span>
       </label>
       <button type="submit" disabled={pending} style={buttonStyle}>{pending ? "Submitting…" : "Submit correction request"}</button>
-      {message ? <p style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
-      {error ? <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
+      {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
     </form>
   );
 }

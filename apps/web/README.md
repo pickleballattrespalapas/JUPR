@@ -41,8 +41,9 @@ Current public and staff-facing routes include:
 - `/faq` public rating FAQ.
 - `/privacy` first-party privacy policy copy.
 - `/terms` first-party terms copy.
-- `/support` and `/contact` support/contact shell routed to `joe@juprleagues.com`.
-- `/data-corrections` public correction intake instructions with no direct mutation.
+- `/support` and `/contact` durable general-support intake plus a populated email fallback.
+- `/data-corrections` public correction intake with no direct data mutation.
+- `/profile-privacy` identity-reviewed privacy fulfillment intake with no direct public-profile mutation.
 - `/admin` staff operations cockpit for the Streamlit-to-Next migration.
 - `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, and `/admin/league-manager` guarded staff migration surfaces.
 - `/clubs/[clubSlug]/admin/score-entry` staging-only score-entry MVP, still feature-flagged and not production-active by default.
@@ -57,6 +58,7 @@ Use one of the following API base URL variables:
 - `NEXT_PUBLIC_JUPR_ENABLE_NEXT_ADMIN_SCORE_ENTRY=0` (keep disabled outside controlled staging)
 - `JUPR_STAGING_API_BASE_URL` (optional preview override; defaults to the dedicated Fly staging API)
 - `NEXT_PUBLIC_STAGING_SUPABASE_URL` and `NEXT_PUBLIC_STAGING_SUPABASE_ANON_KEY` (preview-only staging auth project; never use service-role credentials)
+- `JUPR_SUPPORT_EMAIL` (server-rendered support/contact fallback; defaults to `joe@juprleagues.com`)
 
 Use this public web URL variable for metadata and sitemap generation:
 

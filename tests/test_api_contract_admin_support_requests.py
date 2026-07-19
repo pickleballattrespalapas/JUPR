@@ -30,6 +30,9 @@ def _tables() -> dict[str, list[dict]]:
                 "requested_action": "Review match 42.",
                 "created_at": "2026-01-01T00:00:00Z",
                 "updated_at": "2026-01-01T00:00:00Z",
+                "identity_status": "not_required",
+                "fulfillment_status": "not_required",
+                "resolution_action": "none",
             },
             {
                 "id": "req_2",
@@ -44,6 +47,9 @@ def _tables() -> dict[str, list[dict]]:
                 "description": "Review my profile.",
                 "created_at": "2026-01-02T00:00:00Z",
                 "updated_at": "2026-01-02T00:00:00Z",
+                "identity_status": "pending",
+                "fulfillment_status": "pending",
+                "resolution_action": "none",
             },
         ],
         "admin_activity_log": [],
@@ -116,3 +122,70 @@ def test_admin_support_request_update_requires_confirmation(monkeypatch):
 
     assert response.status_code == 400
     assert "SAVE REQUEST STATUS" in response.json()["detail"]
+
+
+def test_privacy_request_requires_verified_fulfillment_before_resolution(monkeypatch):
+    supabase = FakeSupabase(_tables())
+    _install(monkeypatch, supabase)
+
+    blocked = TestClient(app).patch(
+        "/admin/clubs/club/support-requests/req_2",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "status": "resolved",
+            "admin_note": "Reviewed.",
+            "expected_updated_at": "2026-01-02T00:00:00Z",
+            "identity_status": "pending",
+            "fulfillment_status": "pending",
+            "resolution_action": "none",
+            "confirmation_text": "SAVE REQUEST STATUS",
+        },
+    )
+
+    assert blocked.status_code == 400
+    assert "Verify the requester identity" in blocked.json()["detail"]
+
+
+def test_privacy_request_resolves_with_completed_sop_evidence(monkeypatch):
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/support-requests/req_2",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "status": "resolved",
+            "admin_note": "Alias applied and public projections checked.",
+            "expected_updated_at": "2026-01-02T00:00:00Z",
+            "identity_status": "verified",
+            "fulfillment_status": "completed",
+            "resolution_action": "alias",
+            "resolution_evidence": "Verified by organizer; player, leaderboard, match, and roster projections checked.",
+            "confirmation_text": "SAVE REQUEST STATUS",
+        },
+    )
+
+    assert response.status_code == 200
+    row = next(row for row in tables["public_support_requests"] if row["id"] == "req_2")
+    assert row["identity_status"] == "verified"
+    assert row["fulfillment_status"] == "completed"
+    assert row["resolution_action"] == "alias"
+
+
+def test_admin_support_request_rejects_stale_update(monkeypatch):
+    supabase = FakeSupabase(_tables())
+    _install(monkeypatch, supabase)
+
+    response = TestClient(app).patch(
+        "/admin/clubs/club/support-requests/req_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "status": "in_review",
+            "expected_updated_at": "2025-12-31T00:00:00Z",
+            "confirmation_text": "SAVE REQUEST STATUS",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "changed after it was loaded" in response.json()["detail"]

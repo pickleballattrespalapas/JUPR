@@ -1,4 +1,5 @@
 import DataCorrectionForm from "./DataCorrectionForm";
+import { SUPPORT_EMAIL } from "@/lib/publicSupportContent";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -6,8 +7,6 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
-
-const supportEmail = "joe@juprleagues.com";
 
 export default function DataCorrectionsPage() {
   return (
@@ -43,7 +42,7 @@ export default function DataCorrectionsPage() {
           <p style={{ color: "#475569" }}>
             If the form is unavailable, send the same details by email.
           </p>
-          <a href={`mailto:${supportEmail}?subject=${encodeURIComponent("Pickleball Club Sandwich data correction request")}`}>Email correction request</a>
+          <a href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("Pickleball Club Sandwich data correction request")}`}>Email correction request</a>
         </article>
       </div>
     </section>

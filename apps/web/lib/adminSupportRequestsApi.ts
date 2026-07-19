@@ -23,6 +23,10 @@ export type AdminSupportRequest = {
   description: string;
   requested_action?: string | null;
   evidence_url?: string | null;
+  identity_status: string;
+  fulfillment_status: string;
+  resolution_action: string;
+  resolution_evidence?: string | null;
   source?: string | null;
   admin_note?: string | null;
   reviewed_by?: string | null;

@@ -15,6 +15,7 @@ Inventory below reflects files currently present in this repository.
 
 ### `supabase/migrations/` (canonical)
 
+- `20260719171000_public_support_intake_guardrails.sql`
 - `20260420000000_verified_player_updates_foundation.sql`
 - `20260424_matches_soft_delete.sql`
 - `20260428090000_add_unsubscribe_token_to_player_profile_update_subscriptions.sql`
@@ -22,8 +23,6 @@ Inventory below reflects files currently present in this repository.
 - `20260428101000_admin_activity_log.sql`
 - `20260702080000_live_sessions.sql`
 - `20260702170000_live_sessions_schema_contract.sql`
-- `20260719155515_server_only_data_api_lockdown.sql`
-- `20260719155737_canonicalize_server_only_tables.sql`
 - `20261020000000_tournament_registrations_player_id_postgrest_reload.sql`
 - `2026XX_backport_tournament_engine.sql`
 
@@ -76,6 +75,7 @@ Current files in `migrations/`:
 - `20261018_tournament_registration_schema_contract.sql`
 - `20261019_tournament_registration_partner_links.sql`
 - `20261020_tournament_registrations_player_id_postgrest_reload.sql`
+- `20261028_public_support_intake_guardrails.sql`
 
 Important:
 

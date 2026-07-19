@@ -6,7 +6,10 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from supabase import Client
 
-from jupr_app.services.public_support_intake_service import create_public_support_intake_request
+from jupr_app.services.public_support_intake_service import (
+    SupportIntakeRateLimitError,
+    create_public_support_intake_request,
+)
 
 
 class PublicSupportIntakeRequest(BaseModel):
@@ -57,6 +60,8 @@ def install_public_support_intake_routes(
                 payload=_dump_model(payload),
                 source=payload.source,
             )
+        except SupportIntakeRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "3600"}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:

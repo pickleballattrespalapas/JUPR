@@ -16,6 +16,7 @@ JUPR_EMAIL_MODE=staging_redirect or dry_run
 JUPR_STAGING_EMAIL_REDIRECT_TO=<safe test inbox when staging_redirect is used>
 JUPR_TOURNAMENT_ORGANIZER_EMAIL=joe@juprleagues.com
 JUPR_SUPPORT_EMAIL=joe@juprleagues.com
+JUPR_PUBLIC_SUPPORT_RATE_LIMIT_PER_HOUR=5
 ```
 
 Frontend staging:

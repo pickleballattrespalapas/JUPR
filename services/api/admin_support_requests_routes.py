@@ -16,6 +16,7 @@ from jupr_app.domain.admin.roles import (
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_support_requests_service import (
+    SupportRequestConflictError,
     build_admin_support_requests_status,
     is_admin_support_requests_enabled,
     list_admin_support_requests,
@@ -27,6 +28,11 @@ from services.api.auth import authenticate_bearer, auth_header
 class AdminSupportRequestUpdatePayload(BaseModel):
     status: str
     admin_note: str | None = None
+    expected_updated_at: str | None = None
+    identity_status: str | None = None
+    fulfillment_status: str | None = None
+    resolution_action: str | None = None
+    resolution_evidence: str | None = None
     confirmation_text: str = ""
     source: str = "next_admin_support_requests"
 
@@ -67,6 +73,8 @@ def _resolve_support_role_or_403(*, supabase: Any, club_id: str, authorization: 
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, SupportRequestConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -128,6 +136,11 @@ def install_admin_support_requests_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                expected_updated_at=payload.expected_updated_at,
+                identity_status=payload.identity_status,
+                fulfillment_status=payload.fulfillment_status,
+                resolution_action=payload.resolution_action,
+                resolution_evidence=payload.resolution_evidence,
                 source=payload.source,
             )
         except Exception as exc:
