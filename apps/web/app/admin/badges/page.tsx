@@ -15,7 +15,7 @@ export default async function AdminBadgeDiagnosticsPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Badge Debug & Audit</h1>
       <p style={{ color: "#334155", maxWidth: "880px" }}>
-        Badge diagnostics for expected-versus-actual rows, duplicate/stale/missing audit, player-specific evaluator debugging, and guarded badge-definition lifecycle controls.
+        Read-only badge options, evaluator traces, and expected-versus-actual audits require <code>view_audit_log</code>. Staging-only definition, recompute, and revoke writes require <code>run_replay</code>, exact confirmation, durable operation keys, and strict audit completion.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>Badge Diagnostics status is unavailable. {error}</p> : null}
@@ -25,7 +25,7 @@ export default async function AdminBadgeDiagnosticsPage() {
           <article style={cardStyle}><strong>Status</strong><br />{status.status.replace(/_/g, " ")}</article>
           <article style={cardStyle}><strong>Badges</strong><br />{status.badge_count ?? "—"}</article>
           <article style={cardStyle}><strong>Player badge rows</strong><br />{status.player_badge_count ?? "—"}</article>
-          <article style={cardStyle}><strong>Gate</strong><br /><code>view_audit_log</code></article>
+          <article style={cardStyle}><strong>Gates</strong><br /><code>view_audit_log</code> read · <code>run_replay</code> write</article>
         </div>
       ) : null}
 

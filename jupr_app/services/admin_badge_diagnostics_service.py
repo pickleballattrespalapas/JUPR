@@ -9,7 +9,6 @@ from typing import Any
 import pandas as pd
 
 from jupr_app.data.load import load_data
-from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.gamification.badge_audit import build_badge_audit_report
 from jupr_app.domain.gamification.badge_debug import build_badge_debug_report
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id, registry
@@ -19,11 +18,25 @@ from jupr_app.domain.gamification.badge_state import (
     normalize_badge_state,
 )
 from jupr_app.domain.gamification.recompute import run_badge_recompute
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    get_guarded_operation,
+    operation_result,
+    require_staging_service_role_write,
+    required_audit_event,
+    update_guarded_operation,
+)
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_RECOMPUTE = "RECOMPUTE BADGES"
 CONFIRM_REVOKE = "REVOKE BADGE"
 CONFIRM_BADGE_STATE = "UPDATE BADGE STATE"
+BADGE_OPERATION_WORKFLOWS = (
+    "badge_definition_state",
+    "badge_recompute",
+    "badge_revoke",
+)
 
 
 def _truthy_env(name: str) -> bool:
@@ -144,6 +157,14 @@ def build_admin_badge_diagnostics_status(supabase: Any | None, *, club_id: str) 
             "revoke": CONFIRM_REVOKE,
             "state": CONFIRM_BADGE_STATE,
         },
+        "write_environment": "staging_only",
+        "service_role_required": True,
+        "required_permissions": {
+            "options_debug_audit": "view_audit_log",
+            "definition_state_recompute_revoke": "run_replay",
+        },
+        "operation_status_endpoint": "/admin/clubs/{club_id}/badges/operations/{operation_key}",
+        "streamlit_fallback": "badge_debug / badge_audit",
         "badge_count": badge_count,
         "player_badge_count": player_badge_count,
         "warnings": [],
@@ -225,6 +246,7 @@ def update_admin_badge_definition_state(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str,
     source: str = "next_badge_definition_state",
 ) -> dict[str, Any]:
     if not is_admin_badge_diagnostics_enabled():
@@ -268,50 +290,86 @@ def update_admin_badge_definition_state(
         "state_changed_at": datetime.now(timezone.utc).isoformat(),
         "state_change_reason": clean_reason,
     }
-    updated_rows = _safe_rows(
-        supabase.table("badges")
-        .update(patch)
-        .eq("badge_id", clean_badge_id)
-        .eq("state", current_state)
-        .execute()
-    )
-    if not updated_rows:
-        raise ValueError("Badge state changed while it was being updated. Reload badge options and review it again.")
-    updated = {**before, **updated_rows[0]}
-    audit_write = write_admin_activity_log(
+    request_payload = {
+        "badge_id": clean_badge_id,
+        "expected_state": current_state,
+        "target_state": normalized_target,
+        "reason": clean_reason,
+        "force": bool(force),
+    }
+    require_staging_service_role_write(
         supabase,
-        build_activity_payload(
-            club_id=str(club_id),
-            actor_email=actor_email,
-            actor_role=actor_role,
-            action_type="update_badge_definition_state",
-            entity_type="badge_definition",
-            entity_id=clean_badge_id,
-            before_json={
-                "badge_id": clean_badge_id,
-                "name": _clean_text(before.get("name"), limit=160),
-                "state": current_state,
-                "state_changed_at": before.get("state_changed_at"),
-                "state_change_reason": _clean_text(before.get("state_change_reason"), limit=500) or None,
-            },
-            after_json={
-                "source_client": "fastapi/nextjs",
-                "badge_id": clean_badge_id,
-                "state": normalized_target,
-                "state_changed_at": updated.get("state_changed_at"),
-                "state_change_reason": clean_reason,
-                "force": bool(force),
-            },
-            note=clean_reason,
-            source_page=_clean_text(source, limit=120) or "next_badge_definition_state",
-            flagged_for_review=True,
-        ),
+        workflow="Badge Definition State",
+        required_tables=("badges",),
     )
-    if not audit_write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        raise RuntimeError("audit log write required but unavailable")
-    return {
+    operation, idempotent = begin_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="badge_definition_state",
+        action="update_badge_definition_state",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={
+            "badge_id": clean_badge_id,
+            "name": _clean_text(before.get("name"), limit=160),
+            "state": current_state,
+            "state_changed_at": before.get("state_changed_at"),
+            "state_change_reason": _clean_text(before.get("state_change_reason"), limit=500) or None,
+        },
+    )
+    if idempotent:
+        return operation_result(operation)
+
+    try:
+        updated_rows = _safe_rows(
+            supabase.table("badges")
+            .update(patch)
+            .eq("badge_id", clean_badge_id)
+            .eq("state", current_state)
+            .execute()
+        )
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge state write outcome is uncertain. Stop and reload the definition before retrying.",
+        ) from exc
+    if not updated_rows:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="failed",
+            error_text="Optimistic state filter affected no rows.",
+        )
+        raise ValueError("Badge state changed while it was being updated. Reload badge options and review it again.")
+    if len(updated_rows) != 1:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"affected_badge_rows": len(updated_rows)},
+            error_text="Badge state mutation affected an unexpected number of rows.",
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge state mutation affected an unexpected number of rows. Stop and reconcile the definition before retrying.",
+        )
+    updated = {**before, **updated_rows[0]}
+    result = {
         "ok": True,
         "mode": "badge_definition_state_update",
+        "operation_key": operation_key,
         "badge": {
             "badge_id": clean_badge_id,
             "name": _clean_text(updated.get("name"), limit=160) or clean_badge_id,
@@ -320,8 +378,85 @@ def update_admin_badge_definition_state(
             "state_change_reason": clean_reason,
         },
         "force": bool(force),
-        "audit_warning": audit_write.warning,
+        "audit_warning": None,
     }
+    try:
+        required_audit_event(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type="update_badge_definition_state",
+            entity_type="badge_definition",
+            entity_id=clean_badge_id,
+            before={
+                "badge_id": clean_badge_id,
+                "name": _clean_text(before.get("name"), limit=160),
+                "state": current_state,
+                "state_changed_at": before.get("state_changed_at"),
+                "state_change_reason": _clean_text(before.get("state_change_reason"), limit=500) or None,
+            },
+            after={
+                "source_client": "fastapi/nextjs",
+                "badge_id": clean_badge_id,
+                "state": normalized_target,
+                "state_changed_at": updated.get("state_changed_at"),
+                "state_change_reason": clean_reason,
+                "force": bool(force),
+            },
+            note=clean_reason,
+            source=_clean_text(source, limit=120) or "next_badge_definition_state",
+            intent=False,
+        )
+    except Exception as audit_exc:
+        try:
+            restored = _safe_rows(
+                supabase.table("badges")
+                .update(
+                    {
+                        "state": current_state,
+                        "state_changed_at": before.get("state_changed_at"),
+                        "state_change_reason": before.get("state_change_reason"),
+                    }
+                )
+                .eq("badge_id", clean_badge_id)
+                .eq("state", normalized_target)
+                .eq("state_changed_at", patch["state_changed_at"])
+                .execute()
+            )
+        except Exception:
+            restored = []
+        if len(restored) == 1:
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="compensated",
+                result_json={"restored": True, "badge_id": clean_badge_id},
+                error_text=str(audit_exc),
+            )
+            raise RuntimeError("Required completion audit failed; the prior badge state was restored.") from audit_exc
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json=result,
+            error_text=str(audit_exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge state may have changed but completion audit failed and rollback could not be verified. Stop and reconcile.",
+        ) from audit_exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        after_json=result["badge"],
+        result_json=result,
+    )
+    return result
 
 
 def build_admin_badge_debug(
@@ -387,6 +522,7 @@ def run_admin_badge_recompute(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str = "",
     league_id: str | None = None,
     player_id: int | None = None,
     badge_id: str | None = None,
@@ -400,47 +536,117 @@ def run_admin_badge_recompute(
 ) -> dict[str, Any]:
     if not is_admin_badge_diagnostics_enabled():
         raise PermissionError("Next Badge Diagnostics is disabled.")
-    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_RECOMPUTE:
-        raise ValueError(f"Type {CONFIRM_RECOMPUTE} to run badge recompute.")
     clean_mode = _clean_text(mode or "dry-run", limit=40).lower()
     if clean_mode not in {"dry-run", "append-only", "strict"}:
         raise ValueError("mode must be dry-run, append-only, or strict")
+    if clean_mode != "dry-run" and _clean_text(confirmation_text, limit=80).upper() != CONFIRM_RECOMPUTE:
+        raise ValueError(f"Type {CONFIRM_RECOMPUTE} to run an applying badge recompute.")
     safe_player_id = _safe_int(player_id)
-    summary = run_badge_recompute(
+    recompute_kwargs = {
+        "club_id": str(club_id),
+        "mode": clean_mode,
+        "league_id": _clean_text(league_id, limit=120) or None,
+        "context_id": _clean_text(context_id, limit=240) or None,
+        "player_id": safe_player_id,
+        "badge_id": _clean_text(badge_id, limit=120) or None,
+        "since": _clean_text(since, limit=40) or None,
+        "until": _clean_text(until, limit=40) or None,
+        "created_by": str(actor_email or "admin"),
+        "revoke_reason": _clean_text(revoke_reason, limit=400) or None,
+        "allow_strict_global": False,
+        "match_limit": int(match_limit or 5000),
+        "include_non_live": bool(include_non_live),
+    }
+    if clean_mode == "dry-run":
+        summary = run_badge_recompute(supabase, **recompute_kwargs)
+        return {
+            "ok": True,
+            "mode": "badge_recompute_preview",
+            "recompute_mode": clean_mode,
+            "read_only": True,
+            "summary": _json_safe(summary),
+            "audit_warning": None,
+        }
+
+    require_staging_service_role_write(
+        supabase,
+        workflow="Badge Recompute",
+        required_tables=("badges", "player_badges", "badge_eval_runs"),
+    )
+    request_payload = {key: value for key, value in recompute_kwargs.items() if key != "created_by"}
+    operation, idempotent = begin_guarded_operation(
         supabase,
         club_id=str(club_id),
-        mode=clean_mode,
-        league_id=_clean_text(league_id, limit=120) or None,
-        context_id=_clean_text(context_id, limit=240) or None,
-        player_id=safe_player_id,
-        badge_id=_clean_text(badge_id, limit=120) or None,
-        since=_clean_text(since, limit=40) or None,
-        until=_clean_text(until, limit=40) or None,
-        created_by=str(actor_email or "admin"),
-        revoke_reason=_clean_text(revoke_reason, limit=400) or None,
-        allow_strict_global=False,
-        match_limit=int(match_limit or 5000),
-        include_non_live=bool(include_non_live),
+        workflow="badge_recompute",
+        action="badge_recompute",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={"scope": request_payload},
     )
-    log_result = write_admin_activity_log(
-        supabase,
-        build_activity_payload(
+    if idempotent:
+        return operation_result(operation)
+    try:
+        summary = run_badge_recompute(supabase, **recompute_kwargs)
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge recompute stopped with an uncertain partial outcome. Inspect badge_eval_runs and Badge Audit before retrying.",
+        ) from exc
+    result = {
+        "ok": True,
+        "mode": "badge_recompute",
+        "recompute_mode": clean_mode,
+        "operation_key": operation_key,
+        "summary": _json_safe(summary),
+        "audit_warning": None,
+    }
+    try:
+        required_audit_event(
+            supabase,
             club_id=str(club_id),
             actor_email=actor_email,
             actor_role=actor_role,
-            action_type="badge_recompute" if clean_mode != "dry-run" else "badge_recompute_dry_run",
+            action_type="badge_recompute_completed",
             entity_type="badge_admin",
             entity_id=str(badge_id or player_id or league_id or context_id or "scoped_recompute"),
-            before_json=None,
-            after_json={"source_client": "fastapi/nextjs", "mode": clean_mode, "summary": _json_safe(summary)},
+            before={"scope": request_payload},
+            after={"source_client": "fastapi/nextjs", "mode": clean_mode, "summary": _json_safe(summary)},
             note="Badge recompute from Next Badge Diagnostics",
-            source_page=source,
-            flagged_for_review=clean_mode != "dry-run",
-        ),
+            source=source,
+            intent=False,
+        )
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json=result,
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge recompute may have completed but completion audit failed. Run Badge Audit and inspect badge_eval_runs before retrying.",
+        ) from exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        result_json=result,
+        after_json={"summary": result["summary"]},
     )
-    if not log_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        raise RuntimeError("audit log write required but unavailable")
-    return {"ok": True, "mode": "badge_recompute", "recompute_mode": clean_mode, "summary": _json_safe(summary), "audit_warning": log_result.warning}
+    return result
 
 
 def _select_badge_rows(
@@ -471,6 +677,7 @@ def revoke_admin_player_badge(
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
+    operation_key: str,
     player_badge_id: str | None = None,
     player_id: int | None = None,
     badge_id: str | None = None,
@@ -493,38 +700,174 @@ def revoke_admin_player_badge(
     )
     if not rows:
         raise ValueError("No matching player_badges rows found to revoke.")
+    if any(row.get("revoked_at") for row in rows):
+        raise ValueError("One or more selected badge rows are already revoked. Reload Badge Audit before continuing.")
     now = datetime.now(timezone.utc).isoformat()
     reason = _clean_text(revoke_reason, limit=500) or "revoked from Next Badge Diagnostics"
-    revoked_rows: list[dict[str, Any]] = []
-    for row in rows:
-        row_id = row.get("id")
-        if row_id is None:
-            continue
-        patch = {"revoked_at": now, "revoked_by": str(actor_email or "admin"), "revoke_reason": reason}
-        updated = _safe_rows(
-            supabase.table("player_badges")
-            .update(patch)
-            .eq("club_id", str(club_id))
-            .eq("id", row_id)
-            .execute()
-        )
-        revoked_rows.extend(updated or [{**row, **patch}])
-    log_result = write_admin_activity_log(
+    require_staging_service_role_write(
         supabase,
-        build_activity_payload(
+        workflow="Badge Revoke",
+        required_tables=("player_badges",),
+    )
+    selected_ids = sorted(str(row.get("id")) for row in rows if row.get("id") is not None)
+    request_payload = {
+        "player_badge_ids": selected_ids,
+        "reason": reason,
+        "expected": [
+            {
+                "id": row.get("id"),
+                "revoked_at": row.get("revoked_at"),
+                "revoked_by": row.get("revoked_by"),
+                "revoke_reason": row.get("revoke_reason"),
+            }
+            for row in rows
+        ],
+    }
+    operation, idempotent = begin_guarded_operation(
+        supabase,
+        club_id=str(club_id),
+        workflow="badge_revoke",
+        action="badge_revoke",
+        operation_key=operation_key,
+        request_payload=request_payload,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        source=source,
+        before_json={"rows": _json_safe(rows), "matched_count": len(rows)},
+    )
+    if idempotent:
+        return operation_result(operation)
+    revoked_rows: list[dict[str, Any]] = []
+    patch = {"revoked_at": now, "revoked_by": str(actor_email or "admin"), "revoke_reason": reason}
+    try:
+        for row in rows:
+            row_id = row.get("id")
+            if row_id is None:
+                continue
+            query = (
+                supabase.table("player_badges")
+                .update(patch)
+                .eq("club_id", str(club_id))
+                .eq("id", row_id)
+                .is_("revoked_at", None)
+            )
+            updated = _safe_rows(query.execute())
+            if len(updated) != 1:
+                raise RuntimeError(f"Badge row {row_id} changed during revoke.")
+            revoked_rows.extend(updated)
+    except Exception as exc:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="recovery_required",
+            result_json={"revoked_ids": [row.get("id") for row in revoked_rows]},
+            error_text=str(exc),
+        )
+        raise GuardedWriteRecoveryRequired(
+            operation_key,
+            "Badge revoke may be partial. Stop and reconcile the selected rows in Badge Audit before retrying.",
+        ) from exc
+    result = {
+        "ok": True,
+        "mode": "badge_revoke",
+        "operation_key": operation_key,
+        "revoked_count": len(revoked_rows),
+        "rows": _json_safe(revoked_rows),
+        "audit_warning": None,
+    }
+    try:
+        required_audit_event(
+            supabase,
             club_id=str(club_id),
             actor_email=actor_email,
             actor_role=actor_role,
             action_type="badge_revoke",
             entity_type="player_badge",
             entity_id=str(player_badge_id or badge_id or "badge_scope"),
-            before_json={"rows": _json_safe(rows[:25]), "matched_count": len(rows)},
-            after_json={"source_client": "fastapi/nextjs", "revoked_count": len(revoked_rows), "reason": reason},
+            before={"rows": _json_safe(rows[:25]), "matched_count": len(rows)},
+            after={"source_client": "fastapi/nextjs", "revoked_count": len(revoked_rows), "reason": reason},
             note="Badge row revocation from Next Badge Diagnostics",
-            source_page=source,
-            flagged_for_review=True,
-        ),
+            source=source,
+            intent=False,
+        )
+    except Exception as audit_exc:
+        restored_ids: list[str] = []
+        try:
+            for row in rows:
+                row_id = row.get("id")
+                restored = _safe_rows(
+                    supabase.table("player_badges")
+                    .update(
+                        {
+                            "revoked_at": row.get("revoked_at"),
+                            "revoked_by": row.get("revoked_by"),
+                            "revoke_reason": row.get("revoke_reason"),
+                        }
+                    )
+                    .eq("club_id", str(club_id))
+                    .eq("id", row_id)
+                    .eq("revoked_at", now)
+                    .execute()
+                )
+                if len(restored) != 1:
+                    raise RuntimeError(f"Unable to restore badge row {row_id}.")
+                restored_ids.append(str(row_id))
+        except Exception:
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=operation_key,
+                status="recovery_required",
+                result_json=result,
+                error_text=str(audit_exc),
+            )
+            raise GuardedWriteRecoveryRequired(
+                operation_key,
+                "Badge rows may remain revoked because completion audit and rollback verification failed. Stop and reconcile.",
+            ) from audit_exc
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=operation_key,
+            status="compensated",
+            result_json={"restored_ids": restored_ids},
+            error_text=str(audit_exc),
+        )
+        raise RuntimeError("Required completion audit failed; all selected badge rows were restored.") from audit_exc
+    update_guarded_operation(
+        supabase,
+        operation_id=operation.get("id"),
+        operation_key=operation_key,
+        status="completed",
+        after_json={"revoked_ids": selected_ids},
+        result_json=result,
     )
-    if not log_result.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        raise RuntimeError("audit log write required but unavailable")
-    return {"ok": True, "mode": "badge_revoke", "revoked_count": len(revoked_rows), "rows": _json_safe(revoked_rows), "audit_warning": log_result.warning}
+    return result
+
+
+def get_admin_badge_operation(
+    supabase: Any,
+    *,
+    club_id: str,
+    operation_key: str,
+) -> dict[str, Any]:
+    for workflow in BADGE_OPERATION_WORKFLOWS:
+        operation = get_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow=workflow,
+            operation_key=str(operation_key).strip(),
+        )
+        if operation is not None:
+            return {
+                "ok": True,
+                "workflow": workflow,
+                "operation_key": operation.get("operation_key"),
+                "status": operation.get("status"),
+                "result": operation.get("result_json") or {},
+                "error": operation.get("error_text"),
+                "updated_at": operation.get("updated_at"),
+                "recovery": {"badge_audit": "/admin/badges", "replay_history": "/admin/replay-history"},
+            }
+    raise ValueError("Badge operation was not found for this club.")

@@ -9,9 +9,10 @@ from jupr_app.domain.gamification.recompute import run_badge_recompute
 
 
 class FakeTable:
-    def __init__(self, storage, name):
+    def __init__(self, storage, name, mutations):
         self.storage = storage
         self.name = name
+        self.mutations = mutations
         self.filters = []
         self.update_payload = None
         self.insert_payload = None
@@ -28,14 +29,17 @@ class FakeTable:
         return self
 
     def insert(self, payload):
+        self.mutations.append(("insert", self.name))
         self.insert_payload = payload
         return self
 
     def update(self, payload):
+        self.mutations.append(("update", self.name))
         self.update_payload = payload
         return self
 
     def upsert(self, rows, on_conflict=None):
+        self.mutations.append(("upsert", self.name))
         existing = self.storage.setdefault(self.name, [])
         keys = [c.strip() for c in str(on_conflict or "").split(",") if c.strip()]
         existing_keys = {tuple(row.get(k) for k in keys) for row in existing} if keys else set()
@@ -80,9 +84,10 @@ class FakeTable:
 class FakeSupabase:
     def __init__(self, storage=None):
         self.storage = storage if storage is not None else {}
+        self.mutations = []
 
     def table(self, name):
-        return FakeTable(self.storage, name)
+        return FakeTable(self.storage, name, self.mutations)
 
 
 def _build_ctx():
@@ -131,8 +136,10 @@ def test_recompute_dry_run_writes_nothing():
         allow_strict_global=True,
     )
     assert summary["new_awards_count"] >= 0
+    assert summary["read_only"] is True
     assert storage.get("player_badges", []) == []
-    assert storage.get("badge_eval_runs")
+    assert storage.get("badge_eval_runs", []) == []
+    assert supabase.mutations == []
 
 
 def test_recompute_append_only_idempotent():

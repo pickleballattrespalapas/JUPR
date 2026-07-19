@@ -15,10 +15,12 @@ from jupr_app.domain.admin_activity_log import build_activity_payload, write_adm
 from jupr_app.services.admin_match_canonical_audit_service import (
     build_admin_match_canonical_audit_status,
     build_admin_match_canonical_options,
+    get_admin_match_canonical_operation,
     is_admin_match_canonical_audit_enabled,
     run_admin_match_canonical_audit,
     run_admin_match_canonical_normalize,
 )
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -33,6 +35,8 @@ class MatchCanonicalNormalizeRequest(BaseModel):
     player_id: int
     match_ids: list[int] = Field(default_factory=list)
     dry_run: bool = True
+    preview_fingerprint: str = ""
+    operation_key: str = ""
     confirmation_text: str = ""
     source: str = "next_match_canonical_audit"
 
@@ -65,6 +69,11 @@ def _resolve_role_or_403(*, supabase: Any, club_id: str, authorization: str | No
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "operation_key": exc.operation_key, "recovery_required": True},
+        ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, ValueError):
@@ -138,7 +147,34 @@ def install_admin_match_canonical_audit_routes(app, *, get_supabase_client) -> N
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                preview_fingerprint=payload.preview_fingerprint,
+                operation_key=payload.operation_key,
                 source=payload.source,
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/match-canonical-audit/operations/{operation_key}")
+    def get_admin_match_canonical_operation_status(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_canonical_audit_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Canonical Audit is disabled.")
+        supabase = get_supabase_client()
+        _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_match_canonical_operation_status",
+            permission=PERMISSION_VIEW_AUDIT_LOG,
+        )
+        try:
+            return get_admin_match_canonical_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
             )
         except Exception as exc:
             _handle(exc)

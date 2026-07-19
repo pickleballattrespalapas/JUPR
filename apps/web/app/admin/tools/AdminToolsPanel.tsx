@@ -5,41 +5,44 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type StatusResponse = { enabled: boolean; status: string; roles?: string[]; retention_days?: number; retention_cutoff?: string };
 type OverviewResponse = { ok: boolean; roles: Array<Record<string, unknown>>; activity: Array<Record<string, unknown>>; activity_warning?: string | null; health: Record<string, unknown>; role_options: string[]; retention_days: number; retention_cutoff: string };
-type RoleResponse = { ok: boolean; roles: Array<Record<string, unknown>>; audit_warning?: string | null };
-type WorkerResponse = { ok: boolean; mode?: string; result?: Record<string, unknown>; summary?: Record<string, unknown>; worker_status?: Record<string, unknown>; audit_warning?: string | null };
-type RatingReportResponse = { ok: boolean; mode: "admin_rating_report"; read_only: true; scope: string; available_scopes: string[]; generated_on: string; summary: Record<string, unknown>; rows: Array<Record<string, unknown>>; warnings: string[] };
+type RoleResponse = { ok: boolean; operation_key?: string; roles: Array<Record<string, unknown>>; audit_warning?: string | null };
+type WorkerResponse = { ok: boolean; mode?: string; operation_key?: string; read_only?: boolean; result?: Record<string, unknown>; summary?: Record<string, unknown>; worker_status?: Record<string, unknown>; audit_warning?: string | null };
+type RatingReportResponse = { ok: boolean; mode: "admin_rating_report"; read_only: true; scope: string; available_scopes: string[]; generated_on: string; summary: Record<string, unknown>; rows: Array<Record<string, unknown>>; csv_text: string; csv_filename: string; csv_formula_neutralized: true; warnings: string[] };
 type TournamentBackfillPreviewResponse = { ok: boolean; mode: "tournament_match_backfill_preview"; read_only: true; preview_fingerprint: string; confirmation_text: string; summary: Record<string, unknown>; candidates: Array<Record<string, unknown>>; warnings: string[] };
-type TournamentBackfillApplyResponse = { ok: boolean; mode: "tournament_match_backfill_apply"; operation_id: string; selected_game_ids: string[]; inserted_count: number; warnings: string[] };
+type TournamentBackfillApplyResponse = { ok: boolean; mode: "tournament_match_backfill_apply"; operation_id: string; operation_key: string; selected_game_ids: string[]; inserted_count: number; warnings: string[] };
 type SocialSubmission = { id: string; name: string; event_type: string; event_date: unknown; status: string; submission_mode: string; submitted_by_name: string; summary_json: Record<string, unknown>; raw_event_json: Record<string, unknown>; created_at: unknown; updated_at: unknown; rejection_reason?: string | null; moderated_at?: unknown; moderated_by?: string | null };
 type SocialSubmissionListResponse = { ok: boolean; mode: "admin_social_submission_review"; read_only: true; status: string; statuses: string[]; confirmation_text: Record<"approve" | "reject", string>; summary: Record<string, unknown>; submissions: SocialSubmission[]; warnings: string[] };
-type SocialSubmissionModerationResponse = { ok: boolean; mode: "admin_social_submission_moderation"; action: "approve" | "reject"; submission: SocialSubmission; warnings: string[] };
+type SocialSubmissionModerationResponse = { ok: boolean; mode: "admin_social_submission_moderation"; operation_key: string; action: "approve" | "reject"; submission: SocialSubmission; warnings: string[] };
+type GuardedOperationResponse = { ok: boolean; workflow?: string; operation_key: string; status?: string; result?: Record<string, unknown>; error?: string | null; recovery?: Record<string, string>; persisted_game_ids?: string[] };
 type Props = { apiBase: string | null; clubId: string; status: StatusResponse | null };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const mutedTextStyle = { color: "#475569" };
+const warningTextStyle = { color: "#92400e" };
+const dangerTextStyle = { color: "#991b1b" };
 function apiUrl(apiBase: string, path: string): string { return `${apiBase.replace(/\/$/, "")}${path}`; }
-async function apiError(response: Response): Promise<string> { const text = await response.text().catch(() => ""); try { return String((JSON.parse(text) as { detail?: unknown }).detail || text); } catch { return text || `API error (${response.status}).`; } }
+async function apiError(response: Response): Promise<string> {
+  const text = await response.text().catch(() => "");
+  try {
+    const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+    if (detail && typeof detail === "object" && "message" in detail) return String((detail as { message?: unknown }).message || text);
+    return String(detail || text);
+  } catch { return text || `API error (${response.status}).`; }
+}
 function table(rows: Array<Record<string, unknown>>, keys: string[]) {
   if (!rows.length) return <p style={{ color: "#64748b" }}>No rows.</p>;
   return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}><thead><tr>{keys.map((key) => <th key={key} align="left" style={{ borderBottom: "1px solid #e2e8f0", padding: "0.4rem" }}>{key}</th>)}</tr></thead><tbody>{rows.slice(0, 100).map((row, idx) => <tr key={idx}>{keys.map((key) => <td key={key} style={{ borderBottom: "1px solid #f1f5f9", padding: "0.4rem", verticalAlign: "top" }}>{typeof row[key] === "object" && row[key] !== null ? JSON.stringify(row[key]) : String(row[key] ?? "")}</td>)}</tr>)}</tbody></table>{rows.length > 100 ? <p style={{ color: "#64748b" }}>Showing first 100 of {rows.length} rows.</p> : null}</div>;
 }
 function Pre({ value }: { value: unknown }) { return <pre style={{ whiteSpace: "pre-wrap", background: "#0f172a", color: "white", padding: "1rem", borderRadius: "12px", overflowX: "auto", fontSize: "0.82rem" }}>{JSON.stringify(value, null, 2)}</pre>; }
-function csvCell(value: unknown): string {
-  let text = String(value ?? "");
-  if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
-  return `"${text.replace(/"/g, '""')}"`;
-}
 function downloadRatingReport(report: RatingReportResponse): void {
-  const fields: Array<[string, string]> = [["name", "name"], ["jupr", "JUPR"], ["wins", "wins"], ["losses", "losses"], ["matches_played", "matches_played"], ["win_percent", "Win %"], ["gain", "Gain"]];
-  const csv = [fields.map(([, heading]) => csvCell(heading)).join(","), ...report.rows.map((row) => fields.map(([key]) => csvCell(row[key])).join(","))].join("\r\n");
-  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob(["\uFEFF", report.csv_text], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  const safeScope = report.scope.replace(/[^a-z0-9_-]+/gi, "_") || "ratings";
   link.href = url;
-  link.download = `${safeScope}_report_${report.generated_on}.csv`;
+  link.download = report.csv_filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -80,6 +83,14 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [socialSubmissionAction, setSocialSubmissionAction] = useState<"approve" | "reject">("approve");
   const [socialSubmissionReason, setSocialSubmissionReason] = useState("");
   const [socialSubmissionConfirmation, setSocialSubmissionConfirmation] = useState("");
+  const [roleOperationKey, setRoleOperationKey] = useState("");
+  const [workerOperationKey, setWorkerOperationKey] = useState("");
+  const [recomputeOperationKey, setRecomputeOperationKey] = useState("");
+  const [backfillOperationKey, setBackfillOperationKey] = useState("");
+  const [socialOperationKey, setSocialOperationKey] = useState("");
+  const [operationLookupKey, setOperationLookupKey] = useState("");
+  const [operationLookup, setOperationLookup] = useState<GuardedOperationResponse | null>(null);
+  const [recoveryConfirmation, setRecoveryConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -120,13 +131,16 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     if (confirmation.trim().toUpperCase() !== expected) { setMessage(`Type ${expected} to continue.`); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = roleOperationKey || `admin-role:${Date.now()}:${crypto.randomUUID()}`;
+      if (!roleOperationKey) setRoleOperationKey(key);
       const payload = await requestJson<RoleResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/roles`, {
         method: "PATCH",
-        body: JSON.stringify({ email: targetEmail, role: targetRole, user_id: targetUserId || null, action, confirmation_text: confirmation })
+        body: JSON.stringify({ email: targetEmail, role: targetRole, user_id: targetUserId || null, action, confirmation_text: confirmation, operation_key: key })
       });
       setOverview((current) => current ? { ...current, roles: payload.roles } : current);
       setMessage(payload.audit_warning ? `Saved, but audit warning: ${payload.audit_warning}` : (action === "upsert" ? "Role assignment saved." : "Role assignment revoked."));
       setConfirmation("");
+      setRoleOperationKey("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to update role assignment."); }
     finally { setBusy(false); }
   }
@@ -136,13 +150,16 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     if (workerConfirmation.trim().toUpperCase() !== expected) { setMessage(`Type ${expected} to run the badge queue worker.`); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = workerOperationKey || `badge-queue:${Date.now()}:${crypto.randomUUID()}`;
+      if (!workerOperationKey) setWorkerOperationKey(key);
       const payload = await requestJson<WorkerResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/workers/badge-queue`, {
         method: "POST",
-        body: JSON.stringify({ mode: workerMode, max_jobs: Number(workerMaxJobs), time_budget_seconds: Number(workerBudget), confirmation_text: workerConfirmation })
+        body: JSON.stringify({ mode: workerMode, max_jobs: Number(workerMaxJobs), time_budget_seconds: Number(workerBudget), confirmation_text: workerConfirmation, operation_key: key })
       });
       setLastWorkerResult(payload);
       setMessage(payload.audit_warning ? `Badge queue completed with audit warning: ${payload.audit_warning}` : "Badge queue worker completed.");
       setWorkerConfirmation("");
+      setWorkerOperationKey("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge queue worker."); }
     finally { setBusy(false); }
   }
@@ -187,6 +204,8 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     if (socialSubmissionAction === "reject" && !socialSubmissionReason.trim()) { setMessage("Enter a rejection reason before rejecting this submission."); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = socialOperationKey || `social-moderation:${Date.now()}:${crypto.randomUUID()}`;
+      if (!socialOperationKey) setSocialOperationKey(key);
       const payload = await requestJson<SocialSubmissionModerationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/social-submissions/${encodeURIComponent(selected.id)}/moderate`, {
         method: "POST",
         body: JSON.stringify({
@@ -194,6 +213,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           expected_status: selected.status,
           rejection_reason: socialSubmissionReason,
           confirmation_text: socialSubmissionConfirmation,
+          operation_key: key,
           source: "next_admin_tools_social_review"
         })
       });
@@ -201,6 +221,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
       setSelectedSocialSubmissionId("");
       setSocialSubmissionReason("");
       setSocialSubmissionConfirmation("");
+      setSocialOperationKey("");
       const warning = payload.warnings.length ? ` Audit warning: ${payload.warnings.join(" ")}` : "";
       setMessage(`Submission ${payload.action === "approve" ? "approved" : "rejected"}.${warning}`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to moderate the Club Social submission."); }
@@ -213,6 +234,8 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     if (tournamentBackfillConfirmation.trim().toUpperCase() !== tournamentBackfillPreview.confirmation_text) { setMessage(`Type ${tournamentBackfillPreview.confirmation_text} to apply the selected backfill.`); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = backfillOperationKey || `tournament-backfill:${Date.now()}:${crypto.randomUUID()}`;
+      if (!backfillOperationKey) setBackfillOperationKey(key);
       const payload = await requestJson<TournamentBackfillApplyResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/apply`, {
         method: "POST",
         body: JSON.stringify({
@@ -220,12 +243,14 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           preview_fingerprint: tournamentBackfillPreview.preview_fingerprint,
           preview_limit: Number(tournamentBackfillPreview.summary.candidate_limit ?? 500),
           confirmation_text: tournamentBackfillConfirmation,
+          operation_key: key,
           source: "next_admin_tools_tournament_match_backfill"
         })
       });
       setTournamentBackfillPreview(null);
       setSelectedTournamentBackfillGameIds([]);
       setTournamentBackfillConfirmation("");
+      setBackfillOperationKey("");
       setMessage(`Backfilled ${payload.inserted_count} reviewed tournament match(es). Operation ${payload.operation_id}. Reload the preview and verify Match Log before any further write.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply the tournament match backfill."); }
     finally { setBusy(false); }
@@ -235,6 +260,8 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     if (recomputeMode !== "dry-run" && recomputeConfirmation.trim().toUpperCase() !== "RUN BADGE RECOMPUTE") { setMessage("Type RUN BADGE RECOMPUTE to apply badge recompute changes."); return; }
     setBusy(true); setMessage(null);
     try {
+      const key = recomputeMode === "dry-run" ? "" : (recomputeOperationKey || `tools-badge-recompute:${Date.now()}:${crypto.randomUUID()}`);
+      if (recomputeMode !== "dry-run" && !recomputeOperationKey) setRecomputeOperationKey(key);
       const payload = await requestJson<WorkerResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/workers/badge-recompute`, {
         method: "POST",
         body: JSON.stringify({
@@ -247,13 +274,42 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           until: recomputeUntil || null,
           allow_strict_global: recomputeStrictGlobal,
           match_limit: 50000,
-          confirmation_text: recomputeConfirmation
+          confirmation_text: recomputeConfirmation,
+          operation_key: key
         })
       });
       setLastWorkerResult(payload);
-      setMessage(payload.audit_warning ? `Badge recompute finished with audit warning: ${payload.audit_warning}` : "Badge recompute finished.");
+      setMessage(payload.read_only ? "Read-only badge recompute preview finished; no rows were written." : "Badge recompute finished.");
       setRecomputeConfirmation("");
+      if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to run badge recompute."); }
+    finally { setBusy(false); }
+  }
+
+  async function inspectOperation() {
+    if (!operationLookupKey.trim()) { setMessage("Enter the exact guarded operation key first."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<GuardedOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/operations/${encodeURIComponent(operationLookupKey.trim())}`);
+      setOperationLookup(payload);
+      setMessage(`Operation ${payload.operation_key} is ${payload.status || "available"}.`);
+    } catch (error) { setOperationLookup(null); setMessage(error instanceof Error ? error.message : "Unable to inspect operation."); }
+    finally { setBusy(false); }
+  }
+
+  async function recoverTournamentBackfill() {
+    if (!operationLookup || operationLookup.workflow !== "tournament_match_backfill") { setMessage("Inspect a tournament backfill operation first."); return; }
+    if (recoveryConfirmation.trim().toUpperCase() !== "RECOVER TOURNAMENT BACKFILL") { setMessage("Type RECOVER TOURNAMENT BACKFILL to reconcile this operation."); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const payload = await requestJson<GuardedOperationResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/backfills/tournament-matches/operations/${encodeURIComponent(operationLookup.operation_key)}/recover`, {
+        method: "POST",
+        body: JSON.stringify({ confirmation_text: recoveryConfirmation, source: "next_admin_tools_tournament_match_backfill_recovery" })
+      });
+      setOperationLookup(payload);
+      setRecoveryConfirmation("");
+      setMessage("Tournament backfill rows are reconciled. Verify Replay History before further writes.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to recover tournament backfill."); }
     finally { setBusy(false); }
   }
 
@@ -262,19 +318,41 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const roleOptions = overview?.role_options || status?.roles || ["read_only", "scorekeeper", "organizer", "club_owner", "super_admin"];
   const health = overview?.health || {};
   const workerStatus = (health as { workers?: unknown }).workers;
+  const pendingOperationKeys = [roleOperationKey, workerOperationKey, recomputeOperationKey, backfillOperationKey, socialOperationKey].filter(Boolean);
   return <div style={{ display: "grid", gap: "1rem" }}>
     <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Admin session</h2><p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>{sessionLoading ? <p>Checking session…</p> : null}{sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}</article>
     <article style={cardStyle}>
       <h2 style={{ marginTop: 0 }}>Overview</h2>
       <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={flaggedOnly} onChange={(event) => setFlaggedOnly(event.target.checked)} /> Flagged activity only</label>
       <p><button type="button" onClick={loadOverview} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Loading…" : "Load Admin Tools"}</button></p>
-      {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("blocked") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+      {message ? <p role="status" aria-live="polite" style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") || message.toLowerCase().includes("blocked") || message.toLowerCase().includes("critical") || message.toLowerCase().includes("recovery") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
+    </article>
+    <article style={cardStyle}>
+      <h2 style={{ marginTop: 0 }}>Guarded operation recovery</h2>
+      <p style={mutedTextStyle}>Every applying action has a durable operation key. If the outcome is uncertain, stop further writes, keep the exact key shown below, and inspect it here. A completed key replays its saved result; an incomplete key never runs the mutation twice.</p>
+      {pendingOperationKeys.length ? <p style={warningTextStyle}><strong>Retained operation key{pendingOperationKeys.length === 1 ? "" : "s"} after an incomplete request:</strong> {pendingOperationKeys.map((key) => <code key={key} style={{ display: "block", overflowWrap: "anywhere" }}>{key}</code>)}</p> : null}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
+        <label>Exact operation key<br /><input value={operationLookupKey} onChange={(event) => { setOperationLookupKey(event.target.value); setOperationLookup(null); setRecoveryConfirmation(""); }} style={inputStyle} /></label>
+        <button type="button" onClick={inspectOperation} disabled={busy || !accessToken} style={ghostButtonStyle}>Inspect operation</button>
+      </div>
+      {operationLookup ? <div style={{ marginTop: "1rem" }}>
+        <Pre value={operationLookup} />
+        {operationLookup.status === "recovery_required" ? <p style={dangerTextStyle}><strong>Stop:</strong> do not blindly retry this operation. Follow the workflow-specific recovery below, then verify Match Log and Replay History before another write.</p> : null}
+        {operationLookup.workflow === "tournament_match_backfill" && operationLookup.status === "recovery_required" ? <section style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: "12px", padding: "1rem" }}>
+          <h3 style={{ marginTop: 0 }}>Reconcile tournament backfill</h3>
+          <p>Recovery only succeeds when every selected game now has exactly one official match. It does not create or delete matches.</p>
+          <label>Confirmation<br /><input value={recoveryConfirmation} onChange={(event) => setRecoveryConfirmation(event.target.value)} placeholder="RECOVER TOURNAMENT BACKFILL" style={inputStyle} /></label>
+          <p><button type="button" onClick={recoverTournamentBackfill} disabled={busy} style={buttonStyle}>Reconcile existing rows</button></p>
+        </section> : null}
+      </div> : null}
+      <p><a href="/admin/match-log">Open Match Log</a> · <a href="/admin/replay-history">Open Replay History</a> · <a href="/admin/guide">Open Admin Guide</a></p>
+      <p style={mutedTextStyle}>If FastAPI is disabled or recovery cannot prove the exact result, stop and use the existing Streamlit Admin fallback with the operation key and audit activity visible.</p>
     </article>
     {overview ? <>
       <article style={cardStyle}><h2 style={{ marginTop: 0 }}>System health</h2><Pre value={health} /></article>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Reports &amp; exports</h2>
-        <p style={{ color: "#475569" }}>Generate the Streamlit-parity overall or league rating report. This is a club-scoped, read-only query; CSV export is created locally in your browser.</p>
+        <p style={mutedTextStyle}>Generate the Streamlit-parity overall or league rating report. This is a club-scoped, read-only query; FastAPI creates a formula-neutralized CSV and the browser only downloads those server-produced bytes.</p>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
           <label>Report scope<br /><select value={ratingReportScope} onChange={(event) => { setRatingReportScope(event.target.value); setRatingReport(null); }} style={inputStyle}>{ratingReportScopes.map((scope) => <option key={scope} value={scope}>{scope}</option>)}</select></label>
           <button type="button" onClick={loadRatingReport} disabled={busy} style={ghostButtonStyle}>Generate report</button>
@@ -365,7 +443,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
         <hr style={{ border: 0, borderTop: "1px solid #e2e8f0", margin: "1rem 0" }} />
         <h3>Badge recompute</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Mode<br /><select value={recomputeMode} onChange={(event) => setRecomputeMode(event.target.value)} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
+          <label>Mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeConfirmation(""); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run (no writes)</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
           <label>Player ID<br /><input value={recomputePlayerId} onChange={(event) => setRecomputePlayerId(event.target.value)} style={inputStyle} /></label>
           <label>Badge ID<br /><input value={recomputeBadgeId} onChange={(event) => setRecomputeBadgeId(event.target.value)} style={inputStyle} /></label>
           <label>League<br /><input value={recomputeLeagueId} onChange={(event) => setRecomputeLeagueId(event.target.value)} style={inputStyle} /></label>
@@ -373,7 +451,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           <label>Since<br /><input type="date" value={recomputeSince} onChange={(event) => setRecomputeSince(event.target.value)} style={inputStyle} /></label>
           <label>Until<br /><input type="date" value={recomputeUntil} onChange={(event) => setRecomputeUntil(event.target.value)} style={inputStyle} /></label>
           <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center" }}><input type="checkbox" checked={recomputeStrictGlobal} onChange={(event) => setRecomputeStrictGlobal(event.target.checked)} /> Allow strict global</label>
-          <label>Confirmation<br /><input value={recomputeConfirmation} onChange={(event) => setRecomputeConfirmation(event.target.value)} placeholder="RUN BADGE RECOMPUTE" style={inputStyle} /></label>
+          <label>Confirmation {recomputeMode === "dry-run" ? "(not required)" : ""}<br /><input value={recomputeConfirmation} onChange={(event) => setRecomputeConfirmation(event.target.value)} placeholder={recomputeMode === "dry-run" ? "No confirmation for read-only preview" : "RUN BADGE RECOMPUTE"} disabled={recomputeMode === "dry-run"} style={inputStyle} /></label>
           <button type="button" onClick={runBadgeRecompute} disabled={busy} style={ghostButtonStyle}>Run badge recompute</button>
         </div>
         {lastWorkerResult ? <><h3>Last worker result</h3><Pre value={lastWorkerResult} /></> : null}

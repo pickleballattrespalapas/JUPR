@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 import pandas as pd
@@ -56,10 +58,15 @@ def normalize_legacy_matches_for_canonical(
             manual_review.append({"match_id": mid, "reason": "no_safe_normalization", "exclusion_reasons": diag.get("exclusion_reasons", [])})
             continue
 
+        expected = {
+            key: _json_scalar(source_row.get(key))
+            for key in sorted(set(patch) | ({"updated_at"} if "updated_at" in source_row else set()))
+        }
         proposals.append(
             {
                 "match_id": mid,
                 "patch": patch,
+                "expected": expected,
                 "normalization_reasons": reasons,
                 "exclusion_reasons": diag.get("exclusion_reasons", []),
             }
@@ -79,8 +86,24 @@ def normalize_legacy_matches_for_canonical(
             )
             applied.append(mid)
 
+    fingerprint_payload = {
+        "club_id": str(club_id),
+        "player_id": int(player_id) if player_id is not None else None,
+        "proposals": [
+            {
+                "match_id": int(row["match_id"]),
+                "expected": row["expected"],
+                "patch": row["patch"],
+            }
+            for row in proposals
+        ],
+    }
+    preview_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
     return {
         "dry_run": bool(dry_run),
+        "read_only": bool(dry_run),
         "club_id": str(club_id),
         "player_id": int(player_id) if player_id is not None else None,
         "requested_match_ids": sorted(target_ids),
@@ -90,7 +113,29 @@ def normalize_legacy_matches_for_canonical(
         "applied_match_ids": applied,
         "proposals": proposals,
         "manual_review_needed": manual_review,
+        "preview_fingerprint": preview_fingerprint,
     }
+
+
+def _json_scalar(value: Any) -> Any:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
 
 
 def _rows_by_id(df_matches: pd.DataFrame | None) -> dict[int, dict[str, Any]]:

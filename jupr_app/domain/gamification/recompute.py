@@ -51,8 +51,12 @@ def run_badge_recompute(
         until=until,
         mode=mode,
     )
-    eval_run_id = _create_eval_run(supabase, created_by, mode, scope)
-    _update_eval_run(supabase, eval_run_id, status="running", started_at=_now_iso())
+    # A dry run is a true no-write preview. Applying modes retain the durable
+    # badge_eval_runs lifecycle used by workers and recovery tooling.
+    eval_run_id: str | None = None
+    if mode != "dry-run":
+        eval_run_id = _create_eval_run(supabase, created_by, mode, scope)
+        _update_eval_run(supabase, eval_run_id, status="running", started_at=_now_iso())
 
     try:
         if ctx is None:
@@ -102,7 +106,7 @@ def run_badge_recompute(
         if mode == "dry-run":
             summary["new_awards_count"] = len(missing_keys)
             summary["revoked_count"] = len(stale_keys)
-            _update_eval_run(supabase, eval_run_id, status="completed", finished_at=_now_iso(), summary=summary)
+            summary["read_only"] = True
             return summary
 
         created = upsert_player_badges(
@@ -135,13 +139,14 @@ def run_badge_recompute(
         _update_eval_run(supabase, eval_run_id, status="completed", finished_at=_now_iso(), summary=summary)
         return summary
     except Exception as exc:
-        _update_eval_run(
-            supabase,
-            eval_run_id,
-            status="failed",
-            finished_at=_now_iso(),
-            error=str(exc),
-        )
+        if eval_run_id is not None:
+            _update_eval_run(
+                supabase,
+                eval_run_id,
+                status="failed",
+                finished_at=_now_iso(),
+                error=str(exc),
+            )
         raise
 
 

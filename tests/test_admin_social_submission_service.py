@@ -128,6 +128,7 @@ class FakeSupabase:
                 },
             ],
             "admin_activity_log": [],
+            "admin_guarded_operations": [],
         }
 
     def table(self, name):
@@ -137,6 +138,8 @@ class FakeSupabase:
 @pytest.fixture(autouse=True)
 def enable_admin_tools(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
 
 
 def test_social_submission_list_is_read_only_and_club_scoped() -> None:
@@ -164,6 +167,7 @@ def test_approve_social_submission_requires_current_status_and_writes_audit() ->
         actor_email="owner@example.com",
         actor_role="club_owner",
         confirmation_text="APPROVE SOCIAL SUBMISSION",
+        operation_key="social-approve-one",
     )
 
     row = next(row for row in supabase.storage["live_events"] if row["id"] == "event-pending")
@@ -171,7 +175,7 @@ def test_approve_social_submission_requires_current_status_and_writes_audit() ->
     assert row["status"] == "saved"
     assert row["moderated_by"] == "owner@example.com"
     assert row["rejection_reason"] is None
-    audit = supabase.storage["admin_activity_log"][0]
+    audit = supabase.storage["admin_activity_log"][-1]
     assert audit["action_type"] == "approve_club_social_submission"
     assert audit["flagged_for_review"] is True
     assert "raw_event_json" not in audit["before_json"]
@@ -193,6 +197,7 @@ def test_reject_social_submission_requires_reason_before_write() -> None:
             actor_role="club_owner",
             rejection_reason="",
             confirmation_text="REJECT SOCIAL SUBMISSION",
+            operation_key="social-reject-empty",
         )
 
     assert supabase.storage == before
@@ -213,6 +218,7 @@ def test_social_submission_stale_status_is_rejected_without_write() -> None:
             actor_role="club_owner",
             rejection_reason="Duplicate submission",
             confirmation_text="REJECT SOCIAL SUBMISSION",
+            operation_key="social-reject-stale",
         )
 
     assert supabase.storage == before
@@ -232,6 +238,7 @@ def test_social_submission_cross_club_target_is_rejected_without_write() -> None
             actor_email="owner@example.com",
             actor_role="club_owner",
             confirmation_text="APPROVE SOCIAL SUBMISSION",
+            operation_key="social-cross-club",
         )
 
     assert supabase.storage == before

@@ -5,7 +5,14 @@ export type AdminBadgeDiagnosticsStatusResponse = {
   debug_endpoint?: string | null;
   audit_endpoint?: string | null;
   state_endpoint?: string | null;
+  recompute_endpoint?: string | null;
+  revoke_endpoint?: string | null;
+  operation_status_endpoint?: string | null;
   confirmation_text?: Record<string, string>;
+  required_permissions?: Record<string, string>;
+  write_environment?: string;
+  service_role_required?: boolean;
+  streamlit_fallback?: string;
   badge_count?: number | null;
   player_badge_count?: number | null;
   warnings: string[];

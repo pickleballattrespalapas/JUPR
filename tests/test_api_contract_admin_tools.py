@@ -116,6 +116,7 @@ class FakeSupabase:
                 {"id": "role-owner", "club_id": "club", "email": "owner@example.com", "role": "super_admin", "user_id": "user-1", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}
             ],
             "admin_activity_log": [],
+            "admin_guarded_operations": [],
             "matches": [{"club_id": "club", "id": 1, "t1_p1_r": 1200, "t1_p2_r": 1200, "t2_p1_r": 1200, "t2_p2_r": 1200, "t1_p1_r_end": 1210, "t1_p2_r_end": 1210, "t2_p1_r_end": 1190, "t2_p2_r_end": 1190}],
         }
 
@@ -125,6 +126,8 @@ class FakeSupabase:
 
 def install_env(monkeypatch, supabase):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
@@ -288,12 +291,41 @@ def test_admin_tools_overview_and_role_update(monkeypatch):
     saved = client.patch(
         "/admin/clubs/club/tools/roles",
         headers={"Authorization": "Bearer local"},
-        json={"email": "score@example.com", "role": "scorekeeper", "action": "upsert", "confirmation_text": "SAVE ROLE"},
+        json={"email": "score@example.com", "role": "scorekeeper", "action": "upsert", "confirmation_text": "SAVE ROLE", "operation_key": "role-overview-save"},
     )
     assert saved.status_code == 200
     emails = {row["email"] for row in saved.json()["roles"]}
     assert "score@example.com" in emails
     assert supabase.storage["admin_activity_log"]
+
+
+def test_admin_tools_badge_recompute_permission_is_mode_specific(monkeypatch):
+    supabase = FakeSupabase()
+    install_env(monkeypatch, supabase)
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="read_only", assigned=True, source="admin_role_assignments"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.run_admin_badge_recompute_job",
+        lambda *_args, **_kwargs: {"ok": True, "mode": "dry-run", "read_only": True, "summary": {}},
+    )
+    client = TestClient(app)
+
+    preview = client.post(
+        "/admin/clubs/club/tools/workers/badge-recompute",
+        headers={"Authorization": "Bearer local"},
+        json={"mode": "dry-run"},
+    )
+    apply = client.post(
+        "/admin/clubs/club/tools/workers/badge-recompute",
+        headers={"Authorization": "Bearer local"},
+        json={"mode": "append-only", "confirmation_text": "RUN BADGE RECOMPUTE", "operation_key": "tools-badge-apply"},
+    )
+
+    assert preview.status_code == 200
+    assert apply.status_code == 403
+    assert supabase.storage["admin_activity_log"][-1]["after_json"]["required_permission"] == "run_replay"
 
 
 def _patch_role(client, *, email="score@example.com", role="scorekeeper", action="upsert"):
@@ -305,6 +337,7 @@ def _patch_role(client, *, email="score@example.com", role="scorekeeper", action
             "role": role,
             "action": action,
             "confirmation_text": "REVOKE ROLE" if action == "revoke" else "SAVE ROLE",
+            "operation_key": "role-operation-test",
         },
     )
 
@@ -315,14 +348,14 @@ def test_role_upsert_strict_preflight_audit_failure_does_not_mutate(monkeypatch)
     monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
     before = deepcopy(supabase.storage["admin_role_assignments"])
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         lambda *_args, **_kwargs: SimpleNamespace(ok=False, warning="boom"),
     )
 
     response = _patch_role(TestClient(app))
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "audit log write required but unavailable"
+    assert "Required audit intent" in response.json()["detail"]
     assert supabase.storage["admin_role_assignments"] == before
 
 
@@ -337,14 +370,14 @@ def test_role_upsert_strict_completion_audit_failure_removes_new_assignment(monk
         ]
     )
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         lambda *_args, **_kwargs: next(writes),
     )
 
     response = _patch_role(TestClient(app))
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "audit log write required but unavailable"
+    assert "prior role assignment was restored" in response.json()["detail"]
     assert {row["email"] for row in supabase.storage["admin_role_assignments"]} == {
         "owner@example.com"
     }
@@ -372,7 +405,7 @@ def test_role_upsert_strict_completion_audit_failure_restores_existing_assignmen
         ]
     )
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         lambda *_args, **_kwargs: next(writes),
     )
 
@@ -410,7 +443,7 @@ def test_role_revoke_strict_completion_audit_failure_restores_assignment(monkeyp
         ]
     )
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         lambda *_args, **_kwargs: next(writes),
     )
 
@@ -431,20 +464,20 @@ def test_role_revoke_strict_completion_audit_failure_restores_assignment(monkeyp
     assert restored["user_id"] == "organizer-user"
 
 
-def test_role_change_non_strict_audit_failure_warns_after_mutation(monkeypatch):
+def test_role_change_audit_failure_is_always_strict(monkeypatch):
     supabase = FakeSupabase()
     install_env(monkeypatch, supabase)
     monkeypatch.delenv("JUPR_REQUIRE_API_AUDIT_LOG", raising=False)
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         lambda *_args, **_kwargs: SimpleNamespace(ok=False, warning="audit unavailable"),
     )
 
     response = _patch_role(TestClient(app))
 
-    assert response.status_code == 200
-    assert response.json()["audit_warning"] == "audit unavailable"
-    assert "score@example.com" in {
+    assert response.status_code == 500
+    assert "Required audit intent" in response.json()["detail"]
+    assert "score@example.com" not in {
         row["email"] for row in supabase.storage["admin_role_assignments"]
     }
 
@@ -461,12 +494,9 @@ def test_role_change_strict_success_records_intent_and_completion(monkeypatch):
     intent, completion = logs[-2:]
     assert intent["action_type"] == "role_assignment_upsert_intent"
     assert intent["before_json"] is None
-    assert intent["after_json"]["proposed_assignment"] == {
-        "email": "score@example.com",
-        "role": "scorekeeper",
-        "user_id": None,
-    }
-    assert intent["after_json"]["operation_id"]
+    assert intent["after_json"]["workflow"] == "admin_role_assignment"
+    assert intent["after_json"]["request_fingerprint"]
+    assert intent["entity_id"] == "role-operation-test"
     assert completion["action_type"] == "role_assignment_upsert"
     assert completion["actor_email"] == "owner@example.com"
     assert completion["actor_role"] == "super_admin"
@@ -474,13 +504,13 @@ def test_role_change_strict_success_records_intent_and_completion(monkeypatch):
     assert completion["source_page"] == "next_admin_tools_roles"
     assert completion["flagged_for_review"] is True
     assert completion["after_json"]["operation"] == "completion"
-    assert completion["after_json"]["operation_id"] == intent["after_json"]["operation_id"]
+    assert completion["after_json"]["operation_id"] == response.json()["operation_id"]
     assert completion["after_json"]["assignment"] == {
         "email": "score@example.com",
         "role": "scorekeeper",
         "user_id": None,
     }
-    assert response.json()["operation_id"] == intent["after_json"]["operation_id"]
+    assert response.json()["operation_key"] == "role-operation-test"
 
 
 def test_role_change_compensation_preserves_newer_concurrent_assignment(monkeypatch):
@@ -503,14 +533,14 @@ def test_role_change_compensation_preserves_newer_concurrent_assignment(monkeypa
         return SimpleNamespace(ok=False, warning="boom")
 
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         fail_completion_after_concurrent_change,
     )
 
     response = _patch_role(TestClient(app))
 
-    assert response.status_code == 500
-    assert response.json()["detail"].startswith(
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"].startswith(
         "Critical: audit log write failed and the role assignment change could not be rolled back."
     )
     preserved = next(
@@ -545,8 +575,8 @@ def test_role_upsert_unknown_commit_outcome_requires_manual_review(monkeypatch):
 
     response = _patch_role(TestClient(app))
 
-    assert response.status_code == 500
-    assert response.json()["detail"].startswith(
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"].startswith(
         "Critical: the role assignment write outcome is unknown."
     )
     assert "score@example.com" in {
@@ -648,7 +678,7 @@ def test_role_strict_completion_audit_failure_reports_compensation_exception(mon
         ]
     )
     monkeypatch.setattr(
-        "jupr_app.services.admin_tools_service.write_admin_activity_log",
+        "jupr_app.services.admin_guarded_write_service.write_admin_activity_log",
         lambda *_args, **_kwargs: next(writes),
     )
     monkeypatch.setattr(
@@ -658,7 +688,7 @@ def test_role_strict_completion_audit_failure_reports_compensation_exception(mon
 
     response = _patch_role(TestClient(app))
 
-    assert response.status_code == 500
-    assert response.json()["detail"].startswith(
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"].startswith(
         "Critical: audit log write failed and the role assignment change could not be rolled back."
     )

@@ -32,11 +32,15 @@ def badge_tables() -> dict[str, list[dict]]:
             {"id": "pb1", "club_id": "club", "player_id": 1, "badge_id": "high_roller", "context_id": "season", "revoked_at": None},
         ],
         "admin_activity_log": [],
+        "admin_guarded_operations": [],
+        "badge_eval_runs": [],
     }
 
 
 def _install_env(monkeypatch, supabase) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS", "1")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
@@ -115,7 +119,7 @@ def test_admin_badge_audit_route_contract(monkeypatch):
     assert payload["report"]["counts"]["missing_exact_count"] == 0
 
 
-def test_badge_definition_state_requires_manage_roles(monkeypatch):
+def test_badge_definition_state_requires_run_replay(monkeypatch):
     tables = badge_tables()
     supabase = FakeSupabase(tables)
     _install_env(monkeypatch, supabase)
@@ -134,4 +138,4 @@ def test_badge_definition_state_requires_manage_roles(monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "insufficient permission"
     assert tables["badges"][0]["state"] == "live"
-    assert tables["admin_activity_log"][-1]["after_json"]["required_permission"] == "manage_roles"
+    assert tables["admin_activity_log"][-1]["after_json"]["required_permission"] == "run_replay"
