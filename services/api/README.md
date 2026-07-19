@@ -119,7 +119,7 @@ unlock copy, lifecycle availability buckets, and public-safe trophy summaries; r
 badge-evaluation context and inactive players are not returned. The Challenge
 Ladder response computes statuses and eligible-opponent hints in Python and
 returns the same structured rulebook/status policy consumed by the Next route.
-- `GET /clubs/{club_slug}/weekly-recaps?week_start=...`
+- `GET /clubs/{club_slug}/weekly-recaps?week_start=...&page=1&page_size=8` (published-only, page size capped at 12)
 - `GET /clubs/{club_slug}/weekly-recaps/{week_start}`
 - `GET /clubs/{club_slug}/weekly-recaps/{week_start}/pdf`
 - `GET /clubs/{club_slug}/tournament-registration?registration_slug=...&tournament_id=...`
@@ -138,7 +138,7 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /clubs/{club_slug}/live-sessions`
 - `GET /clubs/{club_slug}/live-sessions/{session_key}`
 - `GET /clubs/{club_slug}/match-explorer`
-- `GET /clubs/{club_slug}/match-explorer/preview?me=...&partner=...&opp1=...&opp2=...`
+- `GET /clubs/{club_slug}/match-explorer/preview?me=...&partner=...&opp1=...&opp2=...` (Python-authoritative expected score, deltas, player projections, and impact chart)
 - `POST /admin/clubs/{club_id}/matches/batch` guarded/disabled by default
 
 `GET /clubs/{club_slug}` is backed by `public.clubs` (slug-first lookup with id fallback) and returns a normalized public club contract (`id`, `slug`, `name`, `tagline`, `support_email`, `public_base_url`, `logo_url`, `primary_color`, `is_active`). Tres Palapas default slug is `tres-palapas`.

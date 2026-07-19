@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from jupr_app.domain.constants import CAP_LOSER_GAIN_ELO, DEFAULT_K_FACTOR, MIN_WIN_DELTA_ELO
-from jupr_app.domain.ratings import calculate_hybrid_elo
+from jupr_app.domain.constants import DEFAULT_K_FACTOR
+from jupr_app.domain.match_explorer import build_match_explorer_projection
 from jupr_app.services.public_player_service import get_public_players
 
 LEAGUE_RATING_SELECT = "player_id,league_name,rating,is_active"
@@ -39,18 +39,6 @@ def _jupr(elo: float | None) -> float | None:
     if elo is None:
         return None
     return float(elo) / 400.0
-
-
-def _win_label(probability: float) -> str:
-    if probability >= 0.70:
-        return "Heavy Favorite"
-    if probability >= 0.55:
-        return "Favored"
-    if probability >= 0.45:
-        return "Toss-up"
-    if probability >= 0.30:
-        return "Underdog"
-    return "Heavy Underdog"
 
 
 def _active_league_name(row: dict[str, Any]) -> str | None:
@@ -186,6 +174,11 @@ def build_public_match_explorer_preview(
     score_you = max(0, int(score_you))
     score_opp = max(0, int(score_opp))
     context = str(context_name or "OVERALL").strip() or "OVERALL"
+    available_contexts = get_public_match_explorer_contexts(supabase, club_id=str(club_id))
+    if context.upper() == "OVERALL":
+        context = "OVERALL"
+    elif context not in available_contexts:
+        raise ValueError("Selected rating context is unavailable.")
 
     public_players = get_public_players(supabase, club_id=str(club_id), limit=1000)
     players_by_id: dict[int, dict[str, Any]] = {}
@@ -213,17 +206,13 @@ def build_public_match_explorer_preview(
     ratings = {pid: context_rating(pid) for pid in player_ids}
     you_avg = (ratings[int(me)] + ratings[int(partner)]) / 2.0
     opp_avg = (ratings[int(opp1)] + ratings[int(opp2)]) / 2.0
-    expected_you = 1.0 / (1.0 + 10 ** ((opp_avg - you_avg) / 400.0))
     k_factor = _k_factor_for_context(supabase, club_id=str(club_id), context_name=context)
-
-    delta_you_elo, delta_opp_elo = calculate_hybrid_elo(
-        you_avg,
-        opp_avg,
-        int(score_you),
-        int(score_opp),
+    projection = build_match_explorer_projection(
+        team_you_avg=float(you_avg),
+        team_opponents_avg=float(opp_avg),
+        score_you=int(score_you),
+        score_opponents=int(score_opp),
         k_factor=int(k_factor),
-        min_win_delta=float(MIN_WIN_DELTA_ELO),
-        cap_loser_gain=float(CAP_LOSER_GAIN_ELO),
     )
 
     you_players = [
@@ -234,6 +223,27 @@ def build_public_match_explorer_preview(
         _public_player_payload(players_by_id[int(opp1)], ratings[int(opp1)]),
         _public_player_payload(players_by_id[int(opp2)], ratings[int(opp2)]),
     ]
+
+    player_impacts = []
+    for role, player, delta_elo in (
+        ("You", you_players[0], projection["rating_delta"]["you_team_elo"]),
+        ("Partner", you_players[1], projection["rating_delta"]["you_team_elo"]),
+        ("Opponent 1", opponent_players[0], projection["rating_delta"]["opponent_team_elo"]),
+        ("Opponent 2", opponent_players[1], projection["rating_delta"]["opponent_team_elo"]),
+    ):
+        current_elo = float(player["context_rating"])
+        player_impacts.append(
+            {
+                "role": role,
+                "player": player,
+                "current_rating": current_elo,
+                "current_jupr": _jupr(current_elo),
+                "projected_rating": current_elo + float(delta_elo),
+                "projected_jupr": _jupr(current_elo + float(delta_elo)),
+                "delta_elo": float(delta_elo),
+                "delta_jupr": _jupr(float(delta_elo)),
+            }
+        )
 
     return {
         "context": {"name": context, "k_factor": int(k_factor)},
@@ -249,16 +259,6 @@ def build_public_match_explorer_preview(
                 "players": opponent_players,
             },
         },
-        "expected": {
-            "you": float(expected_you),
-            "opponents": float(1.0 - expected_you),
-            "label": _win_label(float(expected_you)),
-        },
-        "score": {"you": int(score_you), "opponents": int(score_opp)},
-        "rating_delta": {
-            "you_team_elo": float(delta_you_elo),
-            "opponent_team_elo": float(delta_opp_elo),
-            "you_team_jupr": _jupr(float(delta_you_elo)),
-            "opponent_team_jupr": _jupr(float(delta_opp_elo)),
-        },
+        **projection,
+        "player_impacts": player_impacts,
     }

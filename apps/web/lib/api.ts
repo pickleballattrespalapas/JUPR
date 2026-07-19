@@ -318,20 +318,65 @@ export type MatchExplorerPlayer = {
   context_jupr?: number | null;
 };
 
+export type MatchExplorerScoreTo11 = {
+  you: number;
+  opponents: number;
+  label: string;
+};
+
+export type MatchExplorerImpactPoint = {
+  score_share: number;
+  score_to_11: MatchExplorerScoreTo11;
+  you_team_elo: number;
+  opponent_team_elo: number;
+  you_team_jupr: number;
+  opponent_team_jupr: number;
+};
+
+export type MatchExplorerPlayerImpact = {
+  role: "You" | "Partner" | "Opponent 1" | "Opponent 2";
+  player: MatchExplorerPlayer;
+  current_rating: number;
+  current_jupr: number;
+  projected_rating: number;
+  projected_jupr: number;
+  delta_elo: number;
+  delta_jupr: number;
+};
+
 export type MatchExplorerPreview = {
   context: { name: string; k_factor: number };
   teams: {
     you: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
     opponents: { average_rating: number; average_jupr?: number | null; players: MatchExplorerPlayer[] };
   };
-  expected: { you: number; opponents: number; label: string };
-  score: { you: number; opponents: number };
+  expected: { you: number; opponents: number; label: string; score_to_11: MatchExplorerScoreTo11 };
+  score: {
+    you: number;
+    opponents: number;
+    you_share?: number | null;
+    opponents_share?: number | null;
+    beat_expectation_pp?: number | null;
+    score_to_11?: MatchExplorerScoreTo11 | null;
+  };
   rating_delta: {
     you_team_elo: number;
     opponent_team_elo: number;
     you_team_jupr?: number | null;
     opponent_team_jupr?: number | null;
   };
+  impact_chart: {
+    points: MatchExplorerImpactPoint[];
+    score_ticks: Array<{ score_share: number; score_to_11: MatchExplorerScoreTo11 }>;
+    expected_marker: { score_share: number; score_to_11: MatchExplorerScoreTo11 };
+    selected_marker?: {
+      score_share: number;
+      score_to_11?: MatchExplorerScoreTo11 | null;
+      you_team_elo: number;
+      you_team_jupr: number;
+    } | null;
+  };
+  player_impacts: MatchExplorerPlayerImpact[];
 };
 
 export type MatchExplorerPreviewResponse = {

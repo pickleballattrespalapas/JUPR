@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MatchExplorerPreview, MatchExplorerPreviewResponse, PublicPlayer } from "@/lib/api";
 
 type InitialMatchExplorerSelection = {
@@ -20,9 +20,6 @@ type MatchExplorerFormProps = {
   contexts: string[];
   initialSelection?: InitialMatchExplorerSelection;
 };
-
-const MIN_WIN_DELTA_ELO = 1.0;
-const CAP_LOSER_GAIN_ELO = 16.0;
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -49,6 +46,7 @@ function playerName(players: PublicPlayer[], id: string): string {
 }
 
 function cleanScore(value: string | null | undefined, fallback: string): string {
+  if (value == null || String(value).trim() === "") return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return String(Math.min(99, Math.max(0, Math.round(parsed))));
@@ -59,44 +57,16 @@ function initialPlayerId(playerIds: Set<string>, value: string | null | undefine
   return cleaned && playerIds.has(cleaned) ? cleaned : fallback;
 }
 
-function scoreShare(scoreYou: number, scoreOpponents: number): number | null {
-  const total = Number(scoreYou) + Number(scoreOpponents);
-  if (total <= 0) return null;
-  return Number(scoreYou) / total;
-}
-
 function beatExpectationLabel(preview: MatchExplorerPreview): { value: string; caption: string } {
-  const share = scoreShare(preview.score.you, preview.score.opponents);
-  if (share == null || preview.score.you === preview.score.opponents) {
+  const share = preview.score.you_share;
+  const beatPp = preview.score.beat_expectation_pp;
+  if (share == null || beatPp == null) {
     return { value: "—", caption: "No movement on ties / empty scores." };
   }
-  const beatPp = (share - preview.expected.you) * 100;
   return {
     value: `${beatPp >= 0 ? "+" : ""}${beatPp.toFixed(0)} pp`,
     caption: `Your share ${(share * 100).toFixed(1)}% vs expected ${(preview.expected.you * 100).toFixed(1)}%`
   };
-}
-
-function shareToScore11Label(share: number | null): string {
-  if (share == null || !Number.isFinite(share)) return "—";
-  if (Math.abs(share - 0.5) < 1e-12) return "11–11";
-  if (share < 0.5) {
-    const myPts = Math.round((11.0 * share) / Math.max(1e-9, 1.0 - share));
-    return `${myPts}–11`;
-  }
-  const oppPts = Math.round((11.0 * (1.0 - share)) / Math.max(1e-9, share));
-  return `11–${oppPts}`;
-}
-
-function deltaYouFromShare(share: number, expected: number, kFactor: number): number {
-  if (Math.abs(share - 0.5) < 1e-12) return 0.0;
-  let delta = Number(kFactor) * 2.0 * (Number(share) - Number(expected));
-  if (share > 0.5) {
-    if (delta <= 0) delta = MIN_WIN_DELTA_ELO;
-  } else if (delta > 0) {
-    delta = Math.min(delta, CAP_LOSER_GAIN_ELO);
-  }
-  return delta;
 }
 
 function TeamSummary({ title, team }: { title: string; team: MatchExplorerPreview["teams"]["you"] }) {
@@ -122,11 +92,13 @@ function SummaryCards({ preview }: { preview: MatchExplorerPreview }) {
   const beat = beatExpectationLabel(preview);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+    <div data-testid="match-explorer-summary" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
       <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#f8fafc" }}>
         <h3 style={{ marginTop: 0 }}>Expected win rate</h3>
         <p style={{ fontSize: "2rem", fontWeight: 800, margin: 0 }}>{percentLabel(preview.expected.you)}</p>
-        <p style={{ margin: 0, color: "#475569" }}>{preview.expected.label} • {preview.context.name}</p>
+        <p style={{ margin: 0, color: "#475569" }}>
+          {preview.expected.label} • expected {preview.expected.score_to_11.label} • {preview.context.name}
+        </p>
       </article>
       <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#f8fafc" }}>
         <h3 style={{ marginTop: 0 }}>Beat expectation</h3>
@@ -148,21 +120,8 @@ function SummaryCards({ preview }: { preview: MatchExplorerPreview }) {
 }
 
 function PlayerImpactTable({ preview }: { preview: MatchExplorerPreview }) {
-  const rows = [
-    ...preview.teams.you.players.map((player, index) => ({
-      role: index === 0 ? "You" : "Partner",
-      player,
-      deltaElo: preview.rating_delta.you_team_elo
-    })),
-    ...preview.teams.opponents.players.map((player, index) => ({
-      role: index === 0 ? "Opponent 1" : "Opponent 2",
-      player,
-      deltaElo: preview.rating_delta.opponent_team_elo
-    }))
-  ];
-
   return (
-    <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", marginTop: "1rem" }}>
+    <div data-testid="match-explorer-player-impact" style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", marginTop: "1rem" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "620px" }}>
         <thead>
           <tr style={{ background: "#f8fafc", textAlign: "left" }}>
@@ -174,13 +133,13 @@ function PlayerImpactTable({ preview }: { preview: MatchExplorerPreview }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {preview.player_impacts.map((row) => (
             <tr key={`${row.role}-${String(row.player.id)}`}>
               <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9", fontWeight: 700 }}>{row.role}</td>
               <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{row.player.name}</td>
-              <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{ratingLabel(row.player.context_rating)}</td>
-              <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{ratingLabel(row.player.context_rating + row.deltaElo)}</td>
-              <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{deltaLabel(row.deltaElo)}</td>
+              <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{ratingLabel(row.current_rating)}</td>
+              <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{ratingLabel(row.projected_rating)}</td>
+              <td style={{ padding: "0.75rem", borderTop: "1px solid #f1f5f9" }}>{deltaLabel(row.delta_elo)}</td>
             </tr>
           ))}
         </tbody>
@@ -195,17 +154,11 @@ function RatingImpactChart({ preview }: { preview: MatchExplorerPreview }) {
   const margin = { top: 18, right: 24, bottom: 58, left: 62 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
-  const curve = Array.from({ length: 101 }, (_, index) => {
-    const share = index / 100;
-    return {
-      share,
-      delta: deltaYouFromShare(share, preview.expected.you, preview.context.k_factor) / 400.0,
-      score11: shareToScore11Label(share)
-    };
-  });
-  const selectedShare = scoreShare(preview.score.you, preview.score.opponents);
-  const selectedDelta = Number(preview.rating_delta.you_team_jupr ?? preview.rating_delta.you_team_elo / 400.0);
-  const values = curve.map((point) => point.delta).concat([0, selectedDelta]);
+  const curve = preview.impact_chart.points;
+  const selectedMarker = preview.impact_chart.selected_marker;
+  const selectedShare = selectedMarker?.score_share ?? null;
+  const selectedDelta = selectedMarker?.you_team_jupr ?? null;
+  const values = curve.map((point) => point.you_team_jupr).concat([0, selectedDelta ?? 0]);
   let minDelta = Math.min(...values);
   let maxDelta = Math.max(...values);
   const pad = Math.max((maxDelta - minDelta) * 0.12, 0.01);
@@ -214,15 +167,15 @@ function RatingImpactChart({ preview }: { preview: MatchExplorerPreview }) {
 
   const x = (share: number) => margin.left + share * innerWidth;
   const y = (delta: number) => margin.top + (maxDelta - delta) * (innerHeight / (maxDelta - minDelta));
-  const path = curve.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.share).toFixed(1)} ${y(point.delta).toFixed(1)}`).join(" ");
-  const xTicks = [0, 3 / 14, 6 / 17, 9 / 20, 0.5, 11 / 20, 11 / 17, 11 / 14, 1];
+  const path = curve.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.score_share).toFixed(1)} ${y(point.you_team_jupr).toFixed(1)}`).join(" ");
+  const xTicks = preview.impact_chart.score_ticks;
   const yTicks = Array.from(new Set([minDelta, 0, maxDelta].map((value) => Number(value.toFixed(4))))).sort((a, b) => a - b);
   const selectedX = selectedShare == null ? null : x(selectedShare);
-  const selectedY = selectedShare == null ? null : y(selectedDelta);
-  const expectedX = x(preview.expected.you);
+  const selectedY = selectedShare == null || selectedDelta == null ? null : y(selectedDelta);
+  const expectedX = x(preview.impact_chart.expected_marker.score_share);
 
   return (
-    <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#ffffff", marginTop: "1rem" }}>
+    <article data-testid="match-explorer-impact-chart" style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#ffffff", marginTop: "1rem" }}>
       <h3 style={{ marginTop: 0 }}>Rating Impact Predictor</h3>
       <p style={{ color: "#475569", marginTop: "-0.35rem" }}>
         The curve mirrors the Streamlit predictor: x-axis is score share translated to an 11-point score, and y-axis is projected JUPR change for your team.
@@ -237,13 +190,13 @@ function RatingImpactChart({ preview }: { preview: MatchExplorerPreview }) {
           </g>
         ))}
         {xTicks.map((tick) => (
-          <g key={`x-${tick}`}>
-            <line x1={x(tick)} y1={height - margin.bottom} x2={x(tick)} y2={height - margin.bottom + 6} stroke="#94a3b8" />
-            <text x={x(tick)} y={height - margin.bottom + 22} textAnchor="middle" fontSize="11" fill="#475569">{shareToScore11Label(tick)}</text>
+          <g key={`x-${tick.score_share}`}>
+            <line x1={x(tick.score_share)} y1={height - margin.bottom} x2={x(tick.score_share)} y2={height - margin.bottom + 6} stroke="#94a3b8" />
+            <text x={x(tick.score_share)} y={height - margin.bottom + 22} textAnchor="middle" fontSize="11" fill="#475569">{tick.score_to_11.label}</text>
           </g>
         ))}
         <line x1={expectedX} y1={margin.top} x2={expectedX} y2={height - margin.bottom} stroke="#64748b" strokeDasharray="6 4" />
-        <text x={expectedX + 6} y={margin.top + 12} fontSize="11" fill="#475569">Expected {shareToScore11Label(preview.expected.you)}</text>
+        <text x={expectedX + 6} y={margin.top + 12} fontSize="11" fill="#475569">Expected {preview.impact_chart.expected_marker.score_to_11.label}</text>
         <path d={path} fill="none" stroke="#2563eb" strokeWidth="3" strokeLinecap="round" />
         {selectedX != null && selectedY != null ? (
           <g>
@@ -270,7 +223,6 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
   const initialPartner = initialPlayerId(activePlayerIds, initialSelection?.partner, initial[1] ?? "");
   const initialOpp1 = initialPlayerId(activePlayerIds, initialSelection?.opp1, initial[2] ?? "");
   const initialOpp2 = initialPlayerId(activePlayerIds, initialSelection?.opp2, initial[3] ?? "");
-  const hasDeepLinkPlayers = Boolean(initialSelection?.me || initialSelection?.partner || initialSelection?.opp1 || initialSelection?.opp2);
 
   const [context, setContext] = useState(initialContext);
   const [me, setMe] = useState(initialMe);
@@ -283,7 +235,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
   const [message, setMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [autoPreview, setAutoPreview] = useState(hasDeepLinkPlayers);
+  const requestSequence = useRef(0);
 
   const selectedPlayers = useMemo(() => [me, partner, opp1, opp2], [me, partner, opp1, opp2]);
   const hasValidSelection = selectedPlayers.every((value) => Boolean(value)) && new Set(selectedPlayers).size === 4;
@@ -310,7 +262,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
     return url.toString();
   }, [context, me, partner, opp1, opp2, scoreOpp, scoreYou]);
 
-  const runPreview = useCallback(async (optionsOverride: { syncUrl?: boolean } = {}) => {
+  const runPreview = useCallback(async (optionsOverride: { syncUrl?: boolean; signal?: AbortSignal } = {}) => {
     if (!apiBase) {
       setMessage("API base URL is not configured.");
       return;
@@ -325,6 +277,8 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
       return;
     }
 
+    const requestId = requestSequence.current + 1;
+    requestSequence.current = requestId;
     setLoading(true);
     setMessage(null);
     setInfoMessage(null);
@@ -341,25 +295,47 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         score_opp: cleanScore(scoreOpp, "9")
       });
       const response = await fetch(apiUrl(apiBase, `/clubs/${clubSlug}/match-explorer/preview?${params.toString()}`), {
-        method: "GET"
+        method: "GET",
+        signal: optionsOverride.signal
       });
       const payload = (await response.json().catch(() => null)) as MatchExplorerPreviewResponse | { detail?: string } | null;
       if (!response.ok) {
         throw new Error(String((payload as { detail?: string } | null)?.detail || `API error (${response.status})`));
       }
-      setPreview((payload as MatchExplorerPreviewResponse).preview);
+      if (requestId === requestSequence.current) {
+        setPreview((payload as MatchExplorerPreviewResponse).preview);
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to build Match Explorer preview.");
+      if (optionsOverride.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+      if (requestId === requestSequence.current) {
+        setMessage(error instanceof Error ? error.message : "Unable to build Match Explorer preview.");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
   }, [apiBase, clubSlug, context, me, opp1, opp2, partner, scoreOpp, scoreYou, syncUrlParams]);
 
   useEffect(() => {
-    if (!autoPreview || !hasValidSelection) return;
-    setAutoPreview(false);
-    void runPreview({ syncUrl: false });
-  }, [autoPreview, hasValidSelection, runPreview]);
+    if (!selectedPlayers.every((value) => Boolean(value))) {
+      setPreview(null);
+      setMessage("Select four players.");
+      return;
+    }
+    if (!hasValidSelection) {
+      setPreview(null);
+      setMessage("Select four different players.");
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void runPreview({ syncUrl: false, signal: controller.signal });
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [hasValidSelection, runPreview, selectedPlayers]);
 
   async function copyShareLink() {
     if (!hasValidSelection) {
@@ -382,7 +358,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
   const labelStyle = { display: "grid", gap: "0.25rem", fontWeight: 700 };
 
   return (
-    <section style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" }}>
+    <section data-testid="match-explorer-form" style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" }}>
       <h2 style={{ marginTop: 0 }}>Preview a doubles matchup</h2>
       <p style={{ color: "#475569", marginTop: "-0.25rem" }}>
         Selections are shareable through the URL. Use the same `ctx`, `me`, `partner`, `opp1`, `opp2`, `sy`, and `so` deep-link fields as the Streamlit page.
@@ -402,7 +378,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>
-          <button type="button" onClick={() => void runPreview()} disabled={loading} style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: "#2563eb", color: "white", fontWeight: 800 }}>
+          <button type="button" onClick={() => void runPreview()} disabled={loading || !hasValidSelection} style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: "#2563eb", color: "white", fontWeight: 800 }}>
             {loading ? "Previewing…" : "Preview matchup"}
           </button>
           <button type="button" onClick={() => void copyShareLink()} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.65rem 1rem", background: "white", color: "#0f172a", fontWeight: 800 }}>
@@ -413,8 +389,10 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         <p style={{ color: "#475569", margin: 0 }}>
           Current selection: {playerName(activePlayers, me) || "—"} / {playerName(activePlayers, partner) || "—"} vs {playerName(activePlayers, opp1) || "—"} / {playerName(activePlayers, opp2) || "—"}
         </p>
-        {message ? <p style={{ color: "#b91c1c" }}>{message}</p> : null}
-        {infoMessage ? <p style={{ color: "#047857", fontWeight: 700 }}>{infoMessage}</p> : null}
+        <div aria-live="polite">
+          {message ? <p data-testid="match-explorer-validation" style={{ color: "#b91c1c" }}>{message}</p> : null}
+          {infoMessage ? <p style={{ color: "#047857", fontWeight: 700 }}>{infoMessage}</p> : null}
+        </div>
       </div>
 
       {preview ? (

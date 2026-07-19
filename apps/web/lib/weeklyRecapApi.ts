@@ -56,6 +56,12 @@ export type WeeklyRecapsResponse = {
   club: { id: string; slug: string; name: string };
   recaps: WeeklyRecapSummary[];
   selected_recap?: WeeklyRecapSelected | null;
+  pagination: {
+    page: number;
+    page_size: number;
+    has_previous: boolean;
+    has_next: boolean;
+  };
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -97,13 +103,13 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getClubWeeklyRecaps(clubSlug: string, weekStart?: string | null): Promise<ApiResult<WeeklyRecapsResponse>> {
-  const query = weekStart ? `?week_start=${encodeURIComponent(weekStart)}` : "";
-  return fetchJson<WeeklyRecapsResponse>(`/clubs/${clubSlug}/weekly-recaps${query}`);
+export async function getClubWeeklyRecaps(clubSlug: string, weekStart?: string | null, page = 1): Promise<ApiResult<WeeklyRecapsResponse>> {
+  const query = new URLSearchParams({ page: String(Math.max(1, Math.round(page))), page_size: "8" });
+  if (weekStart) query.set("week_start", weekStart);
+  return fetchJson<WeeklyRecapsResponse>(`/clubs/${clubSlug}/weekly-recaps?${query.toString()}`);
 }
 
 export function getWeeklyRecapPdfUrl(clubSlug: string, weekStart: string): string | null {
-  const apiBase = baseUrl();
-  if (!apiBase || !weekStart) return null;
-  return `${apiBase.replace(/\/$/, "")}/clubs/${clubSlug}/weekly-recaps/${encodeURIComponent(weekStart)}/pdf`;
+  if (!clubSlug || !weekStart) return null;
+  return `/api/clubs/${encodeURIComponent(clubSlug)}/weekly-recaps/${encodeURIComponent(weekStart)}/pdf`;
 }

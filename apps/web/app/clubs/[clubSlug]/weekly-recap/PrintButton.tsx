@@ -3,6 +3,7 @@
 export default function PrintButton({ label = "Print / save PDF" }: { label?: string }) {
   return (
     <button
+      data-testid="weekly-recap-print-button"
       type="button"
       onClick={() => window.print()}
       style={{

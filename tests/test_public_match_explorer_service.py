@@ -98,7 +98,15 @@ def test_public_match_explorer_preview_is_public_safe_and_read_only() -> None:
     assert preview["teams"]["you"]["average_rating"] == 1475
     assert preview["teams"]["opponents"]["average_rating"] == 1275
     assert 0 <= preview["expected"]["you"] <= 1
+    assert preview["expected"]["score_to_11"]["label"] == "11\u20133"
+    assert preview["score"]["you_share"] == pytest.approx(11 / 18)
     assert preview["rating_delta"]["you_team_elo"] > 0
+    assert len(preview["impact_chart"]["points"]) == 101
+    assert preview["impact_chart"]["selected_marker"]["score_share"] == pytest.approx(11 / 18)
+    assert [row["role"] for row in preview["player_impacts"]] == ["You", "Partner", "Opponent 1", "Opponent 2"]
+    assert preview["player_impacts"][0]["projected_rating"] == pytest.approx(
+        preview["player_impacts"][0]["current_rating"] + preview["rating_delta"]["you_team_elo"]
+    )
 
     player_payload = preview["teams"]["you"]["players"][0]
     assert set(player_payload) == {"id", "name", "overall_rating", "overall_jupr", "context_rating", "context_jupr"}
@@ -113,4 +121,17 @@ def test_public_match_explorer_rejects_duplicate_players() -> None:
             partner=1,
             opp1=3,
             opp2=4,
+        )
+
+
+def test_public_match_explorer_rejects_non_public_context() -> None:
+    with pytest.raises(ValueError, match="rating context is unavailable"):
+        build_public_match_explorer_preview(
+            fake_supabase(),
+            club_id="club",
+            me=1,
+            partner=2,
+            opp1=3,
+            opp2=4,
+            context_name="Archived",
         )
