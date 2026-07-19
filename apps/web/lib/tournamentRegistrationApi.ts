@@ -147,10 +147,12 @@ export type PublicTournamentRosterState = {
   pending_partner_requests: PublicTournamentRosterEntry[];
   unresolved_partner_entries: PublicTournamentRosterEntry[];
   players_needing_partners: PublicTournamentNeedsPartnerEntry[];
+  partner_board_entries: PublicTournamentNeedsPartnerEntry[];
   summary: {
     total_registrations?: number | null;
     total_players?: number | null;
     players_needing_partners?: number | null;
+    partner_board_entries?: number | null;
     waitlist?: number | null;
   };
 };

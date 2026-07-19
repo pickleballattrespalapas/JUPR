@@ -9,6 +9,12 @@ Use `YYYYMMDDHHMMSS_name.sql` to avoid collisions; avoid date-only prefixes like
 - If a migration changes Supabase schema (tables, columns, constraints, indexes, functions, grants, triggers, policies), the SQL must be captured in `supabase/migrations/`.
 - Do **not** rely on `migrations/` alone for Supabase schema changes.
 
+The Partner Board lifecycle transaction is captured in
+`supabase/migrations/20260719194500_public_partner_pairing_lifecycle.sql`. It
+builds on the partner-link tables provisioned by
+`migrations/20261019_tournament_registration_partner_links.sql` and the canonical
+selection lock protocol already captured under `supabase/migrations/`.
+
 ## Current inventory (as of 2026-07-02)
 
 Inventory below reflects files currently present in this repository.

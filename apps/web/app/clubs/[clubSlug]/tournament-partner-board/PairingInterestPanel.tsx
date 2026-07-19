@@ -22,6 +22,7 @@ function apiUrl(apiBase: string, path: string): string {
 export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, registrationSlug, editToken, requesterSelections, boardEntries }: PairingInterestPanelProps) {
   const [selectionByEntry, setSelectionByEntry] = useState<Record<string, string>>({});
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [sentEntries, setSentEntries] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,9 +52,10 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
           board_entry_key: entryKey
         })
       });
-      const payload = await response.json().catch(() => null);
+      const payload = await response.json().catch(() => null) as { detail?: unknown; message?: string; partner_request_id?: string; idempotent?: boolean } | null;
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
       setMessage(payload?.message || "Pairing request sent. If the other player accepts, JUPR will automatically pair both registrations.");
+      setSentEntries((current) => ({ ...current, [entryKey]: true }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to send pairing request.");
     } finally {
@@ -79,14 +81,14 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
                 {possibleSelections.map((selection) => <option key={selection.id} value={selection.id}>{selection.partner_mode || "Registration"}</option>)}
               </select>
             </label>
-            <button type="button" onClick={() => sendInterest(entry)} disabled={pendingKey === entryKey} style={{ marginTop: "0.5rem", padding: "0.55rem 0.8rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
-              {pendingKey === entryKey ? "Sending…" : "Request pairing"}
+            <button type="button" onClick={() => sendInterest(entry)} disabled={pendingKey === entryKey || Boolean(sentEntries[entryKey])} style={{ marginTop: "0.5rem", padding: "0.55rem 0.8rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
+              {pendingKey === entryKey ? "Sending…" : sentEntries[entryKey] ? "Request pending" : "Request pairing"}
             </button>
           </div>
         );
       })}
-      {message ? <p style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
-      {error ? <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
+      {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
     </div>
   );
 }

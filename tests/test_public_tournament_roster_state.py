@@ -220,6 +220,67 @@ def test_public_roster_null_state_and_email_fallback_fail_closed(monkeypatch):
     assert state["confirmed_teams"] == []
     assert state["unresolved_partner_entries"] == [row]
 
+
+def test_partner_board_projection_requires_display_and_contact_consent(monkeypatch):
+    compiled_state = {
+        "settings": {"partner_board_enabled": True},
+        "event_options": [
+            {
+                "id": "event-1",
+                "event_family_label": "Doubles",
+                "division_name": "Open",
+                "enabled": True,
+                "partner_board_enabled": True,
+                "status": "open",
+            }
+        ],
+        "registrations": [
+            {"id": "reg-visible", "wants_partner_board_contact": True, "status": "CONFIRMED"},
+            {"id": "reg-private", "wants_partner_board_contact": False, "status": "CONFIRMED"},
+        ],
+        "partner_board": [
+            {"selection_id": "sel-visible", "registration_id": "reg-visible", "event_option_id": "event-1"},
+            {"selection_id": "sel-private", "registration_id": "reg-private", "event_option_id": "event-1"},
+        ],
+        "event_rosters": [
+            {
+                "event_option_id": "event-1",
+                "event_day_id": "day-1",
+                "event_day_label": "Saturday",
+                "event_label": "Open Doubles",
+                "entries": [
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "members": [{"registration_id": "reg-visible", "selection_id": "sel-visible", "display_name": "Visible Player"}],
+                    },
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "members": [{"registration_id": "reg-private", "selection_id": "sel-private", "display_name": "Private Player"}],
+                    },
+                ],
+            }
+        ],
+        "summary": {"total_registrations": 2},
+    }
+    monkeypatch.setattr(repo, "build_registration_state", lambda *_args, **_kwargs: compiled_state)
+
+    state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
+
+    assert [row["player_name"] for row in state["players_needing_partners"]] == ["Visible Player", "Private Player"]
+    assert [row["player_name"] for row in state["partner_board_entries"]] == ["Visible Player"]
+    assert state["summary"]["partner_board_entries"] == 1
+    assert "email" not in str(state["partner_board_entries"]).lower()
+    assert "phone" not in str(state["partner_board_entries"]).lower()
+
+    compiled_state["settings"]["partner_board_enabled"] = False
+    disabled_state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
+    assert disabled_state["partner_board_entries"] == []
+
+    compiled_state["settings"]["partner_board_enabled"] = True
+    compiled_state["event_options"][0]["partner_board_enabled"] = False
+    disabled_event_state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
+    assert disabled_event_state["partner_board_entries"] == []
+
 from types import SimpleNamespace
 
 

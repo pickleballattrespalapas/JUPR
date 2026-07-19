@@ -89,7 +89,10 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
 
   const tournament = data?.tournament;
   const settings = data?.settings;
-  const partnerEntries = data?.roster?.players_needing_partners ?? [];
+  // Fail closed: only the explicit board projection carries both display and
+  // contact consent. The broader roster list may contain players who need a
+  // partner but did not opt into public pairing requests.
+  const partnerEntries = data?.roster?.partner_board_entries ?? [];
   const eventChoices = Array.from(new Map(partnerEntries.map((entry) => [entryEventKey(entry), entryEventLabel(entry)])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
   const visibleEntries = selectedEvent ? partnerEntries.filter((entry) => entryEventKey(entry) === selectedEvent) : partnerEntries;
   const query = queryFor({ tournamentId: tournament?.id, registrationSlug: settings?.registration_slug });
@@ -128,7 +131,7 @@ export default async function TournamentPartnerBoardPage({ params, searchParams 
 
       {tournament ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-          <article style={cardStyle}><strong>Players looking</strong><br />{partnerEntries.length}</article>
+          <article style={cardStyle}><strong>Public board entries</strong><br />{partnerEntries.length}</article>
           <article style={cardStyle}><strong>Showing</strong><br />{visibleEntries.length}</article>
           <article style={cardStyle}><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</article>
           <article style={cardStyle}><strong>Roster players</strong><br />{data?.summary?.total_players ?? 0}</article>

@@ -130,6 +130,10 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /clubs/{club_slug}/tournament-registration/confirmation?confirmation_token=...`
 - `GET /clubs/{club_slug}/tournament-roster?registration_slug=...&tournament_id=...`
 - `POST /clubs/{club_slug}/tournament-registration/pairing-interest` with token-gated `requester_selection_id` and public `board_entry_key`
+- `GET /clubs/{club_slug}/tournament-registration/pairing-requests?edit_token=...`
+- `POST /clubs/{club_slug}/tournament-registration/pairing-requests/{request_id}/accept`
+- `POST /clubs/{club_slug}/tournament-registration/pairing-requests/{request_id}/decline`
+- `POST /clubs/{club_slug}/tournament-registration/pairing-requests/{request_id}/cancel`
 - `GET /clubs/{club_slug}/players?q=...&status=active|inactive|all&sort=rating|singles|matches|name|win_pct|recent&limit=...&offset=...` public-display-only directory; defaults to active players
 - `GET /clubs/{club_slug}/players/{player_id}?recent_limit=...&history_limit=...` privacy-safe profile projection with rating trend/breakdowns, awards, relationships, Club Social aggregates, verified-update state, and explicit match-format history
 - `GET /clubs/{club_slug}/matches`

@@ -1893,7 +1893,34 @@ def build_public_tournament_roster_state(
     pending_partner_requests: list[dict[str, Any]] = []
     unresolved_partner_entries: list[dict[str, Any]] = []
     players_needing_partners: list[dict[str, Any]] = []
+    partner_board_entries: list[dict[str, Any]] = []
     unique_players: set[str] = set()
+    public_board_enabled = _coerce_bool(
+        (state.get("settings") or settings or {}).get("partner_board_enabled", False)
+    )
+    board_event_ids = {
+        str(row.get("id") or "")
+        for row in (state.get("event_options") or [])
+        if str(row.get("id") or "")
+        and _coerce_bool(row.get("enabled", True))
+        and _coerce_bool(row.get("partner_board_enabled", row.get("public_partner_board", False)))
+        and str(row.get("status") or "draft").strip().lower()
+        in {"open", "tentative", "confirmed", "published", "active"}
+    }
+    board_selection_ids = {
+        str(row.get("selection_id") or "")
+        for row in (state.get("partner_board") or [])
+        if public_board_enabled
+        and str(row.get("selection_id") or "")
+        and str(row.get("event_option_id") or "") in board_event_ids
+    }
+    contact_registration_ids = {
+        str(row.get("id") or "")
+        for row in (state.get("registrations") or [])
+        if str(row.get("id") or "")
+        and _coerce_bool(row.get("wants_partner_board_contact", False))
+        and str(row.get("status") or "confirmed").strip().upper() not in {"CANCELLED", "WITHDRAWN"}
+    }
 
     for roster in state.get("event_rosters", []):
         event_option_id = str(roster.get("event_option_id") or "")
@@ -1957,25 +1984,30 @@ def build_public_tournament_roster_state(
 
             if status == "NEEDS_PARTNER":
                 primary = members[0] if members else {}
-                source_selection_id = selection_ids[0] if selection_ids else ""
+                source_selection_id = selection_ids[0] if selection_ids else str((source_members[0] if source_members else {}).get("selection_id") or "").strip()
+                source_registration_id = registration_ids[0] if registration_ids else str((source_members[0] if source_members else {}).get("registration_id") or "").strip()
                 board_entry_key = build_public_tournament_reference(
                     tournament_id=str(tournament.get("id") or ""),
                     namespace="partner-board-selection",
                     source_id=source_selection_id,
                 )
-                players_needing_partners.append(
-                    {
-                        "player_name": primary.get("display_name"),
-                        "board_entry_key": board_entry_key or None,
-                        "event_day_label": event_row["event_day_label"],
-                        "event_family": event_row["event_family"],
-                        "division": event_row["division"],
-                        "event_label": event_row["event_label"],
-                        "skill": primary.get("skill"),
-                        "age_bracket": primary.get("age_bracket"),
-                        "note": _public_note(entry.get("notes")),
-                    }
-                )
+                needs_partner_row = {
+                    "player_name": primary.get("display_name"),
+                    "board_entry_key": board_entry_key or None,
+                    "event_day_label": event_row["event_day_label"],
+                    "event_family": event_row["event_family"],
+                    "division": event_row["division"],
+                    "event_label": event_row["event_label"],
+                    "skill": primary.get("skill"),
+                    "age_bracket": primary.get("age_bracket"),
+                    "note": _public_note(entry.get("notes")),
+                }
+                players_needing_partners.append(needs_partner_row)
+                if (
+                    source_selection_id in board_selection_ids
+                    and source_registration_id in contact_registration_ids
+                ):
+                    partner_board_entries.append(dict(needs_partner_row))
 
     return {
         "registrations_by_event": registrations_by_event,
@@ -1983,10 +2015,12 @@ def build_public_tournament_roster_state(
         "pending_partner_requests": pending_partner_requests,
         "unresolved_partner_entries": unresolved_partner_entries,
         "players_needing_partners": players_needing_partners,
+        "partner_board_entries": partner_board_entries,
         "summary": {
             "total_registrations": int(state.get("summary", {}).get("total_registrations") or 0),
             "total_players": len(unique_players),
             "players_needing_partners": len(players_needing_partners),
+            "partner_board_entries": len(partner_board_entries),
             "waitlist": int(state.get("summary", {}).get("waitlist_entries") or 0),
         },
     }
