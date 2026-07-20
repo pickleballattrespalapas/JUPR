@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { bootstrapStagingContext } from "./support/staging";
 
 const clubSlug = String(process.env.STAGING_CLUB_SLUG || "tres-palapas").trim();
 const tournamentId = String(process.env.STAGING_PARTNER_TOURNAMENT_ID || "").trim();
@@ -7,6 +8,10 @@ const requesterToken = String(process.env.STAGING_PARTNER_REQUESTER_EDIT_TOKEN |
 const requesterSelectionId = String(process.env.STAGING_PARTNER_REQUESTER_SELECTION_ID || "").trim();
 const targetBoardEntryKey = String(process.env.STAGING_PARTNER_TARGET_BOARD_ENTRY_KEY || "").trim();
 const apiBase = String(process.env.STAGING_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || "").trim().replace(/\/$/, "");
+
+test.beforeEach(async ({ context }) => {
+  await bootstrapStagingContext(context);
+});
 
 function boardQuery(extra: Record<string, string> = {}): string {
   const query = new URLSearchParams();

@@ -136,7 +136,7 @@ test("tournament roster filters and public deep links remain navigable", async (
 });
 
 test("badge codex: authoritative buckets, filters, anchors, and trophy room", async ({ page }) => {
-  const response = await page.goto(`/clubs/${clubSlug}/badge-codex`, { waitUntil: "domcontentloaded" });
+  const response = await page.goto(`/clubs/${clubSlug}/badge-codex?bucket=all`, { waitUntil: "domcontentloaded" });
   expect(response?.status()).toBeLessThan(400);
   await expect(page.getByRole("heading", { name: /badge codex/i })).toBeVisible();
   await expect(page.locator("[data-badge-bucket]")).toHaveCount(4);

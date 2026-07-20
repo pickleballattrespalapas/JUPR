@@ -366,7 +366,14 @@ If any secret is exposed, rotate it immediately and remove it from history where
 
 ## Manual staging smoke workflow
 
-Run GitHub Actions workflow `Staging Smoke` via `workflow_dispatch` to perform read-only API/web checks against staging. Configure `STAGING_JUPR_API_BASE_URL` secret (required) and `STAGING_WEB_BASE_URL` (optional).
+Run GitHub Actions workflow `Staging Smoke` via `workflow_dispatch` to perform
+read-only API/web checks against staging. The exact API and web origins are
+pre-filled and still checked against hard allowlists; the GitHub `staging`
+environment values remain the fallback if either input is cleared.
+The browser phase runs only the committed 56-test `public-read` parity manifest;
+it rejects skips, flakes, failures, focused tests, count drift, and retries.
+Mixed admin/auth/write suites are intentionally outside this gate. Keep
+`allow_live_unconfigured` off after the staging live-session route is available.
 
 For the full Next/FastAPI admin test surface, run `Deploy FastAPI staging to
 Fly`. It uses `fly.staging.toml`, the GitHub `staging` environment, and staging

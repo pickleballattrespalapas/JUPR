@@ -400,6 +400,25 @@ def test_integrated_manifest_validates_every_wave_spec_and_grep(tmp_path: Path) 
     assert any("tournament-live.staging.spec.ts" in error for error in errors)
 
 
+def test_remote_public_wave_waits_for_hydration_and_uses_stable_live_selectors() -> None:
+    root = Path(__file__).resolve().parents[1]
+    explorer = (root / "apps/web/e2e/public-explorer-recap.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    badges = (root / "apps/web/e2e/staging.smoke.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    partner_board = (
+        root / "apps/web/e2e/tournament-partner-board.parity.spec.ts"
+    ).read_text(encoding="utf-8")
+
+    hydration_wait = 'getByTestId("match-explorer-summary")'
+    first_controlled_change = "await me.selectOption(playerIds[0])"
+    assert explorer.index(hydration_wait) < explorer.index(first_controlled_change)
+    assert "badge-codex?bucket=all" in badges
+    assert "bootstrapStagingContext(context)" in partner_board
+
+
 def test_manual_workflow_is_dispatch_only_exact_staging_and_least_scope() -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/parity-final-evidence.yml").read_text(

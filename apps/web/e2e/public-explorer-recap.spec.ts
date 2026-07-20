@@ -18,6 +18,10 @@ test("Match Explorer hydrates a share link and reacts through Python projections
   );
   expect(playerIds.length, "Match Explorer staging fixture needs four active public players").toBeGreaterThanOrEqual(4);
 
+  // The initial projection proves React hydration and the debounced preview have
+  // settled before Playwright changes the controlled selects.
+  await expect(page.getByTestId("match-explorer-summary")).toContainText("Expected win rate");
+
   await me.selectOption(playerIds[0]);
   await partner.selectOption(playerIds[0]);
   await expect(page.getByTestId("match-explorer-validation")).toContainText("four different players");
